@@ -340,8 +340,15 @@ describe("what a record holds", () => {
       graceTimer: setTimeout(() => {}, 0),
       graceArmedAt: 0,
       lapsed: true,
+      changeNotices: [],
     };
+    // `changeNotices` (the change-notice PR): NOT counted by
+    // recordHoldsState (Ruling 6), pinned by the next test. The chat owners
+    // PR adds no field: per-message owners and "handed" memory live in the
+    // module's own maps (`ownerByMessage`, `handedByRecord`), counted by
+    // recordHoldsState only while their message is unhandled (R3.5).
     expect(Object.keys(full).sort()).toEqual([
+      "changeNotices",
       "clientName",
       "graceArmedAt",
       "graceTimer",
@@ -352,6 +359,27 @@ describe("what a record holds", () => {
       "recordKind",
     ]);
     clearTimeout(full.graceTimer);
+  });
+
+  it("queued change notices are not state: a record holding only notices holds nothing (Ruling 6)", () => {
+    register("claude:a");
+    setDocOwner("d", { ownerId: "claude:a", kind: "claimed" }, "claim", "claude:a");
+    setDocOwner("d", null, "lapse");
+    const record = getOwnerRecord("claude:a") as OwnerRecord;
+    expect(record.changeNotices?.length).toBe(2);
+    expect(recordHoldsState(record)).toBe(false);
+  });
+
+  it("no change notice is queued for Tandem's Claude (every one of its causes is PR 3b-2's)", () => {
+    // A cause literal: this proves the mapping, not a path (no path reaches
+    // the tandem record before PR 3b-2).
+    register("claude:a");
+    setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take", TANDEM_OWNER_ID);
+    setDocOwner("d", { ownerId: "claude:a", kind: "opened" }, "take", "claude:a");
+    setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
+    expect(ownershipSnapshotForTests().changeNotices).toEqual([
+      ["claude:a", [{ documentId: "d", change: "gained", cause: "you opened or created it" }]],
+    ]);
   });
 
   it("holds state exactly while it holds a document", () => {
@@ -381,6 +409,16 @@ describe("reset", () => {
       answerers: 0,
       queuedDocuments: 0,
       pendingClaims: 0,
+      changeNotices: [],
+      // The chat owners PR: per-message owners (with their origins) and what
+      // each record was handed. Empty, since no record exists.
+      messageOwners: [],
+      handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });
@@ -405,6 +443,16 @@ describe("flag off: nothing is ever created", () => {
       answerers: 0,
       queuedDocuments: 0,
       pendingClaims: 0,
+      changeNotices: [],
+      // The chat owners PR: per-message owners (with their origins) and what
+      // each record was handed. Empty, since no record exists.
+      messageOwners: [],
+      handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });

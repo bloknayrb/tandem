@@ -6,6 +6,7 @@ import {
   getDeliveryState,
   resetDeliveryStateForTests,
   resolveDeliveryRound,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -26,6 +27,8 @@ import {
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { defaultSubscribeToEvents } from "../../src/server/launcher/supervisor.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { keyedDeliveryRounds } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
@@ -47,9 +50,17 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 // clear it themselves, and run after this.
 beforeEach(() => {
   setCtrlMode("tandem");
+  // The delivery-round seam as `index.ts` wires it (#2358, the delivery-rounds
+  // PR; review round 1, item 4): in the `ownership-flag-on` job these tests
+  // run keyed rounds, as a real server does; flag off, master's one round.
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
 });
 
 afterEach(() => {
+  setDeliveryRoundSeam(undefined);
   resetForTesting();
 });
 
@@ -771,6 +782,10 @@ describe("wasEmittedViaChannelInDocument", () => {
 // so a poll that could not hand that item over leaves the round open.
 describe("pushEvent records which inbox item a forward waits on", () => {
   const T = 1_700_000_000_000;
+  // Master's one global round (the delivery-rounds PR): these pin its item
+  // hold, so they run with the round seam unwired even in the flag-on job.
+  // The keyed twin is the describe after this one.
+  beforeEach(() => setDeliveryRoundSeam(undefined));
 
   it("an annotation forward is held by its document being unreadable", () => {
     const { cleanup } = collectEvents();
@@ -848,6 +863,86 @@ describe("pushEvent records which inbox item a forward waits on", () => {
     expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
 
     resolveDeliveryRound(T, { documents: new Set(["any-doc"]), items: new Set() });
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+});
+
+// The keyed twin (#2358, the delivery-rounds PR): with rounds keyed, pushEvent
+// decides each forward's key beside the event. The seam is wired directly
+// (keyed, with "pending-doc" open), so this runs keyed in both CI jobs.
+describe("pushEvent keys each forward's round (keyed rounds)", () => {
+  const T = 1_700_000_000_000;
+  beforeEach(() =>
+    setDeliveryRoundSeam({ keyed: () => true, isDocumentOpen: (id) => id === "pending-doc" }),
+  );
+  const poll = (documents: string[], messages: string[] = []) =>
+    resolveDeliveryRound(
+      T,
+      { documents: new Set(), items: new Set() },
+      { documents: new Set(documents), messages: new Set(messages) },
+    );
+
+  it("an annotation forward on an open document is held until a poll reads that document", () => {
+    const { cleanup } = collectEvents();
+    _pushEventForTests({
+      id: "ev-keyed-ann",
+      type: "annotation:created",
+      timestamp: Date.now(),
+      documentId: "pending-doc",
+      payload: { annotationId: "ann-k", annotationType: "comment", content: "x", textSnippet: "" },
+    });
+    poll(["other-doc"]);
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+    poll(["pending-doc"]);
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+
+  it("a reply forward is held by its document, and one on a document that is not open is key-less", () => {
+    const { cleanup } = collectEvents();
+    const reply = (id: string, documentId: string): TandemEvent => ({
+      id,
+      type: "annotation:reply",
+      timestamp: Date.now(),
+      documentId,
+      payload: {
+        annotationId: "ann-parent",
+        replyId: `${id}-reply`,
+        replyAuthor: "user",
+        replyText: "hi",
+        textSnippet: "",
+        parentAuthor: "claude",
+      },
+    });
+    _pushEventForTests(reply("ev-r1", "pending-doc"));
+    _pushEventForTests(reply("ev-r2", "closed-doc"));
+    poll([]);
+    // The key-less round closed; the document's is still open.
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+    poll(["pending-doc"]);
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+
+  it("a chat forward pushed without a noted row key is key-less, whatever document it names", () => {
+    const { cleanup } = collectEvents();
+    _pushEventForTests({
+      id: "ev-keyed-chat",
+      type: "chat:message",
+      timestamp: Date.now(),
+      documentId: "pending-doc",
+      payload: { messageId: "msg-k", text: "hello", replyTo: null, anchor: null },
+    });
+    poll([]);
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+
+  it("the Solo release wake is key-less: any poll closes it", () => {
+    const { cleanup } = collectEvents();
+    emitModeReleaseWake();
+    poll([]);
     expect(getDeliveryState(T, 1).state).toBe("polled");
     cleanup();
   });
@@ -933,7 +1028,8 @@ describe("selection buffering", () => {
     // No selection:changed event emitted
     expect(events).toHaveLength(0);
     // But selection is buffered
-    expect(getBufferedSelection("sel-doc")).toEqual({
+    // (#1123 A2: the buffer also keeps the record's `stamp`, server-side only.)
+    expect(getBufferedSelection("sel-doc")).toMatchObject({
       from: 10,
       to: 50,
       selectedText: "some selected text",
@@ -946,7 +1042,7 @@ describe("selection buffering", () => {
     awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    expect(getBufferedSelection("sel-doc")).toEqual({
+    expect(getBufferedSelection("sel-doc")).toMatchObject({
       from: 10,
       to: 50,
       selectedText: "",

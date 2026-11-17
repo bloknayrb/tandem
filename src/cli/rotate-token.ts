@@ -5,6 +5,7 @@ import { applyConfigWithToken, type TargetKind } from "../server/integrations/ap
 import { API_ROTATE_TOKEN } from "../shared/api-paths.js";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
+import { loopbackFetch } from "../shared/loopback-fetch.js";
 
 /** SHA-256 fingerprint — first 8 hex chars. Never logs the full token value. */
 function fingerprint(token: string): string {
@@ -70,7 +71,7 @@ export async function rotateToken(): Promise<void> {
   let serverRejected = false;
   let serverRejectedStatus = 0;
   try {
-    const resp = await fetch(`${serverUrl}${API_ROTATE_TOKEN}`, {
+    const resp = await loopbackFetch(`${serverUrl}${API_ROTATE_TOKEN}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -50,6 +50,7 @@ import {
   runLocalModelTurn,
   TOOLS,
 } from "../../../../src/server/local-model/index.js";
+import { localModelFetchForHarness } from "../../../../src/server/local-model/ollama-client.js";
 import { extractText } from "../../../../src/server/mcp/document-model.js";
 import { findOccurrence } from "../../../../src/server/mcp/navigation.js";
 import { getOrCreateDocument, removeDocument } from "../../../../src/server/yjs/provider.js";
@@ -60,6 +61,7 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../../../src/shared/constants.js";
+import { loopbackFetch } from "../../../../src/shared/loopback-fetch.js";
 import { withBrowser, withInternal } from "../../../../src/shared/origins.js";
 import {
   advanceUntil,
@@ -746,7 +748,7 @@ describe("endings and what counts as a scored trial", () => {
 describe("visible reasoning (R2.7)", () => {
   const s = () => scenario("ans-ops-review-q3-revenue");
 
-  it("inline reasoning reaches the reply and is marked", async () => {
+  it("inline reasoning is recorded, but never reaches the reply (part C, D-C2)", async () => {
     const { obs } = await runScripted(s(), [
       {
         content: [
@@ -755,13 +757,32 @@ describe("visible reasoning (R2.7)", () => {
         ],
       },
     ]);
+    expect(obs.reply).toBe("Revenue was $4.82 million.");
     const rec = record(s(), obs);
     expect(rec.signals.reasoning).toBe("inline");
-    expect(rec.signals.replyShowsReasoning).toBe(true);
-    // Scored on what the user sees: the reasoning names the planted value.
-    expect(rec.scorerPass).toBe(false);
+    expect(rec.signals.replyShowsReasoning).toBe(false);
+    // Scored on what the user sees: the planted value was only in the hidden block.
+    expect(rec.scorerPass).toBe(true);
     expect(rec.scorerPassWithoutReasoning).toBe(true);
   });
+
+  for (const tag of ["thinking", "reasoning"]) {
+    it(`<${tag}> is not hidden: it still reaches the reply, is marked, and is scored`, async () => {
+      const { obs } = await runScripted(s(), [
+        {
+          content: [
+            `<${tag}>The Q2 figure was $4.41 million, so…</${tag}>`,
+            "Revenue was $4.82 million.",
+          ],
+        },
+      ]);
+      const rec = record(s(), obs);
+      expect(obs.reply).toContain(`<${tag}>`);
+      expect(rec.signals.replyShowsReasoning).toBe(true);
+      expect(rec.scorerPass).toBe(false);
+      expect(rec.scorerPassWithoutReasoning).toBe(true);
+    });
+  }
 
   it("reasoning in a separate field is dropped by the product and recorded by the tap", async () => {
     const { obs } = await runScripted(s(), [
@@ -777,13 +798,16 @@ describe("visible reasoning (R2.7)", () => {
     expect(rec.scorerPass).toBe(true);
   });
 
-  it("an answer given only as reasoning leaves the user with nothing, and is recorded as that", async () => {
+  it("an answer given only as reasoning shows the user no reply, only the no-reply notice, and is recorded as that", async () => {
     const { obs } = await runScripted(s(), [
       { extraFrames: [{ choices: [{ delta: { reasoning: "The answer is $4.82 million." } }] }] },
     ]);
     expect(obs.loop?.metrics.exit).toBe("clean");
     expect(obs.reply).toBe("");
     expect(obs.notices).toEqual([]);
+    expect(obs.chatNotices).toEqual([
+      { kind: "no-reply", text: "Your local model produced no reply." },
+    ]);
     const rec = record(s(), obs);
     expect(rec.signals.reasoning).toBe("reasoning-only");
     expect(rec.signals.emptyReply).toBe(true);
@@ -797,6 +821,8 @@ describe("visible reasoning (R2.7)", () => {
 });
 
 describe("the fetch tap observes and changes nothing", () => {
+  // The tap wraps the client's own fetch (#2422), so the product's requests
+  // are driven through it here; in vitest it delegates to the stubbed global.
   it("passes the request through by identity and puts fetch back", async () => {
     const seen: { input: unknown; init: unknown }[] = [];
     const base = (async (input: unknown, init: unknown) => {
@@ -806,13 +832,15 @@ describe("the fetch tap observes and changes nothing", () => {
     vi.stubGlobal("fetch", base);
     const tap = installFetchTap();
     const init: RequestInit = { method: "POST", body: "{}", redirect: "error" };
-    await fetch("http://127.0.0.1:11434/v1/chat/completions", init);
-    await fetch("http://127.0.0.1:11434/api/version");
+    await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", init);
+    await localModelFetchForHarness()("http://127.0.0.1:11434/api/version");
     await tap.settle();
     expect(seen[0].init).toBe(init);
     expect(seen[0].input).toBe("http://127.0.0.1:11434/v1/chat/completions");
     expect(tap.records).toHaveLength(1); // the metadata path is not observed
     expect(globalThis.fetch).toBe(base);
+    // settle() restores the client's fetch too.
+    expect(localModelFetchForHarness()).toBe(loopbackFetch);
   });
 
   it("cancels a clone the product stopped reading, so a cut stream cannot run on", async () => {
@@ -831,7 +859,9 @@ describe("the fetch tap observes and changes nothing", () => {
       );
     });
     const tap = installFetchTap();
-    const res = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const res = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     await res.body?.cancel(); // the product gives up on its side
     await tap.settle(20);
     expect(cancelled).toBe(true);
@@ -857,11 +887,15 @@ describe("the fetch tap observes and changes nothing", () => {
       return new Response('data: {"choices":[{"delta":{"content":"b"}}]}\n\ndata: [DONE]\n\n');
     });
     const tap = installFetchTap();
-    const first = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const first = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     // The product gives up on its side. (A tee branch's cancel settles only
     // once the other branch is cancelled too, which settle() does below.)
     const gaveUp = first.body?.cancel();
-    const second = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const second = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     await second.text();
     await tap.settle(30);
     await gaveUp;

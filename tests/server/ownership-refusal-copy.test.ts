@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { HolderView, OwnershipRefusalReason } from "../../src/server/sessions/ownership.js";
 import {
+  chatReplyRefusal,
   documentBusyRefusal,
   FOCUS_NOT_MOVED_WARNING,
   holderPhrase,
   type NotDocOwnerInput,
   notDocOwnerRefusal,
+  postRefusal,
 } from "../../src/server/sessions/ownership-refusal.js";
 
 /**
@@ -204,5 +206,64 @@ describe("DOCUMENT_BUSY (the queue's wait bound)", () => {
       expect(message).toContain("nothing was changed");
       expect(Object.keys(details).sort()).toEqual(["documentId", "reason"]);
     }
+  });
+});
+
+describe("the posts PR (R1.7): forms a post can get that the tool cannot reach yet", () => {
+  const tandem = { label: "owner-tnd1", displayKind: "Tandem's Claude" } as const;
+  const OUTLET =
+    "Nothing was sent. If the user asked you in your own conversation to say this, tell them there.";
+
+  it("post with no holder leaves the holder sentence out", () => {
+    expect(postRefusal({ reason: "post", holder: null }).message).toBe(
+      `To answer a user's chat message, pass its id as \`replyTo\`. Do not open or take a document in order to post. ${OUTLET}`,
+    );
+    // The same through the document builder's `post` row.
+    expect(notDocOwnerRefusal({ reason: "post", documentId: "d", holder: null }).message).toBe(
+      `To answer a user's chat message, pass its id as \`replyTo\`. Do not open or take a document in order to post. ${OUTLET}`,
+    );
+  });
+
+  it("post naming a document the caller holds offers the documentId route", () => {
+    expect(postRefusal({ reason: "post", holder: tandem, callerHolds: true }).message).toBe(
+      `Tandem's Claude answers chat that is not about a document. To answer a user's chat message, pass its id as \`replyTo\`; to post about a document you hold, pass its \`documentId\`. Do not open or take a document in order to post. ${OUTLET}`,
+    );
+  });
+
+  it("lost, taken back (PR 3b-2): true for a post", () => {
+    expect(postRefusal({ reason: "lost", holder: tandem, cause: "taken back" }).message).toBe(
+      `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${OUTLET}`,
+    );
+  });
+
+  it("lost, a caller that is Tandem's Claude (PR 5): with and without a holder", () => {
+    const term = { label: "owner-trm1", displayKind: "terminal" } as const;
+    expect(
+      postRefusal({ reason: "lost", holder: term, cause: "taken", callerIsTandem: true }).message,
+    ).toBe("A session the user is working with has this document now; leave it. Nothing was sent.");
+    expect(
+      postRefusal({ reason: "lost", holder: null, cause: "taken", callerIsTandem: true }).message,
+    ).toBe(
+      "This document was taken from Tandem's Claude, and nobody holds it now. Nothing was sent.",
+    );
+  });
+
+  it("every post form names no message and no other session beyond the holder phrase, and carries no owner id", () => {
+    for (const reason of ["post", "not-present", "lost", "held", "claimed", "default"] as const) {
+      for (const holder of [null, tandem]) {
+        const { message, details } = postRefusal({ reason, holder, documentId: "d" });
+        expect(message).not.toMatch(/this message|answer this\b|Do not reply to it/i);
+        expect(message).not.toMatch(/user chose|the user decided/i);
+        expect(JSON.stringify(details)).not.toMatch(/claude:|bridge:|http:/);
+        expect(Object.keys(details).sort()).toEqual(["documentId", "holder", "reason"].sort());
+      }
+    }
+  });
+
+  it("an answered chat reply's copy is the merged answered form", () => {
+    expect(chatReplyRefusal({ reason: "answered", holder: tandem, why: "answered" })).toEqual({
+      message: "Tandem's Claude already answered this. Do not answer it again.",
+      details: { reason: "answered", holder: tandem },
+    });
   });
 });

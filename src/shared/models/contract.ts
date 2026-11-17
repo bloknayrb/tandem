@@ -55,15 +55,61 @@ export const API_MODELS_CHAT_ANSWERER = "/api/models/chat-answerer";
 /** The switch's two positions. */
 export type ChatAnswerer = "claude" | "local";
 
-/** `GET /api/models/chat-answerer`. `localModelResolves` says only whether a
- *  local model would answer now — never which one, or where it points. */
+/**
+ * Whether a local model can answer a chat now, and if not, why (#1123 part B,
+ * Ruling B-2): the editor tells "nothing is saved or enabled" apart from "one
+ * is saved but cannot be used", because their remedies differ. A closed enum:
+ * it names no model, endpoint, id, path or count.
+ *  - `usable`: a local model would answer;
+ *  - `none`: no enabled local model is used (none saved, none enabled, or a
+ *    default that is disabled or a cloud model);
+ *  - the three unusable reasons of `resolveLocalModel`.
+ */
+export type LocalModelState =
+  | "usable"
+  | "none"
+  | "no-default-chosen"
+  | "endpoint-rejected"
+  | "no-endpoint";
+
+/** Every {@link LocalModelState}, for validating an answer. */
+export const LOCAL_MODEL_STATES: readonly LocalModelState[] = [
+  "usable",
+  "none",
+  "no-default-chosen",
+  "endpoint-rejected",
+  "no-endpoint",
+];
+
+/** `GET /api/models/chat-answerer`. `localModelResolves` and `localModelState`
+ *  say only whether a local model would answer now and, if not, which closed
+ *  reason — never which model, or where it points. */
 export interface ChatAnswererResponse {
   answerer: ChatAnswerer;
   localModelResolves: boolean;
+  /** Present on every 200 whatever the switch says; absent only when the check
+   *  threw (then `localModelResolves` is false). #1123 part B, R1.3. */
+  localModelState?: LocalModelState;
   /** This server process's run id, for judging a chat row's `localRun`
    *  (`shared/local-run.ts`). Authorises nothing. */
   runGeneration: string;
 }
+
+/**
+ * The notify-stream replay keys of the switch's notices (#1123). Defined here,
+ * not in the server modules that raise them (`chat-answerer.ts`,
+ * `local-model-announced.ts`, which re-export them), so the editor can key on
+ * them too: a notice with one of these `dedupKey`s is a trigger to re-read the
+ * switch (#1123 part B, R1.2). The keys only; the texts stay with the server.
+ */
+export const ANSWERER_LOCAL_NOTICE_KEY = "local-model-answerer-local";
+export const ANSWERER_CLAUDE_NOTICE_KEY = "local-model-answerer-claude";
+export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
+export const CHAT_ANSWERER_NOTICE_KEYS: readonly string[] = [
+  ANSWERER_LOCAL_NOTICE_KEY,
+  ANSWERER_CLAUDE_NOTICE_KEY,
+  SETTINGS_CHANGED_NOTICE_KEY,
+];
 
 /** `POST /api/models/chat-answerer` answer, on success (200) and on a failed
  *  write (500) alike: `answerer` is what the server is acting on now. */
@@ -85,15 +131,35 @@ export const MODELS_SCHEMA_VERSION = 1 as const;
  * (`useTandemSettings.ts`) re-exports these so every existing import path
  * still resolves.
  */
-export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
+export type ModelProvider =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "local-ollama"
+  | "local-llamacpp"
+  | "local-lmstudio"
+  | "local-other";
 
-export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
+const ALL_PROVIDERS = [
   "anthropic",
   "openai",
   "gemini",
   "local-ollama",
   "local-llamacpp",
-];
+  // #1123 Decisions L1/L2 (2026-11-15): LM Studio, and any other local server
+  // that offers the OpenAI-compatible chat API. Appended, never reordered: a
+  // removed value would make this build's own `models.json` fail to parse.
+  "local-lmstudio",
+  "local-other",
+] as const satisfies readonly ModelProvider[];
+
+// Exhaustiveness: a member added to `ModelProvider` but not to the list above
+// is a type error here, rather than a value every validator silently rejects.
+type UnlistedProvider = Exclude<ModelProvider, (typeof ALL_PROVIDERS)[number]>;
+const _everyProviderListed: [UnlistedProvider] extends [never] ? true : never = true;
+void _everyProviderListed;
+
+export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = ALL_PROVIDERS;
 
 /**
  * Local providers drive an OpenAI-compatible loopback endpoint and carry no
@@ -101,7 +167,12 @@ export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
  * resolves a config when the default entry is one of these; a cloud default
  * leaves the loop inert (cloud BYO keys are v1.1).
  */
-export const LOCAL_MODEL_PROVIDERS: readonly ModelProvider[] = ["local-ollama", "local-llamacpp"];
+export const LOCAL_MODEL_PROVIDERS: readonly ModelProvider[] = [
+  "local-ollama",
+  "local-llamacpp",
+  "local-lmstudio",
+  "local-other",
+];
 
 export function isLocalProvider(provider: ModelProvider): boolean {
   return LOCAL_MODEL_PROVIDERS.includes(provider);
@@ -224,7 +295,13 @@ export const ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS = "INVALID_LOCAL_MODEL_SETT
 export const ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED = "LOCAL_MODEL_SETTINGS_WRITE_FAILED";
 /** `POST /api/models/chat-answerer` body was not `{ answerer: "claude" | "local" }`. */
 export const ERROR_CODE_INVALID_CHAT_ANSWERER = "INVALID_CHAT_ANSWERER";
-/** `POST /api/models/chat-answerer`: the switch took effect but did not reach the disk. */
+/**
+ * `POST /api/models/chat-answerer`: the response said `persisted: false`. Either
+ * the switch did not reach the disk (it may still have taken effect for this
+ * run — the answer carries what is in effect), or the record that keeps the
+ * next start quiet did not reach the disk (#1123 A2: a refused switch to the
+ * local model, or a switch to Claude whose clear of a left-over "chosen" failed).
+ */
 export const ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED = "CHAT_ANSWERER_WRITE_FAILED";
 /** `POST /api/models/chat-answerer`: a later request won before this one
  *  settled (409). Nothing failed; the body carries the state now. */

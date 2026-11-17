@@ -64,6 +64,8 @@ import {
   ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
   ERROR_CODE_INVALID_CHAT_ANSWERER,
   ERROR_CODE_OWN_WINDOW_ONLY,
+  LOCAL_MODEL_STATES,
+  type LocalModelState,
   MODELS_SCHEMA_VERSION,
   type ModelsEntry,
   type ModelsFile,
@@ -526,9 +528,14 @@ const failSyncWrite = (code = "EPERM") => {
   }) as typeof fs.openSync);
 };
 
-/** Make Tandem's own removal of the file fail: both the rename to its marker
- *  and the delete behind it (round 5). */
+/** Make Tandem's own removal of the file fail: the rename to its marker, the
+ *  emptying in place (#1123 A2, R7.3) and the delete behind them (round 5). */
+const failEmpty = () =>
+  vi.spyOn(fs, "ftruncateSync").mockImplementation(() => {
+    throw new Error("EPERM");
+  });
 const failDelete = () => {
+  failEmpty();
   const realRename = fs.renameSync;
   vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
     if (String(to).endsWith(".removed-by-tandem")) throw new Error("EPERM");
@@ -984,7 +991,10 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     vi.spyOn(console, "error").mockImplementation(() => {});
     await setChatAnswerer("local", "own-window");
     vi.restoreAllMocks();
-    expect(chatAnswerer()).toBe("claude");
+    // #1123 A2 (R7.2): the request reconciles toward itself — the disk reads
+    // "local", so the local model takes effect; the stored choice is never
+    // overwritten.
+    expect(chatAnswerer()).toBe("local");
     expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe("local");
     await __flushLocalModelAnnouncedForTests();
     restart();
@@ -1046,7 +1056,7 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     expect(getStartupNotices()).toEqual([]);
   });
 
-  it("round 5 PB (and #5, #3): only the re-assert restores the user's marked Claude after a superseded local write lands over it", async () => {
+  it("round 5 PB, as rebuilt by A2 (R7.2): a superseded local write that lands is the latest request's own answer — the disk and what is in effect agree", async () => {
     markNotFirstLitStart();
     prime();
     await setChatAnswerer("claude", "own-window");
@@ -1060,17 +1070,18 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     release(); // La lands "local" over the marked Claude file
     await Promise.all([la, lb]);
     vi.restoreAllMocks();
-    expect(chatAnswerer()).toBe("claude");
-    // Put back WITH the mark, seeded from the start-up read (round 5 #3).
-    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    // Lb, the latest, asked for the local model and finds it on disk: it
+    // takes effect (recorded as the user's own), so a restart does not flip.
+    expect(chatAnswerer()).toBe("local");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe("local");
     await __flushLocalModelAnnouncedForTests();
     restart();
     prime();
-    expect(chatAnswerer()).toBe("claude");
+    expect(chatAnswerer()).toBe("local");
     expect(getStartupNotices()).toEqual([]);
   });
 
-  it("round 5 review: PB with a failed start-up read and a record still saying 'chosen' still restores the mark", async () => {
+  it("round 5 review's PB with a failed start-up read, as rebuilt by A2: the latest local request's answer stands, and a restart agrees", async () => {
     await chosenLocalThen(() => {});
     prime();
     // The user's own Claude lands its mark; its record-clearing write fails.
@@ -1106,18 +1117,20 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     release();
     await Promise.all([la, lb]);
     vi.restoreAllMocks();
-    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    const effective = chatAnswerer();
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe(effective);
     await __flushLocalModelAnnouncedForTests();
     restart();
     prime();
-    expect(chatAnswerer()).toBe("claude");
+    expect(chatAnswerer()).toBe(effective);
     expect(getStartupNotices()).toEqual([]);
   });
 
-  it("round 5 review: a failed rename with a working delete still leaves the marker; a directory at the marker path is no marker", async () => {
+  it("round 5 review: a failed rename and emptying with a working delete still leaves the marker; a directory at the marker path is no marker", async () => {
     await chosenLocalThen(() => {});
     prime();
     failSyncWrite("ENOSPC");
+    failEmpty();
     const realRename = fs.renameSync;
     vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
       if (String(to).endsWith(".removed-by-tandem")) throw new Error("EPERM");
@@ -1143,13 +1156,14 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("missing")]);
   });
 
-  it("round 5 PD: the user's own switch to the local model whose record write fails is reported unsaved", async () => {
+  it("round 5 PD, as made real by A2 (R7.1): the user's own switch to the local model whose record write fails does not happen", async () => {
     markNotFirstLitStart();
     prime();
     writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await setChatAnswerer("local", "own-window");
-    expect(result).toEqual({ answerer: "local", persisted: false });
+    expect(result).toEqual({ answerer: "claude", persisted: false });
+    expect(chatAnswerer()).toBe("claude");
     writeControl.fail.clear();
     // Positive control: the same switch with the record write working.
     await __flushLocalModelAnnouncedForTests();
@@ -1276,33 +1290,91 @@ describe(`${API_MODELS_CHAT_ANSWERER} (R1.3)`, () => {
     prime();
   });
 
-  it("GET answers the switch, whether a local model resolves now (through the injected seam), and the run id", async () => {
-    let resolves = false;
-    const base = await listen(makeApp({ localModelResolvesNow: () => resolves }));
+  it("GET answers the switch, the local model's state (through the injected seam), and the run id", async () => {
+    let state: LocalModelState = "none";
+    const base = await listen(makeApp({ localModelResolvesNow: () => state }));
     expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toEqual({
       answerer: "claude",
       localModelResolves: false,
+      localModelState: "none",
       runGeneration: LOCAL_RUN_GENERATION,
     });
-    resolves = true;
+    state = "usable";
     const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       answerer: "claude",
       localModelResolves: true,
+      localModelState: "usable",
       runGeneration: LOCAL_RUN_GENERATION,
     });
   });
 
-  it("GET with no seam at all answers that no local model resolves", async () => {
+  // #1123 part B, R1.3: every state value, whatever the switch says, and
+  // nothing but the documented fields.
+  for (const answerer of ["claude", "local"] as const) {
+    for (const state of LOCAL_MODEL_STATES) {
+      it(`GET with the switch at ${answerer} and the state ${state}: exactly the documented fields`, async () => {
+        const base = await listen(makeApp({ localModelResolvesNow: () => state }));
+        if (answerer === "local") {
+          await call(base, "POST", API_MODELS_CHAT_ANSWERER, { json: { answerer: "local" } });
+        }
+        const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
+        expect(res).toEqual({
+          status: 200,
+          body: {
+            answerer,
+            localModelResolves: state === "usable",
+            localModelState: state,
+            runGeneration: LOCAL_RUN_GENERATION,
+          },
+        });
+      });
+    }
+  }
+
+  it("GET with a throwing seam: no state at all, and localModelResolves false", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const base = await listen(
+      makeApp({
+        localModelResolvesNow: () => {
+          throw new Error("boom http://secret.example/path");
+        },
+      }),
+    );
+    const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
+    expect(res).toEqual({
+      status: 200,
+      body: { answerer: "claude", localModelResolves: false, runGeneration: LOCAL_RUN_GENERATION },
+    });
+    // The log line names the error's class, never its message.
+    expect(err.mock.calls.flat().join(" ")).not.toContain("secret");
+  });
+
+  it("GET with a seam answering outside the enum: treated as a throw, so nothing else reaches the wire", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const base = await listen(
+      makeApp({
+        localModelResolvesNow: () => "http://127.0.0.1:11434/llama" as unknown as LocalModelState,
+      }),
+    );
+    expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toEqual({
+      answerer: "claude",
+      localModelResolves: false,
+      runGeneration: LOCAL_RUN_GENERATION,
+    });
+  });
+
+  it("GET with no seam at all answers none", async () => {
     const base = await listen(makeApp());
     expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toMatchObject({
       localModelResolves: false,
+      localModelState: "none",
     });
   });
 
   it("GET is refused to another origin, and to a request with neither an Origin nor Sec-Fetch-Site: same-origin", async () => {
-    const base = await listen(makeApp({ localModelResolvesNow: () => true }));
+    const base = await listen(makeApp({ localModelResolvesNow: () => "usable" }));
     const foreign = await call(base, "GET", API_MODELS_CHAT_ANSWERER, {
       origin: "http://127.0.0.1:9999",
     });

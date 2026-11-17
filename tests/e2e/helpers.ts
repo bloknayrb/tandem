@@ -509,3 +509,37 @@ export async function ownsItsPixels(locator: Locator): Promise<boolean> {
     return !!hit && el.contains(hit);
   });
 }
+
+/**
+ * The warning notices a local-model settings write admitted through the
+ * development allowance raises (#1123 part B, R10.3; ADR-039's owed item for
+ * the Models specs). The E2E client is the Vite page, not Tandem's own window,
+ * so every such write is announced: the switch to the local model, a change
+ * of the answering local model, and commenting switched on. Prefixes, because
+ * the answering-model notice names the model.
+ */
+export const ALLOWANCE_NOTICE_PREFIXES: readonly string[] = [
+  "Your chat was set to be answered by a local model.",
+  "The local model used when your chat is answered by a local model was set or changed",
+  "Local models were allowed to comment on and suggest changes to your documents.",
+];
+
+/**
+ * Every warning toast on the page is one of the allowance's notices — the
+ * Models specs EXPECT those (their writes are not own-window writes) and
+ * nothing else. A cloud-model write raises none; a local-model write raises
+ * the answering one only when it changes which local model answers (its
+ * entry, endpoint or model id), or when a local model starts answering
+ * (`noticeAnsweringChange` in `src/server/local-model/collaborator.ts`).
+ */
+export async function expectOnlyAllowanceNotices(page: Page): Promise<void> {
+  const texts = await page
+    .locator("[data-testid='toast-container'] [role='alert']")
+    .allInnerTexts();
+  for (const text of texts) {
+    expect(
+      ALLOWANCE_NOTICE_PREFIXES.some((p) => text.includes(p)),
+      `an unexpected warning toast: ${text}`,
+    ).toBe(true);
+  }
+}

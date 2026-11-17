@@ -86,9 +86,6 @@ export function resolveAuthTokenCandidate(
  */
 export const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 
-/** Guard so we only warn once per process (not on every SSE reconnect). */
-let _warnedInvalidToken = false;
-
 /**
  * Header carrying the Claude Code session id on stdio-shim → Tandem-server
  * requests. Lets the server correlate channel traffic (replies, awareness,
@@ -176,37 +173,4 @@ export function withClaudeSessionHeader(init?: RequestInit["headers"]): Headers 
   const sessionId = resolveClaudeSessionId();
   if (sessionId !== undefined) headers.set(CLAUDE_SESSION_HEADER, sessionId);
   return headers;
-}
-
-/**
- * Fetch wrapper that automatically injects `Authorization: Bearer <token>`
- * when a resolved Tandem auth token is set and valid.
- *
- * This is the forgiving variant — used by monitor/channel which may run in
- * loopback-only mode without a token. Invalid or absent tokens are silently
- * ignored (no exit-1). The strict validation lives in mcp-stdio.ts only.
- * When the token is set but fails validation, a one-time warning is emitted
- * so operators know why auth headers are absent.
- */
-export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  // Always attach the Claude session header (no-op when not resolvable) so the
-  // server can correlate channel traffic with the originating Claude session,
-  // independent of whether an auth token is configured.
-  const headers = withClaudeSessionHeader(init?.headers);
-  const { token, source } = resolveAuthTokenCandidate();
-  if (token !== undefined) {
-    const trimmed = token.trim();
-    if (VALID_TOKEN_RE.test(trimmed)) {
-      headers.set("Authorization", `Bearer ${trimmed}`);
-      return fetch(url, { ...init, headers });
-    }
-    // Token is set but invalid — warn once so operators know why auth fails
-    if (!_warnedInvalidToken) {
-      _warnedInvalidToken = true;
-      console.error(
-        `[tandem] authFetch: ${source} is set but invalid (must be 32+ alphanumeric chars [A-Za-z0-9_-]); sending without Authorization header`,
-      );
-    }
-  }
-  return fetch(url, { ...init, headers });
 }

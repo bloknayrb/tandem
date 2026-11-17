@@ -9,6 +9,7 @@ import {
   DOCX_EXTENSION,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
+  Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_FIDELITY_REPORT,
@@ -47,6 +48,8 @@ import {
   noteFileWritable,
 } from "../documents/read-only-file.js";
 import { wireFileWatcher } from "../documents/watcher.js";
+import { dropDocumentDeliveryRound } from "../events/delivery-state.js";
+import { dropPendingUpdates } from "../events/observers/chat-client-undo.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
@@ -80,9 +83,14 @@ import {
   stopAutoSave,
   touchSession,
 } from "../session/manager.js";
-import { onDocumentClosed } from "../sessions/ownership.js";
+import {
+  captureCarriedOverChat,
+  onDocumentClosed,
+  undoClientChatWrites,
+} from "../sessions/ownership.js";
 import { addStartupNotice, beginStartupRestore, endStartupRestore } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { carriedOverCandidates } from "./chat-handled.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -1915,8 +1923,21 @@ export async function closeDocumentById(
 
   // Ownership's tab-close point (#2358, ownership design §4.2): the entry goes
   // with the tab. Synchronous and immediately before the untrack, with no
-  // await between them. A no-op while ownership is off.
-  onDocumentClosed(safeId);
+  // await between them. A no-op while ownership is off. The path is passed
+  // as it is (the change notice's file name is computed inside, flag on
+  // only), so nothing new runs here while ownership is off.
+  onDocumentClosed(safeId, closedPath);
+
+  // The document's delivery round goes with the tab (#2358, the
+  // delivery-rounds PR, R3.1): dropped, never closed, immediately before the
+  // step that makes the document not open, with no await since the awaits
+  // above, so a forward that landed during them cannot leave a round nothing
+  // will close, and any later forward on this id is key-less (R1.5). Before
+  // `closeDocument` rather than after it, so a throw from its broadcast
+  // cannot strand the round on a document no poll reads (diff review M1).
+  // After the handover, outside it (it pushes nothing: the source pin).
+  // Rounds of messages on the document survive. A no-op while not keyed.
+  dropDocumentDeliveryRound(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
@@ -2000,6 +2021,13 @@ export async function restoreCtrlSession(): Promise<string | null> {
 
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   restoreCtrlDoc(ctrlDoc, saved);
+  // #2358 (the posts PR, R0.1): the boot's carried-over messages, the
+  // restored user rows that are `read` and not handled now. Taken here, once,
+  // and only with ownership on (the thunk is not called otherwise).
+  captureCarriedOverChat(() => carriedOverCandidates(ctrlDoc.getMap(Y_MAP_CHAT)));
+  // And (security review H1) anything the restored file held back for a
+  // missing dependency is dropped, so it cannot land later under no origin.
+  if (undoClientChatWrites()) dropPendingUpdates(ctrlDoc);
 
   // Read the previous active doc before clearing stale tracking
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);

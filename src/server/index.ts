@@ -22,8 +22,11 @@ import {
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback, resolveBindHostEnv } from "./bind-check.js";
 import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
+import { setChatClientWritesUndone } from "./chat-client-writes.js";
+import { setChatRowsDeletedListener } from "./chat-row-deletions.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
+import { setDeliveryRoundSeam } from "./events/delivery-state.js";
 import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
@@ -38,7 +41,7 @@ import {
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
 import { installLogRedaction } from "./log-redact.js";
-import { handOverDocumentInbox, onTandemReply } from "./mcp/awareness.js";
+import { handOverDocumentInbox, onTandemReply, ownershipChatSide } from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -84,9 +87,13 @@ import {
 } from "./session/manager.js";
 import {
   applyUserOpenDefaultToDocuments,
+  forgetChatMessageOwners,
+  keyedDeliveryRounds,
+  setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  undoClientChatWrites,
 } from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
 import { installSidecarPipeGuard } from "./sidecar-pipe-guard.js";
@@ -172,6 +179,7 @@ async function startLauncherSupervisor(): Promise<void> {
   launcherStartInflight = true;
   try {
     const { createSupervisor } = await import("./launcher/supervisor.js");
+    const { inLocalPeriod, subscribeLocalPeriod } = await import("./models/local-period.js");
     const { resolveAppDataDir } = await import("./platform.js");
     // Assigned before `start()` so a supervisor that spawned a reaper and then
     // threw is still reachable by `shutdown()`. Once a supervisor exists, the
@@ -201,6 +209,10 @@ async function startLauncherSupervisor(): Promise<void> {
       // The v1.0 setup walkthrough holds the boot start until it is done
       // (#2198; Bryan, 2026-10-14) — the same predicate the wizard opens on.
       walkthroughPending: () => isWalkthroughPending(appData, APP_VERSION),
+      // Who answers chat (#1123 A2): no automatic start and no wake while a
+      // local model answers it. Never held while dark (guard 1 reads Claude
+      // until primed, and priming happens only under the flag).
+      localPeriod: { held: inLocalPeriod, subscribe: subscribeLocalPeriod },
       // The address the MCP listener actually bound (#2358 PR 3a, Ruling D14),
       // never the configured host: the run MCP config names it.
       getBoundMcpAddress: () => {
@@ -752,6 +764,19 @@ async function main() {
         `[Tandem] Failed to prime who answers chat: ${err instanceof Error ? err.message : err}`,
       );
     }
+    // The local period (#1123 A2): Claude is handed nothing while a local
+    // model answers chat. Its own `try`, OUTSIDE the prime's, so a failed
+    // prime still installs it and still records the selection hold. After the
+    // CTRL and document restores, before Hocuspocus binds and before the
+    // supervisor starts.
+    try {
+      const { wireLocalPeriod } = await import("./local-period-wiring.js");
+      wireLocalPeriod();
+    } catch (err) {
+      console.error(
+        `[Tandem] Failed to wire the local period: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
@@ -824,6 +849,26 @@ async function main() {
   // The inbox half of a handover (ownership design §6.3), wired beside it for
   // the same reason. Only a flag-on ownership change ever calls it.
   setOwnershipInboxHandover(handOverDocumentInbox);
+  // The chat side of ownership (the chat owners PR, R2.2): which messages are
+  // handled, which are on a document, a row's facts, and the re-owe. And the
+  // other direction: a deleted chat row's per-message owner goes (R3.6).
+  // Wired beside the others for the same reason; only a flag-on ownership
+  // decision calls the first, and the listener returns at the flag.
+  setOwnershipChatSide(ownershipChatSide);
+  setChatRowsDeletedListener(forgetChatMessageOwners);
+  // The posts PR (R4.5): whether a client connection's changes to the chat
+  // map are undone, which is the ownership flag, read through this seam so
+  // the CTRL chat observer never imports it.
+  setChatClientWritesUndone(undoClientChatWrites);
+  // The delivery-rounds PR (design §6.7): whether delivery rounds are keyed by
+  // document and by message, which is the ownership flag, and whether a
+  // document is open (a forward on one that is not keys no document round,
+  // R1.5). Through this seam so `events/` never imports the flag. Flag off,
+  // master's one global round.
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
@@ -927,6 +972,15 @@ async function main() {
     // (ownership design §4.2). Tandem's Claude is never present at boot
     // (decision 11), so it leaves them unowned unless that changes.
     applyUserOpenDefaultToDocuments(getOpenDocs().keys());
+
+    // Decision 11's boot record point (#1123 A2), again now that every
+    // startup document is open (a document opened here can restore a session
+    // holding a selection), immediately before Hocuspocus binds. A no-op
+    // unless `wireLocalPeriod` ran, which only the flag's block above does.
+    {
+      const { recordBootSelections } = await import("./models/local-period.js");
+      recordBootSelections();
+    }
 
     const [srv] = await Promise.all([
       startMcpServerHttp(
@@ -1086,6 +1140,12 @@ async function main() {
         } catch (err) {
           console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
         }
+      }
+      // Decision 11's boot record point (#1123 A2), immediately before bind;
+      // a no-op unless the flag's block wired the local period.
+      {
+        const { recordBootSelections } = await import("./models/local-period.js");
+        recordBootSelections();
       }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);

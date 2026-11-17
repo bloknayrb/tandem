@@ -15,9 +15,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
-import { RUN_FILE_SWEEP_AGE_MS, type RunFileAcl } from "../../../src/server/launcher/run-files.js";
+import {
+  deleteRunFile,
+  RUN_FILE_SWEEP_AGE_MS,
+  type RunFileAcl,
+} from "../../../src/server/launcher/run-files.js";
 import {
   buildClaudeArgs,
   childEnv,
@@ -32,6 +37,13 @@ import {
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
 import { CLAUDE_STREAM_JSON_FLAGS } from "../../../src/shared/launcher/contract.js";
+
+// The stop bound's test makes one deletion hang; every other test gets the
+// real `deleteRunFile` through this pass-through.
+vi.mock(import("../../../src/server/launcher/run-files.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, deleteRunFile: vi.fn(actual.deleteRunFile) };
+});
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STUB_SOURCE = path.join(HERE, "stub-claude-cli.cjs");
@@ -166,6 +178,11 @@ const runRecordFor = (pid: number) =>
 
 beforeEach(async () => {
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  // #2358 PR 3b-1: `prepareRun` reads the user-level Claude settings through
+  // `CLAUDE_CONFIG_DIR` before `claudeSettingsHome`, so without this stub a
+  // developer's exported value would be read here (a privacy leak into test
+  // runs, and nondeterminism).
+  vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oh-spawn-")));
   spawnDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oh-spawn-cwd-")));
@@ -577,6 +594,93 @@ describe("teardown on every exit path (R4)", () => {
     expect(judgeBind(handle, run.sessionId)).toBeNull();
   });
 
+  it("stop() waits for a hung run-file deletion, and at most one second from when its bound is armed (#2421 review)", async () => {
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");
+    const real = await vi.importActual<typeof import("../../../src/server/launcher/run-files.js")>(
+      "../../../src/server/launcher/run-files.js",
+    );
+    const del = vi.mocked(deleteRunFile);
+    // Every deletion from here on hangs until the test lets it go (in the
+    // `finally`, so `afterEach`'s own stop() is not held a second).
+    const hang = deferred();
+    del.mockImplementation(() => hang.promise);
+    // Only the timeout functions: the child's exit still arrives through real
+    // I/O, and `Date.now()` and `setImmediate` below stay real. No spy on the
+    // faked `setTimeout`: `afterEach`'s restoreAllMocks would put the fake
+    // back after the clock is gone.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const stopping = sup.stop().then(() => {
+        settled = true;
+      });
+      // stopInternal arms one fake timer (its SIGTERM grace) and, once the
+      // child's exit has run the teardown (which deletes the run files) and
+      // stopInternal has resolved, stop() arms its bound in the same
+      // synchronous step: the second fake timer. The fake clock has not moved
+      // since it was installed, so the bound is measured from that moment.
+      const deadline = Date.now() + 15_000;
+      while (vi.getTimerCount() < 2) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for stop()'s bound");
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(vi.getTimerCount()).toBe(2);
+      expect(del).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      await new Promise((r) => setImmediate(r));
+      expect(settled, "still waiting at 999 ms").toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await new Promise((r) => setImmediate(r));
+      expect(settled, "resolved by 1,000 ms").toBe(true);
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+      del.mockImplementation(real.deleteRunFile);
+      hang.resolve();
+    }
+  });
+
+  it("stop() resolves as soon as a pending deletion settles, before its bound, with no fake time passing (#2438 review)", async () => {
+    // The twin of the bound above: the deletion is still pending when stop()
+    // arms its bound, then settles. A build that always waited the full second
+    // would never settle here, since the fake clock never moves.
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");
+    const real = await vi.importActual<typeof import("../../../src/server/launcher/run-files.js")>(
+      "../../../src/server/launcher/run-files.js",
+    );
+    const del = vi.mocked(deleteRunFile);
+    const held = deferred();
+    del.mockImplementation(() => held.promise);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const stopping = sup.stop().then(() => {
+        settled = true;
+      });
+      const deadline = Date.now() + 10_000;
+      // The bound is armed: the SIGTERM grace and the bound are the two fake timers.
+      while (vi.getTimerCount() < 2) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for stop()'s bound");
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(settled).toBe(false);
+      held.resolve();
+      while (!settled) {
+        if (Date.now() > deadline) throw new Error("stop() did not resolve without fake time");
+        await new Promise((r) => setImmediate(r));
+      }
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+      del.mockImplementation(real.deleteRunFile);
+      held.resolve();
+    }
+  });
+
   it("an exit before binding (a crash) ends the spawn, and the crash restart's spawn is a new one", async () => {
     const sup = makeSupervisor();
     await sup.startFresh(spawnDir);
@@ -681,6 +785,115 @@ describe("the boot sweep (R1.9)", () => {
     const sup = makeSupervisor({ aiRefusal: () => REFUSAL, storeLockHeld: () => false });
     await sup.start();
     expect(fs.existsSync(old)).toBe(true);
+  });
+});
+
+describe("#1123 A2: a start the local period holds writes no run files and mints no handle", () => {
+  /** A local-period seam whose `held` the test flips. */
+  function localPeriod(initially: boolean) {
+    let held = initially;
+    return {
+      seam: { held: () => held, subscribe: () => () => {} },
+      set: (v: boolean) => {
+        held = v;
+      },
+    };
+  }
+
+  it("a boot held by the local period: no run file, no registered spawn, no child", async () => {
+    const lp = localPeriod(true);
+    let writes = 0;
+    const sup = makeSupervisor({
+      localPeriod: lp.seam,
+      runFileWriteHold: async () => {
+        writes += 1;
+      },
+    });
+    const logs = captureErrors();
+    await sup.start();
+    await sleep(100);
+    // Held BEFORE the write, not discarded after it: no handle was minted.
+    expect(writes).toBe(0);
+    expect(logs().some((l) => l.includes("not starting Claude (boot)"))).toBe(true);
+    expect(records("spawn-")).toEqual([]);
+    expect(runFilesOnDisk()).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+
+  it("the local period begins while the run files are written: the start is held, its files are deleted and its handle ended", async () => {
+    const lp = localPeriod(false);
+    const gate = deferred();
+    const reached = deferred();
+    const sup = makeSupervisor({
+      localPeriod: lp.seam,
+      runFileWriteHold: async () => {
+        reached.resolve();
+        await gate.promise;
+      },
+    });
+    const logs = captureErrors();
+    const started = sup.start();
+    await reached.promise;
+    // The files and the spawn's state exist now (the write is done, the
+    // re-checks are not): the positive control for what follows.
+    expect(runFilesOnDisk()).toHaveLength(2);
+    expect(ownerHandleBindSnapshotForTests().spawns).toHaveLength(1);
+    lp.set(true);
+    gate.resolve();
+    await started;
+    await waitFor(() => runFilesOnDisk().length === 0, "the run files deleted");
+    expect(logs().some((l) => l.includes("not starting Claude (boot)"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawning Claude via reaper"))).toEqual([]);
+    expect(records("spawn-")).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+});
+
+describe("#1123 A2: a message start the local period holds during the run-file write", () => {
+  it("the switch lands while a message start's run files are written: nothing spawns, its files are deleted and its handle ended", async () => {
+    let held = false;
+    let standbyCb: ((event: TandemEvent) => void) | null = null;
+    const gate = deferred();
+    const reached = deferred();
+    const sup = makeSupervisor({
+      localPeriod: { held: () => held, subscribe: () => () => {} },
+      subscribeDuringStandby: (cb) => {
+        standbyCb = cb;
+        return () => {
+          standbyCb = null;
+        };
+      },
+      runFileWriteHold: async () => {
+        reached.resolve();
+        await gate.promise;
+      },
+    });
+    await sup.updateSettings({ startMode: "on-click" });
+    await sup.start(); // on-click: no boot start, the standby watch is armed
+    expect(standbyCb).not.toBeNull();
+    const logs = captureErrors();
+    (standbyCb as unknown as (event: TandemEvent) => void)({
+      id: "evt_msg",
+      type: "chat:message",
+      timestamp: Date.now(),
+      payload: { messageId: "m1", text: "hi" },
+    } as TandemEvent);
+    await reached.promise;
+    // The positive control: the message start wrote its files and registered.
+    expect(runFilesOnDisk()).toHaveLength(2);
+    expect(ownerHandleBindSnapshotForTests().spawns).toHaveLength(1);
+    held = true; // the switch to the local model lands during the write
+    gate.resolve();
+    await waitFor(() => runFilesOnDisk().length === 0, "the run files deleted");
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to finish",
+    );
+    expect(logs().some((l) => l.includes("not starting Claude (message)"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawning Claude via reaper"))).toEqual([]);
+    expect(records("spawn-")).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    expect(sup.status()).toMatchObject({ running: false, heldForLocalModel: true });
   });
 });
 

@@ -40,6 +40,186 @@ describe("each transport branch tells the ownership module its mode before servi
   });
 });
 
+describe("the delivery-round seam is wired in a running server (the delivery-rounds PR)", () => {
+  // Unwired, rounds stay master's one global round even flag on, and no unit
+  // test would notice: `main()` cannot run in a unit test, so the call is
+  // pinned from source, beside `setOwnershipSeqSource`.
+  const src = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("index.ts wires the ownership side's keyedDeliveryRounds and the registry, once, before either transport branch", () => {
+    const call =
+      "setDeliveryRoundSeam({\n    keyed: keyedDeliveryRounds,\n    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),\n  });";
+    expect(src.split(call)).toHaveLength(2);
+    const wired = src.indexOf(call);
+    expect(wired).toBeGreaterThan(
+      src.indexOf("setOwnershipSeqSource(() => deliveryRegistry.counter);"),
+    );
+    expect(wired).toBeLessThan(src.indexOf('if (transportMode === "http") {\n    // Ownership'));
+    const callers = [...SRC_FILES]
+      .filter(([, text]) => /\bsetDeliveryRoundSeam\(/.test(text))
+      .map(([file]) => file)
+      .sort();
+    expect(callers).toEqual(["src/server/events/delivery-state.ts", "src/server/index.ts"]);
+    const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+    expect(ownership).toMatch(
+      /export function keyedDeliveryRounds\(\): boolean \{\n {2}return ownershipEnabled\(\);\n\}/,
+    );
+  });
+
+  it("exactly one call in index.ts, an unconditional statement of main() in the same block as setOwnershipSeqSource (review round 1)", () => {
+    // Every use of the name, whatever its form: a second call (say
+    // `setDeliveryRoundSeam(undefined)`) would unwire the first, and so would
+    // an alias (`const f = setDeliveryRoundSeam; f(undefined)`) or a `.call`
+    // (`setDeliveryRoundSeam.call(null, undefined)`), which a count of
+    // `setDeliveryRoundSeam(` cannot see (the keyed-rounds suites PR, R2). So
+    // the identifier itself is counted, over index.ts's parsed syntax tree:
+    // comments are not in it (a mention in a comment neither adds one nor
+    // hides one), and neither is text inside a string. Exactly two, and each
+    // in its role: the import specifier, unrenamed, from the delivery-state
+    // module (so another function imported under this name is refused), and
+    // the call, a statement of the same block as `setOwnershipSeqSource`'s
+    // (so a call commented out, with a stray reference to keep the count,
+    // is refused). Between those two statements, no `return` or `throw` at
+    // any depth outside a nested function.
+    //
+    // What this pin of source cannot see (limits accepted by Bryan on
+    // 2026-11-17, D-own-6, recorded in ADR-054: the pin guards against an
+    // accidental second writer, and a deliberate bypass is a review matter):
+    // an exit earlier in `main()`, before `setOwnershipSeqSource`; between the
+    // two statements, a conditional exit that is not a `return` or `throw`
+    // statement (a call that throws, say); braces or comment markers inside
+    // strings, which the text depth check below counts as code; a call
+    // through a namespace import by element access
+    // (`ns["setDeliveryRoundSeam"]`, or a computed name such as
+    // `ns["set" + name]`); and calls from other `src` files through an alias
+    // or `.call` (the callers check above matches `setDeliveryRoundSeam(`
+    // only). A behavioural pin that boots `main()` would see each of them.
+    const tree = ts.createSourceFile("index.ts", src, ts.ScriptTarget.Latest, true);
+    const uses: ts.Identifier[] = [];
+    let seqStatement: ts.Statement | undefined;
+    const visit = (node: ts.Node): void => {
+      // `forEachChild`, never `getChildren`: the latter walks JSDoc too.
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") uses.push(node);
+      if (
+        ts.isExpressionStatement(node) &&
+        ts.isCallExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "setOwnershipSeqSource"
+      ) {
+        seqStatement = node;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(uses).toHaveLength(2);
+    const [imported, called] = uses as [ts.Identifier, ts.Identifier];
+    const specifier = imported.parent;
+    expect(ts.isImportSpecifier(specifier) && specifier.propertyName === undefined).toBe(true);
+    const declaration = specifier.parent.parent.parent;
+    expect(
+      ts.isImportDeclaration(declaration) &&
+        ts.isStringLiteral(declaration.moduleSpecifier) &&
+        declaration.moduleSpecifier.text,
+    ).toBe("./events/delivery-state.js");
+    const call = called.parent;
+    expect(ts.isCallExpression(call) && call.expression === called).toBe(true);
+    const callStatement = call.parent;
+    expect(ts.isExpressionStatement(callStatement)).toBe(true);
+    expect(seqStatement, "setOwnershipSeqSource's statement").toBeDefined();
+    const block = (seqStatement as ts.Statement).parent;
+    expect(callStatement.parent).toBe(block);
+    const statements = (block as ts.Block).statements;
+    const seqAt = statements.indexOf(seqStatement as ts.Statement);
+    const callAt = statements.indexOf(callStatement as ts.Statement);
+    expect(seqAt).toBeGreaterThan(-1);
+    expect(seqAt).toBeLessThan(callAt);
+    const exits: string[] = [];
+    const findExits = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+      if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) exits.push(node.getText());
+      ts.forEachChild(node, findExits);
+    };
+    for (const statement of statements.slice(seqAt + 1, callAt)) findExits(statement);
+    expect(exits).toEqual([]);
+    const lines = src.split("\n");
+    // The call's own line, from the syntax tree, so a comment mentioning the
+    // call above it is not taken for it.
+    const at = tree.getLineAndCharacterOfPosition(called.getStart(tree)).line;
+    // Two spaces and nothing before the call: not wrapped in a condition on
+    // its own line.
+    expect(lines[at]).toBe("  setDeliveryRoundSeam({");
+    // Between `setOwnershipSeqSource` (pinned as a statement of main()) and
+    // this call every brace closes, so the call is in the same block, not
+    // inside a branch or a function opened between them.
+    const from = lines.findIndex((l) => l.includes("setOwnershipSeqSource(() =>"));
+    expect(from).toBeGreaterThan(-1);
+    expect(from).toBeLessThan(at);
+    const between = lines
+      .slice(from, at)
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+    let depth = 0;
+    for (const ch of between) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("the seam has one writer: setDeliveryRoundSeam itself, which its own module never calls (the keyed-rounds suites PR)", () => {
+    // A second assignment inside delivery-state.ts, or a call of the setter
+    // there (the callers check above exempts this file, whose definition
+    // matches it), would unwire the seam with every pin on index.ts still
+    // passing. So the setter's name is counted over this module's syntax tree,
+    // as `setOwnershipSeqSource`'s is in its own: exactly one identifier, the
+    // declaration's (no call, alias or `.call`). A text pin for the
+    // assignment: it does not see a compound (`??=`), destructuring or
+    // parenthesised (`(roundSeam) = x`) assignment, or a mutation of the seam
+    // object (`roundSeam.keyed = ...`) (limits accepted by Bryan on 2026-11-17,
+    // D-own-6, recorded in ADR-054).
+    const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
+    const tree = ts.createSourceFile("delivery-state.ts", module, ts.ScriptTarget.Latest, true);
+    const named: ts.Identifier[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") named.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(named).toHaveLength(1);
+    expect(ts.isFunctionDeclaration((named[0] as ts.Identifier).parent)).toBe(true);
+    expect(module.match(/\broundSeam\s*=(?!=)/g)).toHaveLength(1);
+    expect(module).toMatch(
+      /export function setDeliveryRoundSeam\(seam: DeliveryRoundSeam \| undefined\): void \{\n {2}roundSeam = seam;\n\}/,
+    );
+  });
+
+  it("no src file imports a round seam, drop or close under another name", () => {
+    for (const [file, text] of SRC_FILES) {
+      expect(text, file).not.toMatch(
+        /\b(?:setDeliveryRoundSeam|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound)\s+as\s+\w/,
+      );
+    }
+  });
+
+  it("the drops sit where the brief puts them: the close in closeDocumentById, Clear chat in clearCtrlChatDurably, never the chat observer", () => {
+    const callersOf = (name: string) =>
+      [...SRC_FILES]
+        .filter(
+          ([file, text]) =>
+            file !== "src/server/events/delivery-state.ts" && text.includes(`${name}(`),
+        )
+        .map(([file]) => file)
+        .sort();
+    expect(callersOf("dropDocumentDeliveryRound")).toEqual(["src/server/mcp/document-service.ts"]);
+    expect(callersOf("dropMessageDeliveryRounds")).toEqual(["src/server/session/manager.ts"]);
+    expect(callersOf("closeMessageDeliveryRound")).toEqual([
+      "src/server/mcp/awareness.ts",
+      "src/server/mcp/channel-routes.ts",
+    ]);
+  });
+});
+
 describe("an ownership entry's sinceSeq has a real source in a running server (ownership design §2; PR 2a)", () => {
   // `setOwnershipSeqSource` is a seam that answers 0 when nothing wires it, so
   // every unit test passes without the wiring: an unwired server would stamp
@@ -163,7 +343,7 @@ describe("the handover is wired in a running server, and reachable only through 
     const handOverBody = ownership.slice(handOverFrom, ownership.indexOf("\n}\n", handOverFrom));
     for (const text of [body, keys, handOverBody]) {
       expect(text).not.toMatch(
-        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
+        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
       );
     }
     // The annotation read is the plain one, on a Y.Doc from the non-creating getter.
@@ -235,6 +415,31 @@ describe("the handover is wired in a running server, and reachable only through 
     );
   });
 
+  /**
+   * Each line of `ownership.ts` on which the identifier `handoverSeq` is used
+   * as the map (not as a property name, such as the snapshot's key), trimmed.
+   */
+  function handoverSeqUses(): string[] {
+    const file = ts.createSourceFile("ownership.ts", ownership, ts.ScriptTarget.Latest, true);
+    const lines = ownership.split("\n");
+    const uses: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "handoverSeq") {
+        const parent = node.parent;
+        const isKey =
+          (ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) &&
+          parent.name === node;
+        if (!isKey) {
+          const { line } = file.getLineAndCharacterOfPosition(node.getStart());
+          uses.push(lines[line].trim());
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    return uses;
+  }
+
   it("only a handover writes handoverSeq (and the test setter)", () => {
     expect(ownership.match(/\bhandoverSeq\.set\(/g)).toHaveLength(2);
     expect(functionBody("function handOver(documentId: string): void {")).toContain(
@@ -245,6 +450,18 @@ describe("the handover is wired in a running server, and reachable only through 
     // this module, and nothing else in it or anywhere.
     expect(ownership.match(/\bhandoverSeq\.(get|has|forEach|keys|values|entries)\(/g)).toEqual([
       "handoverSeq.get(",
+    ]);
+    // Every use of the map, by the AST (comments are not identifiers), with
+    // the line it sits on (#2420 review, R9.7): a spread, `new Map(...)`, a
+    // `.size`, passing it along, or any other read than `settledThrough`'s,
+    // the snapshot's spread and the reset's `clear()` adds a line here.
+    expect(handoverSeqUses()).toEqual([
+      "const handoverSeq = new Map<string, number>();",
+      "handoverSeq.set(documentId, seqSource());",
+      "settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,",
+      "handoverSeq: [...handoverSeq],",
+      "handoverSeq.set(documentId, seq);",
+      "handoverSeq.clear();",
     ]);
     expect(ownership).toContain(
       "settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,",
@@ -417,5 +634,325 @@ describe("the inbox's door into ownership (the scope PR)", () => {
       "src/server/mcp/awareness.ts",
     ]);
     expect(filesNaming(/"poll-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+  });
+});
+
+describe("the chat side's seams are wired in a running server (the chat owners PR, R2.2)", () => {
+  // Each is a seam that answers "nothing" when unwired (no message handled,
+  // none on any document, no row, a re-owe that writes nothing, a delete
+  // that tells nobody), so every unit test passes without the wiring.
+  // `main()` cannot be run in a unit test, so the calls are pinned from
+  // source, as the two above are. `ownership-chat.test.ts` wires the same
+  // expressions against the real inbox and calls each member.
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  const filesNaming = (pattern: RegExp) =>
+    [...SRC_FILES]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort();
+  const beforeBothBranches = (line: string) => {
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  };
+
+  it("index.ts wires the chat side once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setOwnershipChatSide(ownershipChatSide);");
+    expect(index.match(/setOwnershipChatSide\(/g)).toHaveLength(1);
+    expect(filesNaming(/\bsetOwnershipChatSide\(/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // (A comment in `ownership.ts` names it in backticks.)
+    expect(filesNaming(/\bownershipChatSide\b(?!`)/)).toEqual([
+      "src/server/index.ts",
+      "src/server/mcp/awareness.ts",
+    ]);
+  });
+
+  it("the chat side's members are synchronous, and its file reads no flag", () => {
+    const awareness = SRC_FILES.get("src/server/mcp/awareness.ts") as string;
+    const start = awareness.indexOf("export const ownershipChatSide = Object.freeze({");
+    expect(start).toBeGreaterThan(-1);
+    const body = awareness.slice(start, awareness.indexOf("\n});\n", start));
+    for (const member of [
+      "handledKeys()",
+      "messagesOn(documentId: string)",
+      "message(key: string)",
+      "reOwe(keys: readonly string[])",
+    ]) {
+      expect(body, member).toContain(member);
+    }
+    expect(body).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    const reOwe = awareness.slice(
+      awareness.indexOf("function reOweChat("),
+      awareness.indexOf("\n}\n", awareness.indexOf("function reOweChat(")),
+    );
+    expect(reOwe).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    // One server-origin transaction (Critical Rule 2), and no push.
+    expect(reOwe.match(/withInternal\(/g)).toHaveLength(1);
+    expect(reOwe).not.toMatch(/withMcp|withBrowser|transact\(|pushEvent/);
+    expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled/);
+  });
+
+  it("index.ts wires the deletion listener once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setChatRowsDeletedListener(forgetChatMessageOwners);");
+    expect(filesNaming(/\bsetChatRowsDeletedListener\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/index.ts",
+    ]);
+    expect(filesNaming(/\bforgetChatMessageOwners\b/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+
+  it("index.ts wires the client-write undo once, before either transport branch and before Hocuspocus starts (the posts PR, R4.5; security review L2)", () => {
+    beforeBothBranches("  setChatClientWritesUndone(undoClientChatWrites);");
+    const wired = index.indexOf("  setChatClientWritesUndone(undoClientChatWrites);");
+    expect(wired).toBeLessThan(index.indexOf("startHocuspocus(wsPort)"));
+    expect(filesNaming(/\bsetChatClientWritesUndone\(/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+    ]);
+    // (The seam's docblock names it.)
+    expect(filesNaming(/\bundoClientChatWrites\b/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+      "src/server/mcp/document-service.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // The seam imports nothing; the observer and the undo never name the
+    // ownership module or the flag.
+    const seam = SRC_FILES.get("src/server/chat-client-writes.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+    for (const file of [
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/events/observers/chat-client-undo.ts",
+    ]) {
+      expect(SRC_FILES.get(file)).not.toMatch(/["'`][^"'`]*\/ownership(\.js)?["'`]|ownership-flag/);
+    }
+  });
+
+  it("the carried-over capture and the pending drop run after restoreCtrlDoc, inside restoreCtrlSession (review round 1, item 1)", () => {
+    const service = SRC_FILES.get("src/server/mcp/document-service.ts") as string;
+    const fn = service.slice(
+      service.indexOf("export async function restoreCtrlSession("),
+      service.indexOf("\n}\n", service.indexOf("export async function restoreCtrlSession(")),
+    );
+    const restored = fn.indexOf("restoreCtrlDoc(ctrlDoc, saved);");
+    expect(restored).toBeGreaterThan(-1);
+    expect(fn.indexOf("captureCarriedOverChat(")).toBeGreaterThan(restored);
+    expect(fn.indexOf("dropPendingUpdates(ctrlDoc)")).toBeGreaterThan(restored);
+    expect(service.match(/captureCarriedOverChat\(/g)).toHaveLength(1);
+  });
+
+  it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
+    const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
+    const manager = SRC_FILES.get("src/server/session/manager.ts") as string;
+    expect(observer).toContain("noteChatRowsDeleted(deleted);");
+    // Before the origin skip, so every origin's delete is told.
+    expect(observer.indexOf("noteChatRowsDeleted(deleted);")).toBeLessThan(
+      observer.indexOf("if (shouldSkipChannel(txn.origin)) return;"),
+    );
+    const clear = manager.slice(
+      manager.indexOf("export async function clearCtrlChatDurably("),
+      manager.indexOf("\n}\n", manager.indexOf("export async function clearCtrlChatDurably(")),
+    );
+    expect(clear).toContain("noteChatRowsDeleted(capturedIds);");
+    expect(filesNaming(/\bnoteChatRowsDeleted\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/session/manager.ts",
+    ]);
+    for (const text of [observer, manager]) {
+      // Any specifier naming the ownership module or the flag, with or without
+      // an extension or the `sessions/` prefix.
+      expect(text).not.toMatch(/["'][^"']*\/ownership(\.js)?["']|ownership-flag/);
+    }
+    // The delete arm fills the list it hands the seam.
+    const arm = observer.slice(
+      observer.indexOf("const deleted: string[] = [];"),
+      observer.indexOf("noteChatRowsDeleted(deleted);"),
+    );
+    expect(arm).toMatch(/change\.action === "delete"[\s\S]*deleted\.push\(key\)/);
+    const seam = SRC_FILES.get("src/server/chat-row-deletions.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+  });
+
+  it("the reply's claim is a named unqueued change, and only the ownership module names its cause", () => {
+    expect(filesNaming(/"reply-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted `tandem_reply`");
+  });
+
+  it("a post's claim is a named unqueued change too, and only the ownership module names its cause (review round 1, item 13)", () => {
+    expect(filesNaming(/"post-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted chat post");
+    expect(queue).toContain("cause\n * `post-claim`");
+    expect(queue).toContain("Seven run where they are");
+  });
+});
+
+describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2.9)", () => {
+  /**
+   * Presence (R2.1) is recomputed only when a field it reads is written
+   * through its setter, which marks presence dirty. A raw write anywhere else
+   * (`lastError = "spawn-failed"` in a new path, say) passes every behavioural
+   * case that does not reach that path, and leaves presence stale there. So
+   * every assignment to each field — plain, compound, `++`/`--`, destructuring
+   * or parenthesised — is found over `supervisor.ts`'s syntax tree, and must
+   * sit inside that field's setter. The one named exception (Ruling H) is
+   * `status()`'s `cli-unusable` clear, exactly one `lastError = undefined`
+   * there.
+   *
+   * What this pin cannot see (review round 1, item 7): a write as the head of
+   * a `for (x of …)` or `for (x in …)` loop; a setter that calls
+   * `markPresenceDirty` only conditionally (the check below is that the call
+   * appears in the setter's body, not that it always runs); and a raw write
+   * inside a nested function within the field's own setter, which is counted
+   * as the setter's. Each is a review matter: none is a shape this file uses.
+   */
+  const SETTERS: Record<string, string> = {
+    lastError: "setLastError",
+    breakerTripped: "setBreakerTripped",
+    configured: "setConfigured",
+    restartTimer: "setRestartTimer",
+    launching: "setLaunching",
+    lastRunBound: "setLastRunBound",
+    standby: "setStandby",
+  };
+
+  function writesOutsideSetters(text: string): string[] {
+    const sf = ts.createSourceFile("supervisor.ts", text, ts.ScriptTarget.Latest, true);
+    const out: string[] = [];
+    const enclosingFunction = (node: ts.Node): string | undefined => {
+      for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+        if (ts.isFunctionDeclaration(n) && n.name) return n.name.text;
+      }
+      return undefined;
+    };
+    /** Identifiers a write targets: `x`, `(x)`, `[x] = …`, `({ x } = …)`. */
+    const targets = (node: ts.Expression): ts.Identifier[] => {
+      if (ts.isParenthesizedExpression(node)) return targets(node.expression);
+      if (ts.isIdentifier(node)) return [node];
+      if (ts.isArrayLiteralExpression(node)) {
+        return node.elements.flatMap((e) => (ts.isOmittedExpression(e) ? [] : targets(e)));
+      }
+      if (ts.isObjectLiteralExpression(node)) {
+        return node.properties.flatMap((p) =>
+          ts.isShorthandPropertyAssignment(p)
+            ? [p.name]
+            : ts.isPropertyAssignment(p)
+              ? targets(p.initializer)
+              : [],
+        );
+      }
+      return [];
+    };
+    const record = (id: ts.Identifier) => {
+      const setter = SETTERS[id.text];
+      if (setter === undefined) return;
+      const fn = enclosingFunction(id);
+      if (fn === setter) return;
+      const line = sf.getLineAndCharacterOfPosition(id.getStart()).line + 1;
+      out.push(`${id.text} written in ${fn ?? "(top level)"} at line ${line}`);
+    };
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      ) {
+        for (const id of targets(node.left)) record(id);
+      }
+      if (
+        (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+        (node.operator === ts.SyntaxKind.PlusPlusToken ||
+          node.operator === ts.SyntaxKind.MinusMinusToken)
+      ) {
+        for (const id of targets(node.operand)) record(id);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return out;
+  }
+
+  it("each field is assigned only inside its setter, but for status()'s one cli-unusable clear", () => {
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    expect(writesOutsideSetters(text)).toEqual([
+      "lastError written in status at line " + statusClearLine(text),
+    ]);
+    // Every setter exists and marks presence dirty.
+    for (const setter of Object.values(SETTERS)) {
+      const at = text.indexOf(`function ${setter}(`);
+      expect(at, setter).toBeGreaterThan(-1);
+      const body = text.slice(at, text.indexOf("\n  }\n", at));
+      expect(body, setter).toContain("markPresenceDirty();");
+    }
+  });
+
+  it("the pin is not vacuous: a planted raw write outside a setter is found", () => {
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    const planted = text.replace(
+      "function recordStartThrow(err: unknown, label: string): void {\n",
+      'function recordStartThrow(err: unknown, label: string): void {\n    lastError = "spawn-failed";\n    [breakerTripped] = [true];\n    (launching)++;\n',
+    );
+    expect(planted).not.toBe(text);
+    const found = writesOutsideSetters(planted).filter((w) => w.includes("recordStartThrow"));
+    expect(found.map((w) => w.split(" ")[0]).sort()).toEqual([
+      "breakerTripped",
+      "lastError",
+      "launching",
+    ]);
+  });
+
+  function statusClearLine(text: string): number {
+    const at = text.indexOf('lastError === "cli-unusable" &&');
+    const clear = text.indexOf("lastError = undefined;", at);
+    return text.slice(0, clear).split("\n").length;
+  }
+
+  it("R2.1 (v) and Ruling A: a restart underway is exactly restartTimer or launching, never messageStartQueued or restartPending()", () => {
+    // Not reachable at the exact moment through the public API (a message
+    // start's queued flag outlives `launching` by a microtask), so pinned here:
+    // presence's (v) reads these three fields and nothing else.
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    const fn = text.slice(text.indexOf("function recomputePresence("));
+    const body = fn.slice(0, fn.indexOf("\n  }\n"));
+    expect(body).toMatch(
+      /const noError = lastError === undefined \|\| restartTimer !== null \|\| launching > 0;/,
+    );
+    expect(body).not.toMatch(/messageStartQueued|restartPending\(/);
+  });
+
+  it("the seam's diagnosticsForTests is read by no src file but its definition (review round 1, item 9)", () => {
+    const readers = [...SRC_FILES.entries()]
+      .filter(([, text]) => text.includes("diagnosticsForTests"))
+      .map(([file, text]) => [file, text.match(/diagnosticsForTests/g)?.length ?? 0] as const);
+    // Declared on `TandemPresenceSeam` and defined on the seam object: two
+    // mentions, both in supervisor.ts. A route, tool or log line reading it
+    // would add a mention here or a file below.
+    expect(readers).toEqual([["src/server/launcher/supervisor.ts", 2]]);
+  });
+
+  it("R2.8's order: noteOwnerHandleBind records the transport's bind synchronously after confirmBind", () => {
+    // The run start is a microtask queued in `onFirstBind`, which `confirmBind`
+    // calls; it sees the transport as bound only because nothing awaits between
+    // `confirmBind` and `entry.boundSpawn = …` (behavioural cover:
+    // owner-handle-chain.test.ts, the R2.8 case).
+    const server = SRC_FILES.get("src/server/mcp/server.ts") as string;
+    expect(server).toMatch(
+      /confirmBind\(candidate, sessionId\)\) \{\n {4}entry\.boundSpawn = candidate\.serial;/,
+    );
+    const fn = server.slice(server.indexOf("function noteOwnerHandleBind("));
+    expect(fn.slice(0, fn.indexOf("\n}\n"))).not.toMatch(/\bawait\b/);
   });
 });

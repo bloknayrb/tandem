@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { localModelResolvesNow } from "../../../src/server/local-model/collaborator.js";
 import {
   type EndpointRejectCode,
   validateEndpoint,
@@ -21,7 +21,11 @@ import {
   primeModelStoreCache,
 } from "../../../src/server/models/registry.js";
 import { createModelStore } from "../../../src/server/models/store.js";
-import type { ModelsEntry, ModelsFile } from "../../../src/shared/models/contract.js";
+import {
+  LOCAL_MODEL_PROVIDERS,
+  type ModelsEntry,
+  type ModelsFile,
+} from "../../../src/shared/models/contract.js";
 import { AgentIdentitySchema } from "../../../src/shared/types.js";
 
 const local: ModelsEntry = {
@@ -211,9 +215,14 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
 
   type Unusable = Extract<LocalModelResolution, { kind: "unusable" }>;
 
-  /** Resolve, and require the four entry points to tell the same story. */
+  /** Resolve, and require the five entry points to tell the same story. */
   function resolveAll(): LocalModelResolution {
     const r = resolveLocalModel();
+    // The chat-answerer GET's closed state (#1123 part B, R1.3), through the
+    // one export `index.ts` may import.
+    expect(localModelResolvesNow()).toBe(
+      r.kind === "ok" ? "usable" : r.kind === "none" ? "none" : r.reason,
+    );
     const config = resolveLocalModelConfig();
     const diagnosis = diagnoseLocalModel();
     const answering = answeringLocalModel();
@@ -770,6 +779,70 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
       expect(answeringLocalModel()?.modelId).toBe("other:7b");
       await persistModelsFile(fileWith([local, local2], null));
       expect(answeringLocalModel()).toBeNull();
+    });
+  });
+
+  // #1123 (LM Studio and "another local server", 2026-11-15). Each new local
+  // provider is an ordinary local model to the resolver (R1.4), and the
+  // loopback rule ignores the provider (R3.3).
+  describe("every local provider resolves alike", () => {
+    const NEW_LOCALS = ["local-lmstudio", "local-other"] as const;
+
+    for (const provider of NEW_LOCALS) {
+      it(`${provider}: answers as the sole enabled local model, with its provider on the byline`, async () => {
+        await persistModelsFile(fileWith([{ ...local, provider }, cloud], null));
+        const r = okNow();
+        expect(r.entryId).toBe("m-local");
+        expect(r.config.transport).toBe("v1");
+        expect(r.config.agentIdentity).toEqual({ provider, displayName: "Local" });
+        expect(AgentIdentitySchema.safeParse(r.config.agentIdentity).success).toBe(true);
+      });
+
+      it(`${provider}: answers as the default among several`, async () => {
+        await persistModelsFile(fileWith([local2, { ...local, provider }], "m-local"));
+        expect(okNow().config.agentIdentity?.provider).toBe(provider);
+      });
+
+      it(`${provider}: one of two with no default is no-default-chosen`, async () => {
+        await persistModelsFile(fileWith([local2, { ...local, provider }], null));
+        expect(unusableNow().reason).toBe("no-default-chosen");
+      });
+    }
+
+    const REFUSED_ADDRESSES = [
+      "http://192.168.1.10:1234",
+      "http://0.0.0.0:1234",
+      "http://[::ffff:127.0.0.1]:1234",
+      "http://user:pw@127.0.0.1:1234",
+    ];
+    for (const address of REFUSED_ADDRESSES) {
+      it(`${address} is refused with the same answer for every local provider`, async () => {
+        const check = validateEndpoint(address);
+        expect(check.ok).toBe(false);
+        // The resolver's own answer, per provider: one provider's detail or
+        // state differing from another's fails here.
+        const answers = new Map<string, { detail: string; stateKey: string }>();
+        for (const provider of LOCAL_MODEL_PROVIDERS) {
+          await persistModelsFile(fileWith([{ ...local, provider, endpoint: address }], null));
+          const r = unusableNow();
+          expect(r.reason).toBe("endpoint-rejected");
+          if (!check.ok) expect(r.detail).toContain(check.code);
+          answers.set(provider, { detail: r.detail, stateKey: r.stateKey });
+        }
+        expect(new Set([...answers.values()].map((a) => JSON.stringify(a))).size).toBe(1);
+      });
+    }
+
+    it("http://127.0.0.1:1234/v1 resolves for every local provider, the address kept verbatim", async () => {
+      for (const provider of LOCAL_MODEL_PROVIDERS) {
+        await persistModelsFile(
+          fileWith([{ ...local, provider, endpoint: "http://127.0.0.1:1234/v1" }], null),
+        );
+        const r = okNow();
+        expect(r.config.endpoint).toBe("http://127.0.0.1:1234/v1");
+        // This provider's entry resolved, not another's standing in for it.
+        expect(r.config.agentIdentity?.provider).toBe(provider);
+      }
     });
   });
 });

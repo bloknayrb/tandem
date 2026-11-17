@@ -10,11 +10,16 @@
  * light up alongside it. Final first-run choreography copy is M4-owned.
  */
 import { untrack } from "svelte";
-import { isLocalProvider } from "../../shared/models/contract.js";
+import { isLocalProvider, type ModelProvider } from "../../shared/models/contract.js";
+import {
+  endpointPrefill,
+  PROVIDER_LABEL,
+  PROVIDER_OPTION_ORDER,
+} from "../../shared/models/provider-ui.js";
 import { createModels } from "../hooks/useModels.svelte.js";
 import { createModelsWriteAccess } from "../hooks/useModelsWriteAccess.svelte";
-import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
+import { endpointHint, PICKER_LOCAL_SUBTITLE } from "../utils/local-model-copy.js";
 
 interface Props {
   /** Fires after Save (success) or Skip. Caller should advance its state. */
@@ -34,7 +39,34 @@ interface ProviderOption {
   label: string;
   /** Default model ID surfaced as input placeholder + initial value. */
   defaultModelId: string;
+  /** Display name placeholder, and the name a blank Display name saves as. */
+  nameFallback: string;
 }
+
+// Picker-only per-provider data. `Record`s, so a provider added to the
+// contract is a type error here until it has a row. The cloud labels keep
+// their brand hint; the local ones are the Models tab's.
+const PICKER_LABEL: Record<ModelProvider, string> = {
+  ...PROVIDER_LABEL,
+  anthropic: "Anthropic (Claude)",
+  gemini: "Gemini (Google)",
+};
+// LM Studio and Other have no model everyone has: their id starts empty, so
+// Save stays disabled until it is filled.
+const DEFAULT_MODEL_ID: Record<ModelProvider, string> = {
+  "local-ollama": "llama3.1:70b",
+  "local-llamacpp": "local-model",
+  "local-lmstudio": "",
+  "local-other": "",
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-4o",
+  gemini: "gemini-2.0-flash",
+};
+// #1123 Ruling L-h: Other's long label is not a name; it saves as "Local server".
+const NAME_FALLBACK: Record<ModelProvider, string> = {
+  ...PICKER_LABEL,
+  "local-other": "Local server",
+};
 
 // Local-first, matching ModelEditModal's per-provider gating: v1.0 ships local
 // providers only, so a fresh first run defaults to Ollama and cloud rows render
@@ -42,20 +74,19 @@ interface ProviderOption {
 // "coming soon" — so the roadmap is visible; M4 finalizes first-run copy. The
 // cloud/local split is derived from the contract's `isLocalProvider` (single
 // source of truth, same as ModelEditModal) rather than a hand-maintained
-// per-option flag.
-const PROVIDER_OPTIONS: ProviderOption[] = [
-  { value: "local-ollama", label: "Ollama (local)", defaultModelId: "llama3.1:70b" },
-  { value: "local-llamacpp", label: "llama.cpp (local)", defaultModelId: "local-model" },
-  { value: "anthropic", label: "Anthropic (Claude)", defaultModelId: "claude-sonnet-4-6" },
-  { value: "openai", label: "OpenAI", defaultModelId: "gpt-4o" },
-  { value: "gemini", label: "Gemini (Google)", defaultModelId: "gemini-2.0-flash" },
-];
+// per-option flag. The order is derived from the contract (#1123).
+const PROVIDER_OPTIONS: ProviderOption[] = PROVIDER_OPTION_ORDER.map((value) => ({
+  value,
+  label: PICKER_LABEL[value],
+  defaultModelId: DEFAULT_MODEL_ID[value],
+  nameFallback: NAME_FALLBACK[value],
+}));
 
 let provider = $state<ModelProvider>("local-ollama");
 let displayName = $state("");
 let modelId = $state(PROVIDER_OPTIONS[0].defaultModelId);
 let apiKey = $state("");
-let endpoint = $state("http://localhost:11434");
+let endpoint = $state(endpointPrefill("local-ollama"));
 let saving = $state(false);
 let saveError = $state<string | null>(null);
 // Save can be unavailable before anything was tried here: the one-time
@@ -123,6 +154,12 @@ function selectProvider(next: ModelProvider) {
   if (target && prev && modelId === prev.defaultModelId) {
     modelId = target.defaultModelId;
   }
+  // #1123 R2.3: the same rule for the address, by string equality only — the
+  // field is replaced only while it still holds the previous provider's
+  // prefill ("" for a provider with none). Read before `provider` changes.
+  if (endpoint === endpointPrefill(provider)) {
+    endpoint = endpointPrefill(next);
+  }
   provider = next;
 }
 
@@ -138,7 +175,7 @@ async function handleSave(e: SubmitEvent) {
       const id = await models.addModel(
         {
           provider,
-          displayName: displayName.trim() || currentProvider.label,
+          displayName: displayName.trim() || currentProvider.nameFallback,
           modelId: modelId.trim(),
           enabled: true,
           ...(isCloud ? {} : { endpoint: endpoint.trim() }),
@@ -209,7 +246,9 @@ function handleSkip() {
     <header class="frm-header">
       <div>
         <h2 class="frm-title">Connect an AI model</h2>
-        <div class="frm-step">Step 1 of 2 — Tandem stores your key in the OS keychain.</div>
+        <div class="frm-step" data-testid="first-run-subtitle">
+          {isCloud ? "Step 1 of 2 — Tandem stores your key in the OS keychain." : PICKER_LOCAL_SUBTITLE}
+        </div>
       </div>
       <button
         type="button"
@@ -248,7 +287,7 @@ function handleSkip() {
           type="text"
           data-testid="first-run-displayname"
           bind:value={displayName}
-          placeholder={currentProvider.label}
+          placeholder={currentProvider.nameFallback}
           autocomplete="off"
         />
       </label>
@@ -277,16 +316,24 @@ function handleSkip() {
           />
         </label>
       {:else}
-        <label class="frm-field">
-          <span class="frm-label">Endpoint URL</span>
-          <input
-            type="text"
-            data-testid="first-run-endpoint"
-            bind:value={endpoint}
-            autocomplete="off"
-            class="frm-mono"
-          />
-        </label>
+        <!-- The hint sits OUTSIDE the label, linked by aria-describedby, so the
+             field's accessible name stays "Endpoint URL". -->
+        <div class="frm-field">
+          <label class="frm-field">
+            <span class="frm-label">Endpoint URL</span>
+            <input
+              type="text"
+              data-testid="first-run-endpoint"
+              bind:value={endpoint}
+              autocomplete="off"
+              class="frm-mono"
+              aria-describedby="first-run-endpoint-hint"
+            />
+          </label>
+          <p id="first-run-endpoint-hint" class="frm-hint" data-testid="first-run-endpoint-hint">
+            {endpointHint(endpointPrefill(provider))}
+          </p>
+        </div>
       {/if}
 
       {#if shownError}
@@ -355,6 +402,11 @@ function handleSkip() {
   font-size: 18px;
   font-weight: 600;
   color: var(--tandem-fg);
+}
+.frm-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--tandem-fg-muted);
 }
 .frm-step {
   margin-top: 4px;

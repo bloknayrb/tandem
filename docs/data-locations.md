@@ -54,13 +54,13 @@ Inside either directory:
 
 | Entry | What it holds |
 | --- | --- |
-| `sessions/` | Open-document session state (one JSON per document + the control room), used to restore your tabs on launch |
+| `sessions/` | Open-document session state (one JSON per document + the control room), used to restore your tabs on launch. With local models on (not in any released build yet), the control room's file also records which chat messages were sent while a local model answered chat, which were waiting for Claude when that began, and whether it is still going — message ids only, never text — and is written at each switch of who answers chat, as well as at shutdown and Clear chat. |
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
 | `local-model-settings.json` | Whether local models may comment on and suggest changes to your document (Settings → Models). Not written by any released build yet: local models ship dark. Missing or unreadable means off, and so does a file whose `version` is not exactly the one this build writes: a file written by a later build reads as off, can still be switched off from this build (its `version` and unknown keys are kept), and is never written as on by it (switching it on from this build lasts until Tandem restarts and is reported as not saved). |
 | `local-model-announced.json` | What Tandem has on record about your local-model settings: whether you switched commenting on in Tandem's own window (or were told it is on), which model you chose to answer chat (or were last told answers it), and, until Tandem has shown you its one-time note about it, which model it found already saved the first time local models were switched on; whether your chat is set to be answered by a local model, and whether you chose that yourself in Tandem's own window (or were only told); and whether a notice that your chat is answered by Claude again is still owed to you. Tandem compares this with the saved settings at start-up and tells you if they differ. Not written by any released build yet. Deleting it only makes Tandem tell you again, as long as `local-model-baseline.json` is still there (see the next row). |
-| `chat-answerer.json` | Who answers your chat: Claude or a local model. Not written by any released build yet: local models ship dark. Missing, unreadable or not understood means Claude; a file from a newer version of Tandem reads as Claude too. When you choose Claude in Tandem's own window it is written as `answerer: "claude"` with a `setBy: "own-window"` mark, so the next start knows the choice was yours and says nothing. Deleting it switches your chat back to Claude; if you had chosen a local model, Tandem tells you so at the next start. If a switch to Claude could not write the file, Tandem renames it to `.chat-answerer.json.removed-by-tandem` beside it instead, so the next start does not say the file was removed; that marker is deleted once the file is written again, and is safe to delete. |
+| `chat-answerer.json` | Who answers your chat: Claude or a local model. Not written by any released build yet: local models ship dark. Missing, unreadable or not understood means Claude; a file from a newer version of Tandem reads as Claude too. When you choose Claude in Tandem's own window it is written as `answerer: "claude"` with a `setBy: "own-window"` mark, so the next start knows the choice was yours and says nothing. Deleting it switches your chat back to Claude; if you had chosen a local model, Tandem tells you so at the next start. If a switch to Claude could not write the file, Tandem renames it to `.chat-answerer.json.removed-by-tandem` beside it instead (or, if that rename fails, empties the file in place, which reads as Claude), so the next start does not say the file was removed; Tandem deletes that marker when it writes the file again; a write by another program clears it only at the next start. It is safe to delete. |
 | `local-model-baseline.json` | A marker written once, the first time Tandem starts with local models switched on: it means "the model found then was taken as your starting point", so nobody is warned about a model saved before local models existed. Not written by any released build yet. Deleting it changes nothing unless `local-model-announced.json` is missing too, in which case the next start takes what it finds as the starting point again. |
 | `launcher-settings.json` | How Tandem's own Claude starts and how long it runs (Settings → AI Assistant → Tandem's Claude, #2195). Deleting it restores the defaults: start automatically, keep running. |
 | `v1-walkthrough.json` | Whether you have been through the setup wizard on v1.0 (#2198): written once, when you click **Keep this setup** or an Apply succeeds. Until it exists, every launch of a v1.0 release opens the wizard and holds Tandem's Claude until you confirm. Deleting it brings the walkthrough back on the next launch; an unreadable one is treated as done. |
@@ -97,7 +97,7 @@ remove that file for you; it is safe to delete.
 
 `sessions/`, `annotations/` and `doc-backups/` hold copies of your documents' content (a session
 is the whole open document; an annotation file quotes the text each comment is anchored to; a
-backup is a byte copy). They are private to your account:
+backup is a byte copy). They are private to your account (on Windows, within the limits below):
 
 - **macOS and Linux:** the three folders are `0700` (only you can list or open anything inside),
   and Tandem writes the files in them at `0600`. Tandem tightens a folder an older version created
@@ -106,8 +106,11 @@ backup is a byte copy). They are private to your account:
   written by an older version keeps its old mode until Tandem next rewrites it; until then the
   `0700` folder is what keeps it private. Quarantined files (`*.corrupt.*`, `*.partial.*`,
   `*.future`) are never rewritten, so the folder is all that protects them.
-- **Windows:** the same folders get an owner-only access list that their files and subfolders
-  inherit.
+- **Windows:** the same folders get an access list for you that their files and subfolders
+  inherit. On the one Windows 11 PC we measured it grants only you; on GitHub's Windows Server 2025
+  test machines, entries the parent folder already had stayed, and other PCs have not been measured. It is best effort: if setting it fails, Tandem logs that and keeps
+  working, and it does not remove an entry that someone with control of the folder added for
+  another account ([#2441 in the security register](security.md#accepted-bounded--decided-not-fixed)).
 - **The desktop app's one-time import from the npm folder** leaves the npm copy in place. Tandem
   makes that copy's `sessions/`, `annotations/` and `doc-backups/` folders private too when it imports them
   (`0700` on macOS and Linux; on Windows the old copy keeps the access list it already had).

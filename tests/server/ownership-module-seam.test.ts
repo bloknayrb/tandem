@@ -152,16 +152,25 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    "tests/server/inbox-cursor.test.ts",
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
+    "tests/server/launcher/supervisor-presence.test.ts",
     "tests/server/launcher/supervisor.test.ts",
+    "tests/server/license-armed-restricted.test.ts",
+    "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
+    "tests/server/ownership-change-notices-http.test.ts",
+    "tests/server/ownership-change-notices.test.ts",
+    "tests/server/ownership-chat-client-undo.test.ts",
+    "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
     "tests/server/ownership-dark-enforcement.test.ts",
     "tests/server/ownership-default-rule.test.ts",
+    "tests/server/ownership-delivery-rounds.test.ts",
     "tests/server/ownership-enforcement.test.ts",
     "tests/server/ownership-flag.test.ts",
     "tests/server/ownership-handover.test.ts",
@@ -169,6 +178,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-inbox-scope.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
+    "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -189,20 +199,34 @@ describe("tests and the flag", () => {
     // flag-on and then turns the flag off, to show no path reaches the inbox.
     // The scope PR's one (`ownership-inbox-scope.test.ts`): its dark tests
     // build their server flag-off, to show tandem_checkInbox is master's.
+    // #1123 A2's one (`local-period.test.ts`): it runs every local-period case
+    // with ownership off and on (the brief's "ownership off and on").
     // The notice-rule PR's one (`ownership-notice-rule.test.ts`): its lone-
     // session script and its dark test run flag-off to compare with master.
+    // The change-notice PR's one (`ownership-change-notices.test.ts`): its
+    // dark tests build their server flag-off (no `changed`, no sentence).
+    // PR 3b-1's one (`launcher/supervisor-presence.test.ts`): the supervisor's
+    // run state flag on, with a dark case that builds its supervisor flag-off.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
+      "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/launcher/supervisor-presence.test.ts",
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-change-notices.test.ts",
+      "tests/server/ownership-chat-client-undo.test.ts",
+      "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
+      "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
+      "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -212,20 +236,32 @@ describe("tests and the flag", () => {
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
       // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
+      "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/launcher/supervisor-presence.test.ts",
+      // The keyed-rounds suites PR: its live check of the delivery-round
+      // wiring, flag on in `check` too (the rest of the file is unstubbed).
+      "tests/server/license-armed-restricted.test.ts",
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-change-notices-http.test.ts",
+      "tests/server/ownership-change-notices.test.ts",
+      "tests/server/ownership-chat-client-undo.test.ts",
+      "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
+      "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
+      "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",

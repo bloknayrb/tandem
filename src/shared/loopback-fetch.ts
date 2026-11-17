@@ -1,0 +1,114 @@
+/**
+ * A `fetch` that never uses an environment proxy for a request to this
+ * computer (#2422).
+ *
+ * Node 22.21+ can route its global `fetch` through `HTTP_PROXY` when
+ * `NODE_USE_ENV_PROXY=1` (or `--use-env-proxy`) is set, and it does not exempt
+ * loopback: a request for `http://127.0.0.1:<port>` leaves as a plain-HTTP
+ * `CONNECT` tunnel through the proxy, where `Authorization` and every other
+ * header can be read. The choice is fixed when the process starts, so nothing
+ * Tandem does afterwards can switch it off on the global `fetch`.
+ *
+ * So a request whose host is `127.0.0.1` or `[::1]` is made through undici's
+ * own `fetch` and a plain `Agent`, which reads no proxy variable at all. Any
+ * other host goes to the global `fetch` exactly as before: with
+ * `LAN_BIND_ENABLED` on, `tokenMayGoTo` admits any URL, and a real proxy may
+ * then be what the user needs. `localhost` is deliberately not matched; Tandem
+ * only ever writes the two IP literals (`resolveTandemUrl`).
+ *
+ * Used by the programs that carry the auth token, the owner handle or a
+ * licence to the local server: the stdio bridge's MCP transport and preflight,
+ * `authFetch` (the channel shim, the monitor and the SSE consumer),
+ * `tandem rotate-token`, and the licence commands (`tandem activate` /
+ * `deactivate`). The SSE body streams as before. In the server (#1123): the
+ * local-model client, whose POST carries the chat prompt and so the
+ * document's text, and the start-up instance probe (`probeHealthOnce`), which
+ * decides whether `freePort` may kill a port's listener (#1758).
+ * Redirects are not touched: the caller's `redirect` mode passes through.
+ *
+ * Importing this module evaluates the installed undici, whose `lib/global.js`
+ * sets `Symbol.for("undici.globalDispatcher.1")` to a plain undici `Agent` when
+ * it is unset, and Node's global `fetch` reads that symbol. Node does not set
+ * it at start-up: in a bare process it is unset until the first global
+ * `fetch` (measured on 22.23.5; seen in review on 22.23.2 and 24.22.1), so a
+ * process that reaches this import first has every later global `fetch`
+ * dispatch through the installed undici's `Agent` rather than Node's own. What decides
+ * it is load order: in an ES module, a static `import` of `node:http` sets
+ * Node's own `Agent` before the module body runs, and the shipped server
+ * bundle is ESM and imports `http` statically, so there it was Node's `Agent`
+ * that the global `fetch` kept (measured on Node 22.23.5 with the built
+ * `dist/server/index.js`). A CommonJS `require` of `node:http` does not set it.
+ * With the environment proxy on, Node installs its proxy agent at start-up
+ * and the import never replaces it. Either `Agent` reads no proxy variable, so
+ * no proxy behaviour depends on which wins. No import path avoids this:
+ * undici's `fetch` module requires `lib/global.js` itself.
+ *
+ * Imports nothing from `src/server`, and reads no build flag, so any bundle
+ * may take it.
+ */
+
+import { Agent, fetch as undiciFetch } from "undici";
+
+/** The loopback hosts Tandem writes. `URL.hostname` keeps the IPv6 brackets. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]"]);
+
+type FetchInput = string | URL | Request;
+
+/** The URL a `fetch` input names, or undefined when it does not parse. */
+function targetUrl(input: FetchInput): URL | undefined {
+  try {
+    if (typeof input === "string") return new URL(input);
+    if (input instanceof URL) return input;
+    return new URL(input.url);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `input` names a host on this computer by the literal Tandem uses. */
+export function isLoopbackTarget(input: FetchInput): boolean {
+  const url = targetUrl(input);
+  return url !== undefined && LOOPBACK_HOSTS.has(url.hostname);
+}
+
+// Lazy: nothing is allocated in a program that never makes the request.
+let agent: Agent | undefined;
+function proxyFreeAgent(): Agent {
+  agent ??= new Agent();
+  return agent;
+}
+
+/**
+ * Drop-in `fetch`. Loopback targets use undici with a proxy-free agent; every
+ * other target uses the global `fetch`, looked up at call time.
+ *
+ * undici's `fetch` is a different implementation from the global one, and its
+ * `Request` is a different class, so a global `Request` handed to it would
+ * throw. A loopback `Request` is therefore unpacked into its URL and the init
+ * it carries (an explicit `init` still wins, as it does in `fetch`).
+ */
+export const loopbackFetch: typeof fetch = async (input, init) => {
+  if (!isLoopbackTarget(input)) return globalThis.fetch(input, init);
+  let target: string | URL = input as string | URL;
+  let merged = init;
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    target = input.url;
+    merged = {
+      method: input.method,
+      headers: input.headers,
+      body: input.body === null ? undefined : await input.arrayBuffer(),
+      redirect: input.redirect,
+      signal: input.signal,
+      ...init,
+    };
+  }
+  // undici's `fetch` takes its own dispatcher option, which the DOM
+  // `RequestInit` type does not declare, and returns undici's own `Response`
+  // (same shape, different declaration). Both casts stop here.
+  return undiciFetch(target as Parameters<typeof undiciFetch>[0], {
+    ...(merged as Parameters<typeof undiciFetch>[1]),
+    // The point of the module. undici's `fetch` with no dispatcher shares
+    // Node's global one, and so follows an environment proxy.
+    dispatcher: proxyFreeAgent(),
+  }) as unknown as Promise<Response>;
+};

@@ -1,10 +1,17 @@
 <script lang="ts">
-import { onMount } from "svelte";
+import { onDestroy, onMount } from "svelte";
+import type { ChatAnswerer } from "../../../shared/models/contract";
+import { MODELS_TAB_ORDER, PROVIDER_LABEL } from "../../../shared/models/provider-ui";
+import { createChatAnswerer } from "../../hooks/useChatAnswerer.svelte";
+import { licenseStore } from "../../hooks/useLicense.svelte";
 import { createLocalModelSettings } from "../../hooks/useLocalModelSettings.svelte";
 import { createModels } from "../../hooks/useModels.svelte";
 import { createModelsWriteAccess } from "../../hooks/useModelsWriteAccess.svelte";
+import { createRadioGroup } from "../../hooks/useRadioGroup.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
+import { MCP_BASE_URL } from "../../utils/backend-ports";
 import { disabledControlStyle } from "../../utils/colors";
+import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../utils/local-model-copy";
 import LiveRegion from "../LiveRegion.svelte";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -133,23 +140,153 @@ async function onEditingChange(event: Event) {
   syncEditingBox(input);
 }
 
-const PROVIDER_LABEL: Record<ModelProvider, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Gemini",
-  "local-ollama": "Ollama (local)",
-  "local-llamacpp": "llama.cpp (local)",
+// --- Who answers your chat (#1123 part B, R2; Decision B1) --------------------
+//
+// The one place the switch is changed. The store (`useChatAnswerer`) holds
+// the editor's read; this section reads it and sends the switch ONLY on the
+// user's own selection — a click, or Space/Enter, which a <button> turns into
+// a click (so `onclick` alone: a keydown handler too would send twice). Arrow
+// keys, Home and End move focus only. Nothing sends on mount, on a read, on a
+// models save or on Retry: re-sending "local" upgrades the server's record
+// from "told" to "chosen" (#2417), so this is a correctness rule, not a nicety.
+//
+// Not gated on `readOnly` (R2.9): the switch is a server file, and setting
+// chat to Claude must always be possible.
+const chatAnswerer = createChatAnswerer();
+// R1.2: the tab opening is a trigger. Component init, outside any reaction;
+// the store starts its read on a microtask. No-op while dark (the tab is not
+// mounted then anyway).
+void chatAnswerer.load();
+// An outcome line belongs to the press that produced it (R2.4); it is not
+// shown again the next time the tab opens.
+onDestroy(() => chatAnswerer.clearOutcome());
+
+const ANSWERER_VALUES = ["claude", "local"] as const satisfies readonly ChatAnswerer[];
+/** The radio checked: the server's value, only while the read is known. */
+const shownAnswerer = $derived<ChatAnswerer | null>(
+  chatAnswerer.known ? chatAnswerer.answerer : null,
+);
+/**
+ * Where the roving tab stop and the arrow keys stand. Its own state (R2.2),
+ * set only from event handlers (focus, the arrow keys) and cleared when a
+ * switch settles, so it falls back to the server's value — never re-synced by
+ * an effect, which would move the tab stop off the focused radio on every read.
+ * Always one of the two values, so exactly one radio is tabbable even when
+ * neither is checked.
+ */
+let focusOverride = $state<ChatAnswerer | null>(null);
+const focusedAnswerer = (): ChatAnswerer => focusOverride ?? shownAnswerer ?? "claude";
+// `setValue` moves focus and nothing else (the group focuses the radio after
+// it); no `isDisabled`, which would stop the keys moving focus while pending.
+const answererRg = createRadioGroup<ChatAnswerer>(focusedAnswerer, ANSWERER_VALUES, (v) => {
+  focusOverride = v;
+});
+/** Selecting is unavailable: not known, a switch pending, or not Tandem's
+ *  own window. `aria-disabled`, never `disabled` (focus stays in the group). */
+const answererUnavailable = $derived(
+  !chatAnswerer.known || chatAnswerer.postPending || access.blocked,
+);
+let answererGroup = $state<HTMLDivElement | undefined>(undefined);
+
+function focusAnswererRadio(value: ChatAnswerer) {
+  const radios = answererGroup?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+  radios?.[ANSWERER_VALUES.indexOf(value)]?.focus();
+}
+
+async function selectAnswerer(value: ChatAnswerer) {
+  // A refused or unreadable page, or one that has not read the switch, sends
+  // nothing: it cannot see what it would be changing.
+  if (!chatAnswerer.known || chatAnswerer.postPending || access.blocked) return;
+  chatAnswerer.clearOutcome();
+  if (value === chatAnswerer.answerer) {
+    // The position already shown: no POST, but read again.
+    void chatAnswerer.load();
+    return;
+  }
+  await chatAnswerer.set(value);
+  // R2.3: after any outcome, focus stays on the radio that shows the
+  // server's value — only if focus is still in the group now (never steal it
+  // from wherever the user tabbed during a slow POST).
+  focusOverride = null;
+  const hasFocus = answererGroup?.contains(document.activeElement) === true;
+  if (hasFocus && chatAnswerer.known) focusAnswererRadio(chatAnswerer.answerer);
+}
+
+/** The read is pending, or a retry of a failed read is in flight (R2.5). */
+const answererChecking = $derived(
+  chatAnswerer.status === "pending" || (chatAnswerer.status === "failed" && chatAnswerer.reading),
+);
+/** R2.6's line, or "" when it does not apply. */
+const setToClaudeDoneLine = $derived(
+  !chatAnswerer.known && chatAnswerer.setToClaudeDone ? "Chat was set to Claude." : "",
+);
+
+/** "Set chat to Claude" (R2.5, R2.6): offered whenever the page's access is
+ *  not foreign and no write refusal has latched. */
+const offerSetClaude = $derived(
+  !access.blocked && !chatAnswerer.known && chatAnswerer.status !== "unavailable",
+);
+
+function focusAnswererGroup() {
+  focusAnswererRadio(focusedAnswerer());
+}
+
+function retryAnswererRead() {
+  focusAnswererGroup();
+  void chatAnswerer.load();
+}
+
+async function setChatToClaude() {
+  if (access.blocked || chatAnswerer.postPending) return;
+  // Hand focus to the group first: this button may unmount with the answer.
+  focusAnswererGroup();
+  chatAnswerer.clearOutcome();
+  await chatAnswerer.set("claude");
+}
+
+const ANSWERER_UNUSABLE_LINE: Record<string, string> = {
+  none: "Chat is set to your local model, but no local model can be used now. Turn on a local model and mark it Default, or set chat to Claude.",
+  "no-default-chosen":
+    "Chat is set to your local model, but none of your enabled local models is marked Default, so none can be used. Mark one as Default, or set chat to Claude.",
+  "endpoint-rejected":
+    "Chat is set to your local model, but its Endpoint was not accepted, so it can't be used. Edit the model, or set chat to Claude.",
+  "no-endpoint":
+    "Chat is set to your local model, but it has no Endpoint saved, so it can't be used. Edit the model, or set chat to Claude.",
 };
+/** Decision B6's sentence, after every known-local line. */
+const LOCAL_NOT_SENT_SENTENCE =
+  "While chat is set to your local model, Tandem does not send Claude the chat messages you send, then or later.";
+
+/** R2.8: the one line under the group while the read is known. */
+const answererStatusLines = $derived.by<string[]>(() => {
+  if (!chatAnswerer.known) return [];
+  const lines: string[] = [];
+  if (chatAnswerer.answerer === "claude") {
+    lines.push("Chat is set to Claude. Local models are not sent your chat.");
+  } else {
+    const state = chatAnswerer.localModelState;
+    lines.push(
+      state === "usable"
+        ? "Chat is set to your local model."
+        : state === "threw"
+          ? "Chat is set to your local model. Tandem couldn't check whether it can be used."
+          : ANSWERER_UNUSABLE_LINE[state],
+    );
+    lines.push(LOCAL_NOT_SENT_SENTENCE);
+  }
+  if (licenseStore.ui.aiOff) {
+    lines.push("AI features are off, so chat is not sent to any model. See Settings → License.");
+  }
+  return lines;
+});
+
+const REFUSED_READ_LINE = `This page can't show what chat is set to, because Tandem could not confirm it as Tandem's own window. To see or change it, use the Tandem desktop app, or open Tandem at ${MCP_BASE_URL} in an up-to-date browser.`;
 
 // Anthropic first per the D4 ordering anchor; remaining providers in
-// declaration order.
-const PROVIDER_ORDER: ModelProvider[] = [
-  "anthropic",
-  "openai",
-  "gemini",
-  "local-ollama",
-  "local-llamacpp",
-];
+// declaration order. Derived from the contract (#1123): `grouped` makes a
+// bucket only for a provider in this list, so a hand-written list silently
+// stopped listing an entry of any provider it missed.
+const PROVIDER_ORDER = MODELS_TAB_ORDER;
 
 const grouped = $derived.by(() => {
   const out = new Map<ModelProvider, ModelRegistryEntry[]>();
@@ -257,6 +394,134 @@ function askDelete(id: string) {
     {access.notice}
   </div>
 {/if}
+
+<!-- Who answers your chat (#1123 part B, R2). First in the tab: it is the
+     setting the merged notices send the user to ("set who answers your chat
+     back to Claude in Settings → Models"). Live-region roles sit on the text
+     lines only; R2.8's line is not a live region. -->
+<section
+  data-testid="chat-answerer-section"
+  style="display: flex; flex-direction: column; gap: var(--tandem-space-2); margin-bottom: var(--tandem-space-4); padding-bottom: var(--tandem-space-3); border-bottom: 1px solid var(--tandem-border);"
+>
+  <div class="settings-section-label" id="chat-answerer-label">Who answers your chat</div>
+  <div
+    bind:this={answererGroup}
+    role="radiogroup"
+    aria-labelledby="chat-answerer-label"
+    aria-describedby="chat-answerer-description models-own-window-msg"
+    aria-disabled={answererUnavailable}
+    tabindex="-1"
+    onkeydown={answererRg.handleKeyDown}
+    onfocusout={(e) => {
+      // Focus left the group: the tab stop goes back to the server's value
+      // (R2.2: re-synced to the read), from an event handler, never an effect.
+      if (!answererGroup?.contains(e.relatedTarget as Node | null)) focusOverride = null;
+    }}
+    style="display: inline-flex; align-self: flex-start; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); overflow: hidden;"
+  >
+    {#each [["claude", "Claude"], ["local", "Local model"]] as const as [value, label] (value)}
+      {@const checked = shownAnswerer === value}
+      <button
+        type="button"
+        role="radio"
+        data-testid={`chat-answerer-${value}`}
+        aria-checked={checked}
+        aria-disabled={answererUnavailable}
+        aria-describedby="chat-answerer-description models-own-window-msg"
+        tabindex={answererRg.tabIndexFor(value)}
+        onfocus={() => (focusOverride = value)}
+        onclick={() => void selectAnswerer(value)}
+        style="padding: 4px var(--tandem-space-3); font-size: 13px; border: none; background: {checked
+          ? 'var(--tandem-accent)'
+          : 'var(--tandem-surface)'}; color: {checked
+          ? 'var(--tandem-accent-fg)'
+          : 'var(--tandem-fg)'}; cursor: {answererUnavailable
+          ? 'not-allowed'
+          : 'pointer'}; opacity: {answererUnavailable && !checked ? 0.6 : 1};"
+      >
+        {label}
+      </button>
+    {/each}
+  </div>
+  <div
+    id="chat-answerer-description"
+    style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--tandem-fg-muted);"
+  >
+    {#if chatAnswerer.known}
+      <p data-testid="chat-answerer-status" style="margin: 0;">{answererStatusLines.join(" ")}</p>
+    {:else if chatAnswerer.status === "unavailable"}
+      <p data-testid="chat-answerer-unavailable" style="margin: 0;">
+        Who answers your chat can't be changed with this version of Tandem's server.
+      </p>
+    {:else if chatAnswerer.status === "refused" || chatAnswerer.status === "unreadable"}
+      {#if !access.blocked}
+        <p data-testid="chat-answerer-refused" style="margin: 0;">{REFUSED_READ_LINE}</p>
+      {/if}
+    {:else if chatAnswerer.status === "failed" && !chatAnswerer.reading}
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2);">
+        <span role="alert" data-testid="chat-answerer-load-error">Couldn't read what chat is set to.</span>
+        <button
+          type="button"
+          data-testid="chat-answerer-retry"
+          onclick={retryAnswererRead}
+          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+        >
+          Retry
+        </button>
+      </div>
+    {/if}
+    <!-- "Checking…" and R2.6's line: LiveRegion's announcer shape, because this
+         column is a gapped flex parent (an empty host would sit in it as dead
+         space). Each announcer is mounted for good and out of flow, so a
+         sentence's arrival is a mutation a screen reader announces; the
+         visible copy exists only while there is a sentence, aria-hidden so it
+         is not read twice. -->
+    <!-- "Checking…" is usually already true when the tab opens, so the
+         announcer takes it only after `announceReady` (the same real yield as
+         the own-window announcer above): created empty, it then receives the
+         sentence as a mutation instead of being inserted holding it. The
+         same accepted limit as above: for those 300 ms the radios'
+         description (#chat-answerer-description) lacks "Checking…" (the
+         visible copy is aria-hidden); do not fill the region at mount. -->
+    <LiveRegion srOnly message={announceReady && answererChecking ? "Checking…" : ""} data-testid="chat-answerer-loading" />
+    {#if answererChecking}
+      <p aria-hidden="true" style="margin: 0;">Checking…</p>
+    {/if}
+    <LiveRegion srOnly message={setToClaudeDoneLine} data-testid="chat-answerer-set-claude-done" />
+    {#if setToClaudeDoneLine}
+      <p aria-hidden="true" style="margin: 0;">{setToClaudeDoneLine}</p>
+    {/if}
+    {#if offerSetClaude}
+      <button
+        type="button"
+        data-testid="chat-answerer-use-claude"
+        onclick={() => void setChatToClaude()}
+        style="align-self: flex-start; padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+      >
+        Set chat to Claude
+      </button>
+    {/if}
+  </div>
+  {#if chatAnswerer.outcomeLine && !access.blocked}
+    <div
+      role="alert"
+      data-testid="chat-answerer-error"
+      style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-3); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); font-size: 12px;"
+    >
+      {chatAnswerer.outcomeLine}
+    </div>
+  {/if}
+</section>
+
+<!-- #1123 R4 (S1, S2): what a local model can be and what Tandem sends it.
+     Outside the list-state branch below, so it shows in all five states. -->
+<div
+  data-testid="models-local-intro"
+  style="display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--tandem-space-3); font-size: 12px; color: var(--tandem-fg-muted);"
+>
+  <p style="margin: 0;">{LOCAL_SERVERS_LINE}</p>
+  <p style="margin: 0;">{LOCAL_REQUEST_LINE}</p>
+</div>
 
 <div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
   {#if models.loading}
@@ -530,10 +795,12 @@ function askDelete(id: string) {
     id="local-model-editing-help"
     style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);"
   >
-    Experimental — review every suggestion. When this is on, a local model can add comments,
-    suggest replacements and reply in comment threads. When it is off, local models can read
-    your document and reply in chat only. A change here applies from your next message;
-    switching it off also stops a reply that is already running from adding more.
+    Experimental — review every suggestion. This applies only while chat is set to your local
+    model; while chat is set to Claude, local models are sent nothing. When this is on, your
+    local model can add comments and suggest replacements, except in Solo mode, where it replies
+    in chat only. When it is off, it can read your document and reply in chat only. A change here
+    applies from your next message; switching it off also stops a reply that is already running
+    from adding more.
   </p>
   {#if localModel.saveNotice && !access.blocked}
     <div

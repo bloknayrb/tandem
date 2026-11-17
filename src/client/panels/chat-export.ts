@@ -1,4 +1,5 @@
-import type { CapturedAnchor, ChatMessage } from "../../shared/types";
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
+import { type CapturedAnchor, type ChatMessage, isChatNoticeRow } from "../../shared/types";
 
 export interface ChatExportDocument {
   id: string;
@@ -44,8 +45,13 @@ export function exportChatMarkdown(
       currentDate = date;
       lines.push(`## ${date}`, "");
     }
+    // A notice row is Tandem's, not Claude's words (#1123 part B, Ruling B-c).
     const author =
-      message.author === "claude" ? (message.agentIdentity?.displayName ?? claudeLabel) : "You";
+      BYO_MODELS_ENABLED && isChatNoticeRow(message)
+        ? "Tandem"
+        : message.author === "claude"
+          ? (message.agentIdentity?.displayName ?? claudeLabel)
+          : "You";
     const metadata = [`**${author}**`, isoTime(message.timestamp)];
     const fileName = message.documentId ? fileNames.get(message.documentId) : undefined;
     if (fileName) metadata.push(`\`${fileName.replace(/\\/g, "\\\\").replace(/`/g, "\\`")}\``);

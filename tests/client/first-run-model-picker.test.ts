@@ -20,6 +20,11 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isLocalProvider,
+  LOCAL_MODEL_PROVIDERS,
+  VALID_MODEL_PROVIDERS,
+} from "../../src/shared/models/contract.js";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
@@ -87,7 +92,8 @@ describe("FirstRunModelPickerModal — local-first default", () => {
     const values = Array.from(fieldset.querySelectorAll("input[type=radio]")).map(
       (el) => (el as HTMLInputElement).value,
     );
-    expect(values.slice(0, 2)).toEqual(["local-ollama", "local-llamacpp"]);
+    expect(values.slice(0, LOCAL_MODEL_PROVIDERS.length)).toEqual([...LOCAL_MODEL_PROVIDERS]);
+    expect([...values].sort()).toEqual([...VALID_MODEL_PROVIDERS].sort());
   });
 
   it("disables cloud radios and enables local ones (same local-only gate as the edit modal)", () => {
@@ -95,8 +101,10 @@ describe("FirstRunModelPickerModal — local-first default", () => {
       props: { onComplete: vi.fn() },
     });
     const radio = (v: string) => getByTestId(`first-run-provider-${v}`) as HTMLInputElement;
-    for (const v of ["local-ollama", "local-llamacpp"]) expect(radio(v).disabled).toBe(false);
-    for (const v of ["anthropic", "openai", "gemini"]) expect(radio(v).disabled).toBe(true);
+    for (const v of LOCAL_MODEL_PROVIDERS) expect(radio(v).disabled).toBe(false);
+    for (const v of VALID_MODEL_PROVIDERS.filter((p) => !isLocalProvider(p))) {
+      expect(radio(v).disabled).toBe(true);
+    }
   });
 });
 

@@ -94,6 +94,13 @@ updates:
       # turn every weekly group PR red.
       - dependency-name: "mammoth"
         versions: [">=1.13.0"]
+      # REMOVE when `engines.node` rises to >=22.19 (undici 8's own floor).
+      # undici is bundled into the stdio bridge, the channel shim and the
+      # monitor (#2422) and Tandem supports Node >=22.12.0, so a major whose
+      # engines exclude that range would ship a bridge that fails on it.
+      # Minors and patches of 7.x still ride in the npm group.
+      - dependency-name: "undici"
+        update-types: ["version-update:semver-major"]
 
   # Split by update-type for the same reason as npm above. Cargo has not yet hit
   # the hostage failure, but the shape is identical -- and a Rust major is worse

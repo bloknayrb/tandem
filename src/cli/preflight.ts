@@ -16,6 +16,7 @@
  */
 
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
+import { loopbackFetch } from "../shared/loopback-fetch.js";
 
 const DEFAULT_TIMEOUT_MS = 2000;
 
@@ -39,7 +40,7 @@ export async function probeTandemServer(opts: PreflightOptions = {}): Promise<Pr
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(`${url}/health`, { signal: controller.signal });
+    const res = await loopbackFetch(`${url}/health`, { signal: controller.signal });
     if (!res.ok) {
       return {
         ok: false,

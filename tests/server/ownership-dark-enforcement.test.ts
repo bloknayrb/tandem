@@ -116,6 +116,18 @@ const EMPTY_SNAPSHOT = {
   answerers: 0,
   queuedDocuments: 0,
   pendingClaims: 0,
+  // The change-notice PR: every record's queued notices (closed names
+  // included, stored on the notice). Empty, since no record exists.
+  changeNotices: [],
+  // The chat owners PR: per-message owners (with their origins) and what
+  // each record was handed. Empty, since no record exists.
+  messageOwners: [],
+  handed: [],
+  // The posts PR: the carried-over set, the chat answerers and who wrote
+  // each reply row. Empty.
+  carriedOver: [],
+  chatAnswerers: [],
+  repliers: [],
 };
 
 describe("tools/list while dark", () => {
@@ -146,6 +158,23 @@ describe("tools/list while dark", () => {
       '"ownership"',
       '"holding"',
       '"notYours"',
+      // The change-notice PR's `changed` part, its keys, values and each cause word.
+      '"changed"',
+      '"cause"',
+      '"gained"',
+      '"lost"',
+      '"your write claimed it"',
+      '"a poll of yours claimed it"',
+      '"you opened or created it"',
+      '"another session took it"',
+      '"its tab was closed"',
+      '"Tandem stopped counting this session as attached"',
+      // The chat owners PR's cause word (a reply's claim of a document).
+      '"a chat reply of yours claimed it"',
+      // The posts PR: the two server-only chat fields and a post's cause word.
+      '"settles"',
+      '"superseded"',
+      '"a chat post of yours claimed it"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }

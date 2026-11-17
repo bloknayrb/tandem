@@ -338,8 +338,8 @@ async function makeTunnel() {
   return { connects, url: `http://127.0.0.1:${addr.port}` };
 }
 
-describe("Node's environment proxy (review rounds 1 and 2)", () => {
-  it("withholds the handle when NODE_USE_ENV_PROXY routes the request through an HTTP proxy", async () => {
+describe("Node's environment proxy (#2422): the handle rides a direct request", () => {
+  it("is sent, and no CONNECT reaches the proxy, with NODE_USE_ENV_PROXY on", async () => {
     const up = await makeUpstream();
     const tunnel = await makeTunnel();
     const url = `http://127.0.0.1:${up.port}`;
@@ -356,38 +356,8 @@ describe("Node's environment proxy (review rounds 1 and 2)", () => {
       },
       up,
     );
-    // Not vacuous: the request really went through the proxy.
-    expect(tunnel.connects).toContain(`127.0.0.1:${up.port}`);
-    expect(init).toBeDefined();
-    for (const seen of up.seen) expect(seen.headers[HEADER]).toBeUndefined();
-  }, 30_000);
-
-  it("withholds it for [::1] with NO_PROXY=::1, which Node still proxies (round 2); skipped where the host has no IPv6", async (ctx) => {
-    let up: Awaited<ReturnType<typeof makeUpstream>>;
-    try {
-      up = await makeUpstream("::1");
-    } catch {
-      ctx.skip();
-      return;
-    }
-    const tunnel = await makeTunnel();
-    const url = `http://[::1]:${up.port}`;
-    await initializeThrough(
-      {
-        TANDEM_URL: url,
-        [OWNER_HANDLE_URL_ENV]: url,
-        [OWNER_HANDLE_ENV]: HANDLE,
-        NODE_USE_ENV_PROXY: "1",
-        HTTP_PROXY: tunnel.url,
-        http_proxy: undefined,
-        NO_PROXY: "::1",
-        no_proxy: undefined,
-      },
-      up,
-    );
-    // Whether or not Node routed it through the tunnel, the handle never left.
-    expect(up.seen.length).toBeGreaterThan(0);
-    for (const seen of up.seen) expect(seen.headers[HEADER]).toBeUndefined();
+    expect(tunnel.connects).toEqual([]);
+    expect(init?.headers[HEADER]).toBe(HANDLE);
   }, 30_000);
 });
 
@@ -415,6 +385,6 @@ describe("the destination rule's source (R2.2, R2.4)", () => {
     // in tests/shared/owner-handle.test.ts.
     expect(ruleSrc).not.toMatch(/^import /m);
     expect(ruleSrc).not.toMatch(/tokenMayGoTo\(/);
-    expect(bridgeSrc).toMatch(/ownerHandleForUpstream\(baseUrl, process\.env, process\.execArgv\)/);
+    expect(bridgeSrc).toMatch(/ownerHandleForUpstream\(baseUrl, process\.env\)/);
   });
 });

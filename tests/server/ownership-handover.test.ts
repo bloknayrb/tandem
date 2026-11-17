@@ -10,9 +10,11 @@
  *
  * Everything here goes through the real `tandem_checkInbox` tool, with
  * **registered owner records** (never the unregistered default test caller),
- * each reader keeping its own cursor, and with the two seams wired exactly as
- * `src/server/index.ts` wires them: an unwired sequence source answers 0 and
- * an unwired handover re-owes nothing, and either would make these vacuous.
+ * each reader keeping its own cursor, and with three of the seams
+ * `src/server/index.ts` wires, wired as it wires them: an unwired sequence
+ * source answers 0 and an unwired handover re-owes nothing, and either would
+ * make these vacuous; an unwired delivery-round seam leaves the rounds as
+ * master's one global round, which no flag-on server runs.
  *
  * Flag on for the whole file, except the dark tests at the end, which seed
  * their state flag-on and then turn it off.
@@ -32,13 +34,18 @@ import { z } from "zod";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
+  keyedDeliveryRoundsForTests,
+  noteChatMessageRowKey,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
+  _pushEventForTests,
   resetForTesting as resetEventQueue,
   subscribe,
   unsubscribe,
 } from "../../src/server/events/queue.js";
+import type { TandemEvent } from "../../src/server/events/types.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
@@ -57,6 +64,7 @@ import {
   applyUserOpenDefault,
   DEFAULT_GRACE_MS,
   getDocOwner,
+  keyedDeliveryRounds,
   noteTransportChanged,
   noteTransportRegistered,
   onDocumentClosed,
@@ -294,7 +302,11 @@ async function closeByRoute(id: string): Promise<void> {
   expect(res._status, JSON.stringify(res._body)).toBe(200);
 }
 
-/** Everything a test world needs, wired as `src/server/index.ts` wires it. */
+/**
+ * Everything a test world needs. The seams this file uses are wired as
+ * `src/server/index.ts` wires them; `index.ts` wires more, which these tests
+ * do not reach.
+ */
 async function buildWorld(): Promise<void> {
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
   run++;
@@ -311,9 +323,16 @@ async function buildWorld(): Promise<void> {
   register(A);
   register(B);
   register(C);
-  // The two lines of `src/server/index.ts`.
+  // As `src/server/index.ts` wires them: the sequence source, the inbox
+  // handover, and the delivery-round seam (with the real `keyedDeliveryRounds`,
+  // so a test that turns the flag off is back on master's one global round,
+  // as a flag-off server is).
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
   setCtrlMode("tandem");
   // An active document that is none of a test's own, so those are background.
   const front = mkDoc("front");
@@ -341,6 +360,7 @@ afterEach(async () => {
   }
   resetOwnershipForTests();
   resetInbox();
+  setDeliveryRoundSeam(undefined);
   vi.unstubAllEnvs();
   fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -1549,6 +1569,76 @@ describe("a handover cannot fail the change it rides on (R1.9)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Delivery rounds. Every flag-on server runs keyed rounds (the delivery-rounds
+// PR; design §6.7), so this file wires the seam in `buildWorld`.
+
+/**
+ * Open keyed rounds as real forwards do, with an external consumer attached
+ * for the pushes only: one per document in `documentIds` (each must be open,
+ * or the forward opens the key-less round instead) and one for a chat message
+ * whose chat-map key is noted first (unnoted, it would be key-less too).
+ */
+function openRounds(documentIds: string[], chatKey: string): void {
+  const opener = () => {};
+  subscribe(opener, "external");
+  for (const documentId of documentIds) {
+    _pushEventForTests({
+      id: `evt-round-${documentId}`,
+      type: "annotation:created",
+      timestamp: Date.now(),
+      documentId,
+      payload: {
+        annotationId: `round-${documentId}`,
+        annotationType: "comment",
+        content: "x",
+        textSnippet: "",
+      },
+    } as TandemEvent);
+  }
+  const chat = {
+    id: `evt-round-${chatKey}`,
+    type: "chat:message",
+    timestamp: Date.now(),
+    payload: { messageId: chatKey, text: "hello", replyTo: null, anchor: null },
+  } as TandemEvent;
+  noteChatMessageRowKey(chat, chatKey);
+  _pushEventForTests(chat);
+  unsubscribe(opener);
+}
+
+/**
+ * The open rounds by kind and key only. `abandoned` and `forwardedAt` are left
+ * out: once the last external consumer unsubscribes every keyed round is
+ * marked abandoned (`queue.ts` `unsubscribe`, `noteExternalConsumersGone`), so
+ * a bracket that subscribes and unsubscribes changes that field with nothing
+ * planted.
+ */
+const roundKeys = () =>
+  keyedDeliveryRoundsForTests()
+    .map(({ kind, id }) => `${kind}:${id ?? ""}`)
+    .sort();
+
+describe("the delivery-round seam is wired in this world (keyed rounds, flag on)", () => {
+  it("a forward on an open document opens its document round, and a chat message with a noted key its message round", () => {
+    const doc = mkDoc("d");
+    openRounds([doc.id], "chat-live");
+    expect(roundKeys()).toEqual([`document:${doc.id}`, "message:chat-live"]);
+  });
+});
+
+// The two R1.8 brackets below compare the open rounds before and after, by
+// kind and key, and the forward count. For PR 3b's reviewers: 3b's re-owe will
+// open a round by design (flip-blocker row "Handover gap (d)", in
+// `ownership-flip-blockers.ts`), so these brackets are expected to change then.
+// What each check sees: a round opens only through `pushEvent`
+// (`recordWakeForward`), and the bracket's external subscriber records every
+// push, so `events` is non-empty after any re-owe that pushes, whatever its
+// key. The key comparison alone cannot see a round opened on a key that is
+// already open (these brackets open the handed-over document's round
+// themselves), because a forward joins the open round; the forward count
+// catches that too, since every `recordWakeForward` moves it, push or not.
+
 describe("the handover moves nothing and pushes nothing (R1.8)", () => {
   it("no Y.Doc transaction, no event on the push path, no change to the delivery round; and the item is re-owed", async () => {
     const doc = mkDoc("d");
@@ -1558,6 +1648,15 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     const handed = (inbox: Inbox) =>
       actionIds(inbox).includes("c1") && replyIds(inbox).includes("r1");
     const { b } = await seenByAll(doc, handed);
+    // After the polls above, which would close them: open rounds on this
+    // document, on another open one, and on a message.
+    const other = mkDoc("other");
+    openRounds([doc.id, other.id], "chat-bracket");
+    const roundsBefore = roundKeys();
+    const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
+    expect(roundsBefore, "the comparison's precondition").toEqual(
+      [`document:${doc.id}`, `document:${other.id}`, "message:chat-bracket"].sort(),
+    );
 
     // A lapse, because a take or a close makes writes of its own.
     const events: unknown[] = [];
@@ -1575,8 +1674,6 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     ctrl.on("afterTransaction", count);
     const snapshot = (y: Y.Doc) => JSON.stringify(y.toJSON());
     const before = { doc: snapshot(doc.ydoc), ctrl: snapshot(ctrl) };
-    const now = Date.now();
-    const roundBefore = JSON.stringify(getDeliveryState(now, 1));
 
     lapseNow(A);
 
@@ -1587,7 +1684,8 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     expect(transactions).toBe(0);
     expect(events).toEqual([]);
     expect({ doc: snapshot(doc.ydoc), ctrl: snapshot(ctrl) }).toEqual(before);
-    expect(JSON.stringify(getDeliveryState(now, 1))).toBe(roundBefore);
+    expect(roundKeys()).toEqual(roundsBefore);
+    expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore);
 
     // The positive: in this same run the handover re-owed the items.
     expect(handed(await b.poll())).toBe(true);
@@ -1601,6 +1699,13 @@ describe("the handover at the tab-close point moves nothing and pushes nothing e
     annotation(doc.ydoc, "c1");
     const handed = (inbox: Inbox) => actionIds(inbox).includes("c1");
     const { b } = await seenByAll(doc, handed);
+    const other = mkDoc("other");
+    openRounds([doc.id, other.id], "chat-bracket");
+    const roundsBefore = roundKeys();
+    const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
+    expect(roundsBefore, "the comparison's precondition").toEqual(
+      [`document:${doc.id}`, `document:${other.id}`, "message:chat-bracket"].sort(),
+    );
 
     const events: unknown[] = [];
     const onEvent = (event: unknown) => {
@@ -1615,8 +1720,6 @@ describe("the handover at the tab-close point moves nothing and pushes nothing e
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     doc.ydoc.on("afterTransaction", count);
     ctrl.on("afterTransaction", count);
-    const now = Date.now();
-    const roundBefore = JSON.stringify(getDeliveryState(now, 1));
     const counter = deliveryRegistry.counter;
 
     // The tab-close point itself, which `closeDocumentById` calls between its
@@ -1630,7 +1733,8 @@ describe("the handover at the tab-close point moves nothing and pushes nothing e
     expect(markOf(doc.id)).toBe(counter);
     expect(transactions).toBe(0);
     expect(events).toEqual([]);
-    expect(JSON.stringify(getDeliveryState(now, 1))).toBe(roundBefore);
+    expect(roundKeys()).toEqual(roundsBefore);
+    expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore);
 
     // The document is still open here (the untrack never ran): B is handed it.
     expect(handed(await b.poll())).toBe(true);

@@ -1,16 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAiRefusal,
+  closeMessageDeliveryRound,
   type DeliveryState,
   deliveryItemKey,
+  deliveryRoundKeyOf,
+  discardSuspendedRound,
+  dropDocumentDeliveryRound,
+  dropMessageDeliveryRounds,
   getDeliveryState,
   isUnansweredAsk,
+  keyedDeliveryRoundsForTests,
+  noteChatMessageRowKey,
   noteExternalConsumerAttached,
   noteExternalConsumersGone,
   recordInboxPoll,
   recordWakeForward,
   resetDeliveryStateForTests,
   resolveDeliveryRound,
+  setDeliveryRoundSeam,
+  suspendDeliveryRound,
 } from "../../../src/server/events/delivery-state.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 
@@ -549,5 +558,239 @@ describe("a held round is re-timed to its oldest undelivered item (PR #2225 revi
     recordWakeForward(T0 + 100, { documentId: "doc-a", itemId: "ann-1" });
     resolveDeliveryRound(T0 + 150, { documents: new Set(["doc-a"]), items: new Set() });
     expect(getDeliveryState(T0 + 150, 1).waitingMs).toBe(150);
+  });
+});
+
+/**
+ * The flag-on twin (#2358, the delivery-rounds PR): rounds keyed by document
+ * and by message. The boot seam is wired directly, as `src/server/index.ts`
+ * wires it (with the ownership flag), and reset after each test; this file
+ * stubs no variable. Everything above runs with the seam unwired: master's
+ * one global round, which is also every flag-off build.
+ *
+ * The integration tests (real polls by two records, real replies, real
+ * closes) are `tests/server/ownership-delivery-rounds.test.ts`.
+ */
+describe("delivery-state, keyed (ownership on)", () => {
+  const T0 = 1_700_000_000_000;
+  const open = new Set<string>();
+  beforeEach(() => {
+    resetDeliveryStateForTests();
+    open.clear();
+    for (const id of ["d1", "d2", "d3"]) open.add(id);
+    setDeliveryRoundSeam({ keyed: () => true, isDocumentOpen: (id) => open.has(id) });
+  });
+  afterEach(() => {
+    setDeliveryRoundSeam(undefined);
+    resetDeliveryStateForTests();
+  });
+
+  const annotation = (documentId: string | undefined, id = "a1"): TandemEvent =>
+    ({
+      id: `e-${id}`,
+      type: "annotation:created",
+      timestamp: T0,
+      ...(documentId !== undefined ? { documentId } : {}),
+      payload: { annotationId: id, annotationType: "comment", content: "x", textSnippet: "" },
+    }) as TandemEvent;
+  const chat = (rowKey: string, id = rowKey): TandemEvent => {
+    const event = {
+      id: `e-${rowKey}`,
+      type: "chat:message",
+      timestamp: T0,
+      documentId: "d1",
+      payload: { messageId: id, text: "x", replyTo: null, anchor: null },
+    } as TandemEvent;
+    noteChatMessageRowKey(event, rowKey);
+    return event;
+  };
+  const forward = (at: number, event: TandemEvent) =>
+    recordWakeForward(at, undefined, deliveryRoundKeyOf(event));
+  const poll = (at: number, documents: string[] = [], messages: string[] = []) => {
+    recordInboxPoll(at);
+    resolveDeliveryRound(
+      at,
+      { documents: new Set(), items: new Set() },
+      { documents: new Set(documents), messages: new Set(messages) },
+    );
+  };
+  const rounds = () => keyedDeliveryRoundsForTests().map((r) => `${r.kind}:${r.id ?? ""}`);
+  const deliveryItemOf = (event: TandemEvent) =>
+    event.documentId && event.type === "annotation:created"
+      ? { documentId: event.documentId, itemId: event.payload.annotationId }
+      : undefined;
+
+  it("R1.1/R1.2/R1.5: each forward opens the round its key says; a chat row is keyed by its map key, not its id", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 1, annotation("d2"));
+    forward(T0 + 2, chat("row-key", "forged-id"));
+    forward(T0 + 3, annotation(undefined, "wake_1"));
+    forward(T0 + 4, annotation("closed-doc"));
+    expect(rounds()).toEqual(["document:d1", "document:d2", "message:row-key", "keyless:"]);
+  });
+
+  it("R1.3: a repeat forward keeps the first clock", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 500, annotation("d1", "a2"));
+    expect(getDeliveryState(T0 + 600, 1).waitingMs).toBe(600);
+  });
+
+  it("R2.1: a poll closes only what it covered; a second round stays open", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 10, annotation("d2"));
+    poll(T0 + 100, ["d2"]);
+    expect(rounds()).toEqual(["document:d1"]);
+    expect(getDeliveryState(T0 + 100, 1)).toMatchObject({
+      state: "awaiting-poll",
+      latencyMs: null,
+      waitingMs: 100,
+    });
+    poll(T0 + 300, ["d1"]);
+    expect(getDeliveryState(T0 + 300, 1)).toMatchObject({ state: "polled", latencyMs: 300 });
+  });
+
+  it("R2.3: the key-less round closes on any committed poll", () => {
+    forward(T0, annotation(undefined, "wake_1"));
+    forward(T0 + 1, annotation("d1"));
+    poll(T0 + 5);
+    expect(rounds()).toEqual(["document:d1"]);
+  });
+
+  it("R2.2: a reply closes its message's round only", () => {
+    forward(T0, chat("m1"));
+    forward(T0 + 1, chat("m2"));
+    closeMessageDeliveryRound("m1", T0 + 50);
+    expect(rounds()).toEqual(["message:m2"]);
+    closeMessageDeliveryRound("m2", T0 + 80);
+    expect(getDeliveryState(T0 + 80, 1)).toMatchObject({ state: "polled", latencyMs: 79 });
+    // `polled` with no poll at all (R2.5).
+    expect(getDeliveryState(T0 + 80, 1).pollCount).toBe(0);
+  });
+
+  it("R2.5: latencyMs is the oldest round the most recent closing event closed", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 100, annotation("d2"));
+    forward(T0 + 200, annotation("d3"));
+    poll(T0 + 1_000, ["d2", "d3"]);
+    expect(getDeliveryState(T0 + 1_000, 1).latencyMs).toBeNull();
+    poll(T0 + 2_000, ["d1"]);
+    expect(getDeliveryState(T0 + 2_000, 1).latencyMs).toBe(2_000);
+  });
+
+  it("R3.3: a drop records no latency; idle when none is left; a drop of nothing changes nothing", () => {
+    forward(T0, annotation("d1"));
+    poll(T0 + 50, ["d1"]);
+    expect(getDeliveryState(T0 + 50, 1)).toMatchObject({ state: "polled", latencyMs: 50 });
+    dropDocumentDeliveryRound("d2");
+    expect(getDeliveryState(T0 + 60, 1)).toMatchObject({ state: "polled", latencyMs: 50 });
+    forward(T0 + 100, annotation("d1"));
+    dropDocumentDeliveryRound("d1");
+    expect(getDeliveryState(T0 + 110, 1)).toMatchObject({ state: "idle", latencyMs: null });
+    forward(T0 + 200, chat("m1"));
+    forward(T0 + 210, chat("m2"));
+    dropMessageDeliveryRounds(["m1"]);
+    expect(rounds()).toEqual(["message:m2"]);
+    closeMessageDeliveryRound("m2", T0 + 300);
+    expect(getDeliveryState(T0 + 300, 1)).toMatchObject({ state: "polled", latencyMs: 90 });
+  });
+
+  it("R4.1: detach marks every round abandoned; a close while abandoned records no latency; re-attach keeps first clocks", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 100, annotation("d2"));
+    noteExternalConsumersGone();
+    expect(getDeliveryState(T0 + 500, 1)).toMatchObject({
+      state: "consumer-detached",
+      waitingMs: null,
+    });
+    poll(T0 + 600, ["d1"]);
+    expect(getDeliveryState(T0 + 600, 0)).toMatchObject({ state: "consumer-detached" });
+    noteExternalConsumerAttached();
+    expect(getDeliveryState(T0 + 700, 1)).toMatchObject({
+      state: "awaiting-poll",
+      waitingMs: 600,
+    });
+    poll(T0 + 900, ["d2"]);
+    expect(getDeliveryState(T0 + 900, 1)).toMatchObject({ state: "polled", latencyMs: 800 });
+  });
+
+  it("R4.1: a round closed while abandoned leaves latencyMs null", () => {
+    forward(T0, annotation("d1"));
+    noteExternalConsumersGone();
+    poll(T0 + 600, ["d1"]);
+    expect(getDeliveryState(T0 + 600, 1)).toMatchObject({ state: "polled", latencyMs: null });
+  });
+
+  it("R4.2: suspend every round; none closes; drops still apply; the discard leaves idle", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 1, annotation("d2"));
+    forward(T0 + 2, chat("m1"));
+    suspendDeliveryRound();
+    expect(getDeliveryState(T0 + 10, 1)).toMatchObject({
+      state: "idle",
+      latencyMs: null,
+      waitingMs: null,
+    });
+    poll(T0 + 20, ["d1", "d2"], ["m1"]);
+    closeMessageDeliveryRound("m1", T0 + 21);
+    expect(rounds()).toEqual(["document:d1", "document:d2", "message:m1"]);
+    dropDocumentDeliveryRound("d1");
+    expect(rounds()).toEqual(["document:d2", "message:m1"]);
+    discardSuspendedRound();
+    expect(rounds()).toEqual([]);
+    expect(getDeliveryState(T0 + 30, 1)).toMatchObject({ state: "idle", latencyMs: null });
+    forward(T0 + 40, annotation(undefined, "wake_2"));
+    expect(rounds()).toEqual(["keyless:"]);
+  });
+
+  it("the payload keeps master's fields exactly and carries no key", () => {
+    forward(T0, annotation("d1"));
+    forward(T0 + 1, chat("secret-key"));
+    const state = getDeliveryState(T0 + 5, 1);
+    expect(Object.keys(state).sort()).toEqual(
+      ["forwardCount", "latencyMs", "pollCount", "sincePollMs", "state", "waitingMs"].sort(),
+    );
+    expect(JSON.stringify(state)).not.toMatch(/d1|secret-key/);
+  });
+
+  it("one round, keyed and master: every field the same at every step", () => {
+    const steps = (keyedMode: boolean) => {
+      resetDeliveryStateForTests();
+      setDeliveryRoundSeam(
+        keyedMode ? { keyed: () => true, isDocumentOpen: (id) => open.has(id) } : undefined,
+      );
+      const out: DeliveryState[] = [getDeliveryState(T0, 1)];
+      const event = annotation("d1");
+      recordWakeForward(T0, deliveryItemOf(event), deliveryRoundKeyOf(event));
+      out.push(getDeliveryState(T0 + 50, 1), getDeliveryState(T0 + 50, 0));
+      noteExternalConsumersGone();
+      out.push(getDeliveryState(T0 + 60, 1));
+      noteExternalConsumerAttached();
+      out.push(getDeliveryState(T0 + 70, 1));
+      recordInboxPoll(T0 + 100);
+      resolveDeliveryRound(
+        T0 + 100,
+        { documents: new Set(), items: new Set() },
+        { documents: new Set(["d1"]), messages: new Set() },
+      );
+      out.push(getDeliveryState(T0 + 150, 1));
+      return out;
+    };
+    const master = steps(false);
+    const keyedOut = steps(true);
+    expect(keyedOut).toEqual(master);
+    expect(master.at(-1)).toMatchObject({ state: "polled", latencyMs: 100 });
+  });
+
+  it("the dark guard: unwired or answering false, no keyed state is kept", () => {
+    setDeliveryRoundSeam({ keyed: () => false, isDocumentOpen: () => true });
+    const event = chat("m-dark");
+    expect(deliveryRoundKeyOf(event)).toBeUndefined();
+    recordWakeForward(T0, undefined, deliveryRoundKeyOf(annotation("d1")));
+    closeMessageDeliveryRound("m-dark", T0 + 1);
+    dropDocumentDeliveryRound("d1");
+    dropMessageDeliveryRounds(["m-dark"]);
+    expect(keyedDeliveryRoundsForTests()).toEqual([]);
+    // Master's one global round took the forward.
+    expect(getDeliveryState(T0 + 2, 1).state).toBe("awaiting-poll");
   });
 });

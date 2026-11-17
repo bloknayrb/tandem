@@ -121,6 +121,20 @@ export function buildRunMcpConfig(opts: {
   return {
     mcpServers: {
       tandem: {
+        // Pinned to Node and the bridge script, with no flags. This bridge is
+        // only ever given a loopback URL (`loopbackBaseUrl`: `127.0.0.1` or
+        // `[::1]`), and since #2422 its requests there go through
+        // `loopbackFetch`'s proxy-free agent, which no proxy setting reaches
+        // (`src/shared/loopback-fetch.ts`); the bridge reads no proxy
+        // variable. The settings that turn Node's environment proxy on without
+        // a variable the environment shows are `--use-env-proxy` given as an
+        // argument, which these pinned arguments never pass; a Node config
+        // file (`--experimental-config-file` or
+        // `--experimental-default-config-file`, which Node refuses in
+        // `NODE_OPTIONS`, so again only these arguments could pass one); and
+        // proxy variables deleted from `process.env` after start-up (Node
+        // fixes its dispatcher at start; nothing in the bridge deletes them).
+        // None of them reaches the bridge's loopback requests.
         command: opts.nodePath,
         args: [opts.bridgeScript],
         env: {
@@ -136,9 +150,6 @@ export function buildRunMcpConfig(opts: {
           // environment Claude Code passes is unmeasured; if it does not, this
           // clears nothing (a residual, docs/security.md).
           NODE_OPTIONS: "",
-          // Node's environment proxy, off for the bridge if this wins the merge
-          // (the bridge withholds the handle when it could be on, review round 2).
-          NODE_USE_ENV_PROXY: "",
           // `NODE_DEBUG=http,fetch,…` would print request headers, the handle's
           // among them, to the bridge's stderr, which Claude Code captures.
           NODE_DEBUG: "",
@@ -283,10 +294,22 @@ function errCode(err: unknown): string | undefined {
  * in this process, keyed by path, valued by the identity they had then
  * (#2358 PR 3a review, item 4: about five PowerShell starts per spawn, before
  * the child starts). Re-run whenever the identity changes (a directory removed
- * and recreated, or swapped). This weakens nothing against another user: once
- * locked, only the current user can change the directory or its ACL, and that
- * user can read the run files anyway. Each file's own ACL is still re-read per
- * spawn. The `lstat` link check above it runs every time.
+ * and recreated, or swapped). This weakens nothing against another user
+ * unless `launcher/`'s ACL has already been weakened by someone holding
+ * WRITE_DAC on it (the user as its owner, an administrator, SYSTEM): once
+ * locked, only they can change it, and the user can read the run files
+ * anyway. The residual: an EXPLICIT, NON-INHERITABLE broad ACE added to
+ * `launcher/` after the first check is not seen again in this process (no new
+ * file inherits it, so each file's re-read passes; an inheritable one reaches
+ * the new file and its re-read fails closed). If that ACE grants list rights,
+ * other users could list the run files' names, not read the files; if it also
+ * grants delete-child and add-file (a Full Control grant does; the names are
+ * random, so listing is needed too), they could delete a run file and put
+ * their own at its name before Claude Code reads it, so that Claude Code runs
+ * their MCP config's `command` (or their settings' hooks) as the user. Bryan
+ * accepted this residual on 2026-11-17 (#2439; batching the permission checks
+ * is #2440). Each file's own ACL is still re-read per spawn. The `lstat` link
+ * check above it runs every time.
  */
 const verifiedWindowsDirs = new Map<string, string>();
 
@@ -394,7 +417,17 @@ export async function writeRunFile(
       } catch {
         // A broad ACE reached the directory after it was verified (review round
         // 2, item 2): forget the verification so the next spawn checks and
-        // locks the directory again, which heals it.
+        // locks the directory again. That heals a broad ACE `launcher/`
+        // itself inherits only where `lockDir`'s `/inheritance:r` removes it. On Windows builds
+        // where `:r` acts as `:d` (acl-win.ts, `setRestrictiveAcl`; GitHub's
+        // Server 2025 image is one) it is copied as an explicit ACE, which the
+        // re-read after the lock refuses, and from then on it is the explicit
+        // case. An EXPLICIT broad ACE stays (`/grant:r` replaces only the
+        // current user's own explicit ACE), so every later spawn refuses at
+        // `launcher-dir-acl` and starts Claude without the run files ("Not
+        // passing the run files"): fail closed, which is correct. Either ACE
+        // can reach a locked `launcher/` only through someone holding
+        // WRITE_DAC on it: the user or an administrator.
         verifiedWindowsDirs.delete(dir);
         throw new RunFileError(`${kind}-acl`);
       }

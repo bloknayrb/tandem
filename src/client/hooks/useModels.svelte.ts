@@ -5,6 +5,7 @@ import {
   ERROR_CODE_MODELS_BUSY,
   ERROR_CODE_MODELS_STALE,
   ERROR_CODE_OWN_WINDOW_ONLY,
+  isLocalProvider,
   type ModelsGetResponse,
   type ModelsPostBody,
   type ModelsPostResponse,
@@ -12,6 +13,7 @@ import {
 } from "../../shared/models/contract.js";
 import { reconcileModelsToServerOnce } from "../actions/reconcile-models-registry.js";
 import { createDefaultKeychainBackend } from "../keychain/keychain-backend.js";
+import { signalModelsWriteCommitted } from "../models/models-write-signal.js";
 import { projectModelsFile } from "../models/project.js";
 import { modelsWriteWasRefused, noteModelsWriteRefused } from "../models/write-refusal.js";
 import type { AgentLabelSource } from "../utils/agentLabel.js";
@@ -291,14 +293,26 @@ let _writeQueue: Promise<void> = Promise.resolve();
  *                is exhausted does it fall through to a rollback;
  *   400/500/network → rollback to the pre-mutation snapshot + surface the error.
  */
-async function writeThrough(apply: () => void): Promise<WriteOutcome> {
+async function writeThrough(
+  apply: () => void,
+  /** This write adds a local-provider model (#1123 part B, R3.2). */
+  opts: { addsLocal?: boolean } = {},
+): Promise<WriteOutcome> {
   const runExclusive = async (): Promise<WriteOutcome> => {
+    const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
     const commit = (etag: string): "committed" => {
       _etag = etag;
       _saveError = null;
+      // Every committed write is a trigger to re-read who answers chat
+      // (#1123 part B, R1.2); an add that takes the saved local models from
+      // none to one also decides the first-local-model toast (R3). A fetch
+      // continuation, never inside a reaction.
+      signalModelsWriteCommitted({
+        firstLocal:
+          opts.addsLocal === true && !snapshot.models.some((m) => isLocalProvider(m.provider)),
+      });
       return "committed";
     };
-    const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
     const rollback = (message: string): "rolledback" => {
       _models = snapshot.models;
       _defaultModelId = snapshot.defaultModelId;
@@ -497,9 +511,12 @@ export function createModels(): ModelsState {
         await storeSecret(apiKeyRef, plaintextApiKey);
       }
       const next: ModelRegistryEntry = { ...entry, id, ...(apiKeyRef ? { apiKeyRef } : {}) };
-      const outcome = await writeThrough(() => {
-        _models = [..._models, next];
-      });
+      const outcome = await writeThrough(
+        () => {
+          _models = [..._models, next];
+        },
+        { addsLocal: isLocalProvider(next.provider) },
+      );
       // Terminal-only cleanup: the entry landed only when `committed`; on a
       // rollback OR a reconcile-adopt the minted ref backs nothing. Best-effort
       // delete (never throws). Keying on the outcome (not reconstructed side

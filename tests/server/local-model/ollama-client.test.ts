@@ -427,3 +427,78 @@ describe("ollama-client — endpoint is rebuilt from the validated URL (#1295 L4
     expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/ollama/v1/chat/completions");
   });
 });
+
+// #1123 Decision L3 / Ruling L-c: one trailing `/v1` is dropped from the path
+// in `baseUrl`, after validation, for both transports. Judged by the URL the
+// request is built for, on the non-streaming (`postJson`) and streaming paths.
+describe("ollama-client — a trailing /v1 in the saved address", () => {
+  const okJson = () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+      headers: { "content-type": "application/json" },
+    });
+  const okStream = () =>
+    streamResponse(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', "data: [DONE]\n\n"]);
+
+  const TABLE: Array<[string, string]> = [
+    ["http://localhost:1234/v1", "http://127.0.0.1:1234/v1/chat/completions"],
+    ["http://localhost:1234/v1/", "http://127.0.0.1:1234/v1/chat/completions"],
+    ["http://localhost:1234/v1//", "http://127.0.0.1:1234/v1/chat/completions"],
+    ["http://localhost:1234", "http://127.0.0.1:1234/v1/chat/completions"],
+    // One `/v1` removed, never two.
+    ["http://localhost:1234/v1/v1", "http://127.0.0.1:1234/v1/v1/chat/completions"],
+    // `//v1`: the `/` before `v1` is preceded by `/`, so the path is kept.
+    ["http://localhost:1234//v1", "http://127.0.0.1:1234//v1/v1/chat/completions"],
+    // Case-sensitive.
+    ["http://localhost:1234/V1", "http://127.0.0.1:1234/V1/v1/chat/completions"],
+    ["http://localhost:1234/v1/proxy", "http://127.0.0.1:1234/v1/proxy/v1/chat/completions"],
+    ["http://localhost:1234/apiv1", "http://127.0.0.1:1234/apiv1/v1/chat/completions"],
+    ["http://localhost:1234/v10", "http://127.0.0.1:1234/v10/v1/chat/completions"],
+    ["http://localhost:1234/v1x", "http://127.0.0.1:1234/v1x/v1/chat/completions"],
+    // A query or fragment is still dropped (#1295 L5), and then `/v1` too.
+    ["http://localhost:1234/v1?x=1#f", "http://127.0.0.1:1234/v1/chat/completions"],
+    // IPv6 loopback (`validateEndpoint` accepts `::1`): the brackets are kept.
+    ["http://[::1]:1234/v1", "http://[::1]:1234/v1/chat/completions"],
+    ["http://[::1]:1234", "http://[::1]:1234/v1/chat/completions"],
+  ];
+
+  for (const [saved, expected] of TABLE) {
+    it(`${saved} → ${expected} (non-streaming)`, async () => {
+      const fetchMock = stubFetch(okJson);
+      await chat({ config: { ...V1, endpoint: saved }, messages: [], tools: [] });
+      expect(fetchMock.mock.calls[0][0]).toBe(expected);
+    });
+
+    it(`${saved} → ${expected} (streaming)`, async () => {
+      const fetchMock = stubFetch(okStream);
+      await chat({
+        config: { ...V1, endpoint: saved },
+        messages: [],
+        tools: [],
+        onContentDelta: () => {},
+      });
+      expect(fetchMock.mock.calls[0][0]).toBe(expected);
+    });
+  }
+
+  it("the native transport drops it too (both build from baseUrl)", async () => {
+    const fetchMock = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: { content: "ok" } }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await chat({
+      config: { ...NATIVE, endpoint: "http://localhost:11434/v1" },
+      messages: [],
+      tools: [],
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:11434/api/chat");
+  });
+
+  it("the config passed in is not rewritten", async () => {
+    stubFetch(okJson);
+    const config = { ...V1, endpoint: "http://localhost:1234/v1" };
+    await chat({ config, messages: [], tools: [] });
+    expect(config.endpoint).toBe("http://localhost:1234/v1");
+  });
+});

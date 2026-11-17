@@ -28,6 +28,10 @@ import {
   TOOLS,
 } from "../../../src/server/local-model/index.js";
 import { extractText } from "../../../src/server/mcp/document-model.js";
+import {
+  localModelFetchForHarness,
+  setLocalModelFetchForHarness,
+} from "../../../src/server/local-model/ollama-client.js";
 import { canonicalJson } from "./record.js";
 import { harnessConfig } from "./model-config.js";
 import { sha256Hex } from "./paths.js";
@@ -157,6 +161,9 @@ export async function computeFingerprint(): Promise<FingerprintResult> {
   };
 
   const realFetch = globalThis.fetch;
+  // The client posts through its own `fetch` (`loopbackFetch`, #2422), not
+  // `globalThis.fetch`, so the scripted stub is installed there.
+  const realClientFetch = localModelFetchForHarness();
   const realSetTimeout = globalThis.setTimeout;
   const realNow = Date.now;
   let clockOffset = 0;
@@ -169,12 +176,12 @@ export async function computeFingerprint(): Promise<FingerprintResult> {
     selectedText?: string,
   ) => {
     const stub = scriptedFetch(script);
-    globalThis.fetch = stub.fetch;
+    setLocalModelFetchForHarness(stub.fetch);
     try {
       const obs = await runTrial({ markdown, prompt: TASK, selectedText, tier, config });
       return { obs, calls: stub.calls };
     } finally {
-      globalThis.fetch = realFetch;
+      setLocalModelFetchForHarness(realClientFetch);
     }
   };
 
@@ -294,11 +301,13 @@ export async function computeFingerprint(): Promise<FingerprintResult> {
     };
   } finally {
     globalThis.fetch = realFetch;
+    setLocalModelFetchForHarness(realClientFetch);
     globalThis.setTimeout = realSetTimeout;
     Date.now = realNow;
   }
   if (
     globalThis.fetch !== realFetch ||
+    localModelFetchForHarness() !== realClientFetch ||
     globalThis.setTimeout !== realSetTimeout ||
     Date.now !== realNow
   ) {

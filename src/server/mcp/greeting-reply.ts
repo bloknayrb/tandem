@@ -23,6 +23,7 @@
 
 import { CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ChatMessage } from "../../shared/types.js";
+import { isLocalPeriodChat } from "../models/local-period.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
 /** What a reply looks like to the classifier. No content: it never needs it. */
@@ -76,11 +77,14 @@ export function snapshotUserChat(): UserChatSnapshot {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const ids = new Set<string>();
   let unread = false;
-  chatMap.forEach((value) => {
+  chatMap.forEach((value, key) => {
     const msg = value as Partial<ChatMessage> | null;
     if (msg === null || typeof msg !== "object" || msg.author !== "user") return;
     if (typeof msg.id === "string") ids.add(msg.id);
-    if (msg.read !== true) unread = true;
+    // Local-period chat is never stamped read (Claude is never handed it,
+    // #1123 A2), so it is not chat waiting for Claude: it never keeps the
+    // hello from being announced as "ready" (the review session's ruling).
+    if (msg.read !== true && !isLocalPeriodChat(key)) unread = true;
   });
   return { ids, unread };
 }
