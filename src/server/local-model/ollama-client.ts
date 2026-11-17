@@ -110,6 +110,35 @@ function parseArgs(raw: unknown): {
   }
 }
 
+/**
+ * The `fetch` every chat request is posted with: `loopbackFetch` (#2422), so
+ * the prompt never goes through an environment proxy.
+ *
+ * Swappable for ONE reason: the local-model measurement harness
+ * (`probe/local-model-spike/`) observes the shipped client's traffic with its
+ * fetch tap and scripts responses for its fingerprint, and it used to do both by
+ * replacing `globalThis.fetch`, which this client no longer calls. It now wraps
+ * what {@link localModelFetchForHarness} returns, so a measured request still
+ * leaves through `loopbackFetch`. Nothing in `src/` may call the setter
+ * (`tests/server/local-model/client-fetch-seam.test.ts`), and the seam test
+ * forbids the global `fetch` anywhere in `src/server`, so the product cannot
+ * hand this the global `fetch` either.
+ */
+let clientFetch: typeof fetch = loopbackFetch;
+
+/** The `fetch` the client currently posts with (measurement harness only). */
+export function localModelFetchForHarness(): typeof fetch {
+  return clientFetch;
+}
+
+/**
+ * Replace the `fetch` the client posts with; `null` puts `loopbackFetch` back.
+ * Measurement harness only: a wrapper must end in the `fetch` it wrapped.
+ */
+export function setLocalModelFetchForHarness(next: typeof fetch | null): void {
+  clientFetch = next ?? loopbackFetch;
+}
+
 /** Read a Response body to text with a hard byte ceiling, then return the text. */
 async function readBoundedText(res: Response, capBytes: number): Promise<string> {
   const body = res.body;
@@ -157,9 +186,10 @@ async function postLoopback<T>(
     ? AbortSignal.any([opts.signal, timeoutCtrl.signal])
     : timeoutCtrl.signal;
   try {
-    // Never the global `fetch`: under Node's environment proxy that would send
-    // this loopback request, prompt and all, through the proxy (#2422).
-    const res = await loopbackFetch(url, {
+    // `loopbackFetch` (above), never the global `fetch`: under Node's environment
+    // proxy that would send this loopback request, prompt and all, through the
+    // proxy (#2422).
+    const res = await clientFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),

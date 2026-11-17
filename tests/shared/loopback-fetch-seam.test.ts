@@ -322,7 +322,12 @@ describe("no path around loopbackFetch in the programs that make loopback reques
 
   it("the two #1123 call sites use loopbackFetch", () => {
     const code = (rel: string) => sources().find((s) => s.rel === rel)?.code ?? "";
-    expect(code("src/server/local-model/ollama-client.ts")).toMatch(/await loopbackFetch\(url,/);
+    const client = code("src/server/local-model/ollama-client.ts");
+    // The client posts through `clientFetch`, which starts as and resets to
+    // `loopbackFetch` (the harness seam, pinned in client-fetch-seam.test.ts).
+    expect(client).toMatch(/await clientFetch\(url,/);
+    expect(client).toMatch(/let clientFetch: typeof _ = loopbackFetch;/);
+    expect(client).toMatch(/clientFetch = next \?\? loopbackFetch;/);
     expect(code("src/server/platform.ts")).toMatch(
       /await loopbackFetch\(`http:\/\/\$\{authority\}/,
     );
