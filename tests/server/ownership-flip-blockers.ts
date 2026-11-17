@@ -410,6 +410,15 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Wiring the suites of that set that poll the inbox, each with a live check, or a test " +
       "that drives their paths keyed.",
   },
+  {
+    gap:
+      "#2439: on Windows the launcher folder's owner and access-list checks run once per server " +
+      "process (verifiedWindowsDirs, src/server/launcher/run-files.ts), so an entry new files do " +
+      "not inherit, added after the first check, is not seen again in that process. Bryan accepted " +
+      "it on 2026-11-17 for the dark state (docs/security.md, Accepted (bounded)); the acceptance " +
+      "is re-decided when OWNERSHIP_ENABLED flips.",
+    closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
+  },
 ];
 
 /**

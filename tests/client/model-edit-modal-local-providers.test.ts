@@ -6,7 +6,7 @@
  * flag gate of its own (its call site does), so a direct mount is flag-on.
  */
 
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
@@ -30,9 +30,10 @@ const CLOUD = VALID_MODEL_PROVIDERS.filter((p) => !isLocalProvider(p));
 
 /**
  * `withEndpoint: false` mounts an entry of `provider` with no saved address,
- * which shows what a new entry of that provider shows: Svelte's select binding
- * reads `:checked`, which happy-dom does not match on an <option>, so a change
- * event cannot switch the provider here.
+ * which shows what a new entry of that provider shows. The select is a
+ * `value` plus an `onchange` that reads the select's own value (#1123, the
+ * test-hardening PR, R3.1), so a change event switches the provider here too:
+ * see "the provider switch, driven" below.
  */
 function mountWith(provider?: ModelProvider, withEndpoint = true) {
   const entry: ModelRegistryEntry | undefined = provider
@@ -52,6 +53,30 @@ function mountWith(provider?: ModelProvider, withEndpoint = true) {
   return render(ModelEditModal, { props: { entry, onCancel: vi.fn(), onSave: vi.fn() } });
 }
 
+// Literal tables (#2437's carried Low): never built from the product's maps.
+const PLACEHOLDER: Readonly<Record<string, string>> = {
+  "local-ollama": "http://127.0.0.1:11434",
+  "local-llamacpp": "",
+  "local-lmstudio": "http://127.0.0.1:1234",
+  "local-other": "",
+};
+const HINT_WITH_PORT = (address: string) =>
+  `The server's address on this computer, for example ${address}. Leave off /chat/completions; a trailing /v1 is ignored.`;
+const HINT_NO_PORT =
+  "The server's address on this computer, including its port, for example http://127.0.0.1 followed by the port. Leave off /chat/completions; a trailing /v1 is ignored.";
+const HINT: Readonly<Record<string, string>> = {
+  "local-ollama": HINT_WITH_PORT("http://127.0.0.1:11434"),
+  "local-llamacpp": HINT_NO_PORT,
+  "local-lmstudio": HINT_WITH_PORT("http://127.0.0.1:1234"),
+  "local-other": HINT_NO_PORT,
+};
+const S1 =
+  "Tandem can use a model server on this computer that offers the OpenAI-compatible chat API, such as Ollama, LM Studio or llama.cpp. Hugging Face models can be used through one of these if the server runs them. Tandem does not download models.";
+const S2 =
+  'When Tandem sends your local model a message, it includes your document\'s text when the document is short, tools for reading your document, and, in Tandem mode if you allow it under "Local models and your document", tools for adding comments and suggestions. Tandem reads the reply as a stream. A server or model that does not support tool calling may fail. Models differ in how well they do this.';
+const CLOUD_NOTE =
+  "Cloud providers are coming in a future release. For now, choose a local provider.";
+
 describe("ModelEditModal — every local provider", () => {
   for (const p of LOCAL_MODEL_PROVIDERS) {
     it(`${p}: an existing entry opens with its provider selected`, () => {
@@ -67,7 +92,7 @@ describe("ModelEditModal — every local provider", () => {
       const m = mountWith(p, false);
       const field = m.getByTestId("model-edit-endpoint") as HTMLInputElement;
       expect(field.value).toBe("");
-      expect(field.placeholder).toBe(LOCAL_ENDPOINT_PREFILL[p]);
+      expect(field.placeholder).toBe(PLACEHOLDER[p]);
     });
 
     it(`${p}: S1, S2 and S3 are shown, and the hint describes the Endpoint field`, async () => {
@@ -75,8 +100,7 @@ describe("ModelEditModal — every local provider", () => {
       const intro = m.getByTestId("model-edit-local-intro").textContent ?? "";
       expect(intro).toContain(LOCAL_SERVERS_LINE);
       expect(intro).toContain(LOCAL_REQUEST_LINE);
-      const hint = endpointHint(LOCAL_ENDPOINT_PREFILL[p]);
-      const field = m.getByRole("textbox", { name: "Endpoint", description: hint });
+      const field = m.getByRole("textbox", { name: "Endpoint", description: HINT[p] });
       expect(field).toBe(m.getByTestId("model-edit-endpoint"));
       // The select's own name is untouched by the copy placed after it.
       expect(m.getByRole("combobox", { name: "Provider" })).toBe(
@@ -146,4 +170,85 @@ describe("ModelEditModal — the hint's two shapes (S3)", () => {
       "Tandem can use a model server on this computer that offers the OpenAI-compatible chat API, such as Ollama, LM Studio or llama.cpp. Hugging Face models can be used through one of these if the server runs them. Tandem does not download models.",
     );
   });
+});
+
+describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () => {
+  type Mounted = ReturnType<typeof mountWith>;
+  const select = (m: Mounted) => m.getByTestId("model-edit-provider") as HTMLSelectElement;
+  const endpoint = (m: Mounted) => m.getByTestId("model-edit-endpoint") as HTMLInputElement;
+  /** As a user's choice reaches the page: the select's value, then `change`. */
+  async function switchTo(m: Mounted, p: ModelProvider) {
+    select(m).value = p;
+    await fireEvent.change(select(m));
+    expect(select(m).value).toBe(p);
+  }
+  function expectLocalCopy(m: Mounted, p: ModelProvider) {
+    expect(endpoint(m).placeholder).toBe(PLACEHOLDER[p]);
+    expect(m.getByRole("textbox", { name: "Endpoint", description: HINT[p] })).toBe(endpoint(m));
+    const lines = Array.from(m.getByTestId("model-edit-local-intro").querySelectorAll("p")).map(
+      (el) => el.textContent,
+    );
+    expect(lines).toEqual([S1, S2]);
+    expect(m.queryByTestId("model-edit-provider-note")).toBeNull();
+    expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe("");
+    expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe("");
+  }
+
+  for (const from of LOCAL_MODEL_PROVIDERS) {
+    for (const to of LOCAL_MODEL_PROVIDERS) {
+      if (from === to) continue;
+      it(`a new entry, default → ${from} → ${to}: empty field, ${to}'s placeholder, hint and copy`, async () => {
+        const m = mountWith();
+        await switchTo(m, from);
+        await switchTo(m, to);
+        // Ruling L-f: no prefill is ever written into the field.
+        expect(endpoint(m).value).toBe("");
+        expectLocalCopy(m, to);
+      });
+    }
+  }
+
+  for (const p of LOCAL_MODEL_PROVIDERS) {
+    it(`a new entry switched from the default to ${p}: the field stays empty`, async () => {
+      const m = mountWith();
+      await switchTo(m, p);
+      expect(endpoint(m).value).toBe("");
+      expectLocalCopy(m, p);
+    });
+
+    it(`an existing ${p} entry keeps its saved address through a switch to every other local provider`, async () => {
+      const m = mountWith(p);
+      for (const to of LOCAL_MODEL_PROVIDERS.filter((q) => q !== p)) {
+        await switchTo(m, to);
+        expect(endpoint(m).value).toBe("http://127.0.0.1:9");
+        expectLocalCopy(m, to);
+      }
+    });
+  }
+
+  for (const cloud of CLOUD) {
+    for (const p of LOCAL_MODEL_PROVIDERS) {
+      // Ruling H-1: switched back to its (disabled) cloud value by the same
+      // event, the only way a test sees S1/S2 removed on a provider change.
+      it(`an existing ${cloud} entry → ${p} → ${cloud}: local copy shown, then the cloud note again`, async () => {
+        const m = mountWith(cloud);
+        await switchTo(m, p);
+        expectLocalCopy(m, p);
+        expect(endpoint(m).value).toBe("");
+        await switchTo(m, cloud);
+        expect(m.queryByTestId("model-edit-local-intro")).toBeNull();
+        expect(m.queryByTestId("model-edit-endpoint-hint")).toBeNull();
+        expect(m.queryByTestId("model-edit-endpoint")).toBeNull();
+        expect(
+          m.getByTestId("model-edit-provider-note").textContent?.replace(/\s+/g, " ").trim(),
+        ).toBe(CLOUD_NOTE);
+        expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe(
+          "My Anthropic key",
+        );
+        expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe(
+          "e.g. claude-opus-4-7",
+        );
+      });
+    }
+  }
 });

@@ -223,7 +223,8 @@ function startReplacingKey() {
       <select
         data-testid="model-edit-provider"
         class="mem-input"
-        bind:value={provider}
+        value={provider}
+        onchange={(e) => (provider = e.currentTarget.value as ModelProvider)}
       >
         {#each PROVIDER_OPTIONS as opt (opt.value)}
           <option value={opt.value} disabled={opt.disabled}>
@@ -511,7 +512,7 @@ function startReplacingKey() {
     flex-direction: column;
     gap: 4px;
     font-size: 11px;
-    color: var(--tandem-fg-subtle);
+    color: var(--tandem-fg-muted);
   }
   .mem-local-intro p {
     margin: 0;
@@ -519,7 +520,7 @@ function startReplacingKey() {
   .mem-hint {
     margin: 0;
     font-size: 11px;
-    color: var(--tandem-fg-subtle);
+    color: var(--tandem-fg-muted);
   }
 
   .mem-error {

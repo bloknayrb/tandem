@@ -43,6 +43,11 @@ const NUMBER_WORDS = [
   "Thirteen",
   "Fourteen",
   "Fifteen",
+  "Sixteen",
+  "Seventeen",
+  "Eighteen",
+  "Nineteen",
+  "Twenty",
 ];
 
 /**
@@ -356,7 +361,7 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   },
   {
     issue: 2266,
-    why: "FIXED on POSIX (save keeps the mode; 0700 app-data dirs, 0600 store files, derived-file ceiling); the Windows DACL / ownership residue is counted as accepted under #2278",
+    why: "FIXED on POSIX (save keeps the mode; 0700 app-data dirs, 0600 store files, derived-file ceiling); the Windows DACL / ownership residue is counted as accepted under #2278, and the Windows lock's limits under #2441",
   },
 ];
 
