@@ -1250,10 +1250,25 @@ describe("the dark requirement: flag off, nothing", () => {
       await settle();
       expect(vi.getTimerCount()).toBe(3);
       await h.sup.relaunch();
-      await childN(2);
+      const c2 = await childN(2);
       await settle();
+      // The turn above went unanswered, so the relaunch carries a wake: the
+      // second spawn resumes and writes one turn.
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      expect(c2.stdin.writes).toHaveLength(1);
+      // Master's timers after the relaunch: the first spawn's backoff reset
+      // (never cleared; it checks `child === spawned` when it fires), the
+      // relaunch's SIGTERM grace for the first child (resolved by its exit,
+      // never cleared), the second spawn's resume confirmation, its wake turn's
+      // latch and receipt check, and its backoff reset. A window timer would
+      // make this 7.
+      expect(vi.getTimerCount()).toBe(6);
       await h.sup.stop();
       await settle();
+      // After stop(): the second spawn's confirmation, latch and receipt are
+      // cleared; left are the two backoff resets and the two SIGTERM graces
+      // (the relaunch's and the stop's).
+      expect(vi.getTimerCount()).toBe(4);
       expect(micro).not.toHaveBeenCalled();
       expect(h.seam.diagnosticsForTests().recomputes).toBe(0);
     } finally {
