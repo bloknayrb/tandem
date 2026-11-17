@@ -2,7 +2,6 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { endpointHint } from "../../src/client/utils/local-model-copy.js";
 import { LOCAL_MODEL_PROVIDERS, type ModelProvider } from "../../src/shared/models/contract.js";
 import { LOCAL_ENDPOINT_PREFILL } from "../../src/shared/models/provider-ui.js";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
@@ -61,6 +60,18 @@ asTandemOwnWindow();
 
 const PREFILL = LOCAL_ENDPOINT_PREFILL;
 
+/** S3 per local provider, as literals (never built with `endpointHint`). */
+const HINT_WITH_PORT = (address: string) =>
+  `The server's address on this computer, for example ${address}. Leave off /chat/completions; a trailing /v1 is ignored.`;
+const HINT_NO_PORT =
+  "The server's address on this computer, including its port, for example http://127.0.0.1 followed by the port. Leave off /chat/completions; a trailing /v1 is ignored.";
+const HINT: Readonly<Record<string, string>> = {
+  "local-ollama": HINT_WITH_PORT("http://127.0.0.1:11434"),
+  "local-llamacpp": HINT_NO_PORT,
+  "local-lmstudio": HINT_WITH_PORT("http://127.0.0.1:1234"),
+  "local-other": HINT_NO_PORT,
+};
+
 function mount() {
   return render(FirstRunModelPickerModal, { props: { onComplete: vi.fn() } });
 }
@@ -83,6 +94,21 @@ describe("first-run picker — local providers offered", () => {
     }
     expect(m.getByText("LM Studio (local)")).toBeTruthy();
     expect(m.getByText("Other local server (OpenAI-compatible)")).toBeTruthy();
+    // The radios' DOM order, as a literal list: the locals first, then cloud.
+    const order = Array.from(
+      m
+        .getByTestId("first-run-providers")
+        .querySelectorAll<HTMLInputElement>("input[type='radio']"),
+    ).map((r) => r.value);
+    expect(order).toEqual([
+      "local-ollama",
+      "local-llamacpp",
+      "local-lmstudio",
+      "local-other",
+      "anthropic",
+      "openai",
+      "gemini",
+    ]);
   });
 });
 
@@ -120,6 +146,27 @@ describe("first-run picker — address prefill (R2.3)", () => {
     expect(endpointField(m).value).toBe("http://127.0.0.1:1234");
   });
 
+  // #2437's carried Low: one provider's prefill typed under ANOTHER provider is
+  // a typed address, so a rule that compared against any prefill would fail.
+  it("LM Studio, Ollama's prefill typed, then Other: the typed address is kept", async () => {
+    const m = mount();
+    await choose(m, "local-lmstudio");
+    await typeEndpoint(m, "http://127.0.0.1:11434");
+    await choose(m, "local-other");
+    expect(endpointField(m).value).toBe("http://127.0.0.1:11434");
+  });
+
+  it("Ollama, LM Studio's prefill typed, then llama.cpp by a bare change event: kept", async () => {
+    const m = mount();
+    await typeEndpoint(m, "http://127.0.0.1:1234");
+    // No click: pins only that the handler runs on `change` (Ruling H-2), not
+    // anything about keyboard selection in a real browser.
+    await fireEvent.change(m.getByTestId("first-run-provider-local-llamacpp"));
+    expect(endpointField(m).value).toBe("http://127.0.0.1:1234");
+    // The switch happened: llama.cpp's hint (no port) describes the field.
+    expect(m.getByTestId("first-run-endpoint-hint").textContent?.trim()).toBe(HINT_NO_PORT);
+  });
+
   it("an address typed equal to Ollama's prefill is treated as the prefill and replaced", async () => {
     const m = mount();
     await typeEndpoint(m, "");
@@ -147,7 +194,7 @@ describe("first-run picker — copy (S3, S6, Ruling L-h)", () => {
     it(`${p}: the hint describes the Endpoint URL field, outside its label`, async () => {
       const m = mount();
       await choose(m, p);
-      const hint = endpointHint(PREFILL[p]);
+      const hint = HINT[p];
       // Fails if the hint is inside the label (the name would change) or not linked.
       const field = m.getByRole("textbox", { name: "Endpoint URL", description: hint });
       expect(field).toBe(endpointField(m));

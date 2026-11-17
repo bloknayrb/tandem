@@ -385,8 +385,10 @@ describe("the triggers (R1.2)", () => {
       // Not in the local period any more (nothing held), so only the new
       // trigger can read.
       store.noteChatSent(user("u1"), { aiOff: false, held: false });
-      await held.request(3);
+      // The read the trigger started fails too: nothing more is read (no loop).
+      await (await held.request(3)).fail();
       await drain();
+      expect(state.status).toBe("failed");
       expect(gets()).toHaveLength(3);
     });
 
@@ -396,14 +398,17 @@ describe("the triggers (R1.2)", () => {
       await p;
       expect(state.status).toBe("failed");
       store.observeChatForAnswerer({ doc, synced: true, messages: [user("a")] });
-      store.observeChatForAnswerer({
-        doc,
-        synced: true,
-        messages: [
-          user("a", { localRun: { status: "stopped", reason: "error", generation: "g9" } }),
-        ],
-      });
-      await held.request(2);
+      const after = [
+        user("a", { localRun: { status: "stopped", reason: "error", generation: "g9" } }),
+      ];
+      store.observeChatForAnswerer({ doc, synced: true, messages: after });
+      // The read the trigger started fails too, and the same messages are
+      // observed once more: nothing more is read (no loop).
+      await (await held.request(2)).fail();
+      await drain();
+      store.observeChatForAnswerer({ doc, synced: true, messages: after });
+      await drain();
+      expect(state.status).toBe("failed");
       expect(gets()).toHaveLength(2);
     });
   });

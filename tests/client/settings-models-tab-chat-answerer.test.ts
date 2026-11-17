@@ -505,3 +505,83 @@ describe("'Chat was set to Claude.' is never left unsaid (UX review)", () => {
     expect(region.textContent?.trim()).toBe("");
   });
 });
+
+// #1123, the test-hardening PR, R4.3: the two lines in the gapped description
+// column take LiveRegion's announcer shape (its header: the host shape is only
+// for a parent with no `gap`).
+describe("'Checking…' and 'Chat was set to Claude.' as announcers (R4.3)", () => {
+  const column = (v: ReturnType<typeof mount>) => {
+    const el = v.container.querySelector<HTMLElement>("#chat-answerer-description");
+    if (!el) throw new Error("no #chat-answerer-description");
+    return el;
+  };
+  /** The visible copies: `aria-hidden` paragraphs in the column holding `text`. */
+  const visible = (v: ReturnType<typeof mount>, text: string) =>
+    Array.from(column(v).querySelectorAll<HTMLElement>("[aria-hidden='true']")).filter(
+      (el) => el.textContent?.trim() === text,
+    );
+  const isOutOfFlow = (el: HTMLElement) =>
+    /position:\s*absolute/.test(el.getAttribute("style") ?? "");
+
+  it("both announcers are in the description column, out of flow, before any sentence", async () => {
+    const v = mount();
+    for (const id of ["chat-answerer-loading", "chat-answerer-set-claude-done"]) {
+      const a = v.getByTestId(id);
+      expect(column(v).contains(a)).toBe(true);
+      expect(a.getAttribute("role")).toBe("status");
+      expect(isOutOfFlow(a)).toBe(true);
+      expect(a.getAttribute("aria-hidden")).toBeNull();
+    }
+    expect(v.getByTestId("chat-answerer-set-claude-done").textContent).toBe("");
+    // Unmount-free: the same nodes are still there once the read answers.
+    const loading = v.getByTestId("chat-answerer-loading");
+    await (await held.request(1)).answer(200, known("claude"));
+    expect(v.getByTestId("chat-answerer-loading")).toBe(loading);
+  });
+
+  it("'Checking…': the announcer holds it and an aria-hidden visible copy is in the column; then both go", async () => {
+    const v = mount();
+    const first = await held.request(1);
+    expect(v.getByTestId("chat-answerer-loading").textContent).toBe("Checking…");
+    expect(visible(v, "Checking…")).toHaveLength(1);
+    await first.answer(200, known("claude"));
+    expect(v.getByTestId("chat-answerer-loading").textContent).toBe("");
+    expect(visible(v, "Checking…")).toHaveLength(0);
+    expect(column(v).textContent).not.toContain("Checking…");
+  });
+
+  it("'Chat was set to Claude.': the announcer holds it and an aria-hidden visible copy is in the column", async () => {
+    const v = await mounted({ code: "OWN_WINDOW_ONLY" }, 403);
+    const announcer = v.getByTestId("chat-answerer-set-claude-done");
+    expect(announcer.textContent).toBe("");
+    expect(visible(v, "Chat was set to Claude.")).toHaveLength(0);
+    await fireEvent.click(v.getByTestId("chat-answerer-use-claude"));
+    await drain();
+    await posts()[0].answer(200, { answerer: "claude", persisted: true });
+    await (await held.request(3)).answer(403, { code: "OWN_WINDOW_ONLY" });
+    // The same node, mounted before the line, now holds it: its arrival is a
+    // mutation of a region already in the tree (a remount would fail here).
+    expect(v.getByTestId("chat-answerer-set-claude-done")).toBe(announcer);
+    expect(announcer.textContent).toBe("Chat was set to Claude.");
+    expect(visible(v, "Chat was set to Claude.")).toHaveLength(1);
+  });
+
+  it("'Checking…' after a failed read's Retry arrives in the announcer already mounted", async () => {
+    const v = mount();
+    await (await held.request(1)).fail();
+    const announcer = v.getByTestId("chat-answerer-loading");
+    expect(announcer.textContent).toBe("");
+    await fireEvent.click(v.getByTestId("chat-answerer-retry"));
+    await held.request(2);
+    expect(v.getByTestId("chat-answerer-loading")).toBe(announcer);
+    expect(announcer.textContent).toBe("Checking…");
+    expect(visible(v, "Checking…")).toHaveLength(1);
+  });
+
+  it("with nothing to say, every in-flow child of the column has text (no empty boxes)", async () => {
+    const v = await mounted(known("claude"));
+    const inFlow = Array.from(column(v).children).filter((el) => !isOutOfFlow(el as HTMLElement));
+    expect(inFlow.length).toBeGreaterThan(0);
+    for (const el of inFlow) expect(el.textContent?.trim()).not.toBe("");
+  });
+});

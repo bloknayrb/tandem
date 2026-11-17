@@ -6,7 +6,8 @@
  *
  * Two transports, normalized to one `{content, toolCalls}` shape so the loop is
  * transport-agnostic:
- *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions
+ *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions, where one
+ *              trailing `/v1` in the saved address is dropped first (`baseUrl`)
  *  - "native": Ollama-native       POST {endpoint}/api/chat
  *
  * Hardening beyond the spike's client (security review #1123):
