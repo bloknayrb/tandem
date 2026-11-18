@@ -7,7 +7,7 @@
  *
  *  - **`BYO_MODELS_ENABLED` on:** work that came through MCP reads "Claude"
  *    whatever the Models registry holds and whoever answers chat (P10(1), V3,
- *    Label decisions L1 to L6 of 2026-11-17). That rule lives in
+ *    and Label decisions L1 and L4 of 2026-11-17: plain "Claude" in 0.32). That rule lives in
  *    `createAgentLabel` (`hooks/useAgentLabel.svelte.ts`) and in
  *    `annotation.ts`'s `readAgentFamilyLabel`, not here. A local model's name
  *    appears only on a record it wrote, read from the record's `agentIdentity`
@@ -16,9 +16,10 @@
  *    registry by `resolveAgentLabel`, unchanged since pre-M2, so a v0.13.x cohort
  *    that configured a model keeps its byline.
  *
- * `resolveAgentLabel` has two granularities:
- *  - `family`   — the brand ("Claude", "GPT", "Gemini", "Local model").
- *  - `specific` — the precise model, used ONLY in the status pill.
+ * `resolveAgentLabel` has two styles (`createAgentLabel` exposes them as
+ * `family` and `specific`):
+ *  - `"family"` — the brand ("Claude", "GPT", "Gemini", "Local model").
+ *  - `"model"`  — the precise model, used ONLY in the status pill.
  *
  * Pure + framework-free so it can be unit-tested directly.
  */

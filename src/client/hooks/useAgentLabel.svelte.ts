@@ -11,7 +11,7 @@
  *    (P10(1), V3, AL-1). A registry entry is no evidence of which client is
  *    connected, and a note sent to Claude while chat is local still goes to
  *    Claude after the switch back.
- *  - **Dark (as shipped):** master's rule, `resolveAgentLabel` over
+ *  - **Dark (as shipped):** the registry rule, `resolveAgentLabel` over
  *    `agentLabelSource()` (localStorage settings while dark), so a v0.13.x
  *    cohort's configured-model byline stays byte-identical.
  *

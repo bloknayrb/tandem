@@ -20,6 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
+import { installHeldFetch } from "../helpers/held-fetch";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
@@ -84,6 +85,7 @@ const { AnnotationExtension } = await import("../../src/client/editor/extensions
 const { _resetModelsStoreForTests, getModelsSnapshot, loadFromServer } = await import(
   "../../src/client/hooks/useModels.svelte.js"
 );
+const answerer = await import("../../src/client/hooks/useChatAnswerer.svelte.js");
 
 const fakeState = { doc: { content: { size: 100 } } };
 
@@ -144,10 +146,12 @@ async function seedStore(file: ServerFile): Promise<void> {
   await loadFromServer();
   vi.unstubAllGlobals();
   expect(getModelsSnapshot().models.map((m) => m.id)).toEqual(file.models.map((m) => m.id));
+  expect(getModelsSnapshot().defaultModelId).toBe(file.defaultModelId);
 }
 
 beforeEach(() => {
   _resetModelsStoreForTests();
+  answerer._resetChatAnswererForTests();
   localStorage.clear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -164,6 +168,36 @@ describe("editor aria-label, lit: Claude-side comments read Claude (R1.1)", () =
       expect(ariaLabelFor()).toBe("Claude comment annotation");
     });
   }
+});
+
+describe("editor aria-label, lit: both chat states (R1.2)", () => {
+  // The comment goes to Claude at once or after the switch back, so the label
+  // does not follow who answers chat. A build keyed on the known answer fails
+  // the first case; one keyed on the held flag fails the second.
+  it("chat known to be local (a read answered 'local'): 'Claude comment annotation'", async () => {
+    await seedStore(STATES.a.file);
+    const held = installHeldFetch();
+    const read = answerer.requestRead();
+    const call = await held.request(1);
+    await call.answer(200, {
+      answerer: "local",
+      localModelResolves: true,
+      localModelState: "usable",
+      runGeneration: "gen-1",
+    });
+    await read;
+    expect(answerer.createChatAnswerer().answerer).toBe("local");
+    expect(answerer.inLocalPeriod(false)).toBe(true);
+    expect(ariaLabelFor()).toBe("Claude comment annotation");
+  });
+
+  it("chat held local with no known read (noteHeld(true) alone): 'Claude comment annotation'", async () => {
+    await seedStore(STATES.a.file);
+    answerer.noteHeld(true);
+    expect(answerer.createChatAnswerer().status).not.toBe("known");
+    expect(answerer.inLocalPeriod(true)).toBe(true);
+    expect(ariaLabelFor()).toBe("Claude comment annotation");
+  });
 });
 
 describe("editor aria-label, lit: a local-model comment names its own stamp", () => {

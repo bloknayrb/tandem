@@ -59,7 +59,10 @@ export function agentAnnotation(id: string, agentIdentity?: AgentIdentity): Anno
 }
 
 /** Chat byline of one agent row (`chat-author-<id>`), as chat-panel-local.test.ts mounts it. */
-export async function chatByline(agentIdentity?: AgentIdentity): Promise<string> {
+export async function chatByline(
+  agentIdentity?: AgentIdentity,
+  opts: { localPeriod?: boolean } = {},
+): Promise<string> {
   const row: ChatMessage = {
     id: "r1",
     author: "claude",
@@ -93,7 +96,7 @@ export async function chatByline(agentIdentity?: AgentIdentity): Promise<string>
       onClaudeCodeOfferDismiss: () => {},
       aiDisabled: false,
       localPickup: null,
-      localPeriod: false,
+      localPeriod: opts.localPeriod ?? false,
       noticeAnnouncement: "",
     },
   });
@@ -168,7 +171,7 @@ export function cardWorking(): { ariaLabel: string; title: string } {
 }
 
 /** The status bar's working pill, whole text (StatusBar.svelte.test.ts's positive control). */
-export function statusPill(): string {
+export function statusPill(opts: { aiLocalChat?: "local" | "unusable" | null } = {}): string {
   const r = render(StatusBar, {
     props: {
       connected: true,
@@ -180,7 +183,7 @@ export function statusPill(): string {
       claudeWorkingTool: "tandem_edit",
       aiLiveIndicator: "connected" as const,
       aiLauncherAttached: false,
-      aiLocalChat: null,
+      aiLocalChat: opts.aiLocalChat ?? null,
       aiLauncherRestarting: false,
       aiLauncherStarting: false,
       aiLauncherStandby: null,

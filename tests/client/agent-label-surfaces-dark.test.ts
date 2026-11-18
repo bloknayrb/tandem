@@ -12,8 +12,11 @@
  * changing that constant fails here where the older dark tests stay green.
  *
  *  (1) an `openai` "My GPT" default  → "GPT"; the pill "My GPT is editing…"
- *  (2) a `local-ollama` entry        → "Local model"
- *  (3) nothing                       → "Assistant"
+ *  (2) a `local-ollama` entry "Qwen" → "Local model"; the pill "Qwen is editing…"
+ *  (3) nothing                       → "Assistant"; the pill "Assistant is editing…"
+ *
+ * The pill uses the registry's model name (`specific`) while dark, as master
+ * does; the brief names only (1)'s pill, and (2) and (3) are master's values too.
  *
  * These pass on master. The one case master fails: a record stamped with an
  * empty name reads "Local model" (AL-7) — the empty-name rule has no flag, and
@@ -121,6 +124,7 @@ for (const s of STATES) {
       const { chipName, summary, listed } = await commentFilter();
       expect(chipName).toBe(s.family);
       expect(summary).toContain(s.family);
+      // R3.2: the summary must not read "AI" while dark (L3 is lit-only).
       expect(summary).not.toContain("AI");
       expect(listed).toEqual(["claude-1", "local-1"]);
     });

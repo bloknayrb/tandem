@@ -117,6 +117,18 @@ describe("lit, state (a): Claude-side work reads Claude on every surface (R1.1)"
   });
 });
 
+describe("lit, state (a), with chat on the local model: Claude-side work still reads Claude (R1.1, R1.2)", () => {
+  // "whichever answers chat": the props the chat panel and the status bar
+  // already receive for the local period must not relabel Claude's work.
+  it("chat byline with the chat panel in the local period", async () => {
+    expect(await chatByline(undefined, { localPeriod: true })).toBe("Claude");
+  });
+
+  it("status bar working pill while the status bar is told chat is local", () => {
+    expect(statusPill({ aiLocalChat: "local" })).toBe("Claude is editing…");
+  });
+});
+
 describe("lit: the comment filter reads AI (R2.1, R2.2, Label decision L3, AL-3)", () => {
   it("the agent chip is named 'AI', the summary says 'AI', and both kinds of agent comment stay listed", async () => {
     const { chipName, summary, listed } = await commentFilter();

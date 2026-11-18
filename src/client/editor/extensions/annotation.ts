@@ -86,7 +86,7 @@ export function parseStoredVisibility(): DecorationVisibility {
  * rule as `createAgentLabel`, for code outside the Svelte tree (ADR-039
  * amendment 2026-11-17 (agent labels)):
  *  - Lit (`BYO_MODELS_ENABLED` on): "Claude", whatever the Models store holds.
- *  - Dark: master's rule, `resolveAgentLabel` over `agentLabelSource()`
+ *  - Dark: the registry rule, `resolveAgentLabel` over `agentLabelSource()`
  *    (localStorage settings while dark), read on every decoration pass, so a
  *    v0.13.x cohort's configured-model label stays byte-identical. Picked up on
  *    the next rebuild after a model change.
