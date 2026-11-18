@@ -1858,7 +1858,11 @@ function collectInboxDocuments(
       // (additionalProperties: false) would otherwise reject the WHOLE
       // response over one stray key, such as a stale `heldInSolo` marker. It
       // is a new object: nothing here deletes a key from `item`, whose nested
-      // objects are shared with the stored record.
+      // objects are shared with the stored record. Not the whole-response
+      // backstop's parsed copy instead: with ownership on the response is
+      // changed after the backstop runs (notices drained into `ownership`, a
+      // note appended to `summary`), and the backstop parses a test hook's
+      // copy, so its output would be stale.
       if (checked.success) return checked.data as unknown as typeof item;
       logInboxDrop(`document ${id}`, `${bucket} item`, item, checked.error.issues);
       refused += 1;
