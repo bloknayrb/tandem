@@ -417,7 +417,7 @@ function makeGetModelsHandler(): Handler {
 
 /**
  * Whole-file replace of the server-side registry (#1123 M2). Body is an
- * envelope `{ file, ifMatch, reconcile? }`: Tandem's own window (#2404, see the
+ * envelope `{ file, ifMatch, reconcile?, autoDefaultId? }`: Tandem's own window (#2404, see the
  * module header) → loopback → `.strict()` safeParse
  * of `file` (defense-in-depth) → optimistic-concurrency check on `ifMatch`
  * (matching `POST /api/integrations`'s gating shape). `ifMatch` is the ETag the
@@ -435,6 +435,13 @@ function makeGetModelsHandler(): Handler {
  * — the listeners run inside the persist call, before this handler regains
  * control. The handler itself never touches the record of what the user was
  * told: it runs dark, and that record must not.
+ *
+ * `autoDefaultId` (sent by the Models store when its automatic-default rule
+ * marked the default) is copied into `meta` only when it is a string, as
+ * `reconcile` is only the literal `true`. The handler does nothing else with
+ * it: it is not logged, not echoed and not saved (the file is saved as
+ * sent). Whether it is honoured is decided by the change listener against
+ * the registry under the write lock, never here.
  */
 function makePostModelsHandler(ownWindow: OwnWindowPolicy): Handler {
   return async (req: Request, res: Response) => {
@@ -444,7 +451,12 @@ function makePostModelsHandler(ownWindow: OwnWindowPolicy): Handler {
       return;
     }
     if (assertLoopbackForMutation(req, res)) return;
-    const envelope = req.body as { file?: unknown; ifMatch?: unknown; reconcile?: unknown };
+    const envelope = req.body as {
+      file?: unknown;
+      ifMatch?: unknown;
+      reconcile?: unknown;
+      autoDefaultId?: unknown;
+    };
     if (typeof envelope?.ifMatch !== "string") {
       res.status(400).json({
         error: "BAD_REQUEST",
@@ -467,6 +479,11 @@ function makePostModelsHandler(ownWindow: OwnWindowPolicy): Handler {
         source,
         // Only the literal `true`, and it only ever suppresses an info notice.
         reconcile: envelope.reconcile === true,
+        // Only a string, and it only ever narrows what counts as the user's
+        // choice; the collaborator decides whether it is honoured.
+        ...(typeof envelope.autoDefaultId === "string"
+          ? { autoDefaultId: envelope.autoDefaultId }
+          : {}),
       });
       if (result.ok) {
         const ok: ModelsPostResponse = { etag: result.etag };

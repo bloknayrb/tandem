@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Server } from "node:http";
 import os from "node:os";
@@ -14,6 +15,7 @@ import {
   answeringChangedNotice,
   answeringFingerprint,
   answeringSwitchedNotice,
+  autoDefaultHonoured,
   baselineAdoptedNotice,
   createLocalModelCollaborator,
   DEFAULT_COLLABORATOR_DEPS,
@@ -131,6 +133,15 @@ const B: ModelsEntry = {
   endpoint: "http://127.0.0.1:11435",
   enabled: true,
 };
+/** A third enabled local entry, with its own Endpoint (#1123's automatic default). */
+const C: ModelsEntry = {
+  id: "entry-c",
+  provider: "local-lmstudio",
+  displayName: "Model C",
+  modelId: "phi-4",
+  endpoint: "http://127.0.0.1:11436",
+  enabled: true,
+};
 const CLOUD: ModelsEntry = {
   id: "entry-cloud",
   provider: "anthropic",
@@ -176,7 +187,7 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
     next: ModelsFile,
     origin = OWN_WINDOW_ORIGIN,
     extra: Record<string, unknown> = {},
-  ): Promise<void> {
+  ): Promise<globalThis.Response> {
     const res = await fetch(`${baseUrl}${API_MODELS}`, {
       method: "POST",
       headers: { Origin: origin, "content-type": "application/json" },
@@ -184,6 +195,7 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
     });
     // A refused save would make every "nothing was raised" assertion vacuous.
     expect(res.status, await res.clone().text()).toBe(200);
+    return res;
   }
 
   async function setEditing(editing: boolean, origin = OWN_WINDOW_ORIGIN): Promise<void> {
@@ -1599,6 +1611,192 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect((await record())?.answering).toBeNull();
     });
   });
+
+  // ── #1123: the automatic default (server half) ─────────────────────────────
+
+  describe("a default the client's automatic-default rule set is not, by itself, the user choosing a model (#1123)", () => {
+    function expectOneInfoNaming(m: ModelsEntry): void {
+      expect(warnings()).toEqual([]);
+      expect(infos()).toHaveLength(1);
+      expect(infos()[0].message).toBe(answeringSwitchedNotice(answeringOf(m)));
+    }
+    const marker = (id: string) => ({ autoDefaultId: id });
+
+    it("R6.1 delete the default, another answers: as master's file([B]) — one info notice, B recorded; nothing of the marker kept", async () => {
+      await boot();
+      await save(file([A, B], A.id));
+      expectSilent();
+
+      const res = await save(file([B], B.id), OWN_WINDOW_ORIGIN, marker(B.id));
+      const body = await res.text();
+      expect(body).not.toContain("autoDefaultId");
+      expect(Object.keys(JSON.parse(body))).toEqual(["etag"]);
+
+      expectOneInfoNaming(B);
+      expect((await record())?.answering).toBe(fp(B));
+
+      // The cache was not mutated by the listener: GET agrees with the disk.
+      const got = await fetch(`${baseUrl}${API_MODELS}`);
+      expect(got.status).toBe(200);
+      const view = (await got.json()) as { file: ModelsFile; etag: string };
+      expect(view.file.defaultModelId).toBe(B.id);
+      const disk = fs.readFileSync(path.join(dir, MODELS_FILE_NAME));
+      expect(view.etag).toBe(createHash("sha256").update(disk).digest("hex"));
+      expect(disk.toString("utf8")).not.toContain("autoDefaultId");
+    });
+
+    it("R6.2 two enabled, none marked, delete one: as master's file([B]) — one info notice, B recorded", async () => {
+      await boot();
+      await save(file([A, B]));
+      await save(file([B], B.id), OWN_WINDOW_ORIGIN, marker(B.id));
+      expectOneInfoNaming(B);
+      expect((await record())?.answering).toBe(fp(B));
+    });
+
+    it("R6.3 rename a planted answering entry: as master's same body — A recorded, the waiting warning withdrawn", async () => {
+      await boot();
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect((await record())?.answering ?? null).toBeNull();
+
+      await save(file([{ ...A, displayName: "Renamed" }], A.id), OWN_WINDOW_ORIGIN, marker(A.id));
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY), "the rename touched A").toEqual([]);
+      expect((await record())?.answering).toBe(fp(A));
+      expect(infos()).toEqual([]);
+    });
+
+    it("R6.4 rename another entry beside a planted A: as master's body without the default — nothing recorded, the warning still waiting", async () => {
+      await boot();
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      await save(file([A, CLOUD]));
+      expect((await record())?.answering ?? null).toBeNull();
+      const before = getBuffer().length;
+
+      await save(
+        file([A, { ...CLOUD, displayName: "Renamed" }], A.id),
+        OWN_WINDOW_ORIGIN,
+        marker(A.id),
+      );
+      expect(getBuffer()).toHaveLength(before);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY), "still waiting").toHaveLength(1);
+      expect(
+        (await record())?.answering ?? null,
+        "the automatic default blessed nothing",
+      ).toBeNull();
+    });
+
+    it("R6.5 first local into an empty registry: as master's file([A]) — recorded, no info notice", async () => {
+      await boot();
+      await save(file([A], A.id), OWN_WINDOW_ORIGIN, marker(A.id));
+      expectSilent();
+      expect((await record())?.answering).toBe(fp(A));
+    });
+
+    it("R6.6 turn on a sole switched-off local: as master's file([A]) from that state — recorded, no info notice", async () => {
+      await boot();
+      await save(file([{ ...A, enabled: false }]));
+      await save(file([A], A.id), OWN_WINDOW_ORIGIN, marker(A.id));
+      expectSilent();
+      expect((await record())?.answering).toBe(fp(A));
+    });
+
+    it("R6.7 a marker not equal to the posted default is ignored: as master's file([B], B.id) — B recorded, no info notice", async () => {
+      await boot();
+      await save(file([A, B], A.id));
+      await save(file([B], B.id), OWN_WINDOW_ORIGIN, marker(A.id));
+      expectSilent();
+      expect((await record())?.answering).toBe(fp(B));
+    });
+
+    it("R6.8 a live default replaced: the marker is ignored — B recorded, no info notice", async () => {
+      await boot();
+      await save(file([CLOUD, B], CLOUD.id));
+      await save(file([CLOUD, B], B.id), OWN_WINDOW_ORIGIN, marker(B.id));
+      expect(infos()).toEqual([]);
+      expect((await record())?.answering).toBe(fp(B));
+    });
+
+    it("R6.9 the rule rejects it (two enabled after): the marker is ignored — B recorded, no info notice", async () => {
+      await boot();
+      await save(file([A, B, C], A.id));
+      await save(file([B, C], B.id), OWN_WINDOW_ORIGIN, marker(B.id));
+      expect(infos()).toEqual([]);
+      expect((await record())?.answering).toBe(fp(B));
+    });
+
+    it("R6.10 an allowance write with a marker: the warning exactly as master's allowance file([A], A.id)", async () => {
+      await boot();
+      await save(file([A], A.id), ALLOWANCE_ORIGIN, marker(A.id));
+      expect(warnings()).toHaveLength(1);
+      expect(warnings()[0].dedupKey).toBe(ANSWERING_CHANGED_NOTICE_KEY);
+      expect(warnings()[0].message).toBe(answeringChangedNotice(answeringOf(A)));
+      expect(infos()).toEqual([]);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect((await record())?.answering ?? null).toBeNull();
+    });
+
+    it("R6.11 no marker, the answering entry chosen: as master — A recorded, the warning withdrawn", async () => {
+      await boot();
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      await save(file([A], A.id));
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect((await record())?.answering).toBe(fp(A));
+      expect(infos()).toEqual([]);
+    });
+
+    it.each([
+      ["a number", 123],
+      ["an object", {}],
+      ["null", null],
+      ["an array", ["entry-a"]],
+      ["an empty string", ""],
+    ])(
+      "a marker that is %s is ignored: as master's file([A], A.id) after a planted A",
+      async (_n, value) => {
+        await boot();
+        await save(file([A]), ALLOWANCE_ORIGIN);
+        await save(file([A, CLOUD]));
+        await save(file([A, CLOUD], A.id), OWN_WINDOW_ORIGIN, { autoDefaultId: value });
+        // Master: defaulting A touches it, so A is recorded and the warning goes.
+        expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toEqual([]);
+        expect((await record())?.answering).toBe(fp(A));
+      },
+    );
+
+    it("a marker naming a default the store clears (no such entry) is ignored", async () => {
+      await boot();
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      await save(file([A], "ghost"), OWN_WINDOW_ORIGIN, marker("ghost"));
+      // Master for file([A], "ghost"): stored as file([A]); A unchanged, so untouched.
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect((await record())?.answering ?? null).toBeNull();
+    });
+
+    it("a marker is never logged, raised, replayed or written anywhere (sentinel)", async () => {
+      const SENTINEL = "zz-auto-default-sentinel-7f3a";
+      const sinks = [
+        vi.spyOn(console, "warn").mockImplementation(() => {}),
+        vi.spyOn(console, "info").mockImplementation(() => {}),
+        vi.spyOn(console, "log").mockImplementation(() => {}),
+        vi.spyOn(console, "debug").mockImplementation(() => {}),
+        vi.mocked(console.error),
+      ];
+      await boot();
+      await save(file([A]), ALLOWANCE_ORIGIN, { autoDefaultId: SENTINEL });
+      await save(file([A, B], A.id), OWN_WINDOW_ORIGIN, { autoDefaultId: SENTINEL });
+      const res = await save(file([B]), OWN_WINDOW_ORIGIN, { autoDefaultId: SENTINEL });
+      expect(await res.text()).not.toContain(SENTINEL);
+      await __flushLocalModelAnnouncedForTests();
+      for (const spy of sinks) expect(JSON.stringify(spy.mock.calls)).not.toContain(SENTINEL);
+      expect(JSON.stringify(getBuffer())).not.toContain(SENTINEL);
+      expect(JSON.stringify(getStartupNotices())).not.toContain(SENTINEL);
+      expect(openOwnWindowStream()).not.toContain(SENTINEL);
+      for (const name of fs.readdirSync(dir)) {
+        expect(fs.readFileSync(path.join(dir, name), "utf8"), name).not.toContain(SENTINEL);
+      }
+    });
+  });
 });
 
 // ── R3.2 / R3.4: by source ────────────────────────────────────────────────────
@@ -1638,5 +1836,184 @@ describe("the record modules consult neither the mode nor the licence (#2404 R3.
   it("the route handlers never touch the record: POST /api/models runs while dark", () => {
     const routes = read("models/api-routes.ts");
     expect(routes).not.toMatch(/local-model-announced/);
+  });
+});
+
+// ── #1123: the automatic default — the honour predicate and its pins ─────────
+
+describe("autoDefaultHonoured: each condition fails alone (#1123 R3.1)", () => {
+  it("honoured: own window, the marker is the default left, no live default replaced, the rule picks it", () => {
+    expect(autoDefaultHonoured(file([A, B]), file([B], B.id), "own-window", B.id)).toBe(true);
+  });
+
+  it("source 'allowance' → false", () => {
+    expect(autoDefaultHonoured(file([A, B]), file([B], B.id), "allowance", B.id)).toBe(false);
+  });
+
+  it("the marker is not the default left → false", () => {
+    expect(autoDefaultHonoured(file([]), file([A, CLOUD], CLOUD.id), "own-window", A.id)).toBe(
+      false,
+    );
+  });
+
+  it("a live default survived the write → false", () => {
+    expect(
+      autoDefaultHonoured(file([CLOUD, B], CLOUD.id), file([CLOUD, B], B.id), "own-window", B.id),
+    ).toBe(false);
+  });
+
+  it("the rule does not pick the marked entry (two enabled locals) → false", () => {
+    expect(autoDefaultHonoured(file([A, B, C]), file([B, C], B.id), "own-window", B.id)).toBe(
+      false,
+    );
+  });
+
+  it("no marker → false", () => {
+    expect(autoDefaultHonoured(file([A, B]), file([B], B.id), "own-window", undefined)).toBe(false);
+  });
+
+  it("no default left → false", () => {
+    expect(autoDefaultHonoured(file([A]), file([A]), "own-window", A.id)).toBe(false);
+  });
+
+  it("the prior default's entry was removed by this write → may be honoured", () => {
+    expect(autoDefaultHonoured(file([A, B], A.id), file([B], B.id), "own-window", B.id)).toBe(true);
+  });
+
+  it("reads and never changes before or after", () => {
+    const before = file([A, B], A.id);
+    const after = file([B], B.id);
+    const snap = JSON.stringify([before, after]);
+    autoDefaultHonoured(before, after, "own-window", B.id);
+    expect(JSON.stringify([before, after])).toBe(snap);
+  });
+});
+
+describe("where the automatic-default marker may go (#1123 R2.2, R3.2, R4.1)", () => {
+  const SRC = path.join(__dirname, "../../../src");
+  const strip = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const readSrc = (rel: string) => strip(fs.readFileSync(path.join(SRC, rel), "utf8"));
+  const count = (hay: string, needle: string | RegExp) =>
+    typeof needle === "string" ? hay.split(needle).length - 1 : [...hay.matchAll(needle)].length;
+
+  /** The text inside the parentheses of each call starting at a match of `re`. */
+  function callSpans(src: string, re: RegExp): string[] {
+    const out: string[] = [];
+    for (const m of src.matchAll(re)) {
+      let i = (m.index as number) + m[0].length - 1;
+      if (src[i] !== "(") continue;
+      const open = i;
+      let depth = 0;
+      for (; i < src.length; i++) {
+        if (src[i] === "(") depth++;
+        else if (src[i] === ")" && --depth === 0) break;
+      }
+      out.push(src.slice(open + 1, i));
+    }
+    return out;
+  }
+
+  /** The text between the `{` ending `opener` and its matching `}`. */
+  function blockSpan(src: string, opener: string): { start: number; end: number } {
+    const at = src.indexOf(opener);
+    expect(at, `not found: ${opener}`).toBeGreaterThan(-1);
+    expect(src.indexOf(opener, at + 1), `found twice: ${opener}`).toBe(-1);
+    const open = at + opener.length - 1;
+    expect(src[open]).toBe("{");
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) return { start: open + 1, end: i };
+    }
+    throw new Error(`unbalanced: ${opener}`);
+  }
+
+  function allTs(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) return allTs(p);
+      return /\.(ts|svelte)$/.test(d.name) ? [p] : [];
+    });
+  }
+
+  it("R2.2: the marker is passed to no log, response or notice call in the handler, registry or listener", () => {
+    const SINKS: Array<[string, RegExp]> = [
+      ["console", /\bconsole\.\w+\s*\(/g],
+      ["json", /\.json\s*\(/g],
+      ["send", /\.send\s*\(/g],
+      ["pushNotification", /\bpushNotification\s*\(/g],
+      ["announce", /\bannounce\w*\s*\(/g],
+      ["notice builder", /\b\w+Notice\s*\(/g],
+      ["addStartupNotice", /\baddStartupNotice\s*\(/g],
+    ];
+    const files = {
+      "server/models/api-routes.ts": readSrc("server/models/api-routes.ts"),
+      "server/models/registry.ts": readSrc("server/models/registry.ts"),
+      "server/local-model/collaborator.ts": readSrc("server/local-model/collaborator.ts"),
+    };
+    // Positive controls: the marker is really there, and the scan finds calls.
+    expect(files["server/models/api-routes.ts"]).toContain("autoDefaultId");
+    expect(files["server/local-model/collaborator.ts"]).toContain("autoDefaultId");
+    expect(callSpans(files["server/models/api-routes.ts"], SINKS[0][1]).length).toBeGreaterThan(0);
+    expect(callSpans(files["server/models/api-routes.ts"], SINKS[1][1]).length).toBeGreaterThan(0);
+    expect(
+      callSpans(files["server/local-model/collaborator.ts"], SINKS[3][1]).length,
+    ).toBeGreaterThan(0);
+    for (const [rel, src] of Object.entries(files)) {
+      for (const [name, re] of SINKS) {
+        for (const raw of callSpans(src, re)) {
+          // Prose inside a quoted string is not an identifier.
+          const span = raw.replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, '""');
+          // Neither the marker nor a whole write's meta/change/envelope.
+          expect(span, `${rel}: ${name}(…) carries the marker`).not.toMatch(
+            /autoDefaultId|\b(change|meta|envelope)\b(?!\s*\.\s*(source|reconcile|before|after)\b)/,
+          );
+        }
+      }
+    }
+  });
+
+  it("R3.2: persistModelsFile is named in no src file but the registry, and is called only inside persistModelsFileIfMatch", () => {
+    const hits = allTs(SRC).filter((f) =>
+      /\bpersistModelsFile\b/.test(strip(fs.readFileSync(f, "utf8"))),
+    );
+    expect(hits.map((f) => path.relative(SRC, f).replace(/\\/g, "/"))).toEqual([
+      "server/models/registry.ts",
+    ]);
+    const reg = readSrc("server/models/registry.ts");
+    expect(count(reg, /\bpersistModelsFile\b/g), "the definition and one call").toBe(2);
+    expect(reg).toContain("export async function persistModelsFile(");
+    const { start, end } = blockSpan(reg, "): Promise<IfMatchWriteResult> {");
+    const body = reg.slice(start, end);
+    expect(body.trim().length).toBeGreaterThan(0);
+    expect(count(body, /\bpersistModelsFile\b/g)).toBe(1);
+  });
+
+  it("R4.1: the honour check is called once, inside the own-window branch of noticeAnsweringChange, and the marker is read nowhere else", () => {
+    const src = readSrc("server/local-model/collaborator.ts");
+    const fn = blockSpan(src, "function noticeAnsweringChange(change?: ModelsFileChange): void {");
+    const fnText = src.slice(fn.start, fn.end);
+    const branch = blockSpan(fnText, 'if (change?.source === "own-window") {');
+    const own = { start: fn.start + branch.start, end: fn.start + branch.end };
+
+    expect(count(src, /\bautoDefaultHonoured\b/g), "the definition and one call").toBe(2);
+    const def = src.indexOf("export function autoDefaultHonoured(");
+    expect(def).toBeGreaterThan(-1);
+    const calls = [...src.matchAll(/\bautoDefaultHonoured\s*\(/g)]
+      .map((m) => m.index as number)
+      .filter((i) => i !== def + "export function ".length);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeGreaterThan(own.start);
+    expect(calls[0]).toBeLessThan(own.end);
+
+    // Every read of the marker is in the predicate's own body or that branch.
+    const pred = blockSpan(src, "  autoDefaultId: string | undefined,\n): boolean {");
+    for (const m of src.matchAll(/\bautoDefaultId\b/g)) {
+      const i = m.index as number;
+      const inPredicate = i >= def && i < pred.end;
+      const inBranch = i > own.start && i < own.end;
+      expect(inPredicate || inBranch, `autoDefaultId read at offset ${i}`).toBe(true);
+    }
   });
 });

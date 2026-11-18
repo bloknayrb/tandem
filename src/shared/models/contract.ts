@@ -243,6 +243,19 @@ export interface ModelsPostBody {
    * not from Tandem's own window is announced whatever it says.
    */
   reconcile?: boolean;
+  /**
+   * The id of a default that the client's automatic-default rule
+   * (`autoDefaultFor` in `./auto-default.ts`) set in this write — sent by the
+   * Models store when its automatic-default rule marked the default. It only
+   * narrows what the server counts as the user's choice of a model: an
+   * honoured marker means "marking this entry the default" is not, by itself,
+   * read as the user choosing it (#1123, #2410). It grants nothing. The server
+   * honours it only on a write from Tandem's own window, and only when it is
+   * exactly what the rule would have produced from the written file;
+   * otherwise it is ignored and the write is judged as if it were absent. It
+   * is compared, never stored, logged or echoed.
+   */
+  autoDefaultId?: string;
 }
 
 /** `POST /api/models` success response — the new ETag after the write. */

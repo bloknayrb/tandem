@@ -46,7 +46,8 @@ import { createHash } from "node:crypto";
 import { BYO_MODELS_ENABLED, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
 import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
-import type { ChatAnswerer, LocalModelState } from "../../shared/models/contract.js";
+import { autoDefaultFor } from "../../shared/models/auto-default.js";
+import type { ChatAnswerer, LocalModelState, ModelsFile } from "../../shared/models/contract.js";
 import { withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
@@ -87,7 +88,11 @@ import {
   localModelEditingState,
 } from "../models/local-model-settings.js";
 import { LOCAL_RUN_GENERATION } from "../models/local-run-generation.js";
-import { type ModelsFileChange, onModelsFileChanged } from "../models/registry.js";
+import {
+  type ModelsChangeSource,
+  type ModelsFileChange,
+  onModelsFileChanged,
+} from "../models/registry.js";
 import { pushNotification } from "../notifications.js";
 import { addStartupNotice } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -336,13 +341,53 @@ export function baselineAdoptedNotice(now: AnsweringLocalModel): string {
  * Did this write add the entry, edit it, or make it the default? The route
  * receives a whole replacement file, not an intent, so it is decided by
  * comparing the file before and after. Both are the store's canonical form.
+ *
+ * `countDefault: false` leaves out only the last half, "made it the default":
+ * used when the write's default was set by the client's automatic-default rule
+ * (`autoDefaultHonoured`), so that marking does not by itself read as the
+ * user choosing the entry. An added, removed or edited entry still counts.
  */
-export function entryTouchedByWrite(change: ModelsFileChange, entryId: string): boolean {
+export function entryTouchedByWrite(
+  change: ModelsFileChange,
+  entryId: string,
+  countDefault = true,
+): boolean {
   const before = change.before.models.find((m) => m.id === entryId);
   const after = change.after.models.find((m) => m.id === entryId);
   if (!before || !after) return true;
   if (JSON.stringify(before) !== JSON.stringify(after)) return true;
+  if (!countDefault) return false;
   return change.after.defaultModelId === entryId && change.before.defaultModelId !== entryId;
+}
+
+/**
+ * Is this write's automatic-default marker honoured (#1123)? The marker
+ * (`autoDefaultId`, sent by the Models store when its automatic-default rule
+ * marked the default) is honoured only when all of these hold, judged on the
+ * registry before and after the write, both read under the write lock:
+ *  - the write came from Tandem's own window (never the allowance);
+ *  - the marker names the default the write left;
+ *  - the write did not replace a live default: there was none before, or this
+ *    write removed its entry (with a default surviving, the rule never fires;
+ *    the cache never holds a default naming no entry);
+ *  - the rule itself, given the written entries and no default, picks exactly
+ *    the marked entry: it is the one enabled local entry.
+ * Otherwise the marker is ignored, and the write is judged exactly as it
+ * would be without it. Pure: it reads `before` and `after` and changes
+ * neither (`after` is the live cache).
+ */
+export function autoDefaultHonoured(
+  before: ModelsFile,
+  after: ModelsFile,
+  source: ModelsChangeSource,
+  autoDefaultId: string | undefined,
+): boolean {
+  if (source !== "own-window") return false;
+  if (typeof autoDefaultId !== "string") return false;
+  if (autoDefaultId !== after.defaultModelId) return false;
+  const priorDefault = before.defaultModelId;
+  if (priorDefault !== null && after.models.some((m) => m.id === priorDefault)) return false;
+  return autoDefaultFor(after.models, null) === autoDefaultId;
 }
 
 /**
@@ -1190,7 +1235,11 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
    *
    * A write from Tandem's own window is the user's own: no warning, and the
    * record is set at once — but only when that write changed which model
-   * answers, or added, edited or defaulted the answering entry. A write that
+   * answers, or added, edited or defaulted the answering entry. A default the
+   * client's automatic-default rule set does not count as defaulting it, when
+   * the write's marker is honoured (`autoDefaultHonoured`); an honoured marker
+   * can only make the entry count as untouched, so it can withhold a record or
+   * add the info notice, never bless a model or silence a notice. A write that
    * left the answering model alone records nothing and withdraws nothing, so
    * the user's unrelated edit can never bless a model some other writer put
    * there. The one thing their own change can do without their noticing is
@@ -1218,7 +1267,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       before.endpoint !== now.endpoint ||
       before.modelId !== now.modelId;
     if (change?.source === "own-window") {
-      const touched = entryTouchedByWrite(change, now.entryId);
+      const autoDefault = autoDefaultHonoured(
+        change.before,
+        change.after,
+        change.source,
+        change.autoDefaultId,
+      );
+      const touched = entryTouchedByWrite(change, now.entryId, !autoDefault);
       if (identityChanged || touched) deps.announced?.setByUser?.(answeringFingerprint(now));
       else deps.announced?.retry?.();
       if (identityChanged && !touched && !change.reconcile) {
