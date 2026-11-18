@@ -1264,6 +1264,9 @@ describe("isDocumentWaiting, the module alone", () => {
       [{ type: "note", audience: "private" }, {}],
       [{ audience: "private" }, {}],
       [{}, { private: true }],
+      // A Claude-facing parent that is not a comment (a legacy Claude highlight
+      // stored outbound keeps its audience): the type arm alone refuses it.
+      [{ author: "claude", type: "highlight", audience: "outbound" }, {}],
     ];
     for (const [parentExtra, replyExtra] of cases) {
       const anns = [userCommentRecord("p", parentExtra)] as never;
