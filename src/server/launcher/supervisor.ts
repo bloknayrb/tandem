@@ -1699,29 +1699,38 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * second one would be work nobody asked for.
    */
   let standbyUnsubscribe: (() => void) | null = null;
-  /** A message's start is queued on the op lock or running (#2196). One at a
-   * time: a burst records its owed wake and leaves the queued start to answer
-   * it. Counts toward `restartPending`, so the status reads "Starting" from
-   * the moment the message lands rather than once the lock frees up. */
+  /** A message's start — the pass today's arm owes — is queued on the op lock
+   * or running (#2196). One at a time: a burst records its owed wake and
+   * leaves the queued start to answer it. Counts toward `restartPending`, so
+   * the status reads "Starting" from the moment the message lands rather than
+   * once the lock frees up. Raised only by the standby watch, as it queues
+   * that pass, and lowered only by that pass's own `finally` (#2358 PR
+   * 3b-2b1a, R3.2): a start-or-wake pass never reads or lowers it, so a chat
+   * reads as Starting until its own pass ends, whatever ran before it. */
   let messageStartQueued = false;
   /**
-   * A start pass is queued on the op lock or running, whoever queued it
-   * (#2358 PR 3b-2a). Raised by `startForMessage`, lowered in its `finally`.
-   * Flag off only the standby watch queues a pass, and it raises
-   * `messageStartQueued` with it, so the two are always equal there; flag on
-   * a pass that only start-or-wake owes raises this alone, so it does not
-   * read as a pending restart (`restartPending` counts `messageStartQueued`,
-   * the 3b-2a brief's drafter's ruling 3). A chat that finds this raised joins
-   * the queued pass rather than queuing a second.
+   * Start passes queued on the op lock or running, whoever queued them
+   * (#2358 PR 3b-2b1a, R3.3; a count, where 3b-2a had one flag). Raised as
+   * `startForMessage` queues, lowered in its `finally`. Read only by
+   * `startOrWake`, which joins any queued or running pass, and by the
+   * `finally`'s re-queue, which runs only when no other pass is queued. Flag
+   * off both readers are unreached (`startOrWake` returns first, and the
+   * re-queue reads `startOrWakeOwed` first, never raised there), and it is
+   * at most 1, since only the standby watch queues a pass and only one of
+   * its passes exists at a time. Bound: two, and when two are in flight
+   * they are a start-or-wake-only pass then the chat's (a new pass is queued
+   * only at a count of 0, or by the watch while no pass of its own exists).
    */
-  let passQueued = false;
+  let passesQueued = 0;
   /**
-   * Start-or-wake owes the queued pass (#2358 PR 3b-2a). Written only by
+   * Start-or-wake owes a pass (#2358 PR 3b-2a). Written only by
    * `startOrWake`, which does nothing flag off, so it is never raised there.
-   * The pass reads and clears it at its start; raised again while the pass
-   * runs, the pass's `finally` queues exactly one more (R2.7). Never cleared
-   * by anything else, and never read but by the pass: only `startOrWake`
-   * raises it, and only after its own licence, Off and shutdown checks.
+   * The next pass to reach its locked body reads and clears it, whichever
+   * queued that pass (a call that finds a chat's pass queued joins it);
+   * raised again while passes are in flight, the last of them to end queues
+   * exactly one more (R2.7; 3b-2b1a, R3.3). Never cleared by anything else,
+   * and never read but by the pass: only `startOrWake` raises it, and only
+   * after its own licence, Off and shutdown checks.
    */
   let startOrWakeOwed = false;
   /** The cause of the latest `startOrWake` that joined a pass, for the pass's
@@ -1757,14 +1766,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return;
       }
       wakeOwedAcrossSpawns = true;
+      // Coalesces only with a pass today's arm already owes, queued or
+      // running. A pass only start-or-wake owes is not one (#2358 PR
+      // 3b-2b1a, R3.1): the chat gets its own pass, queued now, behind every
+      // lock operation queued before it, as on master.
       if (messageStartQueued) return;
       messageStartQueued = true;
-      // A pass start-or-wake queued (flag on only): this chat joins it, and
-      // the raise above makes it count as a pending start at once (R2.10).
-      if (passQueued) return;
       // `startForMessage` catches what it can; this catches the rest, because
       // an unhandled rejection exits the server (#2125).
-      startForMessage().catch((err: unknown) => {
+      startForMessage(true).catch((err: unknown) => {
         console.error("[Launcher] Starting Claude for a message failed:", err);
       });
     });
@@ -1775,12 +1785,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * to, so a failure is left where the user can see it — `lastError`, or the
    * licence and not-configured states `respawn` already records.
    *
-   * This is the one start pass (#2358 PR 3b-2a): today's arm (the standby
-   * watch, `messageStartQueued`) and start-or-wake (`startOrWakeOwed`, flag on
-   * only) both owe it. Today's arm is decided first, exactly as on master;
-   * start-or-wake's share runs only when today's arm did not start. */
-  async function startForMessage(): Promise<void> {
-    passQueued = true;
+   * The start pass (#2358 PR 3b-2a, 3b-2b1a). `owedByMessage` is fixed when
+   * the pass is queued: true for the pass today's arm owes (the standby
+   * watch's, Q), false for one only start-or-wake owes (P, flag on only).
+   * Today's arm is decided only by its own pass, at the lock position the
+   * chat's acceptance gave it, never by P (R3.2). Start-or-wake
+   * (`startOrWakeOwed`) joins whichever pass reads it first; its share runs
+   * only when today's arm did not start. */
+  async function startForMessage(owedByMessage: boolean): Promise<void> {
+    passesQueued += 1;
     await withLock(async () => {
       // What start-or-wake owes is consumed here, at the pass's read (R2.7).
       // Flag off it is never raised, so the pass below is master's.
@@ -1789,10 +1802,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (ownershipEnabled()) startPasses += 1;
       // Re-checked under the lock: the user's own Start, a shutdown or another
       // AI attaching may all have landed while this waited. Flag off
-      // `messageStartQueued` is always raised here (the watch is the only
-      // queuer); flag on it is not when only start-or-wake owes the pass.
+      // `owedByMessage` is always true (the watch is the only queuer), as
+      // master's `messageStartQueued` always was here.
       if (
-        !messageStartQueued ||
+        !owedByMessage ||
         shuttingDown ||
         standby === undefined ||
         breakerTripped ||
@@ -1819,19 +1832,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         recordStartThrow(err, "Could not start Claude for the message");
       }
     }).finally(() => {
-      // Anything today's arm set while the pass ran is cleared, not re-queued:
-      // its wake was owed synchronously by the watch (drafter's ruling 2).
-      messageStartQueued = false;
-      passQueued = false;
-      // Start-or-wake raised again while the pass ran: exactly one more pass
-      // (R2.7). Never raised flag off.
-      if (startOrWakeOwed) queueStartPass();
+      // Only today's arm's own pass lowers its pending state (R3.2): a chat
+      // accepted while this pass ran was coalesced into it, and its wake was
+      // owed synchronously by the watch, so it is cleared, not re-queued. A
+      // start-or-wake-only pass leaves it alone: a chat's pass queued behind
+      // this one still reads as Starting.
+      if (owedByMessage) messageStartQueued = false;
+      passesQueued -= 1;
+      // Start-or-wake raised again while passes were in flight: exactly one
+      // more pass, queued by the last of them to end (R2.7, R3.3). A pass
+      // still queued reads it first. Never raised flag off.
+      if (startOrWakeOwed && passesQueued === 0) queueStartPass();
     });
   }
 
-  /** Queue the one start pass. Ends in a catch: nothing awaits it (#2125). */
+  /** Queue a pass only start-or-wake owes. Ends in a catch: nothing awaits it
+   *  (#2125). */
   function queueStartPass(): void {
-    startForMessage().catch((err: unknown) => {
+    startForMessage(false).catch((err: unknown) => {
       console.error(`[Launcher] The start pass failed: ${errorName(err)}`);
     });
   }
@@ -1898,8 +1916,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * See `Supervisor.startOrWake` (#2358 PR 3b-2a, R2.1, R2.2, R2.12). Dropped
    * at the call — nothing recorded, no pass — flag off, during shutdown, when
    * the live standby is Off, or when the licence refuses (a licence activated
-   * later therefore starts nothing for it). Otherwise it joins the one queued
-   * pass, queuing it unless one is queued: a burst is one pass.
+   * later therefore starts nothing for it). Otherwise it joins any pass
+   * queued or running (a chat's own pass included, 3b-2b1a R3.3), queuing
+   * one only when none is: a burst is one pass.
    */
   function startOrWake(cause: StartOrWakeCause): void {
     try {
@@ -1908,7 +1927,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (decideRefusal() !== null) return;
       startOrWakeOwed = true;
       startOrWakeCause = START_OR_WAKE_CAUSES.has(cause) ? cause : "other";
-      if (passQueued) return;
+      if (passesQueued > 0) return;
       console.error(`[Launcher] Start-or-wake queued (${startOrWakeCause})`);
       queueStartPass();
     } catch (err) {
