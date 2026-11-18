@@ -174,7 +174,8 @@ async function handleSave(e: SubmitEvent) {
   // Save is natively disabled while saving, and a browser moves focus off a
   // disabled control to <body>, where the dialog's Escape no longer reaches.
   // Keep focus in the dialog so the exits stay live from the keyboard (R2.4);
-  // a failed save hands it back to Save below.
+  // a failed save then puts it on Save below, whichever control submitted
+  // (CD-7: Enter from a field included).
   const parkedFocus =
     dialogEl !== null &&
     dialogEl.contains(document.activeElement) &&
@@ -225,10 +226,11 @@ async function handleSave(e: SubmitEvent) {
     saveError = err instanceof Error ? err.message : "Failed to save";
   } finally {
     saving = false;
-    // A failed save leaves the window open with the reason shown: give focus
-    // back to Save (enabled again after this render) if it is still parked on
-    // the dialog, so a keyboard user is where they were. In `finally`, because
-    // the failure branches `return` out of the `try`.
+    // A failed save leaves the window open with the reason shown: move focus
+    // to Save (enabled again after this render) if it is still parked on the
+    // dialog, whichever control submitted — after Enter from a field that is
+    // Save, not the field (CD-7). In `finally`, because the failure branches
+    // `return` out of the `try`.
     if (parkedFocus && !closed && saveError !== null && document.activeElement === dialogEl) {
       await tick();
       saveEl?.focus();

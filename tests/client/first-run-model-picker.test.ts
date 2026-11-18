@@ -239,6 +239,21 @@ describe("FirstRunModelPickerModal — saving", () => {
     expect(document.activeElement).toBe(saveButton(m));
   });
 
+  // CD-7: whichever control submitted, a failed save leaves focus on Save.
+  // After Enter from a field that is Save, not the field.
+  it("a failed save by Enter from the Model ID field puts focus on Save", async () => {
+    addModel.mockResolvedValue(null);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    modelIdField(m).focus();
+    await fireEvent.submit(modelIdField(m).closest("form") as HTMLFormElement);
+    await flush();
+    await flush();
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(m.getByTestId("first-run-error")).toBeTruthy();
+    expect(document.activeElement).toBe(saveButton(m));
+  });
+
   it("a committed add sets it as the default, once, and completes", async () => {
     addModel.mockResolvedValue("new-id");
     const m = mount();
