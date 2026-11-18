@@ -310,6 +310,14 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     expect(effect).toMatch(
       /\.then\(\(\) => \{\s*if \(!modelsStore\.loaded && !modelsStore\.loading\) return $/,
     );
+    // Nothing else writes the latch: every assignment in App, in any form,
+    // the declaration excluded, is the reset and the set above.
+    const writes = [
+      ...app.matchAll(
+        /(?<!let )\bmodelsReloadTriedThisConnection\s*(\|\|=|&&=|\?\?=|=(?!=))\s*([^;\n]*)/g,
+      ),
+    ].map((m) => `${m[1]} ${m[2].trim()}`);
+    expect(writes.sort()).toEqual(["= false", "= true"]);
   });
 
   it("no longer derives the window from the registry", () => {
