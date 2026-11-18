@@ -1700,7 +1700,10 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect((await record())?.answering).toBe(fp(A));
     });
 
-    it("R6.7 a marker not equal to the posted default is ignored: as master's file([B], B.id) — B recorded, no info notice", async () => {
+    // With marker A and file([B], B.id) the rule check already fails, so this
+    // case does not isolate the marker-equals-default half; the predicate's
+    // unit case does.
+    it("R6.7 a marker the rule would not produce is ignored: as master's file([B], B.id) — B recorded, no info notice", async () => {
       await boot();
       await save(file([A, B], A.id));
       await save(file([B], B.id), OWN_WINDOW_ORIGIN, marker(A.id));
@@ -1792,8 +1795,12 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect(JSON.stringify(getBuffer())).not.toContain(SENTINEL);
       expect(JSON.stringify(getStartupNotices())).not.toContain(SENTINEL);
       expect(openOwnWindowStream()).not.toContain(SENTINEL);
-      for (const name of fs.readdirSync(dir)) {
-        expect(fs.readFileSync(path.join(dir, name), "utf8"), name).not.toContain(SENTINEL);
+      // Files only: a subdirectory of the temp dir would make readFileSync throw.
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        expect(fs.readFileSync(path.join(dir, entry.name), "utf8"), entry.name).not.toContain(
+          SENTINEL,
+        );
       }
     });
   });
@@ -1893,7 +1900,10 @@ describe("where the automatic-default marker may go (#1123 R2.2, R3.2, R4.1)", (
   const SRC = path.join(__dirname, "../../../src");
   const strip = (s: string) =>
     s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  const readSrc = (rel: string) => strip(fs.readFileSync(path.join(SRC, rel), "utf8"));
+  // `\r\n` normalized after reading, so an opener holding a newline (R4.1's)
+  // matches on a CRLF working tree too.
+  const readSrc = (rel: string) =>
+    strip(fs.readFileSync(path.join(SRC, rel), "utf8").replace(/\r\n/g, "\n"));
   const count = (hay: string, needle: string | RegExp) =>
     typeof needle === "string" ? hay.split(needle).length - 1 : [...hay.matchAll(needle)].length;
 
@@ -1988,6 +1998,47 @@ describe("where the automatic-default marker may go (#1123 R2.2, R3.2, R4.1)", (
     const body = reg.slice(start, end);
     expect(body.trim().length).toBeGreaterThan(0);
     expect(count(body, /\bpersistModelsFile\b/g)).toBe(1);
+
+    // And `setCache`, which tells the listeners, is called only from the boot
+    // prime (twice, with PRIME) and from persistModelsFile (once): a new direct
+    // caller in the registry would hand a listener a `before` no etag named.
+    expect(reg).toContain("function setCache(next: ModelsFile, meta: ModelsWriteMeta): void {");
+    const setCacheCalls = [...reg.matchAll(/(?<!function )\bsetCache\s*\(/g)].map(
+      (m) => m.index as number,
+    );
+    expect(setCacheCalls).toHaveLength(3);
+    const prime = blockSpan(reg, "export async function primeModelStoreCache(): Promise<void> {");
+    const persist = blockSpan(reg, "  meta: ModelsWriteMeta = UNSPECIFIED,\n): Promise<void> {");
+    const inSpan = (i: number, sp: { start: number; end: number }) => i > sp.start && i < sp.end;
+    expect(setCacheCalls.filter((i) => inSpan(i, prime))).toHaveLength(2);
+    expect(setCacheCalls.filter((i) => inSpan(i, persist))).toHaveLength(1);
+    for (const span of callSpans(reg.slice(prime.start, prime.end), /\bsetCache\s*\(/g)) {
+      expect(span).toMatch(/,\s*PRIME$/);
+    }
+  });
+
+  it("R4.1: entryTouchedByWrite's third argument is passed once, fed by autoDefaultHonoured's result", () => {
+    const withThird: Array<[string, string]> = [];
+    for (const f of allTs(SRC)) {
+      const src = strip(fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n"));
+      for (const span of callSpans(src, /(?<!function )\bentryTouchedByWrite\s*\(/g)) {
+        // Top-level commas only.
+        let depth = 0;
+        let commas = 0;
+        for (const ch of span) {
+          if ("([{".includes(ch)) depth++;
+          else if (")]}".includes(ch)) depth--;
+          else if (ch === "," && depth === 0) commas++;
+        }
+        if (commas >= 2) withThird.push([path.relative(SRC, f).replace(/\\/g, "/"), span]);
+      }
+    }
+    expect(withThird).toEqual([
+      ["server/local-model/collaborator.ts", "change, now.entryId, !autoDefault"],
+    ]);
+    const src = readSrc("server/local-model/collaborator.ts");
+    expect(count(src, /\bautoDefault\b/g), "declared once, read once").toBe(2);
+    expect(src).toMatch(/const autoDefault = autoDefaultHonoured\(/);
   });
 
   it("R4.1: the honour check is called once, inside the own-window branch of noticeAnsweringChange, and the marker is read nowhere else", () => {

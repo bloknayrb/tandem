@@ -45,13 +45,12 @@ export interface ModelsWriteMeta {
   /** The client's one-time localStorage→server reconcile. */
   reconcile: boolean;
   /**
-   * The envelope's `autoDefaultId`, when it was a string: the id of a default
-   * the client's automatic-default rule set in this write — sent by the Models
-   * store when its automatic-default rule marked the default. Carried only so
-   * a change listener can compare it with `before` and `after`
-   * (`autoDefaultHonoured` in the local-model collaborator); it only narrows
-   * what counts as the user's choice. Never stored, logged or echoed. Absent
-   * on every other write.
+   * The envelope's `autoDefaultId`, when it was a string: sent by the Models
+   * store when its automatic-default rule marked the default in this write.
+   * Carried only so a change listener can compare it with `before` and
+   * `after` (`autoDefaultHonoured` in the local-model collaborator); it only
+   * narrows what counts as the user's choice. Never stored, logged or echoed.
+   * Absent on every other write.
    */
   autoDefaultId?: string;
 }
