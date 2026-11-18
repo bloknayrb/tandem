@@ -1093,9 +1093,10 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
         await expectKept(id);
       });
 
-      // Review round 1, R1.1: any other result is reported by the store as it
-      // stands after the switch's re-read — known local S, known Claude R,
-      // not known N — for a refused or failed write and for `unconfirmed`.
+      // Review rounds 1 and 2: any other result, first match — the store
+      // known local after the re-read, S; the POST's own answer naming Claude
+      // in effect, R; anything else, N (a store still saying Claude may be
+      // stale, so it never gives R).
       describe("a refused or failed write (500 write-failed, Claude in effect)", () => {
         const refused = { answerer: "claude", persisted: false, code: WF };
         it("store known Claude: R (a new string, not Settings' line)", async () => {
@@ -1109,9 +1110,9 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
           expect(notices()).toEqual([[notice(N.set)]]);
           expectWithdrawn(id);
         });
-        it("store not known (the re-read failed): N", async () => {
+        it("store not known (the re-read failed): R, on the server's own answer", async () => {
           const id = await press(500, refused, "fail");
-          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          expect(notices()).toEqual([[notice(N.refused)]]);
           await expectKept(id);
         });
       });
@@ -1122,9 +1123,9 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
           ["404", 404, { error: "NOT_FOUND" }],
           ["a network failure", 0, null],
         ] as const) {
-          it(`${label}, store known Claude: R`, async () => {
+          it(`${label}, store known Claude: N (the response does not state the answerer)`, async () => {
             const id = await press(status, body, known("claude"));
-            expect(notices()).toEqual([[notice(N.refused)]]);
+            expect(notices()).toEqual([[notice(N.notConfirmed)]]);
             await expectKept(id);
           });
         }
@@ -1133,12 +1134,50 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
           expect(notices()).toEqual([[notice(N.set)]]);
           expectWithdrawn(id);
         });
+        it("a server restart during the switch: the POST timed out and the re-read is dropped (new process), the store still says Claude: N, not R", async () => {
+          const id = await pushConfirmation();
+          store.noteCtrlSynced({});
+          await (await held.request(2)).answer(200, known("claude"));
+          click();
+          await (await held.request(3)).answer(200, known("claude"));
+          const post = await held.request(4);
+          await post.timeout();
+          const reread = await held.request(5);
+          store.noteCtrlSynced({}); // a new server process: this re-read is not adopted
+          await reread.answer(200, known("claude"));
+          await (await held.request(6)).answer(200, known("claude"));
+          await drain();
+          expect(posts()).toHaveLength(1);
+          expect(state.known).toBe(true);
+          expect(state.answerer).toBe("claude");
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          await expectKept(id);
+        });
         it("a POST that timed out, store not known (the re-read failed): N", async () => {
           const id = await press(-1, null, "fail");
           expect(notices()).toEqual([[notice(N.notConfirmed)]]);
           await expectKept(id);
         });
       });
+    });
+
+    it("the switch counter: store not known, a press, then 'Set chat to Claude' sent during the press's read, which settles while that POST is on the wire: the press is silent (review round 2)", async () => {
+      const id = await pushConfirmation();
+      await readAs(403, { code: "OWN_WINDOW_ONLY" }); // the store is not known
+      click();
+      const pressRead = await held.request(3);
+      const done = store.setChatAnswerer("claude"); // allowed while not known
+      const post = await held.request(4);
+      await pressRead.answer(403, { code: "OWN_WINDOW_ONLY" });
+      await drain();
+      expect(notices()).toEqual([]);
+      await post.answer(200, { answerer: "claude", persisted: true });
+      await (await held.request(5)).answer(403, { code: "OWN_WINDOW_ONLY" });
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(notices()).toEqual([]);
+      await expectKept(id);
     });
 
     it("a full Settings switch to Claude during the press's read: the press sends nothing and shows nothing (review round 1)", async () => {

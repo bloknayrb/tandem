@@ -800,10 +800,12 @@ function withdrawConfirmation(): void {
  * choice; review round 1); from the STORE, known local, nothing (re-sending
  * would upgrade the server's "told" to "chosen", #2417); still not known, X;
  * otherwise one `setChatAnswerer("local")` (CR-2). Its notice: S or U for a
- * POST that answered local; nothing for a superseded Claude; for any other
- * result (unconfirmed, or a refused or failed write), the store as it stands
- * after the switch's re-read decides — known local S, known Claude R, not
- * known N (review round 1, R1.1, correcting the brief). No return on a
+ * POST that answered local; nothing for a superseded Claude; otherwise,
+ * first match: the store known local after the switch's re-read, S (it claims
+ * only that chat was set); the POST's own answer naming Claude in effect, R;
+ * anything else, N — a store that merely still says Claude may be stale, so
+ * R rests only on the server's word to this press (review rounds 1 and 2,
+ * correcting the brief). No return on a
  * missing confirmation id: the rows run regardless. Never writes `$state`
  * itself; only from the click and the fetch continuations below it.
  */
@@ -819,7 +821,8 @@ export async function pressUseItForChat(): Promise<void> {
     return;
   }
   const result = await setChatAnswerer("local");
-  // A switch began during the press's read: Settings owns that one.
+  // Not reached after the checks above (no switch pending, the read known);
+  // kept so a switch that was never sent is never reported.
   if (result.kind === "not-sent") return;
   // This notice carries the result; a line left behind would be announced at
   // the next Settings → Models open, against the tab's rule.
@@ -830,10 +833,11 @@ export async function pressUseItForChat(): Promise<void> {
   }
   // A superseded Claude: another choice won, and Settings says nothing either.
   if (result.kind === "answered" && result.superseded) return;
-  // Otherwise the POST did not say chat is local: the store, after the
-  // switch's re-read, says what holds now.
+  // Otherwise the POST did not say chat is local. "Was set" needs only the
+  // store to know local; "left set to Claude" needs the server's own answer
+  // to this press (an `answered` Claude), never a store that may be stale.
   if (isKnownLocal()) pushUseItNotice("set");
-  else if (isKnownClaude()) pushUseItNotice("refused");
+  else if (result.kind === "answered") pushUseItNotice("refused");
   else pushUseItNotice("notConfirmed");
 }
 
@@ -845,20 +849,23 @@ function onModelsWrite(info: { firstLocal: boolean }): void {
       if (outcome.status !== "known") return; // not known: dropped, unmarked
       if (toastAlreadyShown()) return;
       const sink = _toastSink;
-      // Known local: it would be false, so it is dropped (and marked). So when
-      // the store already knows local (a switch settled while this read was in
-      // flight, so the read was not adopted).
+      // Known local, or a store that already knows local (a switch settled
+      // while this read was in flight, so the read was not adopted): it would
+      // be false, so it is dropped (and marked).
       if (outcome.answerer !== "claude" || isKnownLocal() || sink === null) {
         markToastShown();
         return;
       }
       const id = generateNotificationId();
-      // The withdrawal finds the toast and its tray row by this id. The toast
-      // takes the id of the latest push with its dedupKey and the tray row
-      // keeps the first; both are this one, because this store is the only
-      // pusher of "first-local-model-chat" and pushes it at most once per
-      // install (the mark and the tray share storage, and its info row expires
-      // after five minutes).
+      // The withdrawal finds the toast and its tray row by this id: the toast
+      // takes the id of the latest push with its dedupKey, and the tray row
+      // keeps the first. This store is the only pusher of
+      // "first-local-model-chat", and marks the offer only once a push
+      // returns; a push that throws after the tray row was made leaves the
+      // offer unmarked, so a later first local model pushes again, and that
+      // earlier row keeps its own id. The sink removes tray rows by id only,
+      // so such a stale row can outlive the withdrawal for up to the info
+      // lifetime (five minutes).
       _confirmationId = id;
       try {
         sink.push(
