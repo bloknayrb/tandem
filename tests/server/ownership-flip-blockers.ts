@@ -496,14 +496,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Acknowledged chat is never started for (3b-2b1b-chat): an in-progress reply or a cursor " +
-      "acknowledgement stamps the message read, so if Claude never answers (its run dies), the " +
-      "message stops counting as waiting and nothing starts Claude for it. A re-owe at the next " +
+      "Read but unanswered chat is never started for (3b-2b1b-chat): every way a user message is " +
+      "stamped read takes it out of waiting: a cursor acknowledgement, a cursor-less poll's commit " +
+      "(read at hand-out), a tandem_reply with replyTo (in-progress included), and " +
+      "POST /api/channel-reply, which stamps it for any session's reply, in-progress included, " +
+      "with no ownership gate, so a session that never owned the message can strand it. If no " +
+      "final answer follows (the run dies, or the replier was not its owner), the message stops " +
+      "counting as waiting and nothing starts Claude for it. A re-owe at the next " +
       "run start (3b-2b4) fixes only what that run sees; after a server restart the message is " +
       "carried over, and carried-over rows are never re-owed, so under today's rules that form is " +
       "permanent.",
-    closedBy:
-      "A decision on a rule for acknowledged-but-unanswered chat, then its change with a test.",
+    closedBy: "A decision on a rule for read-but-unanswered chat, then its change with a test.",
   },
   {
     gap:

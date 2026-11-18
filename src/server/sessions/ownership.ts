@@ -2721,7 +2721,9 @@ const CHAT_HALF_FAILED =
  * `"claim"` arm (chat following an open, unowned document) is not counted
  * (the brief's Flag for Bryan). `select` receives the facts because an
  * `owned` standing carries no document id. Unexported: the step-5 composite
- * and 3b-2b1c reuse it. Synchronous; writes nothing. May throw: its callers
+ * and 3b-2b1c reuse it. Synchronous; no Y.Doc, registry, read-stamp or
+ * ownership write (the chat member resolves the control room with the
+ * creating getter, which exists from boot). May throw: its callers
  * catch.
  */
 function tandemChatWaiting(
@@ -2743,7 +2745,11 @@ function tandemChatWaiting(
  * on a document it holds (the waiting probe, `documentWaiting`), or in chat
  * it owns ({@link tandemChatWaiting}). False while ownership is off, before
  * anything is read. **Computed and not consumed**: nothing calls it until
- * 3b-2b1c wires the supervisor's decision to it. Synchronous; writes nothing.
+ * 3b-2b1c wires the supervisor's decision to it. Synchronous; it makes no
+ * Y.Doc, registry, read-stamp or ownership write (the probe, `documentWaiting`,
+ * can log a legacy migration and add to an in-memory dedup set; the chat side
+ * resolves the control room with the creating getter, which exists from boot).
+ * No licence term, on purpose: refusal is the supervisor's, at the call.
  * Both halves are always asked, each in its own catch, so a throw in one
  * cannot hide a waiting answer from the other: a failed half reads as false
  * and logs one fixed, rate-limited line with no id and no error text.

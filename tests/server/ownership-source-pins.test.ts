@@ -1104,6 +1104,52 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     ]);
   });
 
+  it("computed, not consumed, inside ownership.ts too: tandemWorkWaiting is only defined, tandemChatWaiting only defined and called once (review round 1, R1.3)", () => {
+    // The per-file pin above cannot see a caller inside ownership.ts, where
+    // step 5 and startOrWake live. 3b-2b1b-chat-step5 and 3b-2b1c change these counts.
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
+    expect(text).toContain("export function tandemWorkWaiting(): boolean {");
+    expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(2);
+    expect(text).toContain("function tandemChatWaiting(");
+    expect(text).toContain("tandemChatWaiting(() => true)");
+  });
+
+  it("the waiting rule builds the chat item from exactly admitChatItem's fields (review round 1, R1.2)", () => {
+    // Each literal, comment-stripped and whitespace-folded: `admitChatItem`'s
+    // `const item = { ... };` and `chatItemAdmitted`'s `safeParse({ ... })`.
+    const literal = (text: string, fn: string, open: string) => {
+      const body = text.slice(text.indexOf(`function ${fn}(`));
+      expect(body.length, fn).toBeGreaterThan(0);
+      const start = body.indexOf(open) + open.length;
+      expect(start, `${fn}: ${open}`).toBeGreaterThan(open.length - 1);
+      let depth = 1;
+      let i = start;
+      for (; i < body.length && depth > 0; i++) {
+        if (body[i] === "{") depth++;
+        else if (body[i] === "}") depth--;
+      }
+      return body
+        .slice(start, i - 1)
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+    const admit = literal(
+      stripComments(SRC_FILES.get("src/server/mcp/awareness.ts") as string),
+      "admitChatItem",
+      "const item = {",
+    );
+    const waiting = literal(
+      stripComments(SRC_FILES.get("src/server/mcp/inbox-selection.ts") as string),
+      "chatItemAdmitted",
+      "safeParse({",
+    );
+    // The positive anchor: the literal is the one with the six fields.
+    expect(admit).toContain("id: msg.id");
+    expect(admit).toContain("replyTo: msg.replyTo");
+    expect(waiting).toBe(admit);
+  });
+
   it("ownership.ts imports nothing from awareness (the chat side is reached only through its seam)", () => {
     const text = SRC_FILES.get(OWNERSHIP) as string;
     const specifiers = [

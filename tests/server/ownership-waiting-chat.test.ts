@@ -369,6 +369,8 @@ interface RowWorld {
   candidate: string;
   /** One cursor reader of Tandem's Claude (`t-poll`, `t-poll-again`). */
   t: ReturnType<typeof reader>;
+  /** What each `t-poll` / `t-poll-again` returned, in order. */
+  tInboxes: Inbox[];
   a: ReturnType<typeof reader>;
 }
 
@@ -404,6 +406,7 @@ async function rowWorld(): Promise<RowWorld> {
     closedId,
     candidate: "",
     t: reader(TANDEM),
+    tInboxes: [],
     a: reader(A),
   };
 }
@@ -537,7 +540,7 @@ async function runAct(w: RowWorld, act: Act, r: Row): Promise<void> {
       return makeCandidate(w, r.candidate);
     case "t-poll":
     case "t-poll-again":
-      await w.t.poll();
+      w.tInboxes.push(await w.t.poll());
       return;
     case "t-legacy":
       await pollAs(TANDEM);
@@ -788,6 +791,12 @@ describe("the agreement table: the decision answers as a fresh poll of Tandem's 
     it(r.name, async () => {
       const w = await buildRow(r);
 
+      // Review round 1 (R1.5): where a row's world starts with a `t-poll`,
+      // that first poll handed the candidate, and only it.
+      if (r.acts.includes("t-poll")) {
+        expect(handed(w.tInboxes[0] as Inbox), "the first t-poll").toEqual([w.candidate]);
+      }
+
       const decision = decide();
       const inbox = await reader(TANDEM).poll();
       expect(decision, "the decision").toBe(r.expected === "waiting");
@@ -881,8 +890,15 @@ describe("chatRowsOwedToFreshReader, the module alone", () => {
       isLocalPeriodChat: () => false,
       ...over,
     } as ChatRowsInput);
-  const owed = (row: unknown, over: Partial<ChatRowsInput> = {}) =>
-    chatRowsOwedToFreshReader(input([{ key: "k", row }], over));
+  const owed = (row: unknown, over: Partial<ChatRowsInput> = {}) => {
+    const given = input([{ key: "k", row }], over);
+    // `deepFreeze` does not stop `Set.add` (review round 1, R1.5): the handled
+    // set is asserted unchanged instead.
+    const size = given.handled.size;
+    const keys = chatRowsOwedToFreshReader(given);
+    expect(given.handled.size, "the handled set is not written").toBe(size);
+    return keys;
+  };
 
   it("keeps an unread, unhandled user row over deep-frozen inputs, in input order", () => {
     expect(owed(msg("k"))).toEqual(["k"]);
