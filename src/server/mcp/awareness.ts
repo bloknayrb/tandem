@@ -578,15 +578,14 @@ const DOCUMENT_WAITING_FAILED =
  * **It makes no Y.Doc write.** (It does not write nothing at all: like every
  * caller of `store.listAnnotations()`, it can log a legacy migration and add
  * to the migration log's in-memory dedup set, `migration-log.ts`, and log a
- * malformed key.) The Y.Doc
- * comes from the non-creating getter, the store is built as
- * {@link currentNoticeKeys} builds one, and the rule
- * receives copies: `sanitizeAnnotation` copies shallowly (its `range`,
- * `relRange` and `textSnapshotBreaks` are the stored objects) and the reply
- * map returns its stored objects, so both are `structuredClone`d. The
- * registry is read through a closure that builds the item's key itself, so
- * the rule never restates the key format. Nothing is refreshed, registered,
- * stamped or pushed. (Reading the mode goes through `readModeState`, which
+ * malformed key.) The Y.Doc comes from the non-creating getter, the store is
+ * built as {@link currentNoticeKeys} builds one, and the rule receives
+ * copies: `sanitizeAnnotation` copies shallowly (its `range`, `relRange` and
+ * `textSnapshotBreaks` are the stored objects) and the reply map returns its
+ * stored objects, so both are `structuredClone`d. The registry is read
+ * through a closure that builds the item's key itself, so the rule never
+ * restates the key format. Nothing is refreshed, registered, stamped or
+ * pushed. (Reading the mode goes through `readModeState`, which
  * resolves the control room with the creating getter; it exists from boot in
  * a running server, and an empty Y.Doc emits no update.)
  *
