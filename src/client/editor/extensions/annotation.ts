@@ -5,6 +5,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import * as Y from "yjs";
 import {
+  BYO_MODELS_ENABLED,
   DECORATION_VISIBILITY_KEY,
   HIGHLIGHT_COLOR_VARS,
   normalizeHighlightColor,
@@ -15,7 +16,7 @@ import type { Annotation } from "../../../shared/types";
 import { agentLabelSource } from "../../hooks/useModels.svelte";
 import { annotationToPmRange } from "../../positions";
 import { agentColor } from "../../utils/agent-color";
-import { resolveAgentLabel } from "../../utils/agentLabel";
+import { agentBylineLabel, CLAUDE_AGENT_LABEL, resolveAgentLabel } from "../../utils/agentLabel";
 
 export const annotationPluginKey = new PluginKey("tandemAnnotations");
 
@@ -81,15 +82,18 @@ export function parseStoredVisibility(): DecorationVisibility {
 }
 
 /**
- * Agent family label ("Claude"/"GPT"/…) for the agent-comment aria-label (#438).
- * Reads `agentLabelSource()` — the server-authoritative store when lit,
- * localStorage settings while dark — a subscription-free read on every
- * ProseMirror decoration pass (this runs outside the Svelte tree). Picked up on
- * the next rebuild after a model change; staleness on a screen-reader-only label
- * is acceptable given users pick one model and keep it. The dark branch keeps the
- * label byte-identical to pre-M2 for users who configured a model under v0.13.x.
+ * Label for Claude-side work in the agent-comment aria-label (#438). The same
+ * rule as `createAgentLabel`, for code outside the Svelte tree (ADR-039
+ * amendment 2026-11-17 (agent labels)):
+ *  - Lit (`BYO_MODELS_ENABLED` on): "Claude", whatever the Models store holds.
+ *  - Dark: the registry rule, `resolveAgentLabel` over `agentLabelSource()`
+ *    (localStorage settings while dark), read on every decoration pass, so a
+ *    v0.13.x cohort's configured-model label stays byte-identical. Picked up on
+ *    the next rebuild after a model change.
+ * A record a local model wrote names itself instead (`agentBylineLabel`).
  */
 function readAgentFamilyLabel(): string {
+  if (BYO_MODELS_ENABLED) return CLAUDE_AGENT_LABEL;
   return resolveAgentLabel(agentLabelSource(), "family");
 }
 
@@ -187,10 +191,12 @@ function buildDecorations(
             "data-annotation-id": ann.id,
             "data-annotation-type": ann.type,
             "data-annotation-author": ann.author,
-            // #1123 M3: prefer the specific authoring model's name when the
-            // local-model loop stamped one (survives sanitize via the allowlist
-            // add); else the active-model family label. Dark ⇒ always the latter.
-            "aria-label": `${ann.agentIdentity?.displayName ?? agentLabel} comment annotation`,
+            // #1123: a record the local model wrote names it (its stamped
+            // `agentIdentity`, which survives sanitize via the allowlist; an
+            // identity without a usable name reads "Local model", AL-7); every other agent
+            // comment takes `readAgentFamilyLabel()`'s label. Dark builds never
+            // write `agentIdentity`, so dark is always the latter.
+            "aria-label": `${agentBylineLabel(ann.agentIdentity, agentLabel)} comment annotation`,
           };
         } else {
           // User/import comment → dashed blue underline

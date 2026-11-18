@@ -10,6 +10,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
+import { agentBylineLabel } from "../utils/agentLabel";
 import { AI_OFF_TITLE } from "../utils/license-ui";
 import { CLAUDE_CODE_OFFER_TEXT, showClaudeCodeOffer } from "./chat-claude-code-offer";
 import { localChatDateLabel } from "./chat-export";
@@ -544,7 +545,7 @@ async function exportChat() {
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
             {msg.author === "claude"
-              ? (msg.agentIdentity?.displayName ?? agentLabel.family)
+              ? agentBylineLabel(msg.agentIdentity, agentLabel.family)
               : "You"}
           </span>
           {#if msg.documentId}
