@@ -27,17 +27,9 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import ts from "typescript";
@@ -56,11 +48,22 @@ const posix = (p: string) => p.replace(/\\/g, "/");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf-8");
 
 /** TypeScript/JavaScript source with every comment removed by the TS printer,
- *  so prose cannot satisfy or trip a pin and strings are left whole. */
+ *  so prose cannot satisfy or trip a pin and strings are left whole. Memoized
+ *  per path: several tests read every `src/` file. */
+const printed = new Map<string, string>();
 function code(rel: string): string {
-  const kind = rel.endsWith(".svelte") ? ts.ScriptKind.TS : ts.ScriptKind.Unknown;
-  const sf = ts.createSourceFile(rel, read(rel), ts.ScriptTarget.Latest, false, kind);
-  return ts.createPrinter({ removeComments: true }).printFile(sf);
+  const hit = printed.get(rel);
+  if (hit !== undefined) return hit;
+  const sf = ts.createSourceFile(
+    rel,
+    read(rel),
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.Unknown,
+  );
+  const out = ts.createPrinter({ removeComments: true }).printFile(sf);
+  printed.set(rel, out);
+  return out;
 }
 
 /** Rust source with `//` comments removed (CRLF-safe). */
@@ -71,27 +74,23 @@ function rust(rel: string): string {
     .join("\n");
 }
 
-/** Every `.ts` file under `src/` (Svelte files hold no server code). */
-function srcTsFiles(dir = join(ROOT, "src")): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...srcTsFiles(p));
-    else if (name.endsWith(".ts")) out.push(posix(relative(ROOT, p)));
-  }
-  return out.sort();
+/** Tracked files only, so an untracked scratch file or editor backup cannot
+ *  fail a developer's pre-push. */
+function tracked(dir: string): string[] {
+  const files = execFileSync("git", ["ls-files", "-z", dir], { cwd: ROOT, encoding: "utf-8" })
+    .split("\0")
+    .filter((f) => f.length > 0)
+    .map(posix)
+    .sort();
+  expect(files.length, `git ls-files ${dir} listed nothing`).toBeGreaterThan(10);
+  return files;
 }
 
-/** Every file under `src/` that is neither `.ts` nor `.css` (today: Svelte only). */
-function srcOtherFiles(dir = join(ROOT, "src")): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...srcOtherFiles(p));
-    else if (!/\.(ts|css)$/.test(name)) out.push(posix(relative(ROOT, p)));
-  }
-  return out.sort();
-}
+/** Every tracked `.ts` file under `src/`. */
+const srcTsFiles = (): string[] => tracked("src").filter((f) => f.endsWith(".ts"));
+
+/** Every tracked file under `src/` that is neither `.ts` nor `.css` (today: Svelte only). */
+const srcOtherFiles = (): string[] => tracked("src").filter((f) => !/\.(ts|css)$/.test(f));
 
 type Leaf = {
   devAllowanceBuild: (argv: readonly string[]) => string;
@@ -242,14 +241,7 @@ describe("the harness signal's reach", () => {
   });
 
   it("no tracked file under src-tauri/ names it", () => {
-    const files = execFileSync("git", ["ls-files", "-z", "src-tauri"], {
-      cwd: ROOT,
-      encoding: "utf-8",
-    })
-      .split("\0")
-      .filter((f) => f.length > 0 && !/\.(png|ico|icns|bmp)$/i.test(f));
-    expect(files.length).toBeGreaterThan(10);
-    for (const f of files) {
+    for (const f of tracked("src-tauri").filter((f) => !/\.(png|ico|icns|bmp)$/i.test(f))) {
       expect(readFileSync(join(ROOT, f), "utf-8"), f).not.toContain("tandem-e2e-harness");
     }
   });
