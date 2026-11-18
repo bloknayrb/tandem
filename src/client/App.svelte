@@ -3348,7 +3348,10 @@ function dismissModelPicker() {
            wizard closes after Claude was set up in it. Its own close dismisses
            it, revealing the tutorial (gated on `!modelPickerOpen` above).
            Never mounts while dark. -->
-      <FirstRunModelPickerModal onComplete={dismissModelPicker} />
+      <FirstRunModelPickerModal
+        onComplete={dismissModelPicker}
+        onNotify={(n) => notifications.push(n)}
+      />
     {/if}
 
     {#if fileOpenDialogOpen}

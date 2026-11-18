@@ -3,12 +3,14 @@
  * The first-run window, "Add a local model (optional)" (#1123, ADR-039 items
  * 21–23): pick a local provider, name the model, save it and make it the
  * Default. Choosing a model here counts as the user choosing the Default,
- * replacing any earlier one (Bryan, 2026-11-18, review round 1 of #2462).
- * Usually the Models store has already marked it inside the add's own write
- * (the automatic default, Label decision L6 of 2026-11-17), and then there is
- * no second write; otherwise the window sets it with `setDefault`, a chosen
- * default that carries no automatic marker. The caller's `onComplete` fires
- * on save or on any close.
+ * replacing any earlier one (Bryan's pick from options, 2026-11-18, review
+ * round 1 of #2462). Usually the Models store has already marked it inside the
+ * add's own write (the automatic default, Label decision L6 of 2026-11-17),
+ * and then there is no second write; otherwise the window sets it with
+ * `setDefault`, a chosen default that carries no automatic marker. The
+ * caller's `onComplete` fires on save or on any close; when that set-default
+ * fails and the saved model is still in the list and still not the Default,
+ * one `onNotify` notice follows the close, saying so.
  *
  * Mounted by `App.svelte` behind `modelPickerOpen` (offered once, when the
  * integration wizard closes after Claude was set up in it), which is gated on
@@ -24,6 +26,8 @@ import {
   PROVIDER_LABEL,
   PROVIDER_OPTION_ORDER,
 } from "../../shared/models/provider-ui.js";
+import type { TandemNotification } from "../../shared/types.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { createModels } from "../hooks/useModels.svelte.js";
 import { createModelsWriteAccess } from "../hooks/useModelsWriteAccess.svelte";
 import { trapTab } from "../utils/focus-trap.js";
@@ -38,9 +42,17 @@ import {
 interface Props {
   /** Fires after Save (success) or Skip. Caller should advance its state. */
   onComplete: () => void;
+  /** Raises a notice (App: `notifications.push`). Called at most once, after
+   *  `onComplete`, when the window's set-default failed (R0.1). */
+  onNotify: (n: TandemNotification) => void;
 }
 
-const { onComplete }: Props = $props();
+const { onComplete, onNotify }: Props = $props();
+
+/** Said once, after the window has closed, when its set-default failed. Past
+ *  tense, because a warning stays in the tray (`TandemNotification.severity`). */
+const DEFAULT_NOT_SET_MESSAGE =
+  "Your local model was saved, but Tandem could not make it your Default model. You can mark it as Default in Settings → Models.";
 
 const models = createModels();
 // Once the server has refused a save from this page (#2404: only Tandem's own
@@ -218,19 +230,34 @@ async function handleSave(e: SubmitEvent) {
         : (models.saveError ?? "Failed to save model changes.");
       return;
     }
-    // The model committed. The window's model becomes the Default (Bryan,
-    // 2026-11-18): when the add's own write did not already mark it (another
-    // default was set, possibly by another window between the offer and
-    // Save, or another enabled local model left the rule silent), set it as
-    // a chosen default. That write can still roll back (a concurrent writer
-    // or a blip); the model exists either way, so the window closes as a
-    // success and drops the store's rollback message, which would otherwise
-    // surface later in Settings → Models (RW-5). Closed while it is pending:
-    // the window has already completed, so only the error is dropped.
+    // The model committed. The window's model becomes the Default (Bryan's
+    // pick from options, 2026-11-18): when the add's own write did not
+    // already mark it (another default was set, possibly by another window
+    // between the offer and Save, or another enabled local model left the
+    // rule silent), set it as a chosen default. That write can still roll
+    // back (a concurrent writer or a blip); the model exists either way, so
+    // the window closes as a success (once: a close while it was pending has
+    // already completed it) and drops the store's rollback message, which
+    // would otherwise surface later in Settings → Models. Then, read after
+    // the write resolved, if the model is still saved and still not the
+    // Default, one notice says so (R0.1, replacing RW-5's silence): he
+    // pressed Save, so a close while it was pending still gets it. A model
+    // removed, or made the Default, meanwhile gets none.
     if (models.defaultModelId !== id) {
       const defaulted = await models.setDefault(id);
       if (!defaulted) models.clearError();
-      if (closed) return;
+      if (!closed) finish();
+      if (!defaulted && models.models.some((m) => m.id === id) && models.defaultModelId !== id) {
+        onNotify({
+          id: generateNotificationId(),
+          type: "general-error",
+          severity: "warning",
+          message: DEFAULT_NOT_SET_MESSAGE,
+          dedupKey: "first-run-default-not-set",
+          timestamp: Date.now(),
+        });
+      }
+      return;
     }
     finish();
   } catch (err) {
