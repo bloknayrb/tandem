@@ -413,7 +413,8 @@ export interface ChatMessageFacts {
 /**
  * The chat side, as the ownership side may use it (the chat owners PR, R2.2).
  * **This module never reads the chat map or writes a CTRL row**: everything it
- * needs from chat comes through these four members, which `src/server/index.ts`
+ * needs from chat comes through these seven members (the seventh,
+ * `owedToFreshReader`, is #2358 PR 3b-2b1b-chat's), which `src/server/index.ts`
  * wires once at boot (`setOwnershipChatSide`, pinned from source in
  * `tests/server/ownership-source-pins.test.ts`). Each is synchronous.
  */
@@ -448,6 +449,12 @@ export interface OwnershipChatSide {
   settleCandidates(rowKey: string): string[];
   /** Step 1, second half: add `keys` to the row's `settles`. Returns the keys added. */
   addSettles(rowKey: string, keys: readonly string[]): string[];
+  /**
+   * The keys of the user chat rows a fresh cursor reader would be handed if
+   * it may have them (user rows, not handled, not local-period chat, not
+   * read, admitted by the chat schema). Writes nothing, logs nothing.
+   */
+  owedToFreshReader(): readonly string[];
 }
 
 const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
@@ -457,6 +464,7 @@ const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
   reOwe: () => {},
   settleCandidates: () => [],
   addSettles: () => [],
+  owedToFreshReader: () => [],
 });
 
 let transportMode: "http" | "stdio" | undefined;
@@ -2689,6 +2697,74 @@ export function heldDocumentIds(ownerId: string): string[] {
   for (const [documentId, entry] of ownerByDoc)
     if (entry.ownerId === ownerId) held.push(documentId);
   return held;
+}
+
+// ---------------------------------------------------------------------------
+// Waiting for Tandem's Claude, both halves (#2358 PR 3b-2b1b-chat; ownership
+// design §8.5 as ADR-054's 3b-2b1b and 3b-2b1b-chat amendments rule it).
+
+/** Fixed text: no id, no record, nothing from the error. */
+const DOCUMENT_HALF_FAILED =
+  "[ownership] the document half of waiting could not be computed; it is read as nothing waiting.";
+const CHAT_HALF_FAILED =
+  "[ownership] the chat half of waiting could not be computed; it is read as nothing waiting.";
+
+/**
+ * Whether some user chat message is waiting for Tandem's Claude and accepted
+ * by `select` (Ruling K applied to chat): a key the chat side says a fresh
+ * reader would be handed if it may have it, that is not carried over, and
+ * whose standing is `owned` by Tandem's Claude (per message, by following a
+ * document it holds, or doc-less or on a closed document while it is
+ * present): what the poll's `chatScopeOf` answers `"owns"` for. Its
+ * `"claim"` arm (chat following an open, unowned document) is not counted
+ * (the brief's Flag for Bryan). `select` receives the facts because an
+ * `owned` standing carries no document id. Unexported: the step-5 composite
+ * and 3b-2b1c reuse it. Synchronous; writes nothing. May throw: its callers
+ * catch.
+ */
+function tandemChatWaiting(
+  select: (key: string, facts: ChatMessageFacts, standing: MessageStanding) => boolean,
+): boolean {
+  for (const key of chatSide.owedToFreshReader()) {
+    if (carriedOver.has(key)) continue;
+    const facts = chatSide.message(key);
+    if (facts === undefined) continue;
+    const standing = messageStanding(key, facts);
+    if (standing.kind !== "owned" || standing.ownerId !== TANDEM_OWNER_ID) continue;
+    if (select(key, facts, standing)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether anything is waiting for Tandem's Claude (#2358 PR 3b-2b1b-chat):
+ * on a document it holds (the waiting probe, `documentWaiting`), or in chat
+ * it owns ({@link tandemChatWaiting}). False while ownership is off, before
+ * anything is read. **Computed and not consumed**: nothing calls it until
+ * 3b-2b1c wires the supervisor's decision to it. Synchronous; writes nothing.
+ * Both halves are always asked, each in its own catch, so a throw in one
+ * cannot hide a waiting answer from the other: a failed half reads as false
+ * and logs one fixed, rate-limited line with no id and no error text.
+ */
+export function tandemWorkWaiting(): boolean {
+  if (!ownershipEnabled()) return false;
+  let documents = false;
+  try {
+    documents = heldDocumentIds(TANDEM_OWNER_ID).some((documentId) =>
+      waitingProbe(documentId, TANDEM_OWNER_ID),
+    );
+  } catch {
+    logLimited("waiting-document-half", DOCUMENT_HALF_FAILED);
+  }
+  // Both halves run whatever the first answered (plan review M1), so a chat
+  // half that throws is logged even beside a waiting document.
+  let chat = false;
+  try {
+    chat = tandemChatWaiting(() => true);
+  } catch {
+    logLimited("waiting-chat-half", CHAT_HALF_FAILED);
+  }
+  return documents || chat;
 }
 
 /**

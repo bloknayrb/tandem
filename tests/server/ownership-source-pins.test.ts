@@ -685,6 +685,7 @@ describe("the chat side's seams are wired in a running server (the chat owners P
       "messagesOn(documentId: string)",
       "message(key: string)",
       "reOwe(keys: readonly string[])",
+      "owedToFreshReader()",
     ]) {
       expect(body, member).toContain(member);
     }
@@ -1046,14 +1047,16 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
 
   it("the module's imports are exactly R1.2's list (type-only statements marked)", () => {
     const text = SRC_FILES.get(MODULE) as string;
+    // Whitespace folded, and a wrapped list's trailing comma dropped (biome
+    // wraps the 3b-2b1b-chat schema import).
     const statements = [...text.matchAll(/^import\b[^;]*;/gm)].map((m) =>
-      m[0].replace(/\s+/g, " "),
+      m[0].replace(/\s+/g, " ").replace(/\{ (.*?), \}/, "{ $1 }"),
     );
     expect(statements).toEqual([
-      'import type { Annotation, AnnotationReply } from "../../shared/types.js";',
+      'import type { Annotation, AnnotationReply, ChatMessage } from "../../shared/types.js";',
       'import { isClaudeFacing } from "../annotations/projection.js";',
       'import type { ModeState } from "../mode.js";',
-      'import { inboxUserReplySchema, userActionSchema } from "./output-schemas.js";',
+      'import { inboxChatMessageSchema, inboxUserReplySchema, userActionSchema } from "./output-schemas.js";',
     ]);
     // Nothing reaches another module any other way (dynamic import, require).
     expect(stripComments(text)).not.toMatch(/\bimport\(|\brequire\(|^export\b[^;]*\bfrom\b/m);
@@ -1076,5 +1079,39 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
     );
     expect(ownership.match(/\bwaitingProbe\s*=(?!=)/g)).toHaveLength(2);
     expect(ownership.match(/\bsetWaitingProbe\b/g)).toHaveLength(1);
+  });
+});
+
+describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () => {
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+
+  it("tandemWorkWaiting is named by no src file but ownership.ts (3b-2b1c changes this pin)", () => {
+    expect(filesMentioning("tandemWorkWaiting", [OWNERSHIP])).toEqual([]);
+    // The positive anchor: the scan sees the definition.
+    expect(filesMentioning("tandemWorkWaiting")).toEqual([OWNERSHIP]);
+  });
+
+  it("the pure chat rule is reached from awareness.ts only", () => {
+    expect(
+      filesMentioning("chatRowsOwedToFreshReader", ["src/server/mcp/inbox-selection.ts"]),
+    ).toEqual(["src/server/mcp/awareness.ts"]);
+  });
+
+  it("the chat side's new member is named by awareness.ts (its body) and ownership.ts (its one reader) only", () => {
+    expect(filesMentioning("owedToFreshReader")).toEqual([
+      "src/server/mcp/awareness.ts",
+      OWNERSHIP,
+    ]);
+  });
+
+  it("ownership.ts imports nothing from awareness (the chat side is reached only through its seam)", () => {
+    const text = SRC_FILES.get(OWNERSHIP) as string;
+    const specifiers = [
+      ...text.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+["']([^"']+)["']/gm),
+      ...text.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g),
+    ].map((m) => m[1] as string);
+    // The positive anchor: the scan finds the module's real imports.
+    expect(specifiers).toContain("../ownership-flag.js");
+    expect(specifiers.filter((spec) => /awareness/.test(spec))).toEqual([]);
   });
 });

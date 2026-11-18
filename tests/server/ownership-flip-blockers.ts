@@ -466,7 +466,7 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "Step 5 asks the document half of waiting only (3b-2b1b), so chat that follows a document " +
       "is not seen when the document goes to Tandem's Claude.",
-    closedBy: "The chat-half PR (3b-2b1b-chat).",
+    closedBy: "3b-2b1b-chat-step5.",
   },
   {
     gap:
@@ -484,6 +484,35 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "handed but unacknowledged reads as waiting.)",
     closedBy:
       "3b-2b4 retiring Tandem's Claude's own document entries at each run start (a self re-owe).",
+  },
+  {
+    gap:
+      "The waiting decision's cost is unmeasured (3b-2b1b-chat): each tandemWorkWaiting ask runs " +
+      "one waiting probe per document Tandem's Claude holds, settledChatIds over every chat row, " +
+      "one structuredClone and one schema parse per user chat row, and one message read per owed " +
+      "key. Once 3b-2b1c wires it, that happens at every forward and every start pass, and a " +
+      "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each.",
+    closedBy: "3b-2b4's measurement.",
+  },
+  {
+    gap:
+      "Acknowledged chat is never started for (3b-2b1b-chat): an in-progress reply or a cursor " +
+      "acknowledgement stamps the message read, so if Claude never answers (its run dies), the " +
+      "message stops counting as waiting and nothing starts Claude for it. A re-owe at the next " +
+      "run start (3b-2b4) fixes only what that run sees; after a server restart the message is " +
+      "carried over, and carried-over rows are never re-owed, so under today's rules that form is " +
+      "permanent.",
+    closedBy:
+      "A decision on a rule for acknowledged-but-unanswered chat, then its change with a test.",
+  },
+  {
+    gap:
+      "Claimable work does not count (3b-2b1b-chat): an open document nobody holds whose queue is " +
+      "idle would be handed, with its chat, comments and replies, to a present Tandem's Claude's " +
+      "poll (which claims it), but tandemWorkWaiting does not count that work, so such work does " +
+      "not start a stopped Claude once 3b-2b1c wires it.",
+    closedBy:
+      "Bryan's answer (3b-2b1b-chat's 'Flag for Bryan') and, if he answers B, the change with a test.",
   },
 ];
 

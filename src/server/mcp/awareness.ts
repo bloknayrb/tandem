@@ -70,7 +70,7 @@ import {
   seenBy,
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
-import { isDocumentWaiting } from "./inbox-selection.js";
+import { chatRowsOwedToFreshReader, isDocumentWaiting } from "./inbox-selection.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -2463,6 +2463,32 @@ export const ownershipChatSide = Object.freeze({
       keys.push(key);
     });
     return keys;
+  },
+  /**
+   * The keys of the user chat rows a fresh cursor reader would be handed if
+   * it may have them (#2358 PR 3b-2b1b-chat; `inbox-selection.ts`'
+   * `chatRowsOwedToFreshReader`): user rows, not handled, not local-period
+   * chat, not read, admitted by the chat item schema. Only user rows are
+   * cloned, each in its own `try`, so a row `structuredClone` rejects is
+   * skipped and hides nothing else. Writes nothing, logs nothing.
+   */
+  owedToFreshReader(): readonly string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const rows: { key: string; row: unknown }[] = [];
+    chatMap.forEach((value, key) => {
+      if (typeof value !== "object" || value === null) return;
+      if ((value as Partial<ChatMessage>).author !== "user") return;
+      try {
+        rows.push({ key, row: structuredClone(value) });
+      } catch {
+        // Skipped: read as not waiting (fails closed for this row only).
+      }
+    });
+    return chatRowsOwedToFreshReader({
+      rows,
+      handled: settledChatIds(chatMap),
+      isLocalPeriodChat,
+    });
   },
   /** The facts of the user row under `key`, or undefined. */
   message(key: string) {
