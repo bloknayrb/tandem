@@ -1753,7 +1753,6 @@ describe("3b-2a R2: startOrWake", () => {
   async function offAhead(
     h: ReturnType<typeof makeSupervisor>,
     order: string[],
-    inOffWait?: (c2: FakeChild) => void,
   ): Promise<FakeChild> {
     let relaunchChild: FakeChild | null = null;
     // Each step is recorded where the lock runs it, not at its promise's
@@ -1776,7 +1775,6 @@ describe("3b-2a R2: startOrWake", () => {
     await relaunching;
     const c2 = relaunchChild as unknown as FakeChild;
     await until(() => c2.killed, "the Off's SIGTERM");
-    inOffWait?.(c2);
     c2.releaseExit();
     await off;
     await lockBarrier(h);
@@ -1803,44 +1801,46 @@ describe("3b-2a R2: startOrWake", () => {
     expect(c3.stdin.writes).toHaveLength(0);
   });
 
-  describe("H4: a chat accepted from Off joins the queued pass", () => {
+  describe("H4 (rebuilt in 3b-2b1a, R3.7): a startOrWake joins the pass a chat queued behind an Off", () => {
+    // From idle-stopped, in one synchronous run: the Off queues on the lock,
+    // the chat is accepted (the Off's body has not run, so the standby still
+    // reads idle) and queues its own pass behind the Off, and the call joins
+    // that queued pass. At the pass the standby reads Off.
     async function h4(otherAiAtPass: boolean) {
-      const order: string[] = [];
-      let otherAi = false;
-      const waiting = waitingDouble(() => {
-        order.push("pass");
-        return true;
+      let calls = 0;
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({
+        workWaiting: waiting.fn,
+        // Clear at the chat's acceptance; attached by the pass when asked.
+        otherAiAttached: () => otherAiAtPass && ++calls > 1,
       });
-      const h = makeSupervisor({ workWaiting: waiting.fn, otherAiAttached: () => otherAi });
-      await runningIdle(h);
-      await offAhead(h, order, () => {
-        const st = h.sup.status();
-        if (!st.running && st.standby === "off") order.push("standby-off");
-        const before = pendingOf(h);
-        h.emit(chatEvent());
-        order.push("chat");
-        // Accepted: it marked the queued pass owed by today's arm.
-        expect(before).toBeUndefined();
-        expect(pendingOf(h)).toBe(true);
-        onSpawn = () => order.push("spawn");
-        otherAi = otherAiAtPass;
-      });
-      return { h, order };
+      calls = 0;
+      const logged = (logText().match(/Start-or-wake queued/g) ?? []).length;
+      const off = h.sup.updateSettings({ startMode: "off" });
+      h.emit(chatEvent());
+      h.sup.startOrWake?.("document");
+      // Joined: the call queued no pass of its own.
+      expect((logText().match(/Start-or-wake queued/g) ?? []).length).toBe(logged);
+      await off;
+      await lockBarrier(h);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+      return { h, waiting };
     }
-    it("no other AI at the pass: one spawn, mode saved on-click", async () => {
-      const { order } = await h4(false);
-      await childN(3);
-      expect(order.slice(0, 4)).toEqual(["relaunch", "off", "standby-off", "chat"]);
-      expect(order).toContain("spawn");
-      expect(order.indexOf("spawn")).toBeGreaterThan(order.indexOf("chat"));
-      expect(children).toHaveLength(3);
-      expect(await savedStartMode()).toBe("on-click");
-    });
-    it("another AI at the pass: no spawn, mode still Off (start-or-wake did not carry it)", async () => {
-      const { order } = await h4(true);
-      expect(order).toEqual(["relaunch", "off", "standby-off", "chat", "pass"]);
+    it("no other AI at the pass: today's arm starts Claude from Off and saves on-click", async () => {
+      const { waiting } = await h4(false);
+      const c2 = await childN(2);
       expect(children).toHaveLength(2);
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      expect(await savedStartMode()).toBe("on-click");
+      // Today's arm started it, so start-or-wake's share did not run.
+      expect(waiting.calls).toBe(0);
+    });
+    it("another AI at the pass: today's arm declines, the share returns at Off: no spawn, mode still Off", async () => {
+      const { h, waiting } = await h4(true);
+      expect(waiting.calls).toBe(1);
+      expect(children).toHaveLength(1);
       expect(await savedStartMode()).toBe("off");
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
     });
   });
 
@@ -1859,6 +1859,9 @@ describe("3b-2a R2: startOrWake", () => {
       },
     });
     // The pass's own spawn: a chat lands while the standby watch is still armed.
+    // Since 3b-2b1a (R3.1) that chat has its own pass, queued behind this
+    // one, which finds the child live and starts nothing; the case's premise
+    // (nothing left over that starts a later pass from Off) is unchanged.
     // Acceptance is read from the watch's own effect: it calls `otherAiAttached`
     // only as its last check, after the standby, breaker and start-worthy
     // checks pass, and a start-or-wake-only pass never calls it. (A
@@ -2075,7 +2078,11 @@ describe("3b-2a R2: startOrWake", () => {
       expect(wakes(c2)).toBe(2);
     });
 
-    it("a chat during a pass whose respawn answers cli-unusable: no second attempt", async () => {
+    it("a chat during a pass whose respawn answers cli-unusable: the chat's own pass retries today's arm (two attempts)", async () => {
+      // Before 3b-2b1a the chat joined the running start-or-wake pass and got
+      // no attempt of its own (one resolve). Now it gets master's outcome
+      // (drafter's ruling 1): its own pass, queued at acceptance, which tries
+      // today's arm again after the first attempt failed.
       const waiting = waitingDouble(true);
       let otherAiCalls = 0;
       let bin: string | null = process.execPath;
@@ -2106,15 +2113,15 @@ describe("3b-2a R2: startOrWake", () => {
       await until(() => waiting.calls === 1, "the pass");
       await settle();
       const before = otherAiCalls;
-      h.emit(chatEvent()); // the watch is still armed: accepted, joins
+      h.emit(chatEvent()); // the watch is still armed: accepted, its own pass
       // Accepted: the watch reached its last check (see H2).
       expect(otherAiCalls - before).toBe(1);
       gate = null;
       open();
       await lockBarrier(h);
       await lockBarrier(h);
-      expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
-      expect(resolves).toBe(1);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(2);
+      expect(resolves).toBe(2);
       expect(children).toHaveLength(1);
     });
   });
@@ -2131,16 +2138,20 @@ describe("3b-2a R2: startOrWake", () => {
     expect(children).toHaveLength(2);
   });
 
-  it("a chat that finds a start-or-wake pass queued joins it: no second pass", async () => {
+  it("a chat that finds a start-or-wake pass queued gets its own pass behind it (3b-2b1a R3.1)", async () => {
+    // Before 3b-2b1a the chat joined the queued pass (one pass, the waiting
+    // double never asked). Now the start-or-wake pass runs alone and asks the
+    // waiting double (false: it declines), and the chat's own pass starts
+    // Claude.
     const waiting = waitingDouble(false);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     h.sup.startOrWake?.("document");
-    h.emit(chatEvent()); // accepted: joins the queued pass, which today's arm now owes
+    h.emit(chatEvent()); // accepted: its own pass, queued behind the first
     await lockBarrier(h);
     await childN(2);
     await lockBarrier(h);
-    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
-    expect(waiting.calls).toBe(0); // today's arm started it; start-or-wake's share did not run
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(2);
+    expect(waiting.calls).toBe(1);
     expect(children).toHaveLength(2);
   });
 
@@ -2216,7 +2227,9 @@ describe("3b-2a R2: startOrWake", () => {
   });
 
   describe("R2.10: the Starting status", () => {
-    it("a start-or-wake-only pass does not read as Starting; a chat joining it does, at once", async () => {
+    it("a start-or-wake-only pass does not read as Starting; a chat accepted behind it does, at once", async () => {
+      // The chat no longer joins the queued pass (3b-2b1a R3.1): it has its
+      // own, so two passes reach the lock.
       const waiting = waitingDouble(true);
       const { h } = await idleStopped({ workWaiting: waiting.fn });
       h.sup.startOrWake?.("document");
@@ -2224,7 +2237,7 @@ describe("3b-2a R2: startOrWake", () => {
       h.emit(chatEvent());
       expect(pendingOf(h)).toBe(true);
       await lockBarrier(h);
-      expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(2);
     });
 
     it("a start-or-wake-only pass that declines, with a setup Apply meanwhile: the Apply decides as on master", async () => {
@@ -2277,20 +2290,6 @@ describe("3b-2a R2: startOrWake", () => {
     });
   });
 
-  it("Accepted (concurrency review M2): a chat that joins a start-or-wake pass queued ahead of an Off is started by that pass, then the Off stops it", async () => {
-    const waiting = waitingDouble(false);
-    const { h } = await idleStopped({ workWaiting: waiting.fn });
-    h.sup.startOrWake?.("document"); // pass P queued
-    const off = h.sup.updateSettings({ startMode: "off" }); // behind P
-    h.emit(chatEvent()); // standby still idle: accepted, joins P
-    await off;
-    await lockBarrier(h);
-    expect(children).toHaveLength(2); // P started Claude; the Off stopped it
-    expect(children[1].killed).toBe(true);
-    expect(await savedStartMode()).toBe("off");
-    expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
-  });
-
   it("flag off: nothing recorded, no pass, never Starting, no log line", async () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     const waiting = waitingDouble(true);
@@ -2313,5 +2312,309 @@ describe("3b-2a R2: startOrWake", () => {
     expect(children).toHaveLength(1);
     expect(errSpy.mock.calls.length).toBe(logged);
     expect(vi.getTimerCount()).toBe(timers);
+  });
+});
+
+// --- #2358 PR 3b-2b1a: today's arm coalesces only with today's arm ----------
+
+describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
+  const passes = (h: ReturnType<typeof makeSupervisor>) => h.seam.diagnosticsForTests().startPasses;
+  const messageStartLines = () =>
+    (logText().match(/A message arrived while Claude was stopped/g) ?? []).length;
+  const queuedLines = () => (logText().match(/Start-or-wake queued/g) ?? []).length;
+
+  describe("Coalescing with a running pass", () => {
+    // The cli-unusable construction: the pass does not spawn, so a leaked
+    // second pass shows as a second resolve. `status()` is not called
+    // mid-case (it resolves again while `lastError` is `cli-unusable`).
+    async function coalesce(): Promise<number> {
+      let bin: string | null = process.execPath;
+      let resolves = 0;
+      let gate: Promise<void> | null = null;
+      let entered = false;
+      let open!: () => void;
+      const { h } = await idleStopped({
+        resolveClaudeCommand: () => {
+          resolves += 1;
+          return bin;
+        },
+        readSettings: async () => {
+          if (gate) {
+            entered = true;
+            await gate;
+          }
+          return readLauncherSettings(baseDir);
+        },
+      });
+      bin = null;
+      resolves = 0;
+      gate = new Promise<void>((r) => {
+        open = r;
+      });
+      h.emit(chatEvent()); // accepted: its pass queues and runs
+      await until(() => entered, "the pass's gated settings read");
+      expect(logText()).toMatch(/A message arrived while Claude was stopped/);
+      h.emit(chatEvent()); // the pass is running: coalesced into it
+      gate = null;
+      open();
+      await lockBarrier(h);
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      return resolves;
+    }
+    it("flag off: one resolve, no second attempt", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      expect(await coalesce()).toBe(1);
+    });
+    it("flag on: one resolve, no second attempt", async () => {
+      expect(await coalesce()).toBe(1);
+    });
+  });
+
+  describe("the row's case: idle-stopped, a start-or-wake pass queued, the user's Off, then a chat", () => {
+    async function row(opts: { call: boolean; waiting: boolean }) {
+      const waiting = waitingDouble(opts.waiting);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      let offSettled = false;
+      const offAtSpawn: boolean[] = [];
+      onSpawn = () => offAtSpawn.push(offSettled);
+      if (opts.call) h.sup.startOrWake?.("document"); // P
+      const off = h.sup.updateSettings({ startMode: "off" }).then(() => {
+        offSettled = true;
+      });
+      h.emit(chatEvent()); // the standby still reads idle: accepted, Q behind the Off
+      await off;
+      await lockBarrier(h);
+      const last = await childN(children.length);
+      await settle();
+      return { h, offAtSpawn, last };
+    }
+    it("waiting false: one spawn, after the Off, from Off: on-click saved, running, the chat's wake on it", async () => {
+      const { h, offAtSpawn, last } = await row({ call: true, waiting: false });
+      expect(children).toHaveLength(2);
+      expect(offAtSpawn).toEqual([true]);
+      expect(await savedStartMode()).toBe("on-click");
+      expect(h.sup.status().running).toBe(true);
+      expect(argAfter(last, "--resume")).toBeDefined();
+      expect(turnTexts(last)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(passes(h)).toBe(2);
+    });
+    it("twin, flag off with no startOrWake: the same outcome", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      const { h, offAtSpawn, last } = await row({ call: false, waiting: false });
+      expect(children).toHaveLength(2);
+      expect(offAtSpawn).toEqual([true]);
+      expect(await savedStartMode()).toBe("on-click");
+      expect(h.sup.status().running).toBe(true);
+      expect(turnTexts(last)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    });
+    it("waiting true: the pass starts Claude, the Off stops it, the chat's pass starts it again from Off (two spawns, Accepted)", async () => {
+      const { h, offAtSpawn } = await row({ call: true, waiting: true });
+      expect(children).toHaveLength(3);
+      expect(offAtSpawn).toEqual([false, true]);
+      expect(children[1].killed).toBe(true);
+      expect(await savedStartMode()).toBe("on-click");
+      expect(h.sup.status().running).toBe(true);
+    });
+  });
+
+  it("status across the start-or-wake pass's end: Starting while the chat's pass waits behind the Off", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    let p: FakeChild | null = null;
+    onSpawn = (c) => {
+      c.holdExit = true; // P's child holds its exit, so the Off waits on it
+      p = c;
+      onSpawn = null;
+    };
+    h.sup.startOrWake?.("document"); // P
+    const off = h.sup.updateSettings({ startMode: "off" });
+    h.emit(chatEvent()); // Q, behind the Off
+    const c2 = await until(() => p, "P's spawn");
+    await until(() => c2.killed, "the Off's SIGTERM");
+    // P has ended (the Off runs after it on the FIFO lock); Q is queued.
+    expect(passes(h)).toBe(1);
+    expect(pendingOf(h)).toBe(true);
+    c2.releaseExit();
+    await off;
+    await lockBarrier(h);
+    expect(pendingOf(h)).toBeUndefined();
+    expect(passes(h)).toBe(2);
+    expect(children).toHaveLength(3);
+  });
+
+  it("positive twin: with no chat, the same construction does not read as Starting once P has ended", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    let p: FakeChild | null = null;
+    onSpawn = (c) => {
+      c.holdExit = true;
+      p = c;
+      onSpawn = null;
+    };
+    h.sup.startOrWake?.("document");
+    const off = h.sup.updateSettings({ startMode: "off" });
+    const c2 = await until(() => p, "P's spawn");
+    await until(() => c2.killed, "the Off's SIGTERM");
+    expect(pendingOf(h)).toBeUndefined();
+    c2.releaseExit();
+    await off;
+  });
+
+  describe("between the start-or-wake pass and the chat's (waiting false)", () => {
+    it("a relaunch queued between: the chat's pass runs after it and finds a live child: one spawn", async () => {
+      const waiting = waitingDouble(false);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document"); // P
+      const relaunching = h.sup.relaunch();
+      h.emit(chatEvent()); // Q
+      await relaunching;
+      await lockBarrier(h);
+      await settle();
+      expect(passes(h)).toBe(2);
+      expect(children).toHaveLength(2);
+      expect(messageStartLines()).toBe(0);
+    });
+    it("the user's Start queued between: the Start spawns, and the chat's pass starts nothing (no message-start line)", async () => {
+      const waiting = waitingDouble(false);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document"); // P
+      const starting = h.sup.startByUser();
+      h.emit(chatEvent()); // Q
+      await starting;
+      await lockBarrier(h);
+      await settle();
+      expect(passes(h)).toBe(2);
+      expect(children).toHaveLength(2);
+      expect(messageStartLines()).toBe(0);
+    });
+    it("positive twin: with nothing between, the chat's pass starts Claude (the message-start line)", async () => {
+      const waiting = waitingDouble(false);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document");
+      h.emit(chatEvent());
+      await lockBarrier(h);
+      await childN(2);
+      expect(messageStartLines()).toBe(1);
+    });
+  });
+
+  it("L1: a chat accepted while a declining start-or-wake pass runs gets one more pass, which starts Claude", async () => {
+    let onAsk: (() => void) | null = null;
+    const waiting = waitingDouble(() => {
+      const ask = onAsk;
+      onAsk = null;
+      ask?.();
+      return false;
+    });
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    onAsk = () => h.emit(chatEvent()); // once, from P's waiting decision
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    await childN(2);
+    await lockBarrier(h);
+    expect(passes(h)).toBe(2);
+    expect(children).toHaveLength(2);
+  });
+
+  it("L1's twin: the same declining pass with no chat starts nothing", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    expect(passes(h)).toBe(1);
+    expect(children).toHaveLength(1);
+  });
+
+  it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds it live", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    onSpawn = () => {
+      onSpawn = null;
+      h.emit(chatEvent()); // the watch is still armed: accepted, Q
+    };
+    h.sup.startOrWake?.("document");
+    const c2 = await childN(2);
+    await lockBarrier(h);
+    await lockBarrier(h);
+    expect(passes(h)).toBe(2);
+    expect(children).toHaveLength(2);
+    expect(messageStartLines()).toBe(0);
+    expect(c2.killed).toBe(false);
+  });
+
+  it("R3.3: P running, Q queued, then a call: the call joins Q (two passes, two waiting calls)", async () => {
+    let onAsk: (() => void) | null = null;
+    const waiting = waitingDouble(() => {
+      const ask = onAsk;
+      onAsk = null;
+      ask?.();
+      return true;
+    });
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    onAsk = () => {
+      h.emit(chatEvent()); // Q queued while P runs
+      h.sup.startOrWake?.("document"); // a call: joins
+    };
+    h.sup.startOrWake?.("document"); // P
+    const c2 = await childN(2);
+    await lockBarrier(h);
+    await lockBarrier(h);
+    await settle();
+    expect(passes(h)).toBe(2);
+    expect(waiting.calls).toBe(2); // P's own, then Q's share for the joined call
+    expect(queuedLines()).toBe(1);
+    expect(children).toHaveLength(2);
+    pushJson(c2, RESULT_OK);
+    await settle();
+    expect(wakes(c2)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("R3.3: P ended, Q queued, then a call: the call joins Q (two passes, no second queued line)", async () => {
+    const waiting = waitingDouble(false);
+    let gate: Promise<void> | null = null;
+    let entered = false;
+    let open!: () => void;
+    const { h } = await idleStopped({
+      workWaiting: waiting.fn,
+      readSettings: async () => {
+        if (gate) {
+          entered = true;
+          await gate;
+        }
+        return readLauncherSettings(baseDir);
+      },
+    });
+    gate = new Promise<void>((r) => {
+      open = r;
+    });
+    h.sup.startOrWake?.("document"); // 1: P
+    const relaunching = h.sup.relaunch(); // 2: paused in its settings read
+    h.emit(chatEvent()); // 3: Q
+    await until(() => entered, "the relaunch's gated settings read");
+    expect(passes(h)).toBe(1); // P has ended; the relaunch holds the lock
+    h.sup.startOrWake?.("document"); // 4
+    gate = null;
+    open(); // 5
+    await relaunching;
+    await lockBarrier(h);
+    await lockBarrier(h);
+    expect(passes(h)).toBe(2);
+    expect(waiting.calls).toBe(2);
+    expect(queuedLines()).toBe(1);
+  });
+
+  it("coalescing with Q: a second chat while Q is queued gives one pass and one spawn", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.sup.startOrWake?.("document"); // P ahead, so Q stays queued
+    h.emit(chatEvent()); // Q
+    h.emit(chatEvent()); // coalesced into Q
+    await lockBarrier(h);
+    await childN(2);
+    await lockBarrier(h);
+    await settle();
+    expect(passes(h)).toBe(2); // P and one Q
+    expect(children).toHaveLength(2);
   });
 });

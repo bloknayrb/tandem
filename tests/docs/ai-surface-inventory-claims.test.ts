@@ -485,21 +485,42 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     "watch). Then update this list.",
   ].join(" ");
 
+  it("the writers of messageStartQueued: the standby watch only (3b-2b1a, R3.2)", () => {
+    // Today's arm's pending state: raised by nothing but the watch, so a
+    // start-or-wake pass never reads as a chat's start.
+    const sites = sitesIn(SUPERVISOR, (node) =>
+      raisesFlag(node, "messageStartQueued") ? "" : null,
+    );
+    expect(sites, START_PASS_OBLIGATION).toEqual(["setStandby:"]);
+  });
+
   it("the writers of startOrWakeOwed", () => {
     const sites = sitesIn(SUPERVISOR, (node) => (raisesFlag(node, "startOrWakeOwed") ? "" : null));
     expect(sites, START_PASS_OBLIGATION).toEqual(["startOrWake:"]);
   });
 
   it("every reference to startOrWakeStep, queueStartPass and startForMessage", () => {
-    const refs = sitesIn(SUPERVISOR, (node) =>
-      isReferenceTo(node, ["startOrWakeStep", "queueStartPass", "startForMessage"])
-        ? node.text
-        : null,
-    );
+    // A call to startForMessage is keyed with its argument: `true` is the
+    // authority to run today's arm, which starts from Off with no Off check
+    // of its own, so only the standby watch may pass it (3b-2b1a, R3.2).
+    const refs = sitesIn(SUPERVISOR, (node) => {
+      if (!isReferenceTo(node, ["startOrWakeStep", "queueStartPass", "startForMessage"])) {
+        return null;
+      }
+      const call = node.parent;
+      if (
+        node.text === "startForMessage" &&
+        ts.isCallExpression(call) &&
+        call.expression === node
+      ) {
+        return `startForMessage(${call.arguments.map((a) => a.getText()).join(", ")})`;
+      }
+      return node.text;
+    });
     expect(refs, START_PASS_OBLIGATION).toEqual(
       [
-        "queueStartPass:startForMessage", // the start-or-wake pass
-        "setStandby:startForMessage", // today's arm, the standby watch
+        "queueStartPass:startForMessage(false)", // the start-or-wake pass
+        "setStandby:startForMessage(true)", // today's arm, the standby watch
         "startForMessage:queueStartPass", // the finally's one re-queue
         "startForMessage:startOrWakeStep", // start-or-wake's share of a pass
         "startOrWake:queueStartPass",
