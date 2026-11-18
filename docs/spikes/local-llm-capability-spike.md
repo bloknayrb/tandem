@@ -1,6 +1,6 @@
 # Local-LLM Capability Spike (#1123 M0)
 
-> **2026-11-17: no measurement gates switching local models on.** Bryan decided to "let users use whatever model they want that is local" (ADR-039, the 2026-11-17 amendment on switching local models on), and the review session reads that decision as ending ADR-039's pass rule as a release condition. The ≥14B floor and the June bar this document describes are no longer guidance. The results here, and those of the 2026-11 desktop measurement (written up in PR #2434, open on 2026-11-17), are a record, not advice.
+> **2026-11-17: no measurement gates switching local models on.** Bryan decided to "let users use whatever model they want that is local" (ADR-039, the 2026-11-17 amendment on switching local models on), and the review session reads that decision as ending ADR-039's pass rule as a release condition. The ≥14B floor and the June bar this document describes are no longer guidance. The results here, and those of the 2026-11 desktop measurement (in [Results of the new measurement](#results-of-the-new-measurement) below), are a record, not advice.
 
 > **Status: COMPLETE.** Full-collaborator batch (306 trials) + FALLBACK batch (216 single-shot trials + lenient re-score + bounded-retry confirmation) run and scored. **Verdict:** no model clears the autonomous bar, but the capability **ships as an opt-in / experimental BYO-model feature** (chat default-on, editing opt-in, ≥14B recommended) because Tandem's human-in-the-loop accept/reject review is the safety net. Tables + decision below are final. Kill date 2026-07-02 — closed ahead of it.
 
@@ -324,11 +324,11 @@ ADR-039 said the June "≥14B for editing" floor would be replaced by "whatever 
 - The three screens span 8B to 12B, and every model fell short in the same group. Size did not separate them.
 - No model of 14B or larger was measured: on this computer's 8 GB card even the 12B model ran mostly on the CPU.
 
-The ADR kept the June floor standing "until the new measurement". That measurement has now happened without naming a model. Whether to keep "≥14B recommended" in the roadmap and positioning, drop it, or measure a larger model on bigger hardware is Bryan's decision (ADR-039, results note of 2026-11-15).
+The ADR kept the June floor standing "until the new measurement". That measurement has now happened without naming a model.
 
 #### Notes for whoever reads the next run
 
-- **The quote rule decides the chat outcome.** A reply that rewrites the sentence well, without repeating the original, fails group 3. That is the rule as written, not a scorer miss.
+- **The quote rule decides the chat outcome.** A reply that rewrites the sentence well, without repeating the original, fails group 3. That is the rule as written, not a scorer miss. Bryan later said "a good rewrite that doesn't quote the original is ok" (recorded as S2 in ADR-039's 2026-11-17 amendment on switching local models on). The replies were not re-scored, because under that amendment the measurement no longer gates anything.
 - **An open rubric question:** should a period inside the closing quote of a partial run (`"were."`) fold, so that it counts as a quote of `were`? In both qwen screens, req-ops-review-dispatchers-grammar was failed on exactly that, by the scorer and by the reader. It is not a scorer miss: it is the rule as written.
 - **Calls the reader made:**
   - una-ops-review-q4-revenue: replies that said the review "only lists the third quarter" were passed. The review also gives the second quarter, but the answer, that there is no fourth-quarter figure, is right.
@@ -343,6 +343,7 @@ The ADR kept the June floor standing "until the new measurement". That measureme
   - The signal itself reads "n/a (not recorded)": these records predate it. The answer comes from searching the records with the same pattern the signal uses (`/<\/?think>/gi` over turn texts, `harness/signals.ts`).
   - Every trial's reasoning arrived in a separate field, so Ollama 0.40.16 was parsing it out. The zero describes these models behind this server, not the models alone.
   - granite's three timeouts that streamed nothing contribute no evidence.
+  - This answers the measurement question only. How the product handles a lone closing tag is a separate owed item (item 26d, V12, in ADR-039's 2026-11-17 amendment on switching local models on).
 
 ## Deferred (noted, not silently cut)
 - The blind Claude judge + Claude-as-control for chat quality — chat scored on its deterministic floor (100%, so the judge was not the deciding factor); wire it before relying on chat *quality* gradations finer than the floor.
