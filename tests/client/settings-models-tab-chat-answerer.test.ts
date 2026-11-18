@@ -8,9 +8,11 @@
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import { drain, installHeldFetch } from "../helpers/held-fetch";
+import { modelsPose } from "../helpers/models-pose.svelte";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
@@ -18,24 +20,34 @@ vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 
-vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
-  createModels: () => ({
-    models: [],
-    defaultModelId: null,
-    saveError: null,
-    // #1123: the list has loaded (the first-run window waits for it).
-    loaded: true,
-    loading: false,
-    loadFailed: false,
-    reload: vi.fn(async () => {}),
-    clearError: vi.fn(),
-    addModel: vi.fn(async () => "id"),
-    updateModel: vi.fn(async () => true),
-    deleteModel: vi.fn(async () => {}),
-    toggleEnabled: vi.fn(async () => {}),
-    setDefault: vi.fn(async () => true),
-  }),
-}));
+// The saved list, configurable per case (#1123 R1.6); empty by default, as
+// every earlier case here poses it. `$state`-backed, so a case can change it
+// after mount.
+vi.mock(import("../../src/client/hooks/useModels.svelte"), async () => {
+  const { modelsPose } = await import("../helpers/models-pose.svelte");
+  return {
+    createModels: () => ({
+      get models() {
+        return modelsPose.models as never;
+      },
+      get defaultModelId() {
+        return modelsPose.defaultModelId;
+      },
+      saveError: null,
+      // #1123: the list has loaded (the first-run window waits for it).
+      loaded: true,
+      loading: false,
+      loadFailed: false,
+      reload: vi.fn(async () => {}),
+      clearError: vi.fn(),
+      addModel: vi.fn(async () => "id"),
+      updateModel: vi.fn(async () => true),
+      deleteModel: vi.fn(async () => {}),
+      toggleEnabled: vi.fn(async () => {}),
+      setDefault: vi.fn(async () => true),
+    }),
+  };
+});
 
 vi.mock(import("../../src/client/hooks/useLocalModelSettings.svelte"), () => ({
   createLocalModelSettings: () => ({
@@ -83,6 +95,8 @@ let held: ReturnType<typeof installHeldFetch>;
 beforeEach(() => {
   store._resetChatAnswererForTests();
   licence.aiOff = false;
+  modelsPose.models = [];
+  modelsPose.defaultModelId = null;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   held = installHeldFetch();
 });
@@ -612,5 +626,158 @@ describe("'Checking…' and 'Chat was set to Claude.' as announcers (R4.3)", () 
     const inFlow = Array.from(column(v).children).filter((el) => !isOutOfFlow(el as HTMLElement));
     expect(inFlow.length).toBeGreaterThan(0);
     for (const el of inFlow) expect(el.textContent?.trim()).not.toBe("");
+  });
+});
+
+// #1123 R1.6, Default decision DD1 of 2026-11-18: a cloud or switched-off
+// default keeps local models from answering, and Settings says so above the
+// list, whatever chat is set to.
+describe("a cloud or switched-off default beside an enabled local model (R1.6)", () => {
+  const LOCAL = {
+    id: "l1",
+    provider: "local-ollama",
+    displayName: "Qwen",
+    modelId: "qwen2.5:14b",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+  const CLOUD = {
+    id: "c1",
+    provider: "anthropic",
+    displayName: "Opus",
+    modelId: "claude-opus-4-7",
+    enabled: true,
+  };
+  const LONG = " To use one, mark it as Default and set chat to your local model.";
+  const SHORT = " To use one, mark it as Default.";
+  const CLOUD_LINE =
+    "Your Default model, Opus, is a cloud model, so your local models won't answer chat.";
+  const line = (v: ReturnType<typeof mount>) => v.queryByText(/^\s*Your Default model\b/);
+  const pose = (models: Array<Record<string, unknown>>, defaultModelId: string | null) => {
+    modelsPose.models = models;
+    modelsPose.defaultModelId = defaultModelId;
+  };
+
+  it("cloud default, chat on Claude: the cloud sentence and the longer instruction, above the first row, static", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    const el = line(v) as HTMLElement;
+    expect(el).not.toBeNull();
+    expect(el.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    expect(el.getAttribute("role")).toBeNull();
+    expect(el.getAttribute("aria-live")).toBeNull();
+    expect(el.closest("[role],[aria-live]")).toBeNull();
+    // Before the first model row in DOM order.
+    const firstRow = v.container.querySelector('[data-testid^="model-row-"]') as HTMLElement;
+    expect(firstRow).not.toBeNull();
+    expect(el.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The existing lines are unchanged.
+    expect(v.getByTestId("chat-answerer-status").textContent?.trim()).toBe(
+      "Chat is set to Claude. Local models are not sent your chat.",
+    );
+  });
+
+  it("cloud default, the read not known: the longer instruction", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = mount();
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+  });
+
+  it("switched-off default, chat known local: the switched-off sentence and the short instruction", async () => {
+    const OFF = { ...LOCAL, id: "l0", displayName: "Old", enabled: false };
+    pose([OFF, LOCAL], OFF.id);
+    const v = await mounted(known("local", "none"));
+    expect(line(v)?.textContent?.trim()).toBe(
+      "Your Default model, Old, is switched off, so your local models won't answer chat." + SHORT,
+    );
+    // Accepted: the "Who answers your chat" `none` line shows beside it, unchanged.
+    expect(v.getByTestId("chat-answerer-status").textContent?.trim()).toMatch(
+      /^Chat is set to your local model, but no local model can be used now\./,
+    );
+  });
+
+  it("a default both cloud and switched off: the switched-off sentence", async () => {
+    pose([{ ...CLOUD, enabled: false }, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)?.textContent?.trim()).toBe(
+      "Your Default model, Opus, is switched off, so your local models won't answer chat." + LONG,
+    );
+  });
+
+  it("an empty name: the name and its commas are left out", async () => {
+    pose([{ ...CLOUD, displayName: "" }, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)?.textContent?.trim()).toBe(
+      "Your Default model is a cloud model, so your local models won't answer chat." + LONG,
+    );
+  });
+
+  it("read-only settings (the Default radio disabled): no instruction", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"), 200, true);
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE);
+  });
+
+  it("a local default that is on: no line", async () => {
+    pose([CLOUD, LOCAL], LOCAL.id);
+    const v = await mounted(known("local"));
+    expect(line(v)).toBeNull();
+  });
+
+  it("a cloud default with no enabled local model: no line", async () => {
+    pose([CLOUD, { ...LOCAL, enabled: false }], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)).toBeNull();
+  });
+
+  it("follows the store after mount: marking the local model Default removes the line, a chat read settling local shortens it", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = mount();
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    await (await held.request(1)).answer(200, known("local", "none"));
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + SHORT);
+    modelsPose.defaultModelId = LOCAL.id;
+    await tick();
+    expect(line(v)).toBeNull();
+  });
+
+  it("follows the saved list after mount: the line appears and goes as an enabled local model is saved and removed", async () => {
+    pose([CLOUD], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)).toBeNull();
+    modelsPose.models = [CLOUD, LOCAL];
+    await tick();
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    modelsPose.models = [CLOUD, { ...LOCAL, enabled: false }];
+    await tick();
+    expect(line(v)).toBeNull();
+  });
+
+  it("a whitespace-only name is left out as an empty one is", async () => {
+    pose([{ ...CLOUD, displayName: "   " }, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)?.textContent?.trim()).toBe(
+      "Your Default model is a cloud model, so your local models won't answer chat." + LONG,
+    );
+  });
+
+  it("the line makes no request: only the mount's chat-answerer read", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)).not.toBeNull();
+    modelsPose.models = [CLOUD, LOCAL, { ...LOCAL, id: "l2", displayName: "Two" }];
+    await tick();
+    await drain();
+    expect(held.calls.map((c) => c.method)).toEqual(["GET"]);
+  });
+
+  it("no default, or a default naming no entry: no line", async () => {
+    pose([CLOUD, LOCAL], null);
+    expect(line(await mounted(known("claude")))).toBeNull();
+    cleanup();
+    store._resetChatAnswererForTests();
+    held = installHeldFetch();
+    pose([CLOUD, LOCAL], "ghost");
+    expect(line(await mounted(known("claude")))).toBeNull();
   });
 });

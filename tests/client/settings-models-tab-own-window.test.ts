@@ -180,6 +180,23 @@ describe("a page at http://localhost:3479 (the server's answers are unreadable t
     expect(container.querySelectorAll("[role='alert']")).toHaveLength(0);
   });
 
+  // #1123 R1.6: the Default radio is unavailable here, so the line about a
+  // cloud default keeping local models from answering carries no instruction.
+  it("a cloud default beside an enabled local model: the line, with no instruction", () => {
+    const CLOUD: ModelRegistryEntry = {
+      id: "c",
+      provider: "anthropic",
+      displayName: "Opus",
+      modelId: "claude-opus-4-7",
+      enabled: true,
+    };
+    modelsPose = { models: [CLOUD, A], defaultModelId: "c" };
+    const { queryByText } = mount();
+    expect(queryByText(/^\s*Your Default model\b/)?.textContent?.trim()).toBe(
+      "Your Default model, Opus, is a cloud model, so your local models won't answer chat.",
+    );
+  });
+
   it("announces it: the live region is mounted empty, then the text arrives in the same node", async () => {
     const { getByTestId } = mount();
     const region = getByTestId("models-own-window-live");
