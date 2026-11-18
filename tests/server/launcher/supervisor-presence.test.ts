@@ -2273,15 +2273,17 @@ describe("3b-2a R2: startOrWake", () => {
     const logged = errSpy.mock.calls.length;
     const timers = vi.getTimerCount();
     h.sup.startOrWake?.("document");
-    // What is observed: no Starting status, no pass reached the lock (the
-    // pass counter, the waiting double), no spawn, no log line, no timer.
-    // `restartPending` would read false here even flag on (a start-or-wake-
-    // only pass is not a pending restart), so it is not what shows "no lock
-    // turn"; the pass counter is.
+    // What is observed: no Starting status, no pass reached the lock, no
+    // spawn, no log line, no timer. The evidence that no pass ran is the
+    // waiting double's call count: a pass with the call recorded asks it,
+    // while nothing else can (waiting true, idle-stopped). The pass counter
+    // cannot show it: it counts flag on only, so it is 0 here under any
+    // build. `restartPending` would read false here even flag on (a
+    // start-or-wake-only pass is not a pending restart), so it does not show
+    // it either.
     expect(pendingOf(h)).toBeUndefined();
     await lockBarrier(h);
     expect(pendingOf(h)).toBeUndefined();
-    expect(h.seam.diagnosticsForTests().startPasses).toBe(0);
     expect(waiting.calls).toBe(0);
     expect(children).toHaveLength(1);
     expect(errSpy.mock.calls.length).toBe(logged);
