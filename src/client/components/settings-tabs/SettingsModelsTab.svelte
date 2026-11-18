@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onDestroy, onMount } from "svelte";
-import type { ChatAnswerer } from "../../../shared/models/contract";
+import { type ChatAnswerer, isLocalProvider } from "../../../shared/models/contract";
 import { MODELS_TAB_ORDER, PROVIDER_LABEL } from "../../../shared/models/provider-ui";
 import { createChatAnswerer } from "../../hooks/useChatAnswerer.svelte";
 import { licenseStore } from "../../hooks/useLicense.svelte";
@@ -280,6 +280,31 @@ const answererStatusLines = $derived.by<string[]>(() => {
   return lines;
 });
 
+/**
+ * Default decision DD1 of 2026-11-18 (#1123): Tandem never changes a default
+ * the user set, so a cloud or switched-off default keeps every local model
+ * from answering chat. Say so above the list whenever such a default is saved
+ * beside at least one enabled local model, whatever chat is set to. Static
+ * text: no role, no live region. Switched off wins over cloud (the resolver
+ * checks `enabled` first). The instruction is left out when the Default radio
+ * is disabled (`readOnly`) or unavailable (`access.blocked`). Derived from the
+ * store facade, never captured at mount.
+ */
+const defaultBlocksLocalLine = $derived.by<string | null>(() => {
+  const def = models.models.find((m) => m.id === models.defaultModelId);
+  if (!def || (def.enabled && isLocalProvider(def.provider))) return null;
+  if (!models.models.some((m) => m.enabled && isLocalProvider(m.provider))) return null;
+  // The name as the row shows it; an empty one is left out with its commas.
+  const name = def.displayName.trim() === "" ? "" : `, ${def.displayName},`;
+  const why = def.enabled ? "is a cloud model" : "is switched off";
+  const line = `Your Default model${name} ${why}, so your local models won't answer chat.`;
+  if (readOnly || access.blocked) return line;
+  const chatKnownLocal = chatAnswerer.known && chatAnswerer.answerer === "local";
+  return chatKnownLocal
+    ? `${line} To use one, mark it as Default.`
+    : `${line} To use one, mark it as Default and set chat to your local model.`;
+});
+
 const REFUSED_READ_LINE = `This page can't show what chat is set to, because Tandem could not confirm it as Tandem's own window. To see or change it, use the Tandem desktop app, or open Tandem at ${MCP_BASE_URL} in an up-to-date browser.`;
 
 // Anthropic first per the D4 ordering anchor; remaining providers in
@@ -524,6 +549,13 @@ function askDelete(id: string) {
 </div>
 
 <div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
+  {#if defaultBlocksLocalLine !== null}
+    <!-- DD1 (#1123): a cloud or switched-off default keeps local models from
+         answering. Above the first model row; static, no role, no live region. -->
+    <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
+      {defaultBlocksLocalLine}
+    </p>
+  {/if}
   {#if models.loading}
     <!-- Load in flight: a skeleton, NOT the "No models configured" empty state —
          `_models` is still [] mid-load and asserting "none" would be a lie. -->
