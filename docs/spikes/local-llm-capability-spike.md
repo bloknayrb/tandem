@@ -289,7 +289,7 @@ Run `20261113T204646Z-chat-full-gemma4_12b-0ee4faf3`, 74 trials:
 | Questions the document answers (gating) | 22/24 | **24/24 (100%)** | 80% |
 | Questions it does not answer (gating) | 11/22 | **21/22 (95%)** | 80% |
 | Requests only the editing tier can carry out (gating) | 8/22 | **10/22 (45%)** | 80% |
-| Messages that need no action (reported) | 6/6 | 6/6 | — |
+| Messages that need no action (reported) | 6/6 | 6/6 | n/a |
 
 - **Totals:** no false claims, no timeouts, no empty replies and no errors. The median trial took 21 s and the slowest 60 s.
 - **The unanswerable failure:** the model gave a dropout count of 155, computed by subtracting the 187 learners who completed from the 342 enrolled. The report does not say anyone left; some may still be in tuition.
