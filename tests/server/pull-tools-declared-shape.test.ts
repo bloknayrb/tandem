@@ -176,7 +176,9 @@ async function writeDoc(name = "doc.md"): Promise<{ filePath: string; resolved: 
   // Unique content per case: the store's rename recovery matches a new path
   // to an old envelope by content, and would carry earlier cases' records in.
   await fs.writeFile(filePath, `${DOC_TEXT}\nCase ${path.basename(tmpDir)}.\n`);
-  return { filePath, resolved: await fs.realpath(filePath) };
+  // The JS realpath, the flavour the open pipeline hashes (#2400; never mix
+  // it with the native one). `tmpDir` is already the long spelling.
+  return { filePath, resolved: fsSync.realpathSync(filePath) };
 }
 
 interface Opened {
