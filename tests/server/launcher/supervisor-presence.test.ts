@@ -1417,6 +1417,22 @@ async function savedStartMode(): Promise<string> {
   return (await readLauncherSettings(baseDir)).settings.startMode;
 }
 
+/** Crash `c` and its restarts until the windowed breaker trips (the [0]
+ *  backoff is a faked timer). */
+async function tripBreaker(h: ReturnType<typeof makeSupervisor>, first: FakeChild): Promise<void> {
+  let c = first;
+  for (let i = 0; i < 12; i++) {
+    const prev = children.length;
+    c.exitWith(1, null);
+    await settle();
+    if (h.sup.status().lastError === "circuit-open") break;
+    advance(1);
+    c = await childN(prev + 1);
+    await settle();
+  }
+  await until(() => h.sup.status().lastError === "circuit-open", "the breaker");
+}
+
 describe("3b-2a R1: requestWake", () => {
   it("idle: one wake now; more calls mid-turn give one follow-up after the result", async () => {
     const h = makeSupervisor();
@@ -1513,15 +1529,16 @@ describe("3b-2a R1: requestWake", () => {
     expect(withCall).toBe(without);
   });
 
-  it("no child: nothing written, and the next spawn writes no wake on its account", async () => {
+  it("no child: nothing written", async () => {
+    // Only "nothing written" can fail here: the next spawn is fresh, and a
+    // fresh spawn's bootstrap clears any owed wake, so "the next spawn writes
+    // no wake on its account" is asserted on the Off-released sibling below,
+    // whose next spawn resumes.
     const h = makeSupervisor();
     h.sup.requestWake?.();
+    expect(children).toHaveLength(0);
     const c1 = await runningIdle(h);
     expect(turnTexts(c1)).toHaveLength(1); // the bootstrap only
-    await h.sup.relaunch();
-    const c2 = await childN(2);
-    await settle();
-    expect(c2.stdin.writes).toHaveLength(0);
   });
 
   it("a child whose delivery an Off released: nothing written, and the next spawn writes no wake on its account", async () => {
@@ -1822,25 +1839,42 @@ describe("3b-2a R2: startOrWake", () => {
   });
 
   it("H2: a chat accepted during a pass's respawn leaves nothing that starts a later pass from Off", async () => {
-    const waiting = waitingDouble(true);
-    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    const order: string[] = [];
+    const waiting = waitingDouble(() => {
+      order.push("pass");
+      return true;
+    });
+    let otherAiCalls = 0;
+    const { h } = await idleStopped({
+      workWaiting: waiting.fn,
+      otherAiAttached: () => {
+        otherAiCalls += 1;
+        return false;
+      },
+    });
     // The pass's own spawn: a chat lands while the standby watch is still armed.
-    let accepted: true | undefined;
+    // Acceptance is read from the watch's own effect: it calls `otherAiAttached`
+    // only as its last check, after the standby, breaker and start-worthy
+    // checks pass, and a start-or-wake-only pass never calls it. (A
+    // `restartPending` read here would be true anyway: `launching > 0`.)
+    let acceptedCalls = -1;
     onSpawn = () => {
       onSpawn = null;
+      const before = otherAiCalls;
       h.emit(chatEvent());
-      accepted = pendingOf(h); // the watch accepted it: today's arm owes the pass
+      acceptedCalls = otherAiCalls - before;
     };
     h.sup.startOrWake?.("document");
     await lockBarrier(h);
     const c2 = await childN(2);
-    expect(accepted).toBe(true);
+    expect(acceptedCalls).toBe(1);
     pushJson(c2, RESULT_OK);
     await settle();
     expect(pendingOf(h)).toBeUndefined();
     await updateLauncherSettings(baseDir, { lifetime: "always" }, null);
-    const order: string[] = [];
+    order.length = 0;
     await offAhead(h, order);
+    expect(order).toEqual(["relaunch", "off", "pass"]);
     expect(children).toHaveLength(3); // the relaunch's child only
     expect(await savedStartMode()).toBe("off");
   });
@@ -1898,18 +1932,7 @@ describe("3b-2a R2: startOrWake", () => {
     it("a tripped breaker (standby unset, no restart timer): nothing", async () => {
       const waiting = waitingDouble(true);
       const h = makeSupervisor({ workWaiting: waiting.fn });
-      let c = await runningIdle(h);
-      // Crash until the windowed breaker trips (the [0] backoff is a faked timer).
-      for (let i = 0; i < 12; i++) {
-        const prev = children.length;
-        c.exitWith(1, null);
-        await settle();
-        if (h.sup.status().lastError === "circuit-open") break;
-        advance(1);
-        c = await childN(prev + 1);
-        await settle();
-      }
-      await until(() => h.sup.status().lastError === "circuit-open", "the breaker");
+      await tripBreaker(h, await runningIdle(h));
       const n = children.length;
       h.sup.startOrWake?.("document");
       await lockBarrier(h);
@@ -1920,6 +1943,40 @@ describe("3b-2a R2: startOrWake", () => {
       const next = await childN(n + 1);
       await settle();
       expect(wakes(next)).toBe(0);
+    });
+
+    it("a tripped breaker with a standby set (trip, Off, mode on): no spawn", async () => {
+      // The state the pass's breaker guards exist for: Off then a mode change
+      // leave the standby `awaiting-start` and the breaker tripped (only a
+      // non-message respawn resets it), and a message-kind respawn neither
+      // refuses nor resets it.
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ workWaiting: waiting.fn });
+      await tripBreaker(h, await runningIdle(h));
+      await h.sup.updateSettings({ startMode: "off" });
+      await h.sup.updateSettings({ startMode: "auto" });
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+      const n = children.length;
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(1);
+      expect(children).toHaveLength(n);
+    });
+
+    it("positive twin: the same after the user's Start has reset the breaker: one spawn", async () => {
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ workWaiting: waiting.fn });
+      await tripBreaker(h, await runningIdle(h));
+      await h.sup.startByUser(); // resets the breaker
+      await childN(children.length);
+      await h.sup.updateSettings({ startMode: "off" });
+      await h.sup.updateSettings({ startMode: "auto" });
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+      const n = children.length;
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      await childN(n + 1);
+      expect(children).toHaveLength(n + 1);
     });
   });
 
@@ -1995,12 +2052,17 @@ describe("3b-2a R2: startOrWake", () => {
 
     it("a chat during a pass whose respawn answers cli-unusable: no second attempt", async () => {
       const waiting = waitingDouble(true);
+      let otherAiCalls = 0;
       let bin: string | null = process.execPath;
       let resolves = 0;
       let gate: Promise<void> | null = null;
       let open!: () => void;
       const { h } = await idleStopped({
         workWaiting: waiting.fn,
+        otherAiAttached: () => {
+          otherAiCalls += 1;
+          return false;
+        },
         resolveClaudeCommand: () => {
           resolves += 1;
           return bin;
@@ -2018,7 +2080,10 @@ describe("3b-2a R2: startOrWake", () => {
       h.sup.startOrWake?.("document");
       await until(() => waiting.calls === 1, "the pass");
       await settle();
+      const before = otherAiCalls;
       h.emit(chatEvent()); // the watch is still armed: accepted, joins
+      // Accepted: the watch reached its last check (see H2).
+      expect(otherAiCalls - before).toBe(1);
       gate = null;
       open();
       await lockBarrier(h);
@@ -2087,6 +2152,10 @@ describe("3b-2a R2: startOrWake", () => {
     h.sup.startOrWake?.("document");
     await lockBarrier(h);
     expect(children).toHaveLength(1);
+    // Caught where the decision is read, not further out (the pass's
+    // `.catch` would log "The start pass failed" instead).
+    expect(logText()).toMatch(/The waiting decision threw \(read as nothing waiting\): Error/);
+    expect(logText()).not.toMatch(/The start pass failed/);
     const h2 = makeSupervisor({ workWaiting: throwing });
     const c = await runningIdle(h2);
     h2.sup.startOrWake?.("document");
@@ -2204,9 +2273,15 @@ describe("3b-2a R2: startOrWake", () => {
     const logged = errSpy.mock.calls.length;
     const timers = vi.getTimerCount();
     h.sup.startOrWake?.("document");
+    // What is observed: no Starting status, no pass reached the lock (the
+    // pass counter, the waiting double), no spawn, no log line, no timer.
+    // `restartPending` would read false here even flag on (a start-or-wake-
+    // only pass is not a pending restart), so it is not what shows "no lock
+    // turn"; the pass counter is.
     expect(pendingOf(h)).toBeUndefined();
     await lockBarrier(h);
     expect(pendingOf(h)).toBeUndefined();
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(0);
     expect(waiting.calls).toBe(0);
     expect(children).toHaveLength(1);
     expect(errSpy.mock.calls.length).toBe(logged);

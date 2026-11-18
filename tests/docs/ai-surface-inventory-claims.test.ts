@@ -414,6 +414,41 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     );
   });
 
+  it("start-or-wake and requestWake are not called inside the supervisor either (3b-2a, R2.8)", () => {
+    // The R2.8 source pin excludes supervisor.ts. Within it, the only
+    // references to the two entry points (and to a spawn's `requestWake`
+    // member) are their declarations, the pass's own wake of a live child,
+    // and the public seam. 3b-2b changes this list when it wires them.
+    const sites = sitesIn(SUPERVISOR, (node) => {
+      if (ts.isIdentifier(node) && (node.text === "startOrWake" || node.text === "requestWake")) {
+        const p = node.parent;
+        if (ts.isFunctionDeclaration(p) && p.name === node) return `${node.text}<decl>`;
+        if ((ts.isMethodSignature(p) || ts.isPropertySignature(p)) && p.name === node) {
+          return `${node.text}<signature>`;
+        }
+        if (ts.isPropertyAccessExpression(p) && p.name === node) return `.${node.text}`;
+        if (ts.isShorthandPropertyAssignment(p)) return `${node.text}<returned>`;
+        if (ts.isPropertyAssignment(p) && p.name === node) return `${node.text}<member>`;
+        return node.text;
+      }
+      return null;
+    });
+    expect(sites, OBLIGATION).toEqual(
+      [
+        "<top>:requestWake<signature>", // the Supervisor interface
+        "<top>:startOrWake<signature>",
+        "createSupervisor:requestWake<signature>", // activeTurnDelivery's type
+        "createSupervisor:requestWake<returned>", // the public seam
+        "createSupervisor:startOrWake<returned>",
+        "requestWake:requestWake<decl>",
+        "requestWake:.requestWake", // activeTurnDelivery?.requestWake()
+        "spawnOnce:requestWake<member>", // requestWake: requestWakeOnSpawn
+        "startOrWake:startOrWake<decl>",
+        "startOrWakeStep:requestWake", // the pass wakes a live child
+      ].sort(),
+    );
+  });
+
   it("the functions that reach a turn write are referenced only where known", () => {
     // Each function's own declaration is not a reference; every call, and any
     // reference passed on, is.
