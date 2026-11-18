@@ -25,17 +25,24 @@
  *   prop;
  * - `chatMount()` ends at the first `/>` after `kind="chat"`, so a
  *   self-closing child or an attribute containing `/>` cuts it short;
- * - `/*` inside a script string, which the block-comment strip treats as a
- *   comment;
- * - the markup strip runs over the script too, so a `<!--` inside a script
- *   string or a trailing `//` comment would cut to the next `-->`; and the
- *   block strip runs over markup and CSS, so markup text such as
- *   `accept="image/*"` would start a block strip. Neither occurs in App today
- *   (no `<!--` before `</script>`, no `/*` in markup outside the `<style>`
- *   block's own comments). Either can remove real code, which makes the
- *   count pins (`toBe(1)`, `toBe(2)`) able to pass wrongly: a stray opener
- *   between two `await`s would hide a third. A strip that removed the
- *   handler's own markers fails closed instead (its slice is not found).
+ * - `/*` inside a script string or inside a `//` comment, which the
+ *   block-comment strip treats as a comment; either can likewise cut code
+ *   between two `await`s and make the count pins pass wrongly (none occurs in
+ *   App's script today);
+ * - the markup strip runs first, over the whole file, script included, so a
+ *   `<!--` inside a script string or inside any script comment (`//` or
+ *   `/* *\/`) starts it. The one markup-strip case that can make the count pins
+ *   (`toBe(1)`, `toBe(2)`) pass wrongly is a `<!--` and a `-->` both inside
+ *   the script: the text between them is cut, so a pair between two `await`s
+ *   would hide a third. A lone `<!--` in the script cuts to the first `-->` in
+ *   the markup: before the handler's end marker it removes that marker, so
+ *   the handler's slice is not found and the pins fail closed; after it the
+ *   handler is untouched. Neither occurs in App today (no `<!--` before
+ *   `</script>`).
+ * - the block strip runs second, over markup and CSS too, so markup text such
+ *   as `accept="image/*"` would start a block strip; but the script comes
+ *   before the markup, so such a strip removes only later markup or CSS and
+ *   cannot reach the handler or the count pins.
  * There is no mount test of App (Ruling S-e): 129 imports and a live
  * Hocuspocus provider.
  */

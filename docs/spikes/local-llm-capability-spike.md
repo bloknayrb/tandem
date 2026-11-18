@@ -1,5 +1,7 @@
 # Local-LLM Capability Spike (#1123 M0)
 
+> **2026-11-17: no measurement gates switching local models on.** Bryan decided to "let users use whatever model they want that is local" (ADR-039, the 2026-11-17 amendment on switching local models on), and the review session reads that decision as ending ADR-039's pass rule as a release condition. The ≥14B floor and the June bar this document describes are no longer guidance. The results here, and those of the 2026-11 desktop measurement (written up in PR #2434, open on 2026-11-17), are a record, not advice.
+
 > **Status: COMPLETE.** Full-collaborator batch (306 trials) + FALLBACK batch (216 single-shot trials + lenient re-score + bounded-retry confirmation) run and scored. **Verdict:** no model clears the autonomous bar, but the capability **ships as an opt-in / experimental BYO-model feature** (chat default-on, editing opt-in, ≥14B recommended) because Tandem's human-in-the-loop accept/reject review is the safety net. Tables + decision below are final. Kill date 2026-07-02 — closed ahead of it.
 
 > **2026-11-12: the instrument was rebuilt, and the numbers below are history.** The tables in this document were measured in June 2026 on prompts, a tool list and a loop that no longer ship. They are not evidence for switching local models on. See [The instrument, rebuilt (2026-11-12)](#the-instrument-rebuilt-2026-11-12) for what changed and where new results will go. ADR-039's 2026-11-12 amendment holds the pass rule.
@@ -225,7 +227,7 @@ npx tsx probe/local-model-spike/report.ts --run <run id>
 
 ### Results of the new measurement
 
-**Empty on purpose.** No model has been measured with the rebuilt instrument. The review session's results PR fills this section: the model, its digest and size, the hardware, the run ids, the outcome of the chat tier, the editing tier's reported rates, and the re-derived size floor. Until then nothing in this document says how the shipped tiers behave on any model.
+**Empty on purpose.** No model has been measured with the rebuilt instrument. *(Out of date since 2026-11-13: the desktop measurement was made, and its write-up is in PR #2434; no size floor will be derived, see the note at the top.)* The review session's results PR fills this section: the model, its digest and size, the hardware, the run ids, the outcome of the chat tier, the editing tier's reported rates, and the re-derived size floor. Until then nothing in this document says how the shipped tiers behave on any model.
 
 ## Deferred (noted, not silently cut)
 - The blind Claude judge + Claude-as-control for chat quality — chat scored on its deterministic floor (100%, so the judge was not the deciding factor); wire it before relying on chat *quality* gradations finer than the floor.
