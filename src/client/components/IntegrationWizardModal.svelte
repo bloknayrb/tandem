@@ -60,6 +60,7 @@ import {
 } from "../hooks/useReachabilityCheck.svelte.js";
 import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { resyncCheckbox } from "../utils/checkbox-sync.js";
+import { type WizardCloseReason, wizardCloseReason } from "../utils/model-first-run.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
@@ -76,7 +77,13 @@ import SettingsTandemClaudeSection from "./settings-tabs/SettingsTandemClaudeSec
 
 interface Props {
   open: boolean;
-  onClose: () => void;
+  /**
+   * The wizard closed. `reason` says whether Claude was set up in it (#1123:
+   * App offers the first-run local-model window only after that); it is
+   * computed in `close()` before `wizard.reset()` clears what it reads. A call
+   * with no reason reads as "other".
+   */
+  onClose: (reason?: WizardCloseReason) => void;
   /**
    * Close the wizard and open the Models settings path. Wired by App.svelte to
    * `openModelsSettings`. Only invoked from the flag-ON "AI models" row, which
@@ -482,6 +489,8 @@ $effect(() => {
 });
 
 function close(): void {
+  // #1123: read before `reset()` below clears `step`, `picked` and `applyResults`.
+  const reason = wizardCloseReason(wizard.step, wizard.applyResults, wizard.picked);
   // Delete any keychain secret stored under Advanced but never persisted (the
   // user dismissed before saving). Gated inside the hook on the pre-persist
   // state, so it can never delete a live, file-referenced ref. Must run before
@@ -489,7 +498,7 @@ function close(): void {
   void wizard.cleanupUnsavedSecrets().catch(() => {});
   wizard.reset();
   secretInputs = {};
-  onClose();
+  onClose(reason);
 }
 
 /** Re-run detection from scratch — the open-$effect only fires on the
@@ -1631,7 +1640,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                     type="button"
                     class="iw-btn iw-btn-secondary iw-more-btn"
                     onclick={() => {
-                      onClose();
+                      onClose("other");
                       onSetupModels?.();
                     }}
                     aria-label="Set up a local AI model"

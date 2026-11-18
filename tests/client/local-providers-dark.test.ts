@@ -18,6 +18,9 @@ import {
   LOCAL_REQUEST_LINE,
   LOCAL_SERVERS_LINE,
   PICKER_LOCAL_SUBTITLE,
+  PICKER_MODEL_ID_HINT,
+  PICKER_TITLE,
+  pickerSaveReason,
 } from "../../src/client/utils/local-model-copy";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import { LOCAL_ENDPOINT_PREFILL } from "../../src/shared/models/provider-ui";
@@ -98,6 +101,13 @@ const NEW_COPY = [
   endpointHint(LOCAL_ENDPOINT_PREFILL["local-ollama"]),
   endpointHint(LOCAL_ENDPOINT_PREFILL["local-lmstudio"]),
   PICKER_LOCAL_SUBTITLE,
+  // #1123, the first-run window (PR 4a part 1): its title, hint and Save's
+  // three reasons.
+  PICKER_TITLE,
+  PICKER_MODEL_ID_HINT,
+  pickerSaveReason({ endpoint: "", modelId: "x" }) as string,
+  pickerSaveReason({ endpoint: "x", modelId: "" }) as string,
+  pickerSaveReason({ endpoint: "", modelId: "" }) as string,
   "Set up a local AI model, such as Ollama, LM Studio or llama.cpp",
   "LM Studio",
   "Other local server",

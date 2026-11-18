@@ -65,6 +65,11 @@ export interface ModelsState {
   /** True while a server load is in flight (drives the Settings tab loading state). */
   readonly loading: boolean;
   /**
+   * True once a server load has succeeded in this page; never false again
+   * (#1123, the first-run window waits for it). Never set while dark.
+   */
+  readonly loaded: boolean;
+  /**
    * True when the last server load threw (network / non-OK / bad JSON). Lets the
    * Models tab render a "couldn't load — retry" state instead of asserting "No
    * models configured" over an empty `_models` that is empty only because the
@@ -110,6 +115,9 @@ let _loading = $state(false);
 // its empty-state never asserts "No models configured" when the truth is the
 // fetch failed. Single writer: `loadFromServer` (true on catch, false on success).
 let _loadFailed = $state(false);
+// Set true by the first successful `loadFromServer`, and only reset by the test
+// seam: a later failed reload leaves it true (#1123, the first-run window).
+let _loaded = $state(false);
 let _loadInFlight: Promise<void> | null = null;
 
 // Reconcile gate (R2-B): every mutator awaits this before its POST, so a CRUD
@@ -400,6 +408,7 @@ export function loadFromServer(): Promise<void> {
       await fetchAndApply();
       _saveError = null;
       _loadFailed = false;
+      _loaded = true;
     } catch (err) {
       // Log the actual cause (network drop / non-OK status / bad JSON) — the
       // user-facing string below collapses them all, and the sibling
@@ -493,6 +502,9 @@ export function createModels(): ModelsState {
     },
     get loadFailed() {
       return _loadFailed;
+    },
+    get loaded() {
+      return _loaded;
     },
     async addModel(entry, plaintextApiKey) {
       assertValidPatch(entry);
@@ -612,6 +624,7 @@ export function _resetModelsStoreForTests(): void {
   _saveError = null;
   _loading = false;
   _loadFailed = false;
+  _loaded = false;
   _loadInFlight = null;
   // Reset the write queue too — a test that leaves a mock fetch permanently
   // pending would otherwise gate every subsequent test's writeThrough calls on

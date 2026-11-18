@@ -124,6 +124,10 @@ describe("integration wizard — AI models row (§3.6, flag ON)", () => {
     await tick();
 
     expect(onClose).toHaveBeenCalledTimes(1);
+    // #1123, quoted from the brief (issuecomment-6965850014, R1.1 item 1):
+    // "The Set up button's direct `onClose()` gives `"other"`". The Done-step
+    // case, with a stateful wizard stub, is in integration-wizard-close-reason.
+    expect(onClose).toHaveBeenCalledWith("other");
     expect(onSetupModels).toHaveBeenCalledTimes(1);
   });
 });
