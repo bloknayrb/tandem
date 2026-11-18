@@ -1849,7 +1849,17 @@ function collectInboxDocuments(
     let refused = 0;
     const admit: InboxPollContext["admit"] = (bucket, item) => {
       const checked = INBOX_BUCKET_SCHEMAS[bucket].safeParse(item);
-      if (checked.success) return true;
+      // What is SENT is the parse's output, not `item` (#2465). A strip-mode
+      // parse of the bucket's own schema returns the same type with every key
+      // the schema does not declare removed, at every depth (the bucket
+      // schemas carry no transform, default or coercion, so nothing else
+      // changes; `relRange.fromRel`/`toRel` are `z.unknown()` and pass through
+      // as they are). A client that validates against the advertised schema
+      // (additionalProperties: false) would otherwise reject the WHOLE
+      // response over one stray key, such as a stale `heldInSolo` marker. It
+      // is a new object: nothing here deletes a key from `item`, whose nested
+      // objects are shared with the stored record.
+      if (checked.success) return checked.data as unknown as typeof item;
       logInboxDrop(`document ${id}`, `${bucket} item`, item, checked.error.issues);
       refused += 1;
       if (view) {
@@ -1863,7 +1873,7 @@ function collectInboxDocuments(
               );
         if (entry) refusedEntries.add(entry);
       }
-      return false;
+      return null;
     };
     const baseLedgers: DocumentLedgers =
       view === null
@@ -2151,7 +2161,11 @@ function admitChatItem(msg: Partial<ChatMessage>): InboxChatMessage | null {
     ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
   };
   const checked = inboxChatMessageSchema.safeParse(item);
-  if (checked.success) return item as InboxChatMessage;
+  // The parse's output, never `item`: a stray key in a stored `anchor` would
+  // otherwise make a validating client reject the whole response (#2465; see
+  // the document buckets' `admit`). The cast restores the branded offsets
+  // the schema's plain numbers drop; the values are the stored ones.
+  if (checked.success) return checked.data as InboxChatMessage;
   logInboxDrop("chat", "chat message", item, checked.error.issues);
   return null;
 }
@@ -3853,8 +3867,9 @@ function processUnsurfacedInboxAnnotations(
       // Last, after every privacy and status gate, directly before the push
       // and the stamp (PR #2225 review). A refused item is neither: it stays
       // unsurfaced and is retried next poll, never marked delivered.
-      if (!ctx.admit("userActions", item)) continue;
-      userActions.push(item);
+      const sent = ctx.admit("userActions", item);
+      if (!sent) continue;
+      userActions.push(sent);
       surfaced.set(key, ann.editedAt ?? 0);
     } else if (
       ann.author === "claude" &&
@@ -3869,8 +3884,9 @@ function processUnsurfacedInboxAnnotations(
       !isLocalModelRecord(ann)
     ) {
       const item: InboxUserResponse = { ...ann, textSnippet: snippet, documentId: ctx.documentId };
-      if (!ctx.admit("userResponses", item)) continue; // see the userActions arm
-      userResponses.push(item);
+      const sent = ctx.admit("userResponses", item); // see the userActions arm
+      if (!sent) continue;
+      userResponses.push(sent);
       surfaced.set(key, ann.editedAt ?? 0);
     }
   }
@@ -3915,16 +3931,22 @@ export interface InboxPollContext {
   wasChannelEmitted: (payloadId: string) => boolean;
   /**
    * The last gate on every item, run after the privacy and status gates and
-   * directly before the push and the ledger stamp (PR #2225 review). `false`
+   * directly before the push and the ledger stamp (PR #2225 review). `null`
    * means the item is neither returned nor stamped, so it is retried on the
    * next poll and never marked delivered. Production checks the item against
    * the bucket's own output schema — the one the SDK validates the whole
    * response with, which is why a single malformed client-written record used
    * to fail every item in the poll after they had all been stamped. Because it
-   * runs after the gates, a held or private record is never counted. Tests
-   * pass `() => true`.
+   * runs after the gates, a held or private record is never counted.
+   *
+   * Otherwise it returns what is SENT (#2465): the item as that schema's
+   * strip-mode parse returns it, so a key the advertised schema does not
+   * declare (a stale `heldInSolo`, an `agentIdentity`, a stray nested in
+   * `range`) is removed rather than sent to a client that rejects the whole
+   * response over it. Callers push the returned value, never their own `item`.
+   * Tests pass `(_bucket, item) => item`.
    */
-  admit: (bucket: InboxBucket, item: InboxItem) => boolean;
+  admit: <T extends InboxItem>(bucket: InboxBucket, item: T) => T | null;
 }
 
 /** The three document-scoped `tandem_checkInbox` buckets an item is admitted to. */
@@ -4025,8 +4047,9 @@ export function collectInboxUserReplies(
       };
       // Last, directly before the push and the stamp — see the annotation
       // surfacer (PR #2225 review).
-      if (!ctx.admit("userReplies", item)) continue;
-      out.push(item);
+      const sent = ctx.admit("userReplies", item);
+      if (!sent) continue;
+      out.push(sent);
       replySurfaced.add(ledgerKey(ctx.documentId, reply.id));
     }
   }

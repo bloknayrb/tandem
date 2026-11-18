@@ -37,6 +37,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Request, Response } from "express";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 
@@ -64,11 +65,16 @@ import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { closeStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
-import { resetForTesting as resetEventQueue } from "../../src/server/events/queue.js";
+import {
+  attachObservers,
+  detachObservers,
+  resetForTesting as resetEventQueue,
+} from "../../src/server/events/queue.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";
 import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
@@ -84,10 +90,12 @@ import {
   Y_MAP_CHAT,
 } from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { sanitizeAnnotation } from "../../src/shared/sanitize.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
 import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+import { off } from "../helpers/positions.js";
 
 // Flag on, a poll reads only what its caller's record holds or may claim.
 registerTestCallerRecord();
@@ -165,7 +173,9 @@ afterAll(async () => {
 
 async function writeDoc(name = "doc.md"): Promise<{ filePath: string; resolved: string }> {
   const filePath = path.join(tmpDir, name);
-  await fs.writeFile(filePath, DOC_TEXT);
+  // Unique content per case: the store's rename recovery matches a new path
+  // to an old envelope by content, and would carry earlier cases' records in.
+  await fs.writeFile(filePath, `${DOC_TEXT}\nCase ${path.basename(tmpDir)}.\n`);
   return { filePath, resolved: await fs.realpath(filePath) };
 }
 
@@ -206,7 +216,7 @@ function liveAnchor(doc: Y.Doc) {
   const from = text.indexOf(TARGET);
   expect(from, "the target text is in the document").toBeGreaterThanOrEqual(0);
   const to = from + TARGET.length;
-  const anchored = anchoredRange(doc, from, to, TARGET);
+  const anchored = anchoredRange(doc, off(from), off(to), TARGET);
   if (!anchored.ok || !anchored.relRange) throw new Error("could not anchor the fixture");
   return { range: anchored.range, relRange: anchored.relRange, textSnapshot: TARGET };
 }
@@ -370,5 +380,463 @@ describe("characterization: every declared field arrives with its value", () => 
       "claude reply",
     );
     expect(stored(o.doc, "full-comment"), "the read wrote nothing").toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Commit 2: the reproduction (A1), agentIdentity (A2) and the walk (A3)
+// ---------------------------------------------------------------------------
+
+const AGENT_IDENTITY = { provider: "openai", displayName: "A local helper" };
+
+/** A user comment as the browser writes it, over the live anchor. */
+function userComment(doc: Y.Doc, id: string, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    author: "user",
+    type: "comment",
+    audience: "outbound",
+    ...liveAnchor(doc),
+    content: `comment ${id}`,
+    status: "pending",
+    timestamp: 1_700_000_000_000,
+    rev: 1,
+    ...extra,
+  };
+}
+
+/** `POST /api/mode/release` from the editor's own origin, as the client sends it. */
+function release(): { status: number; body: unknown } {
+  const captured = { status: 200, body: undefined as unknown };
+  const res = {
+    status(code: number) {
+      captured.status = code;
+      return res;
+    },
+    json(body: unknown) {
+      captured.body = body;
+      return res;
+    },
+  } as unknown as Response;
+  handleModeRelease(
+    {
+      headers: { origin: "http://127.0.0.1:5173" },
+      socket: { remoteAddress: "127.0.0.1" },
+      body: {},
+    } as unknown as Request,
+    res,
+  );
+  return captured;
+}
+
+/**
+ * A1's assertions: the poll succeeded through the validating client (`call`
+ * checks that), `userActions` holds the comment without the marker, and the
+ * text part carries no marker either (catches a build that strips only
+ * `structuredContent`).
+ */
+async function expectHandedWithoutMarker(o: Opened, id: string): Promise<void> {
+  const { inbox, text } = await poll();
+  expect(inbox.userActions.map((a) => a.id)).toEqual([id]);
+  const item = inbox.userActions[0];
+  expect(item.content).toBe(`comment ${id}`);
+  expect(item.textSnippet).toBe(TARGET);
+  expect(item.documentId).toBe(o.documentId);
+  expect("heldInSolo" in item, "structuredContent").toBe(false);
+  expect(text.userActions.map((a) => a.id)).toEqual([id]);
+  expect("heldInSolo" in text.userActions[0], "the text part").toBe(false);
+  expect(text.userActions[0]).toEqual(item);
+  const marker = (o.doc.getMap(Y_MAP_ANNOTATIONS).get(id) as { heldInSolo?: unknown }).heldInSolo;
+  expect(marker, "the stored record still carries the marker").toBe(true);
+}
+
+describe("A1: a stale heldInSolo marker no longer fails the poll", () => {
+  it("a Solo comment on a tab closed before the switch to Tandem, then reopened", async () => {
+    setCtrlMode("solo");
+    const first = await openDoc();
+    // The client's own stamp is enough: the server stamp skips a record that
+    // already carries it.
+    browserWrite(
+      first.doc,
+      Y_MAP_ANNOTATIONS,
+      "solo-closed",
+      userComment(first.doc, "solo-closed", { heldInSolo: true }),
+    );
+    await closeDoc(first);
+
+    setCtrlMode("tandem");
+    // The release sweeps OPEN documents only, so it clears nothing here.
+    const released = release();
+    expect(released.status).toBe(200);
+    expect(released.body).toEqual({ data: { released: 0 } });
+
+    const second = await reopen(first.filePath, first.resolved);
+    const raw = second.doc.getMap(Y_MAP_ANNOTATIONS).get("solo-closed") as Record<string, unknown>;
+    expect(raw?.heldInSolo, "the envelope kept the marker through the reopen").toBe(true);
+
+    await expectHandedWithoutMarker(second, "solo-closed");
+  });
+
+  it("the same, with the marker written by the server's stamp observer", async () => {
+    setCtrlMode("solo");
+    const first = await openDoc();
+    // `openFromDisk` does not attach the event-queue observers (Hocuspocus's
+    // doc swap does in production), so attach them as that would.
+    attachObservers(first.documentId, first.doc);
+    try {
+      browserWrite(
+        first.doc,
+        Y_MAP_ANNOTATIONS,
+        "solo-stamped",
+        userComment(first.doc, "solo-stamped"),
+      );
+      const raw = first.doc.getMap(Y_MAP_ANNOTATIONS).get("solo-stamped") as Record<
+        string,
+        unknown
+      >;
+      expect(raw.heldInSolo, "the server stamped the Solo comment").toBe(true);
+    } finally {
+      detachObservers(first.documentId);
+    }
+    await closeDoc(first);
+
+    setCtrlMode("tandem");
+    const released = release();
+    expect(released.status).toBe(200);
+    expect(released.body).toEqual({ data: { released: 0 } });
+
+    const second = await reopen(first.filePath, first.resolved);
+    await expectHandedWithoutMarker(second, "solo-stamped");
+  });
+
+  it("a Solo comment on an open document polled after the switch, before any release", async () => {
+    setCtrlMode("solo");
+    const o = await openDoc();
+    browserWrite(
+      o.doc,
+      Y_MAP_ANNOTATIONS,
+      "solo-open",
+      userComment(o.doc, "solo-open", { heldInSolo: true }),
+    );
+    // The client's mode write has landed; its release POST has not (or failed twice).
+    setCtrlMode("tandem");
+    await expectHandedWithoutMarker(o, "solo-open");
+  });
+});
+
+describe("A2: agentIdentity is stripped from inbox items", () => {
+  it("positive control: a user comment carrying agentIdentity is handed without it", async () => {
+    const o = await openDoc();
+    browserWrite(
+      o.doc,
+      Y_MAP_ANNOTATIONS,
+      "with-agent",
+      userComment(o.doc, "with-agent", { agentIdentity: AGENT_IDENTITY }),
+    );
+    const before = stored(o.doc, "with-agent");
+
+    const { inbox, text } = await poll();
+    expect(inbox.userActions.map((a) => a.id)).toEqual(["with-agent"]);
+    expect("agentIdentity" in inbox.userActions[0]).toBe(false);
+    expect("agentIdentity" in text.userActions[0]).toBe(false);
+    expect(stored(o.doc, "with-agent")).toEqual(before);
+  });
+
+  it("with local-period records not honoured: a user comment and an accepted Claude annotation", async () => {
+    // `isLocalModelRecord` then answers false, so neither record is withheld
+    // as local-model activity and both reach their buckets.
+    __setHonourLocalPeriodRecordsForTests(false);
+    const o = await openDoc();
+    browserWrite(
+      o.doc,
+      Y_MAP_ANNOTATIONS,
+      "user-agent",
+      userComment(o.doc, "user-agent", { agentIdentity: AGENT_IDENTITY }),
+    );
+    browserWrite(
+      o.doc,
+      Y_MAP_ANNOTATIONS,
+      "claude-agent",
+      userComment(o.doc, "claude-agent", {
+        author: "claude",
+        status: "accepted",
+        resolvedBy: "user",
+        agentIdentity: AGENT_IDENTITY,
+      }),
+    );
+    const before = [stored(o.doc, "user-agent"), stored(o.doc, "claude-agent")];
+
+    const { inbox, text } = await poll();
+    expect(inbox.userActions.map((a) => a.id)).toEqual(["user-agent"]);
+    expect(inbox.userResponses.map((a) => a.id)).toEqual(["claude-agent"]);
+    expect(inbox.userResponses[0].status).toBe("accepted");
+    for (const item of [...inbox.userActions, ...inbox.userResponses]) {
+      expect("agentIdentity" in item, String(item.id)).toBe(false);
+    }
+    for (const item of [...text.userActions, ...text.userResponses]) {
+      expect("agentIdentity" in item, `text ${String(item.id)}`).toBe(false);
+    }
+    expect([stored(o.doc, "user-agent"), stored(o.doc, "claude-agent")]).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A3: the walk. Its key list comes from sanitize itself.
+// ---------------------------------------------------------------------------
+
+/**
+ * Kept by `sanitizeAnnotation` on every read, and deliberately NOT declared in
+ * the inbox's advertised schema, so the inbox strips them:
+ * - `heldInSolo` is the Solo-hold marker. It gates the editor's badge and the
+ *   restart hold; live hiding is mode-based (`hideFromAI`), so it means
+ *   nothing to Claude, and a stale one is the ordinary closed-tab case above.
+ * - `agentIdentity` is the local-model collaborator's byline, a client-side
+ *   label; the local model's own records never reach the inbox.
+ * Declaring either would change `tools/list` and hand Claude a field that
+ * means nothing to it.
+ */
+const STRIPPED_ON_PURPOSE = ["heldInSolo", "agentIdentity"] as const;
+
+/**
+ * Keys sanitize reads only to choose a branch or derive another value, and
+ * never emits under their own name for a comment. Measured by the walk, so a
+ * change to sanitize that makes this list wrong turns the test red.
+ */
+const SANITIZE_BRANCH_ONLY: readonly string[] = [];
+
+const STRAY = { strayKey: "not declared" };
+
+/**
+ * A value for every key sanitize may read, each passing sanitize's own type
+ * guard (a wrong-typed value is silently not emitted, which would leave that
+ * field unchecked). `clean` is what must arrive; `withStrays` is what is
+ * stored, a stray key nested in each object the schema declares strict.
+ */
+function fixtureValues(doc: Y.Doc) {
+  const anchor = liveAnchor(doc);
+  const clean: Record<string, unknown> = {
+    id: "walk",
+    author: "user",
+    type: "comment",
+    audience: "outbound",
+    range: anchor.range,
+    relRange: anchor.relRange,
+    content: "walk content",
+    status: "pending",
+    timestamp: 1_700_000_000_000,
+    textSnapshot: anchor.textSnapshot,
+    textSnapshotTruncated: false,
+    textSnapshotBreaks: [{ at: 5, kind: "block" }],
+    editedAt: 1_700_000_000_500,
+    rev: 4,
+    heldInSolo: false,
+    resolvedBy: "user",
+    acceptedReplyId: "reply-accepted",
+    priorSuggestedText: "the earlier proposal",
+    agentIdentity: AGENT_IDENTITY,
+    promotedFrom: "note",
+    importSource: { author: "Reviewer", file: "review.docx", commentId: "9" },
+    suggestedText: "walk proposal",
+  };
+  const withStrays: Record<string, unknown> = {
+    ...clean,
+    range: { ...anchor.range, ...STRAY },
+    // Beside fromRel/toRel: those two are `z.unknown()`, so a key inside them
+    // is allowed by the advertised schema and would fail nothing.
+    relRange: { ...anchor.relRange, ...STRAY },
+    textSnapshotBreaks: [{ at: 5, kind: "block", ...STRAY }],
+    importSource: { ...(clean.importSource as object), ...STRAY },
+  };
+  return { clean, withStrays };
+}
+
+/** Every key `sanitizeAnnotation` reads off `record`, through a Proxy. */
+function keysSanitizeReads(record: Record<string, unknown>): Set<string> {
+  const reads = new Set<string>();
+  const proxy = new Proxy(record, {
+    get(target, key, receiver) {
+      if (typeof key === "string") reads.add(key);
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key) {
+      if (typeof key === "string") reads.add(key);
+      return Reflect.has(target, key);
+    },
+  });
+  sanitizeAnnotation(proxy as never, () => {});
+  return reads;
+}
+
+/** The item properties a bucket's advertised JSON schema declares. */
+async function declaredKeys(bucket: "userActions" | "userResponses" | "userReplies") {
+  const { tools } = await client.listTools();
+  const tool = tools.find((t) => t.name === "tandem_checkInbox");
+  const schema = tool?.outputSchema as {
+    properties: Record<string, { items: { properties: Record<string, unknown> } }>;
+  };
+  return new Set(Object.keys(schema.properties[bucket].items.properties));
+}
+
+describe("A3: inbox items carry only declared keys, at every depth", () => {
+  it("userActions and userResponses: every key sanitize reads is declared or stripped on purpose", async () => {
+    // The userResponses fixture carries agentIdentity: with local-period
+    // records honoured it would be withheld as local-model activity.
+    __setHonourLocalPeriodRecordsForTests(false);
+    const o = await openDoc();
+    const { clean, withStrays } = fixtureValues(o.doc);
+    const buckets = {
+      userActions: { id: "walk-action", overrides: {} },
+      userResponses: {
+        id: "walk-response",
+        overrides: { author: "claude", status: "dismissed", resolvedBy: "user" },
+      },
+    } as const;
+
+    for (const [bucket, { id, overrides }] of Object.entries(buckets)) {
+      const raw = { ...withStrays, ...overrides, id };
+      const reads = keysSanitizeReads(raw);
+      const unknown = [...reads].filter((k) => !(k in clean));
+      expect(unknown, `${bucket}: sanitize reads a key with no FIXTURE value`).toEqual([]);
+      const sanitized = sanitizeAnnotation(raw as never, () => {});
+      const branchOnly = [...reads].filter((k) => !(k in sanitized)).sort();
+      expect(branchOnly, `${bucket}: keys sanitize reads but does not emit`).toEqual([
+        ...SANITIZE_BRANCH_ONLY,
+      ]);
+      // Every value passed its guard: an emitted key with a dropped value
+      // would leave that field unchecked.
+      for (const k of reads) {
+        if (SANITIZE_BRANCH_ONLY.includes(k)) continue;
+        expect(sanitized[k as keyof typeof sanitized], `${bucket}: ${k} emitted`).not.toBe(
+          undefined,
+        );
+      }
+      browserWrite(o.doc, Y_MAP_ANNOTATIONS, id, raw);
+    }
+    const before = {
+      action: stored(o.doc, "walk-action"),
+      response: stored(o.doc, "walk-response"),
+    };
+
+    const { inbox, text } = await poll();
+
+    for (const [bucket, { id, overrides }] of Object.entries(buckets)) {
+      const items = inbox[bucket as keyof typeof buckets];
+      expect(
+        items.map((a) => a.id),
+        `${bucket} holds its item`,
+      ).toEqual([id]);
+      const item = items[0];
+      const expected: Record<string, unknown> = wire({ ...clean, ...overrides, id });
+      const declared = await declaredKeys(bucket as keyof typeof buckets);
+      const reads = keysSanitizeReads({ ...withStrays, ...overrides, id });
+      for (const k of reads) {
+        if (SANITIZE_BRANCH_ONLY.includes(k)) continue;
+        if ((STRIPPED_ON_PURPOSE as readonly string[]).includes(k)) continue;
+        expect(declared.has(k), `${bucket}: ${k} is declared`).toBe(true);
+        expect(item[k], `${bucket}: ${k} arrives equal, strays removed`).toEqual(expected[k]);
+      }
+      for (const k of STRIPPED_ON_PURPOSE) {
+        expect(declared.has(k), `${bucket}: ${k} is not declared`).toBe(false);
+        expect(k in item, `${bucket}: ${k} is not sent`).toBe(false);
+      }
+      expect(text[bucket as keyof typeof buckets][0], `${bucket}: the text part matches`).toEqual(
+        item,
+      );
+    }
+
+    // Nothing was deleted in place: the stored records still hold their strays.
+    const after = {
+      action: stored(o.doc, "walk-action"),
+      response: stored(o.doc, "walk-response"),
+    };
+    expect(after).toEqual(before);
+    const action = after.action as Record<string, Record<string, unknown>>;
+    expect(action.range.strayKey).toBe(STRAY.strayKey);
+    expect(action.relRange.strayKey).toBe(STRAY.strayKey);
+    expect(action.importSource.strayKey).toBe(STRAY.strayKey);
+    expect((action.textSnapshotBreaks as unknown as Item[])[0].strayKey).toBe(STRAY.strayKey);
+  });
+
+  it("userReplies (a guard): a stored reply's undeclared keys never reach the item", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    const o = await openDoc();
+    browserWrite(o.doc, Y_MAP_ANNOTATIONS, "parent", userComment(o.doc, "parent"));
+    const reply = {
+      id: "reply-extra",
+      annotationId: "parent",
+      author: "user",
+      text: "a reply with extras",
+      timestamp: 1_700_000_003_000,
+      private: false,
+      heldInSolo: false,
+      agentIdentity: AGENT_IDENTITY,
+      importAuthor: "Someone",
+    };
+    browserWrite(o.doc, Y_MAP_ANNOTATION_REPLIES, "reply-extra", reply);
+    const declared = await declaredKeys("userReplies");
+
+    const { inbox } = await poll();
+    expect(inbox.userReplies.map((r) => r.id)).toEqual(["reply-extra"]);
+    const item = inbox.userReplies[0];
+    for (const k of Object.keys(item)) expect(declared.has(k), k).toBe(true);
+    expect(item).toEqual({
+      id: "reply-extra",
+      annotationId: "parent",
+      author: "user",
+      text: "a reply with extras",
+      timestamp: 1_700_000_003_000,
+      textSnippet: TARGET,
+      documentId: o.documentId,
+    });
+  });
+
+  /** A user chat message on the open document with a stray key in its anchor. */
+  function chatWithStrayAnchor(documentId: string) {
+    const clean = {
+      id: "chat-stray",
+      text: "about this part",
+      timestamp: 1_700_000_004_000,
+      documentId,
+      anchor: { from: 6, to: 20, textSnapshot: TARGET },
+      replyTo: "chat-earlier",
+    };
+    const record = {
+      ...clean,
+      author: "user",
+      read: false,
+      anchor: { ...clean.anchor, ...STRAY },
+    };
+    withBrowser(ctrl(), () => ctrl().getMap(Y_MAP_CHAT).set(clean.id, record));
+    return clean;
+  }
+
+  it("chat: a stray in anchor is removed (cursor poll, the cursor collector)", async () => {
+    const o = await openDoc();
+    const clean = chatWithStrayAnchor(o.documentId);
+    const before = structuredClone(ctrl().getMap(Y_MAP_CHAT).get(clean.id)) as {
+      anchor: Record<string, unknown>;
+    };
+
+    const { inbox, text } = await poll();
+    expect(inbox.chatMessages).toEqual([clean]);
+    expect(text.chatMessages).toEqual([clean]);
+    const after = ctrl().getMap(Y_MAP_CHAT).get(clean.id) as { anchor: Record<string, unknown> };
+    expect(after.anchor, "the stored anchor is untouched").toEqual(before.anchor);
+  });
+
+  it("chat: a stray in anchor is removed (one cursor-less poll on fresh state, the legacy collector)", async () => {
+    // The FIRST cursor-less poll on fresh state: a second one would find the
+    // message already stamped read and prove nothing (see the header).
+    const o = await openDoc();
+    const clean = chatWithStrayAnchor(o.documentId);
+    const before = structuredClone(ctrl().getMap(Y_MAP_CHAT).get(clean.id)) as {
+      anchor: Record<string, unknown>;
+    };
+
+    const { inbox, text } = await poll({});
+    expect(inbox.chatMessages).toEqual([clean]);
+    expect(text.chatMessages).toEqual([clean]);
+    const after = ctrl().getMap(Y_MAP_CHAT).get(clean.id) as { anchor: Record<string, unknown> };
+    expect(after.anchor, "the stored anchor is untouched").toEqual(before.anchor);
   });
 });

@@ -29,7 +29,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
@@ -159,23 +158,6 @@ async function pollAs(owner: string, args: Record<string, unknown> = {}): Promis
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
   expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
   return inboxSchema.parse((result as { structuredContent: unknown }).structuredContent);
-}
-
-/**
- * A fresh poll whose response skips the SDK client's own output-schema check
- * (`client.request` rather than `callTool`). Row 33 only: see that row.
- */
-async function rawFreshPoll(owner: string, documentId: string): Promise<Inbox> {
-  callingAs = owner;
-  const result = await client.request(
-    {
-      method: "tools/call",
-      params: { name: "tandem_checkInbox", arguments: { cursor: "start", documentId } },
-    },
-    CallToolResultSchema,
-  );
-  expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
-  return inboxSchema.parse(result.structuredContent);
 }
 
 function reader(owner: string) {
@@ -456,8 +438,6 @@ interface Row {
   expected: "waiting" | "not";
   /** A recorded difference: what the fresh poll does instead of agreeing. */
   difference?: "poll-hands-it" | "poll-hands-notice";
-  /** The fresh poll skips the SDK client's schema check (row 33). */
-  rawPoll?: true;
 }
 
 async function makeParent(w: RowWorld, kind: ParentKind): Promise<void> {
@@ -939,11 +919,10 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["honour-local", "item"],
     expected: "waiting",
-    // The server hands it with its stored `agentIdentity`, a field the
-    // advertised output schema does not declare, so an SDK client that checks
-    // structured content (this harness's, and Claude Code's) rejects the whole
-    // response; reported on the PR. The row reads the server's answer.
-    rawPoll: true,
+    // Polled through the SDK client, which checks structured content against
+    // the advertised schema: since #2465 the inbox strips the stored
+    // `agentIdentity` (undeclared) instead of sending it, so the response
+    // validates and this row is a guard for that.
   },
   // Others
   {
@@ -1048,9 +1027,7 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
         .flatMap((spy, i) => spy.mock.calls.slice(before[i]))
         .filter((call) => !String(call[0]).startsWith("[ANNOTATION-STORE] legacy migration:"));
       expect(during, "documentWaiting logged").toEqual([]);
-      const inbox = row.rawPoll
-        ? await rawFreshPoll(TANDEM, w.d.id)
-        : await reader(TANDEM).poll(w.d.id);
+      const inbox = await reader(TANDEM).poll(w.d.id);
       const pollHands = handed(inbox).includes(w.candidate);
       // One candidate: nothing else answerable is handed.
       expect(handed(inbox).filter((id) => id !== w.candidate)).toEqual([]);
