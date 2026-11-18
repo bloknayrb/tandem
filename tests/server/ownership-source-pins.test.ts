@@ -930,7 +930,9 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
     expect(body).toMatch(
       /const noError = lastError === undefined \|\| restartTimer !== null \|\| launching > 0;/,
     );
-    expect(body).not.toMatch(/messageStartQueued|restartPending\(/);
+    // Nor a start pass in flight (3b-2b1a): a start-or-wake-only pass is not a
+    // restart under way.
+    expect(body).not.toMatch(/messageStartQueued|passesQueued|restartPending\(/);
   });
 
   it("the seam's diagnosticsForTests is read by no src file but its definition (review round 1, item 9)", () => {

@@ -1419,7 +1419,7 @@ async function savedStartMode(): Promise<string> {
 
 /** The per-test timeout of a case that runs `tripBreaker` (#2358 PR 3b-2b1a,
  *  R0.5): up to 12 spawn cycles, each waiting on real file I/O, under a
- *  default `testTimeout` of 15 s. Measured at 50-80 ms each on Linux; the
+ *  default `testTimeout` of 15 s. Measured at 36-104 ms each on Linux; the
  *  headroom is for a loaded Windows runner, not a wall-clock claim. */
 const BREAKER_TIMEOUT_MS = 60_000;
 
@@ -2327,7 +2327,7 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     // The cli-unusable construction: the pass does not spawn, so a leaked
     // second pass shows as a second resolve. `status()` is not called
     // mid-case (it resolves again while `lastError` is `cli-unusable`).
-    async function coalesce(): Promise<number> {
+    async function coalesce(afterEnd = false): Promise<number> {
       let bin: string | null = process.execPath;
       let resolves = 0;
       let gate: Promise<void> | null = null;
@@ -2354,10 +2354,16 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
       h.emit(chatEvent()); // accepted: its pass queues and runs
       await until(() => entered, "the pass's gated settings read");
       expect(logText()).toMatch(/A message arrived while Claude was stopped/);
-      h.emit(chatEvent()); // the pass is running: coalesced into it
+      if (!afterEnd) h.emit(chatEvent()); // the pass is running: coalesced into it
       gate = null;
       open();
       await lockBarrier(h);
+      if (afterEnd) {
+        // The twin: the first pass has ended, so this chat gets a pass of
+        // its own, and the construction shows its second attempt.
+        h.emit(chatEvent());
+        await lockBarrier(h);
+      }
       await lockBarrier(h);
       expect(children).toHaveLength(1);
       return resolves;
@@ -2368,6 +2374,13 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     });
     it("flag on: one resolve, no second attempt", async () => {
       expect(await coalesce()).toBe(1);
+    });
+    it("positive twin, flag off: a chat after that pass has ended gets a second attempt", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      expect(await coalesce(true)).toBe(2);
+    });
+    it("positive twin, flag on: the same, two resolves", async () => {
+      expect(await coalesce(true)).toBe(2);
     });
   });
 
@@ -2398,6 +2411,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
       expect(argAfter(last, "--resume")).toBeDefined();
       expect(turnTexts(last)).toEqual([SUPERVISOR_WAKE_PROMPT]);
       expect(passes(h)).toBe(2);
+      pushJson(last, RESULT_OK); // its first turn: anything left owed follows
+      await settle();
+      expect(wakes(last)).toBe(1);
     });
     it("twin, flag off with no startOrWake: the same outcome", async () => {
       vi.stubEnv("TANDEM_OWNERSHIP", "");
@@ -2407,6 +2423,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
       expect(await savedStartMode()).toBe("on-click");
       expect(h.sup.status().running).toBe(true);
       expect(turnTexts(last)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      pushJson(last, RESULT_OK);
+      await settle();
+      expect(wakes(last)).toBe(1);
     });
     it("waiting true: the pass starts Claude, the Off stops it, the chat's pass starts it again from Off (two spawns, Accepted)", async () => {
       const { h, offAtSpawn } = await row({ call: true, waiting: true });
@@ -2462,7 +2481,7 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
   });
 
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
-    it("a relaunch queued between: the chat's pass runs after it and finds a live child: one spawn", async () => {
+    it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);
       const { h } = await idleStopped({ workWaiting: waiting.fn });
       h.sup.startOrWake?.("document"); // P
@@ -2526,7 +2545,10 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(children).toHaveLength(1);
   });
 
-  it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds it live", async () => {
+  it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds the standby cleared", async () => {
+    // Q stops at `standby === undefined` (P's spawn cleared it), before
+    // `isAlive()` is read: removing `isAlive()` alone fails nothing here
+    // (defence in depth); removing the guard does.
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     onSpawn = () => {
@@ -2541,6 +2563,10 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(children).toHaveLength(2);
     expect(messageStartLines()).toBe(0);
     expect(c2.killed).toBe(false);
+    // And Q writes nothing: the one wake is the one owed on P's spawn.
+    pushJson(c2, RESULT_OK);
+    await settle();
+    expect(wakes(c2)).toBe(1);
   });
 
   it("R3.3: P running, Q queued, then a call: the call joins Q (two passes, two waiting calls)", async () => {
@@ -2567,7 +2593,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(children).toHaveLength(2);
     pushJson(c2, RESULT_OK);
     await settle();
-    expect(wakes(c2)).toBeGreaterThanOrEqual(1);
+    // One wake owed by the chat on P's spawn, one from Q's share for the
+    // joined call.
+    expect(wakes(c2)).toBe(2);
   });
 
   it("R3.3: P ended, Q queued, then a call: the call joins Q (two passes, no second queued line)", async () => {
