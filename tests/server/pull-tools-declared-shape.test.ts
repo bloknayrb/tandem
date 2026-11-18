@@ -842,3 +842,23 @@ describe("A3: inbox items carry only declared keys, at every depth", () => {
     expect(after.anchor, "the stored anchor is untouched").toEqual(before.anchor);
   });
 });
+
+describe("source pin: every document push site pushes what admit returned", () => {
+  it("the three `ctx.admit` calls each push their returned value, never the original item", () => {
+    // Behaviour cannot see the userReplies site pushing its original `item`
+    // instead: that item is a literal of declared fields, so the output is
+    // identical today (#2472 review round 1, R1.4). Pinned from source so a
+    // later edit that goes back to `if (!ctx.admit(..)) continue; push(item)`
+    // fails here rather than the next time a stray key appears.
+    const source = fsSync.readFileSync(
+      path.join(import.meta.dirname, "..", "..", "src", "server", "mcp", "awareness.ts"),
+      "utf8",
+    );
+    expect(source.match(/ctx\.admit\(/g) ?? [], "admit call sites").toHaveLength(3);
+    const pinned =
+      source.match(
+        /const sent = ctx\.admit\("(?:userActions|userResponses|userReplies)", item\);[^\n]*\n\s*if \(!sent\) continue;\n\s*\w+\.push\(sent\);/g,
+      ) ?? [];
+    expect(pinned, "each site pushes `sent`").toHaveLength(3);
+  });
+});
