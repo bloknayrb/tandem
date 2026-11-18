@@ -36,7 +36,10 @@ import {
   ownerHandleBindSnapshotForTests,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
-import { CLAUDE_STREAM_JSON_FLAGS } from "../../../src/shared/launcher/contract.js";
+import {
+  CLAUDE_STREAM_JSON_FLAGS,
+  REAPER_NOT_FOUND_MARKER,
+} from "../../../src/shared/launcher/contract.js";
 
 // The stop bound's test makes one deletion hang; every other test gets the
 // real `deleteRunFile` through this pass-through.
@@ -745,7 +748,8 @@ describe("the remaining R4.4 exit paths", () => {
     // `<cwd>/reaper/target/release/`, which a developer's build fills.
     vi.spyOn(process, "cwd").mockReturnValue(recordDir);
     const sup = makeSupervisor();
-    await expect(sup.startFresh(spawnDir)).rejects.toThrow();
+    // The reaper's own refusal, so an unrelated throw does not pass.
+    await expect(sup.startFresh(spawnDir)).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
     await sleep(100);
     expect(runFilesOnDisk()).toEqual([]);
     expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);

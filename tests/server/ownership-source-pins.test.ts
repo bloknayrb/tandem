@@ -942,10 +942,13 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
   it("the pending-state pin is not vacuous: each term is declared under its name, and a planted read is found (3b-2b1b-R0, R0.1)", () => {
     const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
     // The positive anchor: a rename of any of the three in supervisor.ts fails
-    // here rather than leaving the negative match above passing vacuously.
-    expect(text).toContain("let passesQueued = 0;");
-    expect(text).toContain("let messageStartQueued = false;");
-    expect(text).toContain("function restartPending(");
+    // here rather than leaving the negative match above passing vacuously. On
+    // the comment-stripped source, so a comment quoting a declaration cannot
+    // stand in for it after a rename.
+    const code = stripComments(text);
+    expect(code).toContain("let passesQueued = 0;");
+    expect(code).toContain("let messageStartQueued = false;");
+    expect(code).toContain("function restartPending(");
     // And the regex finds each term once it is read in the body.
     const fn = text.slice(text.indexOf("function recomputePresence("));
     const body = fn.slice(0, fn.indexOf("\n  }\n"));
