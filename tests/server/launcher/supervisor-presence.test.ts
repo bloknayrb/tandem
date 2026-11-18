@@ -1419,8 +1419,8 @@ async function savedStartMode(): Promise<string> {
 
 /** The per-test timeout of a case that runs `tripBreaker` (#2358 PR 3b-2b1a,
  *  R0.5): up to 12 spawn cycles, each waiting on real file I/O, under a
- *  default `testTimeout` of 15 s. Measured at 36-104 ms each on Linux; the
- *  headroom is for a loaded Windows runner, not a wall-clock claim. */
+ *  default `testTimeout` of 15 s. The headroom is for a loaded Windows
+ *  runner, not a wall-clock claim. */
 const BREAKER_TIMEOUT_MS = 60_000;
 
 /** Crash `c` and its restarts until the windowed breaker trips (the [0]
