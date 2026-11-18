@@ -52,7 +52,9 @@ const typeOptions: ChipOption[] = [
 // The agent chip (value "claude") matches every agent-authored comment, Claude's
 // and a local model's alike. While local models are on it reads "AI" (Label
 // decision L3 of 2026-11-17); dark it reads the registry's family label, as it
-// always has. $derived so the dark label tracks the agent-label source.
+// always has. $derived as before; dark, the label's source is a one-time
+// localStorage read (`agentLabelSource()`), so nothing here re-runs on a
+// settings change — the same as master (see `agentLabelSource`'s doc).
 const authorOptions = $derived<ChipOption[]>([
   { value: "all", label: "Anyone", kind: "text" },
   {

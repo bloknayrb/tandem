@@ -193,7 +193,7 @@ function buildDecorations(
             "data-annotation-author": ann.author,
             // #1123: a record the local model wrote names it (its stamped
             // `agentIdentity`, which survives sanitize via the allowlist; an
-            // empty stamped name reads "Local model", AL-7); every other agent
+            // identity without a usable name reads "Local model", AL-7); every other agent
             // comment takes `readAgentFamilyLabel()`'s label. Dark builds never
             // write `agentIdentity`, so dark is always the latter.
             "aria-label": `${agentBylineLabel(ann.agentIdentity, agentLabel)} comment annotation`,

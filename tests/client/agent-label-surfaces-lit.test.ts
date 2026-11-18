@@ -5,14 +5,24 @@
  * ADR-039 amendment 2026-11-17 (agent labels); the agent-labels brief's R1.1,
  * R1.5 "Surfaces", "Local names" and "Toolbar", and R2.2).
  *
- * Expected values, each with its source:
- *  - Claude-side work and every "Send to" control read "Claude" (P10(1) and V3
- *    of ADR-039's 2026-11-17 amendment on switching local models on); the
- *    status pill reads "Claude is editing" (AL-1).
- *  - A record a local model wrote names its own stamp, never the store's entry;
- *    an empty stamped name reads "Local model" (AL-7).
- *  - The comment filter's agent chip and its summary read "AI" (Label decision
- *    L3 of 2026-11-17, AL-3), and the chip still matches both kinds of comment.
+ * Expected values, each with the text that fixes it:
+ *  - Claude-side work and every "Send to" control read "Claude". ADR-039's
+ *    2026-11-17 amendment on switching local models on, P10(1): "Claude's own
+ *    replies and comments are always labelled "Claude"; a local model's name
+ *    appears only on what it wrote". V3: "The "Send to" control labels and the
+ *    annotation aria-labels follow P10(1)".
+ *  - A record a local model wrote names its own stamp, never the store's entry:
+ *    P10(1)'s second half, above.
+ *  - The comment filter's agent chip reads "AI". Label decision L3 of
+ *    2026-11-17 (ADR-039 amendment 2026-11-17 (agent labels)), picked: ""AI"
+ *    (Recommended)": "One chip for comments from any AI, named honestly. Each
+ *    comment still shows who wrote it." The chip still matches both kinds of
+ *    comment (its value and predicate are unchanged).
+ *
+ * Three values rest on this PR's own rulings, unconfirmed until the review
+ * session confirms them on the PR: the status pill's "Claude is editing…"
+ * (AL-1), the filter summary's "AI" (AL-3), and "Local model" for an identity
+ * without a usable name (AL-7).
  *
  * The Models store holds state (a): one enabled local entry "Qwen", no default
  * (master's family there: "Local model"). `BYO_MODELS_ENABLED` is flipped on by

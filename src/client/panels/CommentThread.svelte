@@ -92,7 +92,7 @@ const blockedReasonId = `${uid}-accept-blocked`;
                 aria-hidden="true"
               ></span>
               <!-- #1123: a reply the local model wrote names it (its stamped
-                   agentIdentity; "Local model" when that name is empty),
+                   agentIdentity; "Local model" when it has no usable name),
                    matching the card + chat surfaces; every other agent reply
                    takes the label for Claude-side work. Dark builds never
                    write agentIdentity. -->

@@ -90,8 +90,9 @@ export function resolveAgentLabel(source: AgentLabelSource, style: AgentLabelSty
 export const CLAUDE_AGENT_LABEL = "Claude";
 
 /**
- * A local-model record whose stamped `displayName` is empty (AL-7). The same
- * text the registry uses for a local provider's family.
+ * A local-model record whose `agentIdentity` has no usable name (AL-7): an
+ * empty `displayName`, or none at all. The same text the registry uses for a
+ * local provider's family.
  */
 export const LOCAL_MODEL_LABEL = "Local model";
 
@@ -104,7 +105,8 @@ export const AI_FILTER_LABEL = "AI";
 /**
  * Byline for an agent-authored row: the record's own stamped name when it
  * carries an `agentIdentity` (only the local-model collaborator writes one),
- * "Local model" when that stamped name is empty (AL-7), else `family` — the
+ * "Local model" when that identity has no usable name — empty, missing or not
+ * a string reach here as falsy or as a non-string (AL-7) — else `family` — the
  * label for Claude-side work. No flag: a dark build never writes
  * `agentIdentity`, so dark rows always take `family`.
  *
@@ -113,5 +115,8 @@ export const AI_FILTER_LABEL = "AI";
  * "Local model").
  */
 export function agentBylineLabel(identity: AgentIdentity | undefined, family: string): string {
-  return identity ? identity.displayName || LOCAL_MODEL_LABEL : family;
+  if (!identity) return family;
+  return typeof identity.displayName === "string" && identity.displayName
+    ? identity.displayName
+    : LOCAL_MODEL_LABEL;
 }
