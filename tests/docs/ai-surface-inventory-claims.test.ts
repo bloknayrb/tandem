@@ -473,4 +473,37 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
       ].sort(),
     );
   });
+
+  // How a start pass can be reached inside the supervisor (#2358 PR 3b-2b1a,
+  // R0.1). The "not called" list above names only the two entry points; a
+  // raise of `startOrWakeOwed` plus a `queueStartPass()`, or a direct
+  // `startOrWakeStep()`, would reach the pass without naming either.
+  const START_PASS_OBLIGATION = [
+    "A new route to a start pass in supervisor.ts (or a moved one). A start pass",
+    "can start Tandem's Claude: it must sit behind startOrWake's checks (the flag,",
+    "shutdown, the live Off, the licence decision) or be today's arm (the standby",
+    "watch). Then update this list.",
+  ].join(" ");
+
+  it("the writers of startOrWakeOwed", () => {
+    const sites = sitesIn(SUPERVISOR, (node) => (raisesFlag(node, "startOrWakeOwed") ? "" : null));
+    expect(sites, START_PASS_OBLIGATION).toEqual(["startOrWake:"]);
+  });
+
+  it("every reference to startOrWakeStep, queueStartPass and startForMessage", () => {
+    const refs = sitesIn(SUPERVISOR, (node) =>
+      isReferenceTo(node, ["startOrWakeStep", "queueStartPass", "startForMessage"])
+        ? node.text
+        : null,
+    );
+    expect(refs, START_PASS_OBLIGATION).toEqual(
+      [
+        "queueStartPass:startForMessage", // the start-or-wake pass
+        "setStandby:startForMessage", // today's arm, the standby watch
+        "startForMessage:queueStartPass", // the finally's one re-queue
+        "startForMessage:startOrWakeStep", // start-or-wake's share of a pass
+        "startOrWake:queueStartPass",
+      ].sort(),
+    );
+  });
 });
