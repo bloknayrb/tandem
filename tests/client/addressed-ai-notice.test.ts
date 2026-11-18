@@ -328,8 +328,13 @@ describe("noticeAction", () => {
 });
 
 describe("the local period (#1123 part B, R8)", () => {
-  const T =
-    "Comment saved. Chat is set to your local model, which is not sent comments, and Tandem is not sending this comment to Claude now.";
+  // W: the reviewing session's ruling R2.1 (the send notice brief) on Bryan's
+  // pick SN-P2, "Say it waits for Claude (Recommended)". Info, `local-comment`.
+  const W = "Saved. Chat is set to your local model, so this comment waits for Claude.";
+  // W-past: the same ruling R2.1 and pick SN-P2; the composer's `no-agent`
+  // warning in the local period, past tense because a warning persists.
+  const W_PAST =
+    "Saved while chat was set to your local model, so this comment was kept for Claude.";
   /** Every existing rule's input, named. */
   const RULES: Array<[string, Partial<typeof base>, AddressedAiNotice | null]> = [
     ["offline", { serverUnreachable: true }, { kind: "offline" }],
@@ -359,31 +364,34 @@ describe("the local period (#1123 part B, R8)", () => {
       else expect(v).toBeNull();
     });
 
-    it(`${name}: a COMMENT in the local period says T unless offline / ai-off`, () => {
-      const v = addressedAiNotice({ ...base, ...over, via: "comment", localPeriod: true });
-      if (today?.kind === "offline" || today?.kind === "ai-off") {
-        expect(v).toEqual(today);
-        return;
-      }
-      expect(v).not.toBeNull();
-      const toast = noticeAction(v as AddressedAiNotice, "Comment");
-      expect(toast.message).toBe(T);
-      if (today?.kind === "no-agent") {
-        // Kind, severity and CTA kept; only the message is T.
-        expect(v).toEqual({ ...today, localComment: true });
-        expect(toast.severity).toBe("warning");
-        expect(toast.cta).toBe(today.chip);
-        expect(toast.idPrefix).toBe("ai-not-ready");
-      } else {
+    if (today?.kind !== "no-agent") {
+      it(`${name}: a COMMENT in the local period, local-comment: says W unless offline / ai-off`, () => {
+        const v = addressedAiNotice({ ...base, ...over, via: "comment", localPeriod: true });
+        if (today?.kind === "offline" || today?.kind === "ai-off") {
+          expect(v).toEqual(today);
+          return;
+        }
         expect(v).toEqual({ kind: "local-comment" });
-        expect(toast).toEqual({
+        expect(noticeAction(v as AddressedAiNotice, "Comment")).toEqual({
           idPrefix: "ai-local-comment",
           severity: "info",
-          message: T,
+          message: W,
           cta: null,
         });
-      }
-    });
+      });
+    } else {
+      it(`${name}: a COMMENT in the local period, the no-agent variant: says W-past, its CTA unchanged`, () => {
+        const v = addressedAiNotice({ ...base, ...over, via: "comment", localPeriod: true });
+        // Kind, severity and CTA kept; only the message is W-past.
+        expect(v).toEqual({ ...today, localComment: true });
+        expect(noticeAction(v as AddressedAiNotice, "Comment")).toEqual({
+          idPrefix: "ai-not-ready",
+          severity: "warning",
+          message: W_PAST,
+          cta: today.chip,
+        });
+      });
+    }
   }
 
   it("Solo still returns nothing, chat or comment, in the local period", () => {

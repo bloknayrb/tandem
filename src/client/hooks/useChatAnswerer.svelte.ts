@@ -9,10 +9,11 @@ import {
   LOCAL_MODEL_STATES,
   type LocalModelState,
 } from "../../shared/models/contract.js";
-import type { ChatMessage, TandemNotification } from "../../shared/types.js";
+import type { ChatMessage, TandemMode, TandemNotification } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { onModelsWriteCommitted } from "../models/models-write-signal.js";
 import { noteModelsWriteRefused } from "../models/write-refusal.js";
+import { LOCAL_COMMENT_INFO_TEXT } from "../status/addressed-ai-notice.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { modelsPageAccess } from "./useModelsWriteAccess.svelte.js";
 
@@ -594,6 +595,56 @@ export function localChatSettingFor(
       : "unusable";
   }
   return heldFresh ? "local" : null;
+}
+
+// --- The send notice: a card send in the local period -------------------------
+
+/**
+ * The decision behind a card send's raise (#1123, the send notice; ADR-039's
+ * amendment of 2026-11-18). App fills `panels/card-send-raise.ts`'s seam with
+ * the returned function, under `BYO_MODELS_ENABLED`. First match wins (the
+ * reviewing session's ruling):
+ *   1. Solo: nothing (the user opted out of AI surfacing; Ruling B-7's notice
+ *      is the composer's, which returns in Solo too).
+ *   2. Server unreachable (the polled flag): nothing. W would say "Saved ...
+ *      waits" for a write a server restart can drop, and an offline toast would
+ *      rest on a flag that clears only on the next answered poll; the card makes
+ *      no probe, so it says nothing, as on master.
+ *   3. The local period (`inLocalPeriod`, Ruling B-16: a known read wins, held
+ *      counts only when the read is not known): the composer's `local-comment`
+ *      info toast with W, same dedupKey, so the two coalesce.
+ *   4. Otherwise nothing.
+ * No flag check of its own: dark, `inLocalPeriod` is false at its first line.
+ * No `no-agent` parity (R3.3): every non-`ai-off` chip rests on the polled
+ * `sessionLive`, which can be stale without a probe.
+ *
+ * Creating it reads no getter (App builds it before `aiReadiness` exists), and
+ * no value is cached: each raise reads them all. It reads nothing about the
+ * annotation, fetches nothing and dispatches nothing (ADR-027; R3.2). Its
+ * callers refuse at click while the licence refuses AI, so it has no licence
+ * row of its own.
+ */
+export function createCardSendNotice(deps: {
+  getHeld: () => boolean;
+  getMode: () => TandemMode;
+  getServerUnreachable: () => boolean;
+  push: (n: TandemNotification) => void;
+}): () => void {
+  return () => {
+    if (deps.getMode() === "solo") return;
+    if (deps.getServerUnreachable()) return;
+    if (!inLocalPeriod(deps.getHeld())) return;
+    const now = Date.now();
+    // The composer's id and dedupKey shape (Ruling SN-4): `${idPrefix}-${viaKey}`.
+    deps.push({
+      id: `ai-local-comment-comment-${now}`,
+      type: "launcher",
+      severity: "info",
+      message: LOCAL_COMMENT_INFO_TEXT,
+      dedupKey: "ai-local-comment-comment",
+      timestamp: now,
+    });
+  };
 }
 
 // --- R3: the first local model's toast -------------------------------------------
