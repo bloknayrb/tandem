@@ -1,5 +1,6 @@
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import { apiModelsSecretPath } from "../../shared/integrations/contract.js";
+import { autoDefaultFor } from "../../shared/models/auto-default.js";
 import {
   API_MODELS,
   ERROR_CODE_MODELS_BUSY,
@@ -108,6 +109,14 @@ export interface ModelsState {
 let _models = $state<ModelRegistryEntry[]>([]);
 let _defaultModelId = $state<string | null>(null);
 let _etag: string | null = null; // last-seen server ETag (not reactive — no UI reads it)
+// The automatic-default marker (#1123, Default decisions DD1 to DD4 of
+// 2026-11-18): the id the rule marked as the default in the CURRENT `apply`
+// run, or null. Reset at the start of every `apply` run (the 409 re-run
+// included) and on rollback; set only by the rule inside `writeThrough`.
+// `postCurrent` sends it as `autoDefaultId` and decides nothing; the busy
+// retry re-posts the same body, so it is not consumed per POST. Not reactive —
+// no UI reads it.
+let _autoDefaultId: string | null = null;
 let _saveError = $state<string | null>(null);
 let _loading = $state(false);
 // Distinct from `_saveError`: a load failure must not be confused with a
@@ -210,6 +219,7 @@ async function postCurrent(): Promise<PostOutcome> {
   const body: ModelsPostBody = {
     file: projectModelsFile(_models, _defaultModelId),
     ifMatch: _etag ?? "",
+    ...(_autoDefaultId !== null ? { autoDefaultId: _autoDefaultId } : {}),
   };
   const res = await fetch(`${API_BASE}${API_MODELS}`, {
     method: "POST",
@@ -300,12 +310,38 @@ let _writeQueue: Promise<void> = Promise.resolve();
  *   429 busy   → bounded re-POST in `postCurrentWithBusyRetry`; only if the limit
  *                is exhausted does it fall through to a rollback;
  *   400/500/network → rollback to the pre-mutation snapshot + surface the error.
+ *
+ * **The automatic default** (#1123, Label decision L6 of 2026-11-17, Default
+ * decisions DD1 to DD4 of 2026-11-18). Unless `opts.setsDefault` (only
+ * `setDefault`, which stays unconditional and never marks), each `apply` run —
+ * the first and the 409 re-run on fresh server state alike — is followed, in
+ * the same synchronous step, by the shared rule `autoDefaultFor`: when the
+ * state the write produced has no default at all (null, or naming no entry)
+ * and exactly one enabled local entry, that entry becomes the default and the
+ * marker is set to it, so the default rides in this write's own POST, sent
+ * marked as automatic. A default that names an entry (local, cloud or switched
+ * off) is never changed. The rule never runs outside `apply`: deciding before
+ * the queue turn would act on a state a 409 replaces.
  */
 async function writeThrough(
   apply: () => void,
-  /** This write adds a local-provider model (#1123 part B, R3.2). */
-  opts: { addsLocal?: boolean } = {},
+  opts: {
+    /** This write adds a local-provider model (#1123 part B, R3.2). */
+    addsLocal?: boolean;
+    /** `setDefault`'s write: outside the automatic-default rule (CD-4). */
+    setsDefault?: boolean;
+  } = {},
 ): Promise<WriteOutcome> {
+  const applyRun = (): void => {
+    _autoDefaultId = null;
+    apply();
+    if (opts.setsDefault === true) return;
+    const marked = autoDefaultFor(_models, _defaultModelId);
+    if (marked !== null) {
+      _defaultModelId = marked;
+      _autoDefaultId = marked;
+    }
+  };
   const runExclusive = async (): Promise<WriteOutcome> => {
     const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
     const commit = (etag: string): "committed" => {
@@ -325,17 +361,18 @@ async function writeThrough(
       _models = snapshot.models;
       _defaultModelId = snapshot.defaultModelId;
       _etag = snapshot.etag;
+      _autoDefaultId = null;
       _saveError = message;
       return "rolledback";
     };
-    apply(); // optimistic — synchronous, before any await, once this call's turn arrives
+    applyRun(); // optimistic — synchronous, before any await, once this call's turn arrives
     await _reconcileSettled; // R2-B: never POST before reconcile settles
     try {
       const first = await postCurrentWithBusyRetry();
       if (first.ok) return commit(first.etag);
       if (first.kind === "stale") {
         await fetchAndApply(); // adopt fresh server state + etag (ungated — see below)
-        apply(); // re-apply the user's single intent against fresh state
+        applyRun(); // re-apply the user's single intent (and the rule) against fresh state
         const retry = await postCurrentWithBusyRetry();
         if (retry.ok) return commit(retry.etag);
         // Still stale/busy/failed after a reload+retry — adopt the reconciled
@@ -601,9 +638,12 @@ export function createModels(): ModelsState {
       });
     },
     async setDefault(id) {
-      const outcome = await writeThrough(() => {
-        _defaultModelId = id;
-      });
+      const outcome = await writeThrough(
+        () => {
+          _defaultModelId = id;
+        },
+        { setsDefault: true },
+      );
       return outcome === "committed";
     },
     reload,
@@ -621,6 +661,7 @@ export function _resetModelsStoreForTests(): void {
   _models = [];
   _defaultModelId = null;
   _etag = null;
+  _autoDefaultId = null;
   _saveError = null;
   _loading = false;
   _loadFailed = false;
