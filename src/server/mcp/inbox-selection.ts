@@ -38,7 +38,7 @@
  *    `textSnippet` (the text is not read), and must pass its bucket's schema,
  *    the poll's last gate (`admit`).
  *
- * Accept and dismiss notices never count (§8.5): they are not answerable.
+ * Accept and dismiss notices never count (ownership design §8.5): they are not answerable.
  *
  * **What `handedAtOrAbove` must be.** It compares over every live version
  * with `>=`, not one exact version: the settled term below asks it with

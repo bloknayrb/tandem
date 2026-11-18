@@ -135,7 +135,10 @@ function mkDoc(name: string): Doc {
 
 function realFile(name: string): string {
   const filePath = path.join(tmpDir, `${prefix}-${name}`);
-  fs.writeFileSync(filePath, "Hello world, this is a test document.\n");
+  // Unique content per world: the annotation store's rename recovery adopts a
+  // vanished file's annotations for a new path with the same content, which
+  // would carry an earlier row's records into this one.
+  fs.writeFileSync(filePath, `Hello world, this is test document ${filePath}.\n`);
   return filePath;
 }
 
@@ -311,7 +314,10 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   resetOwnershipForTests();
   __resetLocalPeriodForTests();
   __setHonourLocalPeriodRecordsForTests(null);
-  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  for (const [id, doc] of [...getOpenDocs()]) {
+    unwatchFile(doc.filePath);
+    removeDoc(id);
+  }
   clearChat();
   view = [];
   setTransportView(() => view);

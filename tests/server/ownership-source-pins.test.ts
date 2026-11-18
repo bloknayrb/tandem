@@ -1056,9 +1056,7 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
       'import { inboxUserReplySchema, userActionSchema } from "./output-schemas.js";',
     ]);
     // Nothing reaches another module any other way (dynamic import, require).
-    expect(stripComments(text)).not.toMatch(
-      /\bimport\(|\brequire\(|\bexport \* from|\bexport \{[^}]*\} from/,
-    );
+    expect(stripComments(text)).not.toMatch(/\bimport\(|\brequire\(|^export\b[^;]*\bfrom\b/m);
   });
 
   it("only index.ts installs the probe and names documentWaiting, once, as a statement of main() before either transport branch", () => {
@@ -1070,5 +1068,13 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
     ]);
     beforeBothBranches("  setWaitingProbe(documentWaiting);");
     expect(stripComments(index).match(/\bsetWaitingProbe\b/g)).toHaveLength(2);
+    // Inside the ownership module: the declaration, the setter and the test
+    // reset are its only writes of the probe, and nothing in it calls the setter.
+    const ownership = stripComments(SRC_FILES.get("src/server/sessions/ownership.ts") as string);
+    expect(ownership).toContain(
+      "let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;",
+    );
+    expect(ownership.match(/\bwaitingProbe\s*=(?!=)/g)).toHaveLength(2);
+    expect(ownership.match(/\bsetWaitingProbe\b/g)).toHaveLength(1);
   });
 });
