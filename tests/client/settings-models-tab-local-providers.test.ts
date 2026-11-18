@@ -43,6 +43,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
       return pose.defaultModelId ?? null;
     },
     saveError: null,
+    // #1123: the list has loaded (the first-run window waits for it).
+    loaded: true,
     get loading() {
       return pose.loading ?? false;
     },

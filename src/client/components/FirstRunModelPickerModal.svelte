@@ -1,15 +1,17 @@
 <script lang="ts">
 /**
- * First-run model picker: pick a provider, store the key in the OS
- * keychain, set as default. The caller's `onComplete` fires on save or skip.
+ * The first-run window, "Add a local model (optional)" (#1123, ADR-039 items
+ * 21–23): pick a local provider, name the model, save it and make it the
+ * default. The caller's `onComplete` fires on save or on any close.
  *
- * Mounted by `App.svelte` behind `shouldShowModelPicker` (an optional,
- * skippable step after the integration wizard, before the tutorial), which is
- * gated on `BYO_MODELS_ENABLED` — so this stays DARK (never mounts) until the
- * flag flips at v1.0, when the Settings → Models tab and the titlebar model chip
- * light up alongside it. Final first-run choreography copy is M4-owned.
+ * Mounted by `App.svelte` behind `modelPickerOpen` (offered once, when the
+ * integration wizard closes after Claude was set up in it), which is gated on
+ * `BYO_MODELS_ENABLED` — so this stays DARK (never mounts) until the flag flips.
+ *
+ * Only local providers are listed (P4); the cloud branch below stays in source
+ * (its `data-testid`s are a contract) but is unreachable.
  */
-import { untrack } from "svelte";
+import { onDestroy, tick, untrack } from "svelte";
 import { isLocalProvider, type ModelProvider } from "../../shared/models/contract.js";
 import {
   endpointPrefill,
@@ -19,7 +21,13 @@ import {
 import { createModels } from "../hooks/useModels.svelte.js";
 import { createModelsWriteAccess } from "../hooks/useModelsWriteAccess.svelte";
 import { trapTab } from "../utils/focus-trap.js";
-import { endpointHint, PICKER_LOCAL_SUBTITLE } from "../utils/local-model-copy.js";
+import {
+  endpointHint,
+  PICKER_LOCAL_SUBTITLE,
+  PICKER_MODEL_ID_HINT,
+  PICKER_TITLE,
+  pickerSaveReason,
+} from "../utils/local-model-copy.js";
 
 interface Props {
   /** Fires after Save (success) or Skip. Caller should advance its state. */
@@ -37,8 +45,6 @@ const access = createModelsWriteAccess();
 interface ProviderOption {
   value: ModelProvider;
   label: string;
-  /** Default model ID surfaced as input placeholder + initial value. */
-  defaultModelId: string;
   /** Display name placeholder, and the name a blank Display name saves as. */
   nameFallback: string;
 }
@@ -51,40 +57,26 @@ const PICKER_LABEL: Record<ModelProvider, string> = {
   anthropic: "Anthropic (Claude)",
   gemini: "Gemini (Google)",
 };
-// LM Studio and Other have no model everyone has: their id starts empty, so
-// Save stays disabled until it is filled.
-const DEFAULT_MODEL_ID: Record<ModelProvider, string> = {
-  "local-ollama": "llama3.1:70b",
-  "local-llamacpp": "local-model",
-  "local-lmstudio": "",
-  "local-other": "",
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4o",
-  gemini: "gemini-2.0-flash",
-};
 // #1123 Ruling L-h: Other's long label is not a name; it saves as "Local server".
 const NAME_FALLBACK: Record<ModelProvider, string> = {
   ...PICKER_LABEL,
   "local-other": "Local server",
 };
 
-// Local-first, matching ModelEditModal's per-provider gating: v1.0 ships local
-// providers only, so a fresh first run defaults to Ollama and cloud rows render
-// disabled (their BYO key support is v1.1). Cloud rows stay listed — disabled +
-// "coming soon" — so the roadmap is visible; M4 finalizes first-run copy. The
-// cloud/local split is derived from the contract's `isLocalProvider` (single
-// source of truth, same as ModelEditModal) rather than a hand-maintained
-// per-option flag. The order is derived from the contract (#1123).
+// Option data for every provider, in the contract's order. Only the local ones
+// are listed (`LISTED_OPTIONS`, P4: no cloud row until cloud keys work); the
+// cloud/local split is the contract's `isLocalProvider`. No model id is
+// prefilled for any provider (V8): the field starts empty, with a hint.
 const PROVIDER_OPTIONS: ProviderOption[] = PROVIDER_OPTION_ORDER.map((value) => ({
   value,
   label: PICKER_LABEL[value],
-  defaultModelId: DEFAULT_MODEL_ID[value],
   nameFallback: NAME_FALLBACK[value],
 }));
+const LISTED_OPTIONS = PROVIDER_OPTIONS.filter((o) => isLocalProvider(o.value));
 
 let provider = $state<ModelProvider>("local-ollama");
 let displayName = $state("");
-let modelId = $state(PROVIDER_OPTIONS[0].defaultModelId);
+let modelId = $state("");
 let apiKey = $state("");
 let endpoint = $state(endpointPrefill("local-ollama"));
 let saving = $state(false);
@@ -95,11 +87,15 @@ let saveError = $state<string | null>(null);
 // the thing to avoid, so the reason is shown whenever the page is blocked and
 // no other error is on screen.
 const shownError = $derived(saveError ?? (access.blocked ? access.notice : null));
-// Set once the add COMMITS. A retry after a setDefault failure re-attempts only
-// setDefault against this id — never a second addModel (which would duplicate the
-// entry). Lives for the modal's lifetime.
-let addedId = $state<string | null>(null);
+// Set when the window has closed (any exit, a finished save, or unmount). A save
+// still in flight then neither sets the default nor leaves an error on the
+// shared store (R2.4). Plain, not `$state`: nothing renders from it.
+let closed = false;
+onDestroy(() => {
+  closed = true;
+});
 let dialogEl: HTMLElement | null = $state(null);
+let saveEl: HTMLButtonElement | null = $state(null);
 let prevFocus: Element | null = null;
 
 const currentProvider = $derived(
@@ -107,9 +103,15 @@ const currentProvider = $derived(
 );
 const isCloud = $derived(!isLocalProvider(provider));
 
+// Why Save cannot save yet (V14), or null. `canSave` is derived from it, so the
+// visible reason and Save's state never disagree. The cloud test stays for the
+// unreachable cloud branch.
+const saveReason = $derived(isCloud ? null : pickerSaveReason({ endpoint, modelId }));
 const canSave = $derived(
-  modelId.trim().length > 0 && (isCloud ? apiKey.trim().length > 0 : endpoint.trim().length > 0),
+  isCloud ? modelId.trim().length > 0 && apiKey.trim().length > 0 : saveReason === null,
 );
+/** Save is focusable but does nothing: refused page, or a field missing. */
+const saveInert = $derived(access.blocked || !canSave);
 
 $effect(() => {
   const el = untrack(() => dialogEl);
@@ -147,13 +149,8 @@ $effect(() => {
 });
 
 function selectProvider(next: ModelProvider) {
-  const prev = PROVIDER_OPTIONS.find((p) => p.value === provider);
-  const target = PROVIDER_OPTIONS.find((p) => p.value === next);
-  // Only swap modelId when the field still holds the previous provider's
-  // default — preserves any custom value the user typed.
-  if (target && prev && modelId === prev.defaultModelId) {
-    modelId = target.defaultModelId;
-  }
+  // The Model ID is never touched: no provider fills it (V8), and a typed one
+  // is kept.
   // #1123 R2.3: the same rule for the address, by string equality only — the
   // field is replaced only while it still holds the previous provider's
   // prefill ("" for a provider with none). Read before `provider` changes.
@@ -163,55 +160,79 @@ function selectProvider(next: ModelProvider) {
   provider = next;
 }
 
+/** Every exit and a finished save end here: the window is closed for good. */
+function finish() {
+  closed = true;
+  onComplete();
+}
+
 async function handleSave(e: SubmitEvent) {
   e.preventDefault();
   if (!canSave || saving || access.blocked) return;
   saving = true;
   saveError = null;
+  // Save is natively disabled while saving, and a browser moves focus off a
+  // disabled control to <body>, where the dialog's Escape no longer reaches.
+  // Keep focus in the dialog so the exits stay live from the keyboard (R2.4);
+  // a failed save hands it back to Save below.
+  const parkedFocus =
+    dialogEl !== null &&
+    dialogEl.contains(document.activeElement) &&
+    document.activeElement !== dialogEl;
+  if (parkedFocus) dialogEl?.focus();
   try {
-    // Add the model once. If a prior attempt already committed the add but its
-    // setDefault failed, `addedId` is set — retry ONLY setDefault below.
-    if (addedId === null) {
-      const id = await models.addModel(
-        {
-          provider,
-          displayName: displayName.trim() || currentProvider.nameFallback,
-          modelId: modelId.trim(),
-          enabled: true,
-          ...(isCloud ? {} : { endpoint: endpoint.trim() }),
-        },
-        isCloud ? apiKey.trim() : undefined,
-      );
-      // `addModel` returns null when the write did NOT commit (rolled back /
-      // reconciled away) — do NOT finish onboarding with a phantom default, keep
-      // the modal open and surface the store's error.
-      if (id === null) {
-        // Refused as not Tandem's own window: one sentence for that state,
-        // the same one this dialog shows when it opens already blocked.
-        saveError = access.blocked
-          ? access.notice
-          : (models.saveError ?? "Failed to save model changes.");
-        return;
-      }
-      addedId = id;
-    }
-    // The model committed. Setting it as default can still roll back (a
-    // concurrent writer / blip). That is non-fatal — the model exists — but the
-    // store's list banner does NOT render in first-run, so surface it locally and
-    // let the user proceed via Skip rather than silently onboarding with no
-    // default. (Do NOT reuse `models.saveError` here: its "failed to save"
-    // wording would wrongly imply the model itself didn't save.)
-    const defaulted = await models.setDefault(addedId);
-    if (!defaulted) {
-      saveError =
-        "Model saved, but couldn't set it as the default. You can choose a default later in Settings.";
+    const id = await models.addModel(
+      {
+        provider,
+        displayName: displayName.trim() || currentProvider.nameFallback,
+        modelId: modelId.trim(),
+        enabled: true,
+        ...(isCloud ? {} : { endpoint: endpoint.trim() }),
+      },
+      isCloud ? apiKey.trim() : undefined,
+    );
+    // Closed while the add was in flight (R2.4): the model is saved if the add
+    // committed, and not otherwise; either way it is not made the default, and
+    // a rollback's error is not left on the store for Settings → Models.
+    if (closed) {
+      models.clearError();
       return;
     }
-    onComplete();
+    // `addModel` returns null when the write did NOT commit (rolled back /
+    // reconciled away): keep the window open and surface the store's error.
+    if (id === null) {
+      // Refused as not Tandem's own window: one sentence for that state,
+      // the same one this dialog shows when it opens already blocked.
+      saveError = access.blocked
+        ? access.notice
+        : (models.saveError ?? "Failed to save model changes.");
+      return;
+    }
+    // The model committed. Making it the default can still roll back (a
+    // concurrent writer / blip); the model exists either way, so the window
+    // closes as a success and drops the store's rollback message, which would
+    // otherwise surface later in Settings → Models (RW-5). A sole enabled local
+    // model needs no default.
+    const defaulted = await models.setDefault(id);
+    if (!defaulted) models.clearError();
+    if (closed) return;
+    finish();
   } catch (err) {
+    if (closed) {
+      models.clearError();
+      return;
+    }
     saveError = err instanceof Error ? err.message : "Failed to save";
   } finally {
     saving = false;
+    // A failed save leaves the window open with the reason shown: give focus
+    // back to Save (enabled again after this render) if it is still parked on
+    // the dialog, so a keyboard user is where they were. In `finally`, because
+    // the failure branches `return` out of the `try`.
+    if (parkedFocus && !closed && saveError !== null && document.activeElement === dialogEl) {
+      await tick();
+      saveEl?.focus();
+    }
   }
 }
 
@@ -219,7 +240,7 @@ function handleSkip() {
   // Drop any error left on the shared store singleton (e.g. a rolled-back add or
   // setDefault) so it can't co-show on the next Settings → Models open.
   models.clearError();
-  onComplete();
+  finish();
 }
 </script>
 
@@ -234,7 +255,7 @@ function handleSkip() {
   <div
     role="dialog"
     aria-modal="true"
-    aria-label="Connect an AI model"
+    aria-labelledby="first-run-title"
     tabindex={-1}
     bind:this={dialogEl}
     class="frm-dialog"
@@ -245,17 +266,15 @@ function handleSkip() {
   >
     <header class="frm-header">
       <div>
-        <h2 class="frm-title">Connect an AI model</h2>
-        <div class="frm-step" data-testid="first-run-subtitle">
-          {isCloud ? "Step 1 of 2 — Tandem stores your key in the OS keychain." : PICKER_LOCAL_SUBTITLE}
-        </div>
+        <h2 id="first-run-title" class="frm-title">{PICKER_TITLE}</h2>
+        <div class="frm-step" data-testid="first-run-subtitle">{PICKER_LOCAL_SUBTITLE}</div>
       </div>
       <button
         type="button"
         class="frm-close"
         onclick={handleSkip}
         data-testid="first-run-skip"
-        aria-label="Skip for now"
+        aria-label="Close"
       >
         ×
       </button>
@@ -264,7 +283,7 @@ function handleSkip() {
     <form onsubmit={handleSave} class="frm-form">
       <fieldset class="frm-providers" data-testid="first-run-providers">
         <legend class="frm-label">Provider</legend>
-        {#each PROVIDER_OPTIONS as opt (opt.value)}
+        {#each LISTED_OPTIONS as opt (opt.value)}
           {@const optDisabled = !isLocalProvider(opt.value)}
           <label class="frm-provider-row" class:frm-provider-row-disabled={optDisabled}>
             <input
@@ -292,16 +311,24 @@ function handleSkip() {
         />
       </label>
 
-      <label class="frm-field">
-        <span class="frm-label">Model ID</span>
-        <input
-          type="text"
-          data-testid="first-run-modelid"
-          bind:value={modelId}
-          autocomplete="off"
-          class="frm-mono"
-        />
-      </label>
+      <!-- The hint sits OUTSIDE the label, linked by aria-describedby, so the
+           field's accessible name stays "Model ID" (V8: it names no model). -->
+      <div class="frm-field">
+        <label class="frm-field">
+          <span class="frm-label">Model ID</span>
+          <input
+            type="text"
+            data-testid="first-run-modelid"
+            bind:value={modelId}
+            autocomplete="off"
+            class="frm-mono"
+            aria-describedby="first-run-modelid-hint"
+          />
+        </label>
+        <p id="first-run-modelid-hint" class="frm-hint" data-testid="first-run-modelid-hint">
+          {PICKER_MODEL_ID_HINT}
+        </p>
+      </div>
 
       {#if isCloud}
         <label class="frm-field">
@@ -349,20 +376,32 @@ function handleSkip() {
           data-testid="first-run-skip-secondary"
           class="frm-btn frm-btn-secondary"
         >
-          Skip for now
+          No thanks
         </button>
+        <!-- V14: while Save cannot save it stays focusable (aria-disabled) and
+             is described by the reason; the own-window refusal, when shown,
+             wins. Natively disabled only while a save is in flight. -->
         <button
           type="submit"
-          disabled={!canSave || saving}
-          aria-disabled={access.blocked}
-          aria-describedby={access.blocked ? "first-run-error-text" : undefined}
-          style={access.blocked ? "opacity: 0.5; cursor: not-allowed;" : undefined}
+          bind:this={saveEl}
+          disabled={saving}
+          aria-disabled={saveInert}
+          aria-describedby={access.blocked
+            ? "first-run-error-text"
+            : saveReason !== null
+              ? "first-run-save-reason"
+              : undefined}
           data-testid="first-run-save"
           class="frm-btn frm-btn-primary"
         >
-          {saving ? "Saving…" : "Save and continue"}
+          {saving ? "Saving…" : "Save"}
         </button>
       </div>
+      {#if saveReason !== null && !access.blocked}
+        <p id="first-run-save-reason" class="frm-hint frm-save-reason" data-testid="first-run-save-reason">
+          {saveReason}
+        </p>
+      {/if}
     </form>
   </div>
 </div>
@@ -534,5 +573,16 @@ function handleSkip() {
 .frm-btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Focusable but inert (V14): dimmed by colour, not opacity, so the focus ring
+   keeps its full strength. */
+.frm-btn-primary[aria-disabled="true"]:not(:disabled) {
+  background: var(--tandem-surface-sunk);
+  color: var(--tandem-fg-muted);
+  cursor: not-allowed;
+}
+/* Save's reason sits under the buttons, aligned with Save. */
+.frm-save-reason {
+  text-align: right;
 }
 </style>
