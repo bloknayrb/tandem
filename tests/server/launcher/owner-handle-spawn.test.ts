@@ -741,6 +741,9 @@ describe("teardown on every exit path (R4)", () => {
 describe("the remaining R4.4 exit paths", () => {
   it("reaperPath() throwing (no reaper anywhere): no run file, no spawn state", async () => {
     process.env.TANDEM_REAPER_PATH = path.join(recordDir, "no-such-reaper");
+    // Nor under the working directory: `reaperPath` falls back to
+    // `<cwd>/reaper/target/release/`, which a developer's build fills.
+    vi.spyOn(process, "cwd").mockReturnValue(recordDir);
     const sup = makeSupervisor();
     await expect(sup.startFresh(spawnDir)).rejects.toThrow();
     await sleep(100);
