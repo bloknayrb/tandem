@@ -1308,14 +1308,19 @@ function openSettingsModalWithAck() {
   settingsModalOpen = true;
 }
 
-// #1123 M4: the loading gate (returns null while a registry load is in flight)
-// lives in `resolveDefaultModelChip` so it's unit-testable; the `? : null`
-// BYO wrapper at the prop keeps the chip dark-hidden.
+// #1123 Label decision L2: the title bar's chip shows only while chat is set
+// to the local model (the pill's own `localChatSetting`), the licence does not
+// refuse AI, the list has loaded and the saved Default is an enabled local
+// model. The whole decision is `resolveDefaultModelChip` (unit-tested); the
+// `? : null` wrapper at the prop keeps the chip hidden while dark. Pinned by
+// tests/client/app-model-chip-wiring.test.ts.
 const defaultModelLabel = $derived(
   resolveDefaultModelChip({
     defaultModelId: modelsStore.defaultModelId,
     models: modelsStore.models,
-    loading: modelsStore.loading,
+    loaded: modelsStore.loaded,
+    chatSetting: localChatSetting,
+    aiOff: aiReadiness.aiNotice !== null,
   }),
 );
 
@@ -3364,7 +3369,10 @@ function dismissModelPicker() {
            wizard closes after Claude was set up in it. Its own close dismisses
            it, revealing the tutorial (gated on `!modelPickerOpen` above).
            Never mounts while dark. -->
-      <FirstRunModelPickerModal onComplete={dismissModelPicker} />
+      <FirstRunModelPickerModal
+        onComplete={dismissModelPicker}
+        onNotify={(n) => notifications.push(n)}
+      />
     {/if}
 
     {#if fileOpenDialogOpen}

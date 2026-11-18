@@ -7,9 +7,9 @@
  * Exercised by a direct mount (the component has no internal
  * `BYO_MODELS_ENABLED` gate — App's mount is). `createModels` is mocked so the
  * add is controllable without a server round-trip. The window's model
- * becomes the Default (Bryan, 2026-11-18): when the store already marked it
- * inside the add's own write there is no `setDefault`; otherwise the window
- * sets it. The real-store half is first-run-model-picker-store.test.ts.
+ * becomes the Default (Bryan's pick from options, 2026-11-18): when the store
+ * already marked it inside the add's own write there is no `setDefault`;
+ * otherwise the window sets it. The real-store half is first-run-model-picker-store.test.ts.
  *
  * Contracts:
  *   - only local providers are listed, Ollama first (P4);
@@ -20,7 +20,10 @@
  *   - a rolled-back add keeps the window open with the store's error;
  *   - a committed add the store marked completes once, with no `setDefault`;
  *   - a committed add the store did not mark sets it as the default, once;
- *   - a failed default closes as a success and clears the store's error (RW-5);
+ *   - a failed default closes as a success, clears the store's error, and
+ *     then, when the model is still saved and still not the Default, raises
+ *     one warning notice through `onNotify`, after `onComplete` (R0.1);
+ *     a model removed or made the Default meanwhile raises none;
  *   - a close during a save leaves no error and never completes twice (R2.4).
  */
 
@@ -37,6 +40,9 @@ import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
 const clearError = vi.fn();
+// The store's saved list, read through a getter so a case can REASSIGN it
+// (never mutate it in place) while a write is pending (R0.1).
+let storeModels: { id: string }[] = [];
 let storeSaveError: string | null = null;
 // The store's default after the add: what the window reads to decide whether
 // its model still needs `setDefault`.
@@ -52,7 +58,10 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     },
     // The rest of `ModelsState`. This double named four members and matched
     // nothing before the typed mock overload (#1615).
-    models: [],
+    get models() {
+      // Only `id` is read by the window.
+      return storeModels as never;
+    },
     get defaultModelId() {
       return storeDefault;
     },
@@ -78,6 +87,7 @@ beforeEach(() => {
   setDefault.mockResolvedValue(true);
   storeSaveError = null;
   storeDefault = null;
+  storeModels = [];
 });
 
 /** An add that commits and that the store's rule marked as the default. */
@@ -94,10 +104,23 @@ afterEach(() => {
 // blocked state has its own file, settings-models-tab-own-window.test.ts.
 asTandemOwnWindow();
 
-function mount(onComplete = vi.fn()) {
-  const m = render(FirstRunModelPickerModal, { props: { onComplete } });
-  return { ...m, onComplete };
+function mount(onComplete = vi.fn(), onNotify = vi.fn()) {
+  const m = render(FirstRunModelPickerModal, { props: { onComplete, onNotify } });
+  return { ...m, onComplete, onNotify };
 }
+
+/** R0.1's notice, exactly: a warning with no CTA (one argument). */
+const DEFAULT_NOT_SET = {
+  id: expect.any(String),
+  type: "general-error",
+  severity: "warning",
+  message:
+    "Your local model was saved, but Tandem could not make it your Default model. You can mark it as Default in Settings → Models.",
+  dedupKey: "first-run-default-not-set",
+  timestamp: expect.any(Number),
+};
+/** The saved entry, in the mocked list where a notice is expected. */
+const SAVED = { id: "new-id" };
 type Mounted = ReturnType<typeof mount>;
 const modelIdField = (m: Mounted) => m.getByTestId("first-run-modelid") as HTMLInputElement;
 const saveButton = (m: Mounted) => m.getByTestId("first-run-save") as HTMLButtonElement;
@@ -272,6 +295,7 @@ describe("FirstRunModelPickerModal — saving", () => {
   });
 
   it("a committed add the store marked completes once, with one addModel and no setDefault", async () => {
+    storeModels = [SAVED];
     addModel.mockImplementation(markedAdd("new-id"));
     const m = mount();
     await typeModelId(m, "qwen");
@@ -284,6 +308,7 @@ describe("FirstRunModelPickerModal — saving", () => {
     // A committed add is a success: nothing to clear (R0.4).
     expect(clearError).not.toHaveBeenCalled();
     expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).not.toHaveBeenCalled();
   });
 
   it("No thanks completes with no write and clears any store error", async () => {
@@ -295,13 +320,16 @@ describe("FirstRunModelPickerModal — saving", () => {
   });
 });
 
-describe("FirstRunModelPickerModal — the window's model becomes the Default (Bryan, 2026-11-18)", () => {
+describe("FirstRunModelPickerModal — the window's model becomes the Default (Bryan's pick from options, 2026-11-18)", () => {
   for (const [what, before] of [
     ["another model is the default", "other-id"],
     ["no default (the rule stayed silent)", null],
   ] as const) {
-    it(`a committed add the store did not mark (${what}): setDefault once with its id, completes once`, async () => {
+    it(`a committed add the store did not mark (${what}): setDefault once with its id, completes once, no notice`, async () => {
       storeDefault = before;
+      // The saved entry is in the list and the default is another id, so only
+      // setDefault's `true` suppresses the notice.
+      storeModels = [SAVED, { id: "other-id" }];
       addModel.mockResolvedValue("new-id");
       const m = mount();
       await typeModelId(m, "qwen");
@@ -313,11 +341,13 @@ describe("FirstRunModelPickerModal — the window's model becomes the Default (B
       expect(setDefault).toHaveBeenCalledWith("new-id");
       expect(clearError).not.toHaveBeenCalled();
       expect(m.onComplete).toHaveBeenCalledTimes(1);
+      expect(m.onNotify).not.toHaveBeenCalled();
     });
   }
 
-  it("a failed default after a committed add closes as a success and clears the store's error after the rollback (RW-5)", async () => {
+  it("a failed default after a committed add closes as a success, clears the store's error, then raises one notice (R0.1)", async () => {
     storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
     addModel.mockResolvedValue("new-id");
     const def = deferred<boolean>();
     setDefault.mockReturnValue(def.promise);
@@ -330,16 +360,60 @@ describe("FirstRunModelPickerModal — the window's model becomes the Default (B
     expect(setDefault).toHaveBeenCalledTimes(1);
     expect(clearError).not.toHaveBeenCalled();
     expect(m.onComplete).not.toHaveBeenCalled();
+    expect(m.onNotify).not.toHaveBeenCalled();
 
     def.resolve(false); // the store has rolled back and set its error
     await flush();
     expect(clearError).toHaveBeenCalledTimes(1);
     expect(m.onComplete).toHaveBeenCalledTimes(1);
     expect(m.queryByTestId("first-run-error")).toBeNull();
+    expect(m.onNotify).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).toHaveBeenCalledWith(DEFAULT_NOT_SET);
+    // The window closes first; the notice follows.
+    expect(m.onComplete.mock.invocationCallOrder[0]).toBeLessThan(
+      m.onNotify.mock.invocationCallOrder[0],
+    );
   });
 
-  it("closed while setDefault is pending: completes once, and a failed default is cleared", async () => {
+  // The state changes INSIDE the setDefault mock, after the call and before it
+  // resolves false: a build that read it before the await would still notify.
+  it("a failed default, the model removed meanwhile: no notice", async () => {
     storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
+    addModel.mockResolvedValue("new-id");
+    setDefault.mockImplementation(async () => {
+      storeModels = [{ id: "other-id" }]; // a new array without the entry
+      return false;
+    });
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).not.toHaveBeenCalled();
+  });
+
+  it("a failed default, the model already the Default meanwhile: no notice", async () => {
+    storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
+    addModel.mockResolvedValue("new-id");
+    setDefault.mockImplementation(async () => {
+      storeDefault = "new-id";
+      return false;
+    });
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).not.toHaveBeenCalled();
+  });
+
+  it("closed while setDefault is pending: completes once, a failed default is cleared, and the notice still comes", async () => {
+    storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
     addModel.mockResolvedValue("new-id");
     const def = deferred<boolean>();
     setDefault.mockReturnValue(def.promise);
@@ -355,10 +429,34 @@ describe("FirstRunModelPickerModal — the window's model becomes the Default (B
     await flush();
     expect(clearError).toHaveBeenCalledTimes(1);
     expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).toHaveBeenCalledWith(DEFAULT_NOT_SET);
   });
 
-  it("closed while setDefault is pending, and it commits: completes once, nothing cleared", async () => {
+  it("closed while setDefault is pending, then unmounted (as App does), then it fails: one notice", async () => {
     storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
+    addModel.mockResolvedValue("new-id");
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    await fireEvent.click(m.getByTestId("first-run-skip"));
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    m.unmount();
+    def.resolve(false);
+    await flush();
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).toHaveBeenCalledWith(DEFAULT_NOT_SET);
+  });
+
+  it("closed while setDefault is pending, and it commits: completes once, nothing cleared, no notice", async () => {
+    storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
     addModel.mockResolvedValue("new-id");
     const def = deferred<boolean>();
     setDefault.mockReturnValue(def.promise);
@@ -372,10 +470,30 @@ describe("FirstRunModelPickerModal — the window's model becomes the Default (B
     await flush();
     expect(clearError).not.toHaveBeenCalled();
     expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).not.toHaveBeenCalled();
   });
 });
 
 describe("FirstRunModelPickerModal — closed during a save (R2.4)", () => {
+  it("closed during the add, which then commits unmarked: no setDefault and no notice (CD-2)", async () => {
+    // The saved entry is in the list and the Default another id: a build that
+    // notified on a close during the add would fire here.
+    storeDefault = "other-id";
+    storeModels = [SAVED, { id: "other-id" }];
+    const add = deferred<string | null>();
+    addModel.mockReturnValue(add.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await fireEvent.click(m.getByTestId("first-run-skip"));
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    add.resolve("new-id");
+    await flush();
+    expect(setDefault).not.toHaveBeenCalled();
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onNotify).not.toHaveBeenCalled();
+  });
+
   for (const exit of ["first-run-skip", "first-run-skip-secondary"] as const) {
     it(`${exit} during a pending add, then the add commits: the error cleared after`, async () => {
       const add = deferred<string | null>();

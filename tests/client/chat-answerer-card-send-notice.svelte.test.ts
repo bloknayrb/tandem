@@ -187,7 +187,8 @@ describe("the send dispatches and fetches nothing (R3.2)", () => {
       raise();
       s.unreachable = true;
       raise();
-      await Promise.resolve();
+      // One macrotask, so a deferred dispatch or fetch would be seen.
+      await new Promise((r) => setTimeout(r, 0));
       expect(push).toHaveBeenCalledTimes(2);
     } finally {
       window.removeEventListener("tandem:addressed-ai", onAddressed);
