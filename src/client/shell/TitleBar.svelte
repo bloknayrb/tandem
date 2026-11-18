@@ -39,9 +39,10 @@ interface Props {
   updateAvailable?: boolean;
   /**
    * Name of the local model chat is set to (#1123, ADR-039 Label decision
-   * L2). App passes it only while chat is set to the local model and the
-   * saved Default is an enabled local model (`resolveDefaultModelChip`), and
-   * `null` while `BYO_MODELS_ENABLED` is off. When set, the title bar renders
+   * L2). App passes it only while chat is set to the local model, the
+   * licence does not refuse AI, the saved list has loaded and the saved
+   * Default is an enabled local model (`resolveDefaultModelChip`), and `null`
+   * while `BYO_MODELS_ENABLED` is off. When set, the title bar renders
    * a small chip with the name that opens Settings → Models on click; its
    * hover and accessible text say chat is set to that model. `null` /
    * `undefined` renders no chip.

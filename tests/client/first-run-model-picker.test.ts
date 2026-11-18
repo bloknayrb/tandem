@@ -7,9 +7,9 @@
  * Exercised by a direct mount (the component has no internal
  * `BYO_MODELS_ENABLED` gate — App's mount is). `createModels` is mocked so the
  * add is controllable without a server round-trip. The window's model
- * becomes the Default (Bryan's pick from options, 2026-11-18): when the store already marked it
- * inside the add's own write there is no `setDefault`; otherwise the window
- * sets it. The real-store half is first-run-model-picker-store.test.ts.
+ * becomes the Default (Bryan's pick from options, 2026-11-18): when the store
+ * already marked it inside the add's own write there is no `setDefault`;
+ * otherwise the window sets it. The real-store half is first-run-model-picker-store.test.ts.
  *
  * Contracts:
  *   - only local providers are listed, Ollama first (P4);
@@ -295,6 +295,7 @@ describe("FirstRunModelPickerModal — saving", () => {
   });
 
   it("a committed add the store marked completes once, with one addModel and no setDefault", async () => {
+    storeModels = [SAVED];
     addModel.mockImplementation(markedAdd("new-id"));
     const m = mount();
     await typeModelId(m, "qwen");
