@@ -44,6 +44,16 @@ export interface ModelsWriteMeta {
   source: ModelsChangeSource;
   /** The client's one-time localStorage→server reconcile. */
   reconcile: boolean;
+  /**
+   * The envelope's `autoDefaultId`, when it was a string: the id of a default
+   * the client's automatic-default rule set in this write — sent by the Models
+   * store when its automatic-default rule marked the default. Carried only so
+   * a change listener can compare it with `before` and `after`
+   * (`autoDefaultHonoured` in the local-model collaborator); it only narrows
+   * what counts as the user's choice. Never stored, logged or echoed. Absent
+   * on every other write.
+   */
+  autoDefaultId?: string;
 }
 
 /** What a change listener is told: the file before and after, and how. */
@@ -145,6 +155,12 @@ export function getModelsEtag(): string {
  * Persist a whole registry file and keep the cache coherent. Caches the
  * Zod-CANONICAL form the store returns (not the caller's object) so the ETag is
  * stable across a write→read cycle (see `store.serializeModelsFile`).
+ *
+ * Its only production caller is `persistModelsFileIfMatch`, under the write
+ * guard, after the `ifMatch` compare. That is what makes a listener's
+ * `change.before` the very registry the writer's etag named, which the
+ * automatic-default check (`autoDefaultHonoured`) relies on; a second caller
+ * would break that. Pinned in `tests/server/models/own-window-notices.test.ts`.
  */
 export async function persistModelsFile(
   file: ModelsFile,
