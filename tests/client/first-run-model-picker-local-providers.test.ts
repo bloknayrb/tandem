@@ -80,7 +80,9 @@ const HINT: Readonly<Record<string, string>> = {
 };
 
 function mount() {
-  return render(FirstRunModelPickerModal, { props: { onComplete: vi.fn() } });
+  return render(FirstRunModelPickerModal, {
+    props: { onComplete: vi.fn(), onNotify: vi.fn() },
+  });
 }
 
 type Mounted = ReturnType<typeof mount>;

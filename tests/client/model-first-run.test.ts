@@ -224,7 +224,7 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
       /const modelPickerOpen = \$derived\(BYO_MODELS_ENABLED && modelPickerShown\);/,
     );
     expect(app).toMatch(
-      /\{#if modelPickerOpen\}\s*<FirstRunModelPickerModal onComplete=\{dismissModelPicker\} \/>/,
+      /\{#if modelPickerOpen\}\s*<FirstRunModelPickerModal\s+onComplete=\{dismissModelPicker\}\s+onNotify=\{\(n\) => notifications\.push\(n\)\}\s*\/>/,
     );
     // Exactly one mount, and the only block around it is that `{#if}`: a mount
     // nested under another condition, or a second mount elsewhere, could

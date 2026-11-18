@@ -20,6 +20,19 @@ vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 
+// The store's mutators, one set shared by every `createModels()` (#1123
+// R0.2): per-instance `vi.fn()`s would hide a write made through another
+// instance, so "makes no request" could not see it. Reset and re-implemented
+// in `beforeEach`.
+const mutators = vi.hoisted(() => ({
+  addModel: vi.fn(async (): Promise<string | null> => "id"),
+  updateModel: vi.fn(async () => true),
+  deleteModel: vi.fn(async () => {}),
+  toggleEnabled: vi.fn(async () => {}),
+  setDefault: vi.fn(async (_id: string | null) => true),
+  reload: vi.fn(async () => {}),
+}));
+
 // The saved list, configurable per case (#1123 R1.6); empty by default, as
 // every earlier case here poses it. `$state`-backed, so a case can change it
 // after mount.
@@ -38,13 +51,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), async () => {
       loaded: true,
       loading: false,
       loadFailed: false,
-      reload: vi.fn(async () => {}),
       clearError: vi.fn(),
-      addModel: vi.fn(async () => "id"),
-      updateModel: vi.fn(async () => true),
-      deleteModel: vi.fn(async () => {}),
-      toggleEnabled: vi.fn(async () => {}),
-      setDefault: vi.fn(async () => true),
+      ...mutators,
     }),
   };
 });
@@ -93,6 +101,13 @@ asTandemOwnWindow();
 let held: ReturnType<typeof installHeldFetch>;
 
 beforeEach(() => {
+  for (const fn of Object.values(mutators)) fn.mockReset();
+  mutators.addModel.mockImplementation(async () => "id");
+  mutators.updateModel.mockImplementation(async () => true);
+  mutators.setDefault.mockImplementation(async () => true);
+  mutators.deleteModel.mockImplementation(async () => {});
+  mutators.toggleEnabled.mockImplementation(async () => {});
+  mutators.reload.mockImplementation(async () => {});
   store._resetChatAnswererForTests();
   licence.aiOff = false;
   modelsPose.models = [];
@@ -741,7 +756,7 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
     expect(line(v)).toBeNull();
   });
 
-  it("follows the saved list after mount: the line appears and goes as an enabled local model is saved and removed", async () => {
+  it("follows the saved list after mount: the line appears and goes as an enabled local model is saved and switched off", async () => {
     pose([CLOUD], CLOUD.id);
     const v = await mounted(known("claude"));
     expect(line(v)).toBeNull();
@@ -769,6 +784,11 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
     await tick();
     await drain();
     expect(held.calls.map((c) => c.method)).toEqual(["GET"]);
+    // Nor any write through the Models store (R0.2): `reload` runs only from
+    // the retry button.
+    for (const [name, fn] of Object.entries(mutators)) {
+      expect(fn, name).not.toHaveBeenCalled();
+    }
   });
 
   it("no default, or a default naming no entry: no line", async () => {
