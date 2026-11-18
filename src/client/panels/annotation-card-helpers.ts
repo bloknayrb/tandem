@@ -1,5 +1,6 @@
 import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/constants";
 import type { AgentIdentity, Annotation } from "../../shared/types";
+import { agentBylineLabel } from "../utils/agentLabel";
 
 /**
  * Whether a record should PRESENT as an import — either because it carries a
@@ -54,13 +55,14 @@ export function getDisplayAuthor(ann: Annotation): Annotation["author"] {
 }
 
 /**
- * Author label for an annotation. The agent ("claude") branch prefers the
- * specific authoring model's `agentIdentity.displayName` (#1123 M3 — the
- * local-model collaborator stamps it per record), then the user's active model
- * family label (#438, e.g. "Claude"/"GPT"), then a neutral "Assistant". While
- * BYO models are dark, `agentIdentity` is always absent so this is byte-
- * identical to the pre-M3 label. `import` and `user` are author roles, not the
- * agent, and are unaffected.
+ * Author label for an annotation. The agent ("claude") branch is
+ * `agentBylineLabel`: a record the local-model collaborator stamped names its
+ * model (#1123 M3; "Local model" when the stamped name is empty, AL-7), and
+ * every other agent record takes `agentLabel` — `createAgentLabel().family`,
+ * which is "Claude" while local models are on and the registry's family while
+ * dark (#438) — then a neutral "Assistant" when no label is passed. Dark builds
+ * never write `agentIdentity`, so dark is byte-identical to the pre-M3 label.
+ * `import` and `user` are author roles, not the agent, and are unaffected.
  *
  * Callers pass `getDisplayAuthor(ann)`, not `ann.author` — see #1714. The
  * parameter stays the bare role rather than the annotation so this remains a
@@ -71,7 +73,7 @@ export function getAuthorLabel(
   agentLabel?: string,
   agentIdentity?: AgentIdentity,
 ): string {
-  if (author === "claude") return agentIdentity?.displayName ?? agentLabel ?? "Assistant";
+  if (author === "claude") return agentBylineLabel(agentIdentity, agentLabel ?? "Assistant");
   if (author === "import") return "Imported";
   return "You";
 }

@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { API_STORE_RECLAIM_LOCK } from "../../shared/api-paths";
-import { Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
+import { BYO_MODELS_ENABLED, Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
 import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
@@ -12,6 +12,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { type AnnotationSortMode, sortAnnotations } from "../hooks/useAnnotationOrder.js";
 import { licenseStore } from "../hooks/useLicense.svelte";
+import { AI_FILTER_LABEL } from "../utils/agentLabel";
 import { warningStateColors } from "../utils/colors";
 import { API_BASE } from "../utils/fileUpload";
 import AnnotationCard from "./AnnotationCard.svelte";
@@ -378,7 +379,9 @@ const filterLabel = $derived.by(() => {
   if (filterAuthor !== "all") {
     const labels: Record<FilterAuthor, string> = {
       all: "Anyone",
-      claude: agentLabel.family,
+      // The same text as FilterBar's agent chip: "AI" while local models are
+      // on (Label decision L3 of 2026-11-17, AL-3), the family label dark.
+      claude: BYO_MODELS_ENABLED ? AI_FILTER_LABEL : agentLabel.family,
       user: "You",
       import: "Imported",
     };

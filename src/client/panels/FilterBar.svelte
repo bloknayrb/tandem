@@ -1,5 +1,7 @@
 <script lang="ts">
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { AI_FILTER_LABEL } from "../utils/agentLabel";
 import ChipGroup, { type ChipOption } from "./ChipGroup.svelte";
 
 export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
@@ -47,10 +49,20 @@ const typeOptions: ChipOption[] = [
   { value: "with-replacement", label: "With replacement", kind: "icon", icon: "sparkle" },
 ];
 
-// $derived so the Claude chip's accessible name tracks the agent-label setting.
+// The agent chip (value "claude") matches every agent-authored comment, Claude's
+// and a local model's alike. While local models are on it reads "AI" (Label
+// decision L3 of 2026-11-17); dark it reads the registry's family label, as it
+// always has. $derived as before; dark, the label's source is a one-time
+// localStorage read (`agentLabelSource()`), so nothing here re-runs on a
+// settings change — the same as master (see `agentLabelSource`'s doc).
 const authorOptions = $derived<ChipOption[]>([
   { value: "all", label: "Anyone", kind: "text" },
-  { value: "claude", label: agentLabel.family, kind: "pip", pip: "claude" },
+  {
+    value: "claude",
+    label: BYO_MODELS_ENABLED ? AI_FILTER_LABEL : agentLabel.family,
+    kind: "pip",
+    pip: "claude",
+  },
   { value: "user", label: "You", kind: "pip", pip: "user" },
   { value: "import", label: "Imported", kind: "pip", pip: "import" },
 ]);

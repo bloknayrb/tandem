@@ -1,22 +1,30 @@
 /**
- * Agent-agnostic display labels (#438).
+ * Agent display labels (#438; the rule changed by #1123's agent-labels PR,
+ * ADR-039 amendment 2026-11-17 (agent labels)).
  *
- * Tandem speaks MCP to any LLM (ADR-038: Claude is the default integration, not
- * the only one). The UI must not hardcode "Claude" — a user running GPT/Gemini/
- * a local model should see *their* model named. This module resolves a display
- * label for the user's currently-selected model from the Models registry.
+ * Tandem speaks MCP to any client (ADR-038: Claude is the default integration,
+ * not the only one). Which label a surface shows depends on the flag:
  *
- * Two granularities, applied by a fixed per-surface rule (no user toggle):
- *  - `family`   — the brand ("Claude", "GPT", "Gemini"). Used for inline identity
- *                 everywhere: author labels, chat, presence, filters, and the
- *                 imperative "Send to {X}" buttons (concise).
- *  - `specific` — the precise model ("Claude Opus 4.8"). Used ONLY in the status
- *                 pill, the one place the verbose form is welcome.
+ *  - **`BYO_MODELS_ENABLED` on:** work that came through MCP reads "Claude"
+ *    whatever the Models registry holds and whoever answers chat (P10(1), V3,
+ *    and Label decisions L1 and L4 of 2026-11-17: plain "Claude" in 0.32). That rule lives in
+ *    `createAgentLabel` (`hooks/useAgentLabel.svelte.ts`) and in
+ *    `annotation.ts`'s `readAgentFamilyLabel`, not here. A local model's name
+ *    appears only on a record it wrote, read from the record's `agentIdentity`
+ *    (`agentBylineLabel` below).
+ *  - **`BYO_MODELS_ENABLED` off (as shipped):** the label is resolved from the
+ *    registry by `resolveAgentLabel`, unchanged since pre-M2, so a v0.13.x cohort
+ *    that configured a model keeps its byline.
  *
- * Pure + framework-free so it can be unit-tested directly. Reactivity lives in
- * the `createAgentLabel` rune wrapper (`hooks/useAgentLabel.svelte.ts`).
+ * `resolveAgentLabel` has two styles (`createAgentLabel` exposes them as
+ * `family` and `specific`):
+ *  - `"family"` — the brand ("Claude", "GPT", "Gemini", "Local model").
+ *  - `"model"`  — the precise model, used ONLY in the status pill.
+ *
+ * Pure + framework-free so it can be unit-tested directly.
  */
 
+import type { AgentIdentity } from "../../shared/types.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.js";
 
 export type AgentLabelStyle = "family" | "model";
@@ -76,4 +84,39 @@ export function resolveAgentLabel(source: AgentLabelSource, style: AgentLabelSty
   const family = PROVIDER_FAMILY[entry.provider] || FALLBACK_AGENT_LABEL;
   if (style === "family") return family;
   return entry.displayName || entry.modelId || family;
+}
+
+/** What Claude-side work reads while local models are on (P10(1), V3). */
+export const CLAUDE_AGENT_LABEL = "Claude";
+
+/**
+ * A local-model record whose `agentIdentity` has no usable name (AL-7): an
+ * empty `displayName`, or none at all. The same text the registry uses for a
+ * local provider's family.
+ */
+export const LOCAL_MODEL_LABEL = "Local model";
+
+/**
+ * The comment filter's agent chip and its summary while local models are on
+ * (Label decision L3 of 2026-11-17, AL-3): one chip for comments from any AI.
+ */
+export const AI_FILTER_LABEL = "AI";
+
+/**
+ * Byline for an agent-authored row: the record's own stamped name when it
+ * carries an `agentIdentity` (only the local-model collaborator writes one),
+ * "Local model" when that identity has no usable name — empty, missing or not
+ * a string reach here as falsy or as a non-string (AL-7) — else `family` — the
+ * label for Claude-side work. No flag: a dark build never writes
+ * `agentIdentity`, so dark rows always take `family`.
+ *
+ * `||`, not `??`, on the name (an empty string must not render as an empty
+ * byline), and the identity test first (a Claude-side row must never read
+ * "Local model").
+ */
+export function agentBylineLabel(identity: AgentIdentity | undefined, family: string): string {
+  if (!identity) return family;
+  return typeof identity.displayName === "string" && identity.displayName
+    ? identity.displayName
+    : LOCAL_MODEL_LABEL;
 }
