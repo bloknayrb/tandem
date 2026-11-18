@@ -161,7 +161,9 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
       "wizardClosedLatch.mark()",
       "manuallyReopened = false",
     ]) {
-      const at = flat.indexOf(write);
+      // The LAST occurrence: a second write after the decision (a scratch
+      // second `wizardClosedLatch.mark()`) must fail this, not hide behind the first.
+      const at = flat.lastIndexOf(write);
       expect(at, write).toBeGreaterThan(-1);
       expect(decide, `the decision after ${write}`).toBeGreaterThan(at);
     }
