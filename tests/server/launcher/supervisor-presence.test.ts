@@ -1419,8 +1419,8 @@ async function savedStartMode(): Promise<string> {
 
 /** The per-test timeout of a case that runs `tripBreaker` (#2358 PR 3b-2b1a,
  *  R0.5): up to 12 spawn cycles, each waiting on real file I/O, under a
- *  default `testTimeout` of 15 s. Measured at 36-104 ms each on Linux; the
- *  headroom is for a loaded Windows runner, not a wall-clock claim. */
+ *  default `testTimeout` of 15 s. The headroom is for a loaded Windows
+ *  runner, not a wall-clock claim. */
 const BREAKER_TIMEOUT_MS = 60_000;
 
 /** Crash `c` and its restarts until the windowed breaker trips (the [0]
@@ -2480,6 +2480,10 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     await off;
   });
 
+  // The two "queued between" cases cannot fail on a single guard term's
+  // removal (#2458's table): the chat's pass declines on `standby ===
+  // undefined`. The case for the pass's `isAlive()` term is "3b-2b1b-R0,
+  // R0.5" in the enclosing "3b-2b1a R3" describe.
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
     it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);
@@ -2547,8 +2551,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
 
   it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds the standby cleared", async () => {
     // Q stops at `standby === undefined` (P's spawn cleared it), before
-    // `isAlive()` is read: removing `isAlive()` alone fails nothing here
-    // (defence in depth); removing the guard does.
+    // `isAlive()` is read: removing `isAlive()` alone fails nothing here;
+    // removing the guard does. The case that `isAlive()` alone decides is
+    // "3b-2b1b-R0, R0.5" below.
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     onSpawn = () => {
@@ -2567,6 +2572,86 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     pushJson(c2, RESULT_OK);
     await settle();
     expect(wakes(c2)).toBe(1);
+  });
+
+  it("3b-2b1b-R0, R0.5: a standby set beside a live child; the chat's pass declines on isAlive() alone", async () => {
+    // The state the start pass's `isAlive()` re-check alone decides: a standby
+    // set while a child is live (the brief argued none exists; the plan review
+    // found this one, so R0.5 is this case rather than a source pin). A crash
+    // restart (unlocked) waits on its settings read; the user's Start is
+    // refused by the licence (`respawn` throws before `stopInternal`, so the
+    // stop epoch does not move); licence activation spawns B under the lock; a
+    // local period begins; the restart resumes past `planAndSpawn`'s epoch and
+    // stop re-checks, which do not look at `child`, and holds itself, setting
+    // `awaiting-start` beside B. The switch back finds B alive and leaves the
+    // standby. A chat is then accepted by the standby watch and its pass must
+    // decline: without `isAlive()` it stops B and starts a third child.
+    //
+    // Flag on only (this file's default): the positive anchor that the
+    // standby watch accepted the chat is the pass counter, which counts flag
+    // on only. Flag off there is no observable that tells the standby
+    // watch's acceptance apart: its other effect, an owed wake across spawns,
+    // is raised by the gap watch the held restart left armed too, and
+    // `messageStartQueued` is not shown while a child runs.
+    const lic = licenceDouble();
+    const lp = localDouble();
+    let holdNextRead = false;
+    let readHeld = false;
+    let releaseRead = (): void => {};
+    const h = makeSupervisor({
+      aiRefusal: lic.fn,
+      localPeriod: lp.opts,
+      readSettings: async () => {
+        if (holdNextRead) {
+          holdNextRead = false;
+          readHeld = true;
+          await new Promise<void>((r) => {
+            releaseRead = r;
+          });
+        }
+        return {
+          source: "default" as const,
+          settings: { startMode: "auto" as const, lifetime: "always" as const, idleMinutes: 30 },
+        };
+      },
+    });
+    await h.sup.start();
+    const c1 = await childN(1);
+    await settle();
+    holdNextRead = true;
+    c1.exitWith(1, null); // a crash: the restart's settings read is held
+    await settle();
+    advance(1); // the [0] backoff is a (faked) timer
+    await until(() => readHeld, "the crash restart's settings read");
+    lic.refusing = true;
+    await expect(h.sup.startByUser()).rejects.toThrow(); // records the refusal, stops nothing
+    lic.refusing = false;
+    await h.sup.resumeAfterLicence(); // B, under the lock; the epoch is unchanged
+    const b = await childN(2);
+    await settle();
+    lp.held = true;
+    lp.switchTo({ to: "local" });
+    releaseRead();
+    // The restart held itself beside B (its log line), which is the state.
+    await until(
+      () => /not starting Claude \(crash\) until it is answered by Claude again/.test(logText()),
+      "the restart's local hold",
+    );
+    expect(children).toHaveLength(2);
+    // B is alive, so the switch back clears the held start and leaves the
+    // standby (`status()` does not show a standby while a child runs).
+    lp.held = false;
+    lp.switchTo({ to: "claude", asked: true });
+    await settle();
+    const before = passes(h);
+    h.emit(chatEvent());
+    await lockBarrier(h);
+    await settle();
+    // The positive anchor: the standby watch accepted the chat and its pass ran.
+    expect(passes(h)).toBe(before + 1);
+    expect(messageStartLines()).toBe(0);
+    expect(children).toHaveLength(2);
+    expect(b.killed).toBe(false);
   });
 
   it("R3.3: P running, Q queued, then a call: the call joins Q (two passes, two waiting calls)", async () => {

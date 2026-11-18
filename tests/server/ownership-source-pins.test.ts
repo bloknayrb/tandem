@@ -920,6 +920,10 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
     return text.slice(0, clear).split("\n").length;
   }
 
+  // Matches any of the three pending-state terms the pin below keeps out of
+  // `recomputePresence`.
+  const PENDING_STATE_TERMS = /messageStartQueued|passesQueued|restartPending\(/;
+
   it("R2.1 (v) and Ruling A: a restart underway is exactly restartTimer or launching, never messageStartQueued or restartPending()", () => {
     // Not reachable at the exact moment through the public API (a message
     // start's queued flag outlives `launching` by a microtask), so pinned here:
@@ -932,7 +936,33 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
     );
     // Nor a start pass in flight (3b-2b1a): a start-or-wake-only pass is not a
     // restart under way.
-    expect(body).not.toMatch(/messageStartQueued|passesQueued|restartPending\(/);
+    expect(body).not.toMatch(PENDING_STATE_TERMS);
+  });
+
+  it("the pending-state pin is not vacuous: each term is declared under its name, and a planted read is found (3b-2b1b-R0, R0.1)", () => {
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    // The positive anchor: a rename of any of the three in supervisor.ts fails
+    // here rather than leaving the negative match above passing vacuously. On
+    // the comment-stripped source, so a comment quoting a declaration cannot
+    // stand in for it after a rename.
+    const code = stripComments(text);
+    expect(code).toContain("let passesQueued = 0;");
+    expect(code).toContain("let messageStartQueued = false;");
+    expect(code).toContain("function restartPending(");
+    // And the regex finds each term once it is read in the body.
+    const fn = text.slice(text.indexOf("function recomputePresence("));
+    const body = fn.slice(0, fn.indexOf("\n  }\n"));
+    const anchor = "const noError = lastError === undefined";
+    expect(body).toContain(anchor);
+    for (const read of [
+      "if (messageStartQueued) return;",
+      "if (passesQueued > 0) return;",
+      "if (restartPending()) return;",
+    ]) {
+      const planted = body.replace(anchor, `${read}\n    ${anchor}`);
+      expect(planted, read).not.toBe(body);
+      expect(planted, read).toMatch(PENDING_STATE_TERMS);
+    }
   });
 
   it("the seam's diagnosticsForTests is read by no src file but its definition (review round 1, item 9)", () => {
