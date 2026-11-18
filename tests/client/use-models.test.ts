@@ -32,6 +32,7 @@ import {
   createModels,
   getModelsSnapshot,
 } from "../../src/client/hooks/useModels.svelte.js";
+import { API_MODELS } from "../../src/shared/models/contract.js";
 
 /**
  * Default fetch stub: keychain secret POST → 204 / DELETE → 200; models registry
@@ -890,6 +891,12 @@ describe("models store — the automatic default (rows as data)", () => {
     posts?: number;
     /** 9f: every POST of the write carries the marker. */
     everyPostMarked?: boolean;
+    /** 9a, 9b, 9e: the first (pre-409) POST carried this marker, the re-run's none. */
+    firstMarked?: (ids: Ids) => string;
+    /** The ids the last POST must list, in order (rows that add or reload). */
+    posted?: (ids: Ids) => string[];
+    /** An edited entry's fields as the last POST must carry them. */
+    edited?: (ids: Ids) => { id: string; fields: Record<string, unknown> };
   };
 
   const local = (name: string, enabled = true) => ({
@@ -927,7 +934,7 @@ describe("models store — the automatic default (rows as data)", () => {
           status: method === "DELETE" ? 200 : 204,
         });
       }
-      if (method === "POST") {
+      if (method === "POST" && u.endsWith(API_MODELS)) {
         bodies.push(JSON.parse(init?.body as string) as Body);
         const status = statuses.length > 0 ? (statuses.shift() as number) : 200;
         if (status === 200) {
@@ -962,13 +969,16 @@ describe("models store — the automatic default (rows as data)", () => {
       seeded: () => null,
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: (ids) => ids.N,
+      posted: (ids) => [ids.N],
       marked: true,
     },
     {
       row: "1a",
       name: "cloud default; add an enabled local → cloud default kept (DD1)",
       seed: async (m, ids) => {
-        await add(m, ids, "C", cloud("C"));
+        // Keyed: its `/secrets/` POST is not a models POST.
+        ids.C = (await m.addModel(cloud("C"), "sk-test-DO-NOT-USE")) as string;
+        expect(ids.C).toBeTruthy();
         await m.setDefault(ids.C);
       },
       seeded: (ids) => ids.C,
@@ -995,6 +1005,7 @@ describe("models store — the automatic default (rows as data)", () => {
       seeded: () => null,
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: (ids) => ids.N,
+      posted: (ids) => [ids.C, ids.N],
       marked: true,
     },
     {
@@ -1062,6 +1073,7 @@ describe("models store — the automatic default (rows as data)", () => {
       seeded: () => null,
       write: (m, ids) => add(m, ids, "D", local("D", false)),
       expected: (ids) => ids.A,
+      posted: (ids) => [ids.A, ids.D],
       marked: true,
     },
     {
@@ -1071,6 +1083,7 @@ describe("models store — the automatic default (rows as data)", () => {
       seeded: () => null,
       write: (m, ids) => add(m, ids, "C", cloud("C")),
       expected: (ids) => ids.A,
+      posted: (ids) => [ids.A, ids.C],
       marked: true,
     },
     {
@@ -1091,6 +1104,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { enabled: false });
       },
       expected: () => null,
+      edited: (ids) => ({ id: ids.A, fields: { enabled: false } }),
       marked: false,
     },
     {
@@ -1155,6 +1169,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.D, { enabled: true });
       },
       expected: (ids) => ids.D,
+      edited: (ids) => ({ id: ids.D, fields: { enabled: true } }),
       marked: true,
     },
     {
@@ -1208,6 +1223,10 @@ describe("models store — the automatic default (rows as data)", () => {
         });
       },
       expected: (ids) => ids.C,
+      edited: (ids) => ({
+        id: ids.C,
+        fields: { provider: "local-ollama", endpoint: "http://127.0.0.1:11434", enabled: true },
+      }),
       marked: true,
     },
     {
@@ -1219,6 +1238,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { provider: "anthropic" });
       },
       expected: () => null,
+      edited: (ids) => ({ id: ids.A, fields: { provider: "anthropic" } }),
       marked: false,
     },
     {
@@ -1339,6 +1359,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { provider: "anthropic" });
       },
       expected: (ids) => ids.B,
+      edited: (ids) => ({ id: ids.A, fields: { provider: "anthropic" } }),
       marked: true,
     },
     {
@@ -1365,6 +1386,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { enabled: false });
       },
       expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { enabled: false } }),
       marked: false,
     },
     {
@@ -1389,6 +1411,8 @@ describe("models store — the automatic default (rows as data)", () => {
       statuses: [409, 200],
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: () => "X",
+      posted: (ids) => ["X", ids.N],
+      firstMarked: (ids) => ids.N,
       marked: false,
       posts: 2,
     },
@@ -1401,6 +1425,8 @@ describe("models store — the automatic default (rows as data)", () => {
       statuses: [409, 200],
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: () => null,
+      posted: (ids) => ["X", ids.N],
+      firstMarked: (ids) => ids.N,
       marked: false,
       posts: 2,
     },
@@ -1413,6 +1439,7 @@ describe("models store — the automatic default (rows as data)", () => {
       statuses: [409, 200],
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: (ids) => ids.N,
+      posted: (ids) => [ids.N],
       marked: true,
       posts: 2,
     },
@@ -1431,6 +1458,7 @@ describe("models store — the automatic default (rows as data)", () => {
       statuses: [409, 200],
       write: (m, ids) => m.deleteModel(ids.A),
       expected: () => null,
+      posted: (ids) => [ids.B, "E"],
       marked: false,
       posts: 2,
     },
@@ -1443,6 +1471,8 @@ describe("models store — the automatic default (rows as data)", () => {
       statuses: [409, 200],
       write: (m, ids) => add(m, ids, "N", local("N")),
       expected: () => "C",
+      posted: (ids) => ["C", ids.N],
+      firstMarked: (ids) => ids.N,
       marked: false,
       posts: 2,
     },
@@ -1495,6 +1525,12 @@ describe("models store — the automatic default (rows as data)", () => {
       if (r.everyPostMarked) {
         for (const b of posted) expect(b.autoDefaultId).toBe(expected);
       }
+      if (r.firstMarked) expect(posted[0].autoDefaultId).toBe(r.firstMarked(ids));
+      if (r.posted) expect(last.file.models.map((e) => e.id)).toEqual(r.posted(ids));
+      if (r.edited) {
+        const { id, fields } = r.edited(ids);
+        expect(last.file.models.find((e) => e.id === id)).toMatchObject(fields);
+      }
     });
   }
 
@@ -1529,5 +1565,20 @@ describe("models store — the automatic default (rows as data)", () => {
     expect(bodies.length).toBe(2);
     expect("autoDefaultId" in bodies[1]).toBe(false);
     expect(bodies[1].file.defaultModelId).toBeNull();
+  });
+
+  it("the default is set in the write's own apply, before the POST is gated (not at POST time)", async () => {
+    _resetModelsStoreForTests(); // the reconcile gate left pending
+    const m = createModels();
+    const p = m.addModel(local("N"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.models).toHaveLength(1);
+    const n = m.models[0].id;
+    expect(m.defaultModelId).toBe(n); // optimistic, inside apply
+    expect(bodies).toHaveLength(0); // nothing posted yet
+    _settleReconcile();
+    expect(await p).toBe(n);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].autoDefaultId).toBe(n);
   });
 });

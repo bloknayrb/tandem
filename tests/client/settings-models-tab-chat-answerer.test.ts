@@ -8,9 +8,11 @@
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import { drain, installHeldFetch } from "../helpers/held-fetch";
+import { modelsPose } from "../helpers/models-pose.svelte";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
@@ -19,33 +21,33 @@ vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
 }));
 
 // The saved list, configurable per case (#1123 R1.6); empty by default, as
-// every earlier case here poses it.
-const modelsPose = vi.hoisted(() => ({
-  models: [] as Array<Record<string, unknown>>,
-  defaultModelId: null as string | null,
-}));
-vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
-  createModels: () => ({
-    get models() {
-      return modelsPose.models as never;
-    },
-    get defaultModelId() {
-      return modelsPose.defaultModelId;
-    },
-    saveError: null,
-    // #1123: the list has loaded (the first-run window waits for it).
-    loaded: true,
-    loading: false,
-    loadFailed: false,
-    reload: vi.fn(async () => {}),
-    clearError: vi.fn(),
-    addModel: vi.fn(async () => "id"),
-    updateModel: vi.fn(async () => true),
-    deleteModel: vi.fn(async () => {}),
-    toggleEnabled: vi.fn(async () => {}),
-    setDefault: vi.fn(async () => true),
-  }),
-}));
+// every earlier case here poses it. `$state`-backed, so a case can change it
+// after mount.
+vi.mock(import("../../src/client/hooks/useModels.svelte"), async () => {
+  const { modelsPose } = await import("../helpers/models-pose.svelte");
+  return {
+    createModels: () => ({
+      get models() {
+        return modelsPose.models as never;
+      },
+      get defaultModelId() {
+        return modelsPose.defaultModelId;
+      },
+      saveError: null,
+      // #1123: the list has loaded (the first-run window waits for it).
+      loaded: true,
+      loading: false,
+      loadFailed: false,
+      reload: vi.fn(async () => {}),
+      clearError: vi.fn(),
+      addModel: vi.fn(async () => "id"),
+      updateModel: vi.fn(async () => true),
+      deleteModel: vi.fn(async () => {}),
+      toggleEnabled: vi.fn(async () => {}),
+      setDefault: vi.fn(async () => true),
+    }),
+  };
+});
 
 vi.mock(import("../../src/client/hooks/useLocalModelSettings.svelte"), () => ({
   createLocalModelSettings: () => ({
@@ -688,6 +690,10 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
     expect(line(v)?.textContent?.trim()).toBe(
       "Your Default model, Old, is switched off, so your local models won't answer chat." + SHORT,
     );
+    // Accepted: the "Who answers your chat" `none` line shows beside it, unchanged.
+    expect(v.getByTestId("chat-answerer-status").textContent?.trim()).toMatch(
+      /^Chat is set to your local model, but no local model can be used now\./,
+    );
   });
 
   it("a default both cloud and switched off: the switched-off sentence", async () => {
@@ -721,6 +727,17 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
   it("a cloud default with no enabled local model: no line", async () => {
     pose([CLOUD, { ...LOCAL, enabled: false }], CLOUD.id);
     const v = await mounted(known("claude"));
+    expect(line(v)).toBeNull();
+  });
+
+  it("follows the store after mount: marking the local model Default removes the line, a chat read settling local shortens it", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = mount();
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    await (await held.request(1)).answer(200, known("local", "none"));
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + SHORT);
+    modelsPose.defaultModelId = LOCAL.id;
+    await tick();
     expect(line(v)).toBeNull();
   });
 

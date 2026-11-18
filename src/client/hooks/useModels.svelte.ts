@@ -114,8 +114,12 @@ let _etag: string | null = null; // last-seen server ETag (not reactive — no U
 // run, or null. Reset at the start of every `apply` run (the 409 re-run
 // included) and on rollback; set only by the rule inside `writeThrough`.
 // `postCurrent` sends it as `autoDefaultId` and decides nothing; the busy
-// retry re-posts the same body, so it is not consumed per POST. Not reactive —
-// no UI reads it.
+// retry re-posts the same body, so it is not consumed per POST. Also cleared
+// whenever server state is adopted (`fetchAndApply`), so a load landing
+// between a run and its POST cannot post a marker for state it replaced.
+// `postCurrent`'s only caller is `writeThrough`, which is what keeps a marker
+// from ever being posted by a write that did not set it. Not reactive — no UI
+// reads it.
 let _autoDefaultId: string | null = null;
 let _saveError = $state<string | null>(null);
 let _loading = $state(false);
@@ -425,6 +429,7 @@ async function fetchAndApply(): Promise<void> {
   const res = await fetch(`${API_BASE}${API_MODELS}`, { method: "GET" });
   if (!res.ok) throw new Error(`GET ${API_MODELS} → ${res.status}`);
   const { file, etag } = (await res.json()) as ModelsGetResponse;
+  _autoDefaultId = null; // adopted server state: no run of ours marked it
   _models = file.models as ModelRegistryEntry[];
   _defaultModelId = file.defaultModelId;
   _etag = etag;
