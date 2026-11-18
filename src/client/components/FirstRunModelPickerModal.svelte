@@ -170,6 +170,16 @@ async function handleSave(e: SubmitEvent) {
   if (!canSave || saving || access.blocked) return;
   saving = true;
   saveError = null;
+  // Save is natively disabled while saving, and a browser moves focus off a
+  // disabled control to <body>, where the dialog's Escape no longer reaches.
+  // Keep focus in the dialog so the exits stay live from the keyboard (R2.4).
+  if (
+    dialogEl &&
+    dialogEl.contains(document.activeElement) &&
+    document.activeElement !== dialogEl
+  ) {
+    dialogEl.focus();
+  }
   try {
     const id = await models.addModel(
       {
@@ -379,7 +389,7 @@ function handleSkip() {
         </button>
       </div>
       {#if saveReason !== null && !access.blocked}
-        <p id="first-run-save-reason" class="frm-hint" data-testid="first-run-save-reason">
+        <p id="first-run-save-reason" class="frm-hint frm-save-reason" data-testid="first-run-save-reason">
           {saveReason}
         </p>
       {/if}
@@ -551,9 +561,19 @@ function handleSkip() {
   background: var(--tandem-accent);
   color: var(--tandem-accent-fg);
 }
-.frm-btn-primary:disabled,
-.frm-btn-primary[aria-disabled="true"] {
+.frm-btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Focusable but inert (V14): dimmed by colour, not opacity, so the focus ring
+   keeps its full strength. */
+.frm-btn-primary[aria-disabled="true"]:not(:disabled) {
+  background: var(--tandem-surface-sunk);
+  color: var(--tandem-fg-muted);
+  cursor: not-allowed;
+}
+/* Save's reason sits under the buttons, aligned with Save. */
+.frm-save-reason {
+  text-align: right;
 }
 </style>

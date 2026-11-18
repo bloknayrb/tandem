@@ -155,11 +155,34 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     const decide = flat.indexOf("if ( BYO_MODELS_ENABLED && shouldOfferModelPicker(");
     expect(decide, "the offer statement").toBeGreaterThan(-1);
     expect(decide).toBeGreaterThan(flat.indexOf("manuallyReopened = false"));
+    // The whole argument, field by field: the wizard's own reason, the three
+    // captures, the live store and dialog state read AFTER the writes (never a
+    // value captured at the top), the dismissal and the page's own verdict.
     const call = flat.slice(flat.indexOf("shouldOfferModelPicker("));
-    expect(call).toMatch(/autoOpened: closeWasAutoOpen,/);
-    expect(call).toMatch(/manuallyReopened: closeWasManual,/);
-    expect(call).toMatch(/walkthrough: closeWasWalkthrough,/);
-    expect(call).toMatch(/\) modelPickerShown = true;/);
+    expect(call).toMatch(
+      new RegExp(
+        [
+          "^shouldOfferModelPicker\\(\\{ reason,",
+          "autoOpened: closeWasAutoOpen,",
+          "manuallyReopened: closeWasManual,",
+          "walkthrough: closeWasWalkthrough,",
+          "loaded: modelsStore\\.loaded,",
+          "savedModelCount: modelsStore\\.models\\.length,",
+          "wizardShowing: shouldShowWizard,",
+          "settingsOpen: settingsModalOpen,",
+          "helpOpen: showHelp,",
+          "paletteOpen,",
+          "fileOpenDialogOpen,",
+          "dismissed: modelPickerDismissed,",
+          'pageCannotChangeModels: modelsPageAccess\\(\\) === "foreign",',
+          "\\}\\) \\) modelPickerShown = true;",
+        ].join(" "),
+      ),
+    );
+    // `reason` is the handler's own parameter, defaulting to "other".
+    expect(app).toMatch(
+      /function closeIntegrationWizard\(reason: WizardCloseReason = "other"\): void \{/,
+    );
   });
 
   it("writes modelPickerShown true once (in closeIntegrationWizard) and false once (in dismissModelPicker)", () => {
@@ -170,6 +193,14 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     expect(writes.sort()).toEqual(["false", "true"]);
     expect(close).toMatch(/modelPickerShown = true;/);
     expect(functionBody(app, "dismissModelPicker")).toMatch(/modelPickerShown = false;/);
+  });
+
+  it("the wizard's close reason reaches closeIntegrationWizard", () => {
+    // Passed by reference, so the wizard's `onClose(reason)` argument arrives.
+    // A wrapper such as `() => closeIntegrationWizard()` would drop it.
+    expect(app).toMatch(
+      /<IntegrationWizardModal\s+open=\{true\}\s+onClose=\{closeIntegrationWizard\}/,
+    );
   });
 
   it("mounts the window on the flag and the shown state alone", () => {
@@ -212,6 +243,10 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     expect(effect).toMatch(/if \(!BYO_MODELS_ENABLED\) return;/);
     expect(effect).toMatch(/yjsSync\.connected/);
     expect(effect).toMatch(/modelsStore\.loaded \|\|/);
+    // A disconnect re-arms the retry, so a later reconnect retries a failed one.
+    expect(effect).toMatch(
+      /if \(!yjsSync\.connected\) \{\s*modelsReloadTriedThisConnection = false;\s*return;\s*\}/,
+    );
     expect(effect).toMatch(
       /\.then\(\(\) => \{\s*if \(!modelsStore\.loaded && !modelsStore\.loading\) return $/,
     );

@@ -293,6 +293,63 @@ describe("FirstRunModelPickerModal — closed during a save (R2.4)", () => {
   });
 });
 
+describe("FirstRunModelPickerModal — while a save is in flight", () => {
+  it("Save is natively disabled, and focus stays in the dialog so Escape still closes it", async () => {
+    const add = deferred<string | null>();
+    addModel.mockReturnValue(add.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    const save = saveButton(m);
+    save.focus();
+    await fireEvent.click(save);
+    expect(save.disabled).toBe(true);
+    const dialog = m.getByRole("dialog");
+    expect(document.activeElement).toBe(dialog);
+    await fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    add.resolve(null);
+    await flush();
+  });
+
+  it("an add that throws after the window closed leaves no store error", async () => {
+    let reject!: (e: Error) => void;
+    addModel.mockReturnValue(
+      new Promise<string | null>((_, r) => {
+        reject = r;
+      }),
+    );
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await fireEvent.click(m.getByTestId("first-run-skip"));
+    clearError.mockClear();
+    reject(new Error("network"));
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  // A close after the add committed and setDefault already started: the
+  // default was requested before the close, so it may still be set (stated on
+  // the PR); the window does not complete twice, and a failed one is cleared.
+  it("closed while setDefault is pending: completes once, and a failed default is cleared", async () => {
+    addModel.mockResolvedValue("new-id");
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    await fireEvent.click(m.getByTestId("first-run-skip-secondary"));
+    clearError.mockClear();
+    def.resolve(false);
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
 // #2404: a save refused because this page is not Tandem's own window. The
 // window stays (the refusal must be explained where the user is looking), shows
 // the server's plain reason, and Save does nothing more; the exits still work.
