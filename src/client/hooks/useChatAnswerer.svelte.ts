@@ -127,8 +127,9 @@ let _toastShownInMemory = false;
  *  `noteChatSent`, cleared by `takeSendRead`. Plain, not `$state`: no template
  *  reads it, and the take writes it from inside an event handler. */
 let _sendRead: { read: Promise<ReadOutcome>; localPeriodAtSend: boolean } | null = null;
-/** Cap timers started by `takeSendRead` and not yet fired or cleared; held
- *  only so the test reset can clear them. */
+/** Cap timers started by `takeSendRead` and not yet fired or cleared. Two
+ *  readers, both test-only: the test reset clears them, and
+ *  `_capTimerCountForTests` counts them. */
 let _capTimers = new Set<ReturnType<typeof setTimeout>>();
 
 // --- The read --------------------------------------------------------------------

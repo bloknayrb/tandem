@@ -9,10 +9,14 @@
  * reads it, so `<!-->` does not close itself), cut. An opener with no closer
  * strips to the end of the file. Then script comments: `/* … *\/` blocks and
  * whole-line `//` comments (a trailing `//` on a code line is left; a `/*`
- * inside a script string would be read as a comment). Each strip runs over
- * the whole file: a `<!--` inside a script string or `//` comment would cut
- * to the next `-->`, and markup text such as `accept="image/*"` would start a
- * block strip. These limits are listed in the pin files' headers.
+ * inside a script string or a `//` comment would be read as a comment). Each strip runs over
+ * the whole file, the markup strip first: a `<!--` inside a script string or
+ * any script comment (`//` or `/* *\/`) starts the markup strip and cuts to
+ * the next `-->` (a lone one in the script reaches into the markup; a pair
+ * inside the script cuts only the script text between them). Markup text such
+ * as `accept="image/*"` would start a block strip, but App's script comes
+ * before its markup, so that strip removes only later markup or CSS. These
+ * limits are listed in the pin files' headers.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
