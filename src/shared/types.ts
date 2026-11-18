@@ -21,7 +21,11 @@ export const HighlightColorSchema = z.enum(["yellow", "green", "blue", "pink"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
 export const AuthorSchema = z.enum(["user", "claude", "import"]);
-/** Reply authors. `import` carries Word-comment reply threads (#1000); such replies are user-private. */
+/**
+ * Reply authors. `import` carries Word-comment reply threads (#1000); such replies are user-private.
+ * A new reply author is withheld from every Claude pull read until it joins the
+ * allow-list in `channelVisibleReplies` (`server/mcp/annotations.ts`, #2460).
+ */
 export const ReplyAuthorSchema = z.enum(["user", "claude", "import"]);
 /**
  * Provider enum as a Zod schema, sourced from the models contract's
