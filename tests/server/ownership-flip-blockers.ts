@@ -445,6 +445,46 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "from running beside a live child), with a test driving the 3b-2b1b-R0 sequence that " +
       "fails without it.",
   },
+  {
+    gap:
+      "The restart question (3b-2b1b): while the mode is unknown (after a restart, before a " +
+      "client says whether it was Solo), waiting counts no user comment or reply, and nothing " +
+      "re-asks when the mode becomes known (the only release wake is emitModeReleaseWake, " +
+      "src/server/mcp/routes/mode-release.ts). Such a comment counts only when something next " +
+      "asks: a change of owner, or 3b-2b4's checks.",
+    closedBy:
+      "Bryan's answer (3b-2b1b's 'Needs Bryan') and, if it differs, the change with a test.",
+  },
+  {
+    gap:
+      "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
+      "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
+      "each ownership change that reaches step 5's probe.",
+    closedBy: "3b-2b4's measurement.",
+  },
+  {
+    gap:
+      "Step 5 asks the document half of waiting only (3b-2b1b), so chat that follows a document " +
+      "is not seen when the document goes to Tandem's Claude.",
+    closedBy: "The chat-half PR (3b-2b1b-chat).",
+  },
+  {
+    gap:
+      "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
+      "holds every pending user comment reads as waiting, answered or not, as does a resolved " +
+      "comment ever edited, and every user thread reply on any Claude-facing comment (replies " +
+      "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
+      "that filter would not close it: a comment answered only in chat is never handled by it.",
+    closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
+  },
+  {
+    gap:
+      "An item a run of Tandem's Claude acknowledged, after which that run died, reads as not " +
+      "waiting (3b-2b1b, Ruling K), so nothing starts Claude for it: it is stranded. (An item " +
+      "handed but unacknowledged reads as waiting.)",
+    closedBy:
+      "3b-2b4 retiring Tandem's Claude's own document entries at each run start (a self re-owe).",
+  },
 ];
 
 /**

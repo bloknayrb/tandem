@@ -1027,3 +1027,54 @@ describe("the supervisor's start-or-wake and requestWake are called by nothing y
     expect(text).toMatch(/\bstartOrWake\(cause\);/);
   });
 });
+
+describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
+  const MODULE = "src/server/mcp/inbox-selection.ts";
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  // Re-declared from the chat-side describe above (local there), not lifted,
+  // so that describe stays as it was.
+  const beforeBothBranches = (line: string) => {
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  };
+
+  it("the module's imports are exactly R1.2's list (type-only statements marked)", () => {
+    const text = SRC_FILES.get(MODULE) as string;
+    const statements = [...text.matchAll(/^import\b[^;]*;/gm)].map((m) =>
+      m[0].replace(/\s+/g, " "),
+    );
+    expect(statements).toEqual([
+      'import type { Annotation, AnnotationReply } from "../../shared/types.js";',
+      'import { isClaudeFacing } from "../annotations/projection.js";',
+      'import type { ModeState } from "../mode.js";',
+      'import { inboxUserReplySchema, userActionSchema } from "./output-schemas.js";',
+    ]);
+    // Nothing reaches another module any other way (dynamic import, require).
+    expect(stripComments(text)).not.toMatch(/\bimport\(|\brequire\(|^export\b[^;]*\bfrom\b/m);
+  });
+
+  it("only index.ts installs the probe and names documentWaiting, once, as a statement of main() before either transport branch", () => {
+    expect(filesMentioning("setWaitingProbe", ["src/server/sessions/ownership.ts"])).toEqual([
+      "src/server/index.ts",
+    ]);
+    expect(filesMentioning("documentWaiting", ["src/server/mcp/awareness.ts"])).toEqual([
+      "src/server/index.ts",
+    ]);
+    beforeBothBranches("  setWaitingProbe(documentWaiting);");
+    expect(stripComments(index).match(/\bsetWaitingProbe\b/g)).toHaveLength(2);
+    // Inside the ownership module: the declaration, the setter and the test
+    // reset are its only writes of the probe, and nothing in it calls the setter.
+    const ownership = stripComments(SRC_FILES.get("src/server/sessions/ownership.ts") as string);
+    expect(ownership).toContain(
+      "let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;",
+    );
+    expect(ownership.match(/\bwaitingProbe\s*=(?!=)/g)).toHaveLength(2);
+    expect(ownership.match(/\bsetWaitingProbe\b/g)).toHaveLength(1);
+  });
+});

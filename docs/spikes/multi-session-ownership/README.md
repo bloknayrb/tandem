@@ -55,7 +55,7 @@
 | **Default rule** | Where a document goes when nobody in particular should have it: Tandem's Claude as `default` if present, otherwise unowned. |
 | **Handed** | Returned to a reader by `tandem_checkInbox`. A push stream delivers events too, but a push never counts as handed (§9.1). |
 | **Handled** | Answered by a final (not `inProgress`) reply, judged from persisted state (§6.4). |
-| **Waiting** | An item on a document, or a chat message, that is not handled, has not been handed to its current owner, and passes the Solo hold, `hideFromAI` and the ADR-027 and withheld predicates (§8.5). |
+| **Waiting** | An item on a document, or a chat message, that is not handled, has not been handed to its current owner, and passes the Solo hold, `hideFromAI` and the ADR-027 and withheld predicates (§8.5). *[Amended: ADR-054's 3b-2b1b amendment, item 5.]* |
 | **Lapsed** | A record whose documents went back to the default rule because its client went away (§3.4). |
 | **Handle** | `th_` plus 32 base64url characters, minted per Tandem's Claude child spawn and given to that child's Tandem bridge as `TANDEM_OWNER_HANDLE` (route L, which ships: the launcher config's `env`. Route E, the child's environment, is not shipped: probes 9 and 13 measured that the launcher's entry replaces the user's, so the wider reach route E would carry buys nothing); the bridge sends it as the `X-Tandem-Owner-Handle` header (§3.3). Tandem never writes it into a prompt or a tool argument. |
 
@@ -487,7 +487,7 @@ Within `startOrWake`, `wakeOwedAcrossSpawns` is set in exactly two places (today
 
 ### 8.5 Waiting
 
-**Waiting** is computed by the inbox's own document collector with no cursor, after every privacy gate (the Solo hold, `hideFromAI`, the ADR-027 and withheld predicates; R3.1). It counts only answerable items — user comments, user thread replies and user chat, never accept or dismiss notices — that pass the handled filter (§6.4) and have not been handed to the current owner: no live registry entry above the document entry's `sinceSeq`; for chat, no live chat entry at all, since every change of a message's owner retires its entry (§6.5). So an item the owner already has, and answered in some other way, does not keep starting it. A Solo-held item is never waiting. Take-back (§8.2) counts what will be owed **after** the handover it is about to run: the losing record's handed-but-unanswered items count.
+**Waiting** is computed by the inbox's own document collector with no cursor, *[Amended: ADR-054's 3b-2b1b amendment, item 1.]* after every privacy gate (the Solo hold, `hideFromAI`, the ADR-027 and withheld predicates; R3.1). *[Amended: ADR-054's 3b-2b1b amendment, item 2.]* It counts only answerable items — user comments, user thread replies and user chat, never accept or dismiss notices — that pass the handled filter (§6.4) *[Amended: ADR-054's 3b-2b1b amendment, item 4.]* and have not been handed to the current owner: no live registry entry above the document entry's `sinceSeq`; *[Amended: ADR-054's 3b-2b1b amendment, item 3.]* for chat, no live chat entry at all, since every change of a message's owner retires its entry (§6.5). So an item the owner already has, and answered in some other way, does not keep starting it. *[Amended: ADR-054's 3b-2b1b amendment, item 6.]* A Solo-held item is never waiting. Take-back (§8.2) counts what will be owed **after** the handover it is about to run: the losing record's handed-but-unanswered items count.
 
 ### 8.6 Waking a running owner (R2.7)
 
