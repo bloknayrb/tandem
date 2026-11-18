@@ -14,7 +14,8 @@
  *  - A Claude-side comment reads "Claude comment annotation" whatever the Models
  *    store holds. P10(1): "Claude's own replies and comments are always labelled
  *    "Claude"; a local model's name appears only on what it wrote". V3: "The
- *    "Send to" control labels and the annotation aria-labels follow P10(1)".
+ *    "Send to" control labels and the annotation aria-labels follow P10(1)" (P10(1) is Bryan's pick; V3 is the review session's reading of it, filed
+ *    under that amendment's readings and rulings and open to his change).
  *    Master read "Local model", "Assistant", "GPT", "Local model" in states
  *    (a), (b), (c), (d).
  *  - A comment the local model wrote names its stamped model: P10(1)'s second
@@ -233,6 +234,16 @@ describe("editor aria-label, lit: a local-model comment names its own stamp", ()
   it("an identity with no displayName at all (no shipped writer makes one): 'Local model comment annotation' (AL-7)", async () => {
     await seedStore(STATES.a.file);
     expect(ariaLabelFor({ provider: "local-ollama" })).toBe("Local model comment annotation");
+  });
+
+  it("an identity whose displayName is not a string (no shipped writer makes one): 'Local model comment annotation' (AL-7)", async () => {
+    await seedStore(STATES.a.file);
+    expect(ariaLabelFor({ provider: "local-ollama", displayName: 42 })).toBe(
+      "Local model comment annotation",
+    );
+    expect(ariaLabelFor({ provider: "local-ollama", displayName: { name: "x" } })).toBe(
+      "Local model comment annotation",
+    );
   });
 });
 

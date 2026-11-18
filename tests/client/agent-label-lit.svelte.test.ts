@@ -10,7 +10,8 @@
  *  - "Claude" for Claude-side work. P10(1): "Claude's own replies and comments
  *    are always labelled "Claude"; a local model's name appears only on what it
  *    wrote". V3: "The "Send to" control labels and the annotation aria-labels
- *    follow P10(1)".
+ *    follow P10(1)" (P10(1) is Bryan's pick; V3 is the review session's reading of it, filed
+ *    under that amendment's readings and rulings and open to his change).
  *  - `specific` (the status pill's name) "Claude": this PR's own ruling AL-1,
  *    unconfirmed until the review session confirms it.
  * So `createAgentLabel()` answers "Claude" in every registry state below, where

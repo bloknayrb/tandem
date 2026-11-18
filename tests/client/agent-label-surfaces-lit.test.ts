@@ -10,7 +10,8 @@
  *    2026-11-17 amendment on switching local models on, P10(1): "Claude's own
  *    replies and comments are always labelled "Claude"; a local model's name
  *    appears only on what it wrote". V3: "The "Send to" control labels and the
- *    annotation aria-labels follow P10(1)".
+ *    annotation aria-labels follow P10(1)" (P10(1) is Bryan's pick; V3 is the review session's reading of it, filed
+ *    under that amendment's readings and rulings and open to his change).
  *  - A record a local model wrote names its own stamp, never the store's entry:
  *    P10(1)'s second half, above.
  *  - The comment filter's agent chip reads "AI". Label decision L3 of
