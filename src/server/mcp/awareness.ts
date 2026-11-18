@@ -591,8 +591,12 @@ const DOCUMENT_WAITING_FAILED =
  *
  * **Total**: anything that throws answers false, with one fixed log line.
  * Not rate-limited: it is asked once per change of owner that reaches step 5,
- * never in a loop, and a limiter's clock would be state outside this
- * function (Ruling J: nothing existing changes, `resetInbox` included).
+ * and a limiter's clock would be state outside this function (Ruling J:
+ * nothing existing changes, `resetInbox` included). *Corrected by #2358 PR
+ * 3b-2b1b-chat:* `tandemWorkWaiting` (ownership) now asks it once per
+ * document Tandem's Claude holds, so once 3b-2b1c consumes that decision a
+ * document whose read keeps failing logs this line at every ask, unlimited;
+ * the flip-blocker row on the decision's cost names it.
  */
 export function documentWaiting(documentId: string): boolean {
   try {

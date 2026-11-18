@@ -571,8 +571,10 @@ export function isTandemPresent(): boolean {
  * Tandem's Claude, the caller is not, and the cause is not `take-back`;
  * nothing in production reaches that yet (the default rule needs presence,
  * which nothing sets), and while `startOrWake` is a stub its answer starts
- * nothing. The chat half and the
- * forward to the supervisor are later PRs.
+ * nothing. The chat half exists (#2358 PR 3b-2b1b-chat, `tandemWorkWaiting`,
+ * which asks this probe for each document Tandem's Claude holds); step 5's
+ * use of it (3b-2b1b-chat-step5) and the forward to the supervisor
+ * (3b-2b1c) are later PRs.
  */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
   waitingProbe = probe;

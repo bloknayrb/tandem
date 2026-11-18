@@ -1066,9 +1066,14 @@ describe("no write, judged by behaviour", () => {
     const counts = { d: 0, ctrl: 0 };
     w.d.ydoc.on("update", () => counts.d++);
     ctrl().on("update", () => counts.ctrl++);
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m),
+    );
     const before = observable(w, counts);
     expect(tandemWorkWaiting()).toBe(true);
     expect(observable(w, counts)).toBe(before);
+    expect(counts).toEqual({ d: 0, ctrl: 0 });
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
   it("anchor: in the same world, a cursor poll does emit a control-room update", async () => {

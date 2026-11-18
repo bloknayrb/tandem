@@ -55,7 +55,7 @@
 | **Default rule** | Where a document goes when nobody in particular should have it: Tandem's Claude as `default` if present, otherwise unowned. |
 | **Handed** | Returned to a reader by `tandem_checkInbox`. A push stream delivers events too, but a push never counts as handed (§9.1). |
 | **Handled** | Answered by a final (not `inProgress`) reply, judged from persisted state (§6.4). |
-| **Waiting** | An item on a document, or a chat message, that is not handled, has not been handed to its current owner, and passes the Solo hold, `hideFromAI` and the ADR-027 and withheld predicates (§8.5). *[Amended: ADR-054's 3b-2b1b amendment, item 5.]* *[Amended: ADR-054's 3b-2b1b-chat amendment]* |
+| **Waiting** | An item on a document, or a chat message, that is not handled, has not been handed to its current owner, and passes the Solo hold, `hideFromAI` and the ADR-027 and withheld predicates (§8.5). *[Amended: ADR-054's 3b-2b1b amendment, item 5.]* *[Amended: ADR-054's 3b-2b1b-chat amendment.]* |
 | **Lapsed** | A record whose documents went back to the default rule because its client went away (§3.4). |
 | **Handle** | `th_` plus 32 base64url characters, minted per Tandem's Claude child spawn and given to that child's Tandem bridge as `TANDEM_OWNER_HANDLE` (route L, which ships: the launcher config's `env`. Route E, the child's environment, is not shipped: probes 9 and 13 measured that the launcher's entry replaces the user's, so the wider reach route E would carry buys nothing); the bridge sends it as the `X-Tandem-Owner-Handle` header (§3.3). Tandem never writes it into a prompt or a tool argument. |
 
