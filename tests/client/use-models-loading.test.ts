@@ -107,7 +107,10 @@ describe("models store — loading / reload (flag mocked ON)", () => {
 });
 
 // #1123 (R1.3): `loaded` says the list has loaded in this page, for the
-// first-run window. It is set by the first successful load and never cleared.
+// first-run window. The lit design, quoted from the brief on #1123
+// (issuecomment-6965850014, R1.3): "one `$state` set true when the first load
+// succeeds and never set false, exposed on `ModelsState`, reset in
+// `_resetModelsStoreForTests`."
 describe("models store — loaded (flag mocked ON)", () => {
   function failThenSucceed(failures: number) {
     let call = 0;
@@ -127,6 +130,28 @@ describe("models store — loaded (flag mocked ON)", () => {
     const p = loadFromServer();
     expect(models.loaded).toBe(false);
     await p;
+    expect(models.loaded).toBe(true);
+  });
+
+  // The one user the window is for has no model saved: an empty list that
+  // loaded is loaded. A getter that tracked the list's size would fail here.
+  it("is true after a successful load of an empty list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              file: { schemaVersion: 1, models: [], defaultModelId: null },
+              etag: "e-empty",
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const models = createModels();
+    await loadFromServer();
+    expect(models.models).toEqual([]);
     expect(models.loaded).toBe(true);
   });
 

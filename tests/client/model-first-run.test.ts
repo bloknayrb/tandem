@@ -150,11 +150,21 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     }
   });
 
-  it("decides after manuallyReopened = false, behind the flag, from the captured values", () => {
+  it("decides after all three of the handler's writes, behind the flag, from the captured values", () => {
     const flat = close.replace(/\s+/g, " ");
     const decide = flat.indexOf("if ( BYO_MODELS_ENABLED && shouldOfferModelPicker(");
     expect(decide, "the offer statement").toBeGreaterThan(-1);
-    expect(decide).toBeGreaterThan(flat.indexOf("manuallyReopened = false"));
+    // After the LAST of the three: a decision before `wizardClosedLatch.mark()`
+    // or `dismissForVersion(` would read the closing wizard as still open.
+    for (const write of [
+      "dismissForVersion(",
+      "wizardClosedLatch.mark()",
+      "manuallyReopened = false",
+    ]) {
+      const at = flat.indexOf(write);
+      expect(at, write).toBeGreaterThan(-1);
+      expect(decide, `the decision after ${write}`).toBeGreaterThan(at);
+    }
     // The whole argument, field by field: the wizard's own reason, the three
     // captures, the live store and dialog state read AFTER the writes (never a
     // value captured at the top), the dismissal and the page's own verdict.
@@ -186,11 +196,15 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
   });
 
   it("writes modelPickerShown true once (in closeIntegrationWizard) and false once (in dismissModelPicker)", () => {
-    // The declaration (`let modelPickerShown = $state(false)`) is not a write.
-    const writes = [...app.matchAll(/(?<!let )\bmodelPickerShown\s*=(?!=)\s*([^;\n]*)/g)].map((m) =>
-      m[1].trim(),
-    );
-    expect(writes.sort()).toEqual(["false", "true"]);
+    // Declared exactly once, false, as `$state`.
+    expect(app.match(/\blet modelPickerShown\b/g)).toHaveLength(1);
+    expect(app).toContain("let modelPickerShown = $state(false);");
+    // Every other write, in any assignment form (`=`, `||=`, `&&=`, `??=`).
+    // The declaration is not a write.
+    const writes = [
+      ...app.matchAll(/(?<!let )\bmodelPickerShown\s*(\|\|=|&&=|\?\?=|=(?!=))\s*([^;\n]*)/g),
+    ].map((m) => `${m[1]} ${m[2].trim()}`);
+    expect(writes.sort()).toEqual(["= false", "= true"]);
     expect(close).toMatch(/modelPickerShown = true;/);
     expect(functionBody(app, "dismissModelPicker")).toMatch(/modelPickerShown = false;/);
   });
@@ -210,20 +224,53 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     expect(app).toMatch(
       /\{#if modelPickerOpen\}\s*<FirstRunModelPickerModal onComplete=\{dismissModelPicker\} \/>/,
     );
+    // Exactly one mount, and the only block around it is that `{#if}`: a mount
+    // nested under another condition, or a second mount elsewhere, could
+    // unmount or remount a shown window (R1.2: once shown, it stays).
+    const markup = app.slice(app.indexOf("</script>"));
+    expect(markup.match(/<FirstRunModelPickerModal\b/g)).toHaveLength(1);
+    const mountAt = markup.indexOf("<FirstRunModelPickerModal");
+    const open: string[] = [];
+    for (const m of markup
+      .slice(0, mountAt)
+      .matchAll(/\{#(if|each|await|key|snippet)\b[^}]*\}|\{\/(if|each|await|key|snippet)\}/g)) {
+      if (m[1]) open.push(m[0]);
+      else open.pop();
+    }
+    // The app shell's own block (its `{:else}` holds the whole app, the wizard
+    // included; `yjsSync.ready` goes false only at teardown), then the
+    // window's: nothing else.
+    expect(open).toEqual(["{#if !yjsSync.ready}", "{#if modelPickerOpen}"]);
   });
 
   it("the tutorial waits behind the window (R1.5)", () => {
     expect(app).toContain("{#if tutorial.tutorialActive && !shouldShowWizard && !modelPickerOpen}");
   });
 
-  it("nothing opens over the window (R1.4)", () => {
-    expect(functionBody(app, "openSettingsModalWithAck")).toMatch(/if \(modelPickerOpen\) return;/);
-    expect(functionBody(app, "requestOpenFile")).toMatch(
-      /if \(modelPickerOpen\) return Promise\.resolve\(\);/,
+  it("nothing opens over the window (R1.4), each refusal before its handler opens anything", () => {
+    const flat = (t: string) => t.replace(/\s+/g, " ");
+    // Settings: the wizard's guard, then this one, as the first two statements.
+    expect(flat(functionBody(app, "openSettingsModalWithAck"))).toMatch(
+      /^\{ if \(shouldShowWizard\) return; if \(modelPickerOpen\) return; /,
     );
-    expect(dispatchBody(app, "toggle-help")).toMatch(/if \(modelPickerOpen\) return;/);
-    expect(dispatchBody(app, "toggle-palette")).toMatch(
-      /if \(!untrack\(\(\) => paletteOpen\) && modelPickerOpen\) return;/,
+    // The file-open dialog: its first statement.
+    expect(flat(functionBody(app, "requestOpenFile"))).toMatch(
+      /^\{ if \(modelPickerOpen\) return Promise\.resolve\(\); return openFileForRuntime\(/,
+    );
+    // Help's shortcut: before it claims the key or toggles Help.
+    const help = dispatchBody(app, "toggle-help");
+    const helpGuard = help.indexOf("if (modelPickerOpen) return;");
+    expect(helpGuard).toBeGreaterThan(-1);
+    expect(helpGuard).toBeLessThan(help.indexOf("e.preventDefault()"));
+    expect(helpGuard).toBeLessThan(help.indexOf("showHelp ="));
+    // The palette: before the toggle.
+    const palette = dispatchBody(app, "toggle-palette");
+    const paletteGuard = palette.indexOf(
+      "if (!untrack(() => paletteOpen) && modelPickerOpen) return;",
+    );
+    expect(paletteGuard).toBeGreaterThan(-1);
+    expect(paletteGuard).toBeLessThan(
+      palette.indexOf("paletteOpen = !untrack(() => paletteOpen);"),
     );
     expect(app).toMatch(
       /onOpenHelp=\{\(\) => \{\s*if \(!modelPickerOpen\) showHelp = true;\s*\}\}/,
@@ -236,13 +283,26 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     );
   });
 
-  it("retries the model list on connect inside a .then, behind the flag and !loaded (R1.1a)", () => {
+  it("retries the model list on connect inside a .then, behind the flag, after a failed load, once per connection (R1.1a)", () => {
     const at = app.indexOf("modelsStore.reload()");
     expect(at).toBeGreaterThan(-1);
     const effect = app.slice(app.lastIndexOf("$effect(", at), at);
     expect(effect).toMatch(/if \(!BYO_MODELS_ENABLED\) return;/);
     expect(effect).toMatch(/yjsSync\.connected/);
-    expect(effect).toMatch(/modelsStore\.loaded \|\|/);
+    // Only after a FAILED load, never while one runs, never once loaded: a
+    // retry before the boot load would load the pre-reconcile list.
+    expect(effect).toMatch(
+      /if \(modelsStore\.loaded \|\| !modelsStore\.loadFailed \|\| modelsStore\.loading\) return;/,
+    );
+    // The latch: a plain `let` (not `$state`), tested in an early return and
+    // set before the continuation. Without it a failed retry would re-fire
+    // this effect (it reads `loading`) against the server in a loop.
+    expect(app).toContain("let modelsReloadTriedThisConnection = false;");
+    const tested = effect.indexOf("if (modelsReloadTriedThisConnection) return;");
+    const set = effect.indexOf("modelsReloadTriedThisConnection = true;");
+    expect(tested).toBeGreaterThan(-1);
+    expect(set).toBeGreaterThan(tested);
+    expect(effect.indexOf(".then(")).toBeGreaterThan(set);
     // A disconnect re-arms the retry, so a later reconnect retries a failed one.
     expect(effect).toMatch(
       /if \(!yjsSync\.connected\) \{\s*modelsReloadTriedThisConnection = false;\s*return;\s*\}/,

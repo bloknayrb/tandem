@@ -107,6 +107,15 @@ vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   }),
 }));
 
+// The "AI models: Set up" button renders only with the flag on, on the
+// connect step AND on Done; one case below presses it on Done. Every other
+// case here is independent of the flag. Lit as the other mock-true files do
+// (#1123, the flag-neutral tests).
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
+  BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
+}));
+
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
 
 function pick(id: string, kind: "claude-code" | "claude-desktop" | "other-mcp"): PickedIntegration {
@@ -207,6 +216,19 @@ describe("IntegrationWizardModal — the close reason (#1123)", () => {
     await tick();
     expect(wizardStub.step).toBe("connect");
     await fireEvent.keyDown(window, { key: "Escape" });
+    expect(m.onClose).toHaveBeenCalledWith("other");
+  });
+
+  // The lit design, quoted from the brief on #1123 (issuecomment-6965850014,
+  // R1.1 item 1): "The Set up button's direct `onClose()` gives `"other"`", and
+  // its case table: "Presses "AI models: Set up" in the wizard | never;
+  // Settings opens alone". On Done with Claude applied, a build that routed the
+  // button through `close()` would give "claude-set-up" here.
+  it("Done, a Claude row applied, the AI models Set up button: other", async () => {
+    const m = mountAt("done", [pick("cc", "claude-code")], [row("cc", "applied")]);
+    await tick();
+    await fireEvent.click(q(m.container, "integration-wizard-models-setup"));
+    expect(m.onClose).toHaveBeenCalledTimes(1);
     expect(m.onClose).toHaveBeenCalledWith("other");
   });
 

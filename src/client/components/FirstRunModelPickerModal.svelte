@@ -11,7 +11,7 @@
  * Only local providers are listed (P4); the cloud branch below stays in source
  * (its `data-testid`s are a contract) but is unreachable.
  */
-import { onDestroy, untrack } from "svelte";
+import { onDestroy, tick, untrack } from "svelte";
 import { isLocalProvider, type ModelProvider } from "../../shared/models/contract.js";
 import {
   endpointPrefill,
@@ -95,6 +95,7 @@ onDestroy(() => {
   closed = true;
 });
 let dialogEl: HTMLElement | null = $state(null);
+let saveEl: HTMLButtonElement | null = $state(null);
 let prevFocus: Element | null = null;
 
 const currentProvider = $derived(
@@ -172,14 +173,13 @@ async function handleSave(e: SubmitEvent) {
   saveError = null;
   // Save is natively disabled while saving, and a browser moves focus off a
   // disabled control to <body>, where the dialog's Escape no longer reaches.
-  // Keep focus in the dialog so the exits stay live from the keyboard (R2.4).
-  if (
-    dialogEl &&
+  // Keep focus in the dialog so the exits stay live from the keyboard (R2.4);
+  // a failed save hands it back to Save below.
+  const parkedFocus =
+    dialogEl !== null &&
     dialogEl.contains(document.activeElement) &&
-    document.activeElement !== dialogEl
-  ) {
-    dialogEl.focus();
-  }
+    document.activeElement !== dialogEl;
+  if (parkedFocus) dialogEl?.focus();
   try {
     const id = await models.addModel(
       {
@@ -225,6 +225,14 @@ async function handleSave(e: SubmitEvent) {
     saveError = err instanceof Error ? err.message : "Failed to save";
   } finally {
     saving = false;
+    // A failed save leaves the window open with the reason shown: give focus
+    // back to Save (enabled again after this render) if it is still parked on
+    // the dialog, so a keyboard user is where they were. In `finally`, because
+    // the failure branches `return` out of the `try`.
+    if (parkedFocus && !closed && saveError !== null && document.activeElement === dialogEl) {
+      await tick();
+      saveEl?.focus();
+    }
   }
 }
 
@@ -375,6 +383,7 @@ function handleSkip() {
              wins. Natively disabled only while a save is in flight. -->
         <button
           type="submit"
+          bind:this={saveEl}
           disabled={saving}
           aria-disabled={saveInert}
           aria-describedby={access.blocked

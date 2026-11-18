@@ -662,12 +662,16 @@ $effect(() => {
 // #1123 (R1.1a): the same cold start for the model list. `main.ts` loads it
 // once before mount with no retry, and on a desktop cold start that load is
 // likely to fail while the sidecar spawns; the first-run local-model window is
-// offered only once the list has loaded. So once the server is reachable,
-// retry it — once per connection (a later reconnect retries a failed one),
-// never while a load is already running (the boot load, or this one), and
-// never from the effect body: `reload()` writes `$state` synchronously, so it
-// runs in a promise continuation. Its own continuation, not inside the
-// `firstRun` re-check's `.then` above, which runs only while `needed !== true`.
+// offered only once the list has loaded. So once the server is reachable and
+// a load has FAILED, retry it — once per connection (a later reconnect
+// retries a failed one). Keyed on `loadFailed`, never on "not loaded yet":
+// the boot load waits for `initializeStore`'s one-time reconcile, and a retry
+// fired before that would load the pre-reconcile list. Never while a load is
+// running, and never from the effect body: `reload()` writes `$state`
+// synchronously, so it runs in a promise continuation. Its own continuation,
+// not inside the `firstRun` re-check's `.then` above, which runs only while
+// `needed !== true`. The plain (non-reactive) latch is what stops a failed
+// retry from re-firing this effect against the server in a loop.
 let modelsReloadTriedThisConnection = false;
 $effect(() => {
   if (!BYO_MODELS_ENABLED) return;
@@ -675,7 +679,8 @@ $effect(() => {
     modelsReloadTriedThisConnection = false;
     return;
   }
-  if (modelsStore.loaded || modelsStore.loading || modelsReloadTriedThisConnection) return;
+  if (modelsReloadTriedThisConnection) return;
+  if (modelsStore.loaded || !modelsStore.loadFailed || modelsStore.loading) return;
   modelsReloadTriedThisConnection = true;
   void Promise.resolve().then(() => {
     if (!modelsStore.loaded && !modelsStore.loading) return modelsStore.reload();

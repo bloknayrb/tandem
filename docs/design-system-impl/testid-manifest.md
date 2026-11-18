@@ -424,7 +424,7 @@ of these selectors renders in a release build.
 - Who answers your chat (#1123 part B): `chat-answerer-{section,claude,local,status,loading,load-error,retry,use-claude,set-claude-done,refused,unavailable,error}` (`chat-answerer-{claude,local}` are the two radios)
 - Not Tandem's own window (#2404): `models-own-window-notice` (the one visible message at the top of the tab) and `models-own-window-live` (its always-mounted screen-reader announcer)
 - Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
-- First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,modelid-hint,apikey,endpoint,error,save,save-reason,skip,skip-secondary}`
+- First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,modelid-hint,apikey,endpoint,endpoint-hint,error,save,save-reason,skip,skip-secondary}`
 
 ### Integration wizard (unified onboarding wizard)
 The wizard shipped as a detection-led single screen (MAIN view) + a Cowork

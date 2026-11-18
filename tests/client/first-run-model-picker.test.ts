@@ -203,12 +203,14 @@ describe("FirstRunModelPickerModal — Save says why (V14)", () => {
 });
 
 describe("FirstRunModelPickerModal — saving", () => {
-  it("a rolled-back add (null) keeps the window open with the store's error, no default", async () => {
+  it("a rolled-back add (null) keeps the window open with the store's error and the typed fields, no default", async () => {
     addModel.mockResolvedValue(null);
     storeSaveError = "Model registry changed elsewhere; reloaded.";
     const m = mount();
+    await fireEvent.input(m.getByTestId("first-run-displayname"), { target: { value: "Mine" } });
     await typeModelId(m, "qwen");
     await fireEvent.click(saveButton(m));
+    await flush(); // the continuation has run
 
     expect(addModel).toHaveBeenCalledTimes(1);
     expect(setDefault).not.toHaveBeenCalled();
@@ -216,15 +218,37 @@ describe("FirstRunModelPickerModal — saving", () => {
     const err = await m.findByTestId("first-run-error");
     expect(err.textContent).toMatch(/changed elsewhere/i);
     expect(m.getByTestId("first-run-model-modal")).toBeTruthy();
+    // Nothing typed is lost.
+    expect((m.getByTestId("first-run-displayname") as HTMLInputElement).value).toBe("Mine");
+    expect(modelIdField(m).value).toBe("qwen");
+    expect((m.getByTestId("first-run-endpoint") as HTMLInputElement).value).toBe(
+      "http://127.0.0.1:11434",
+    );
   });
 
-  it("a committed add sets it as the default and completes", async () => {
+  it("a failed save from a focused Save gives focus back to Save", async () => {
+    addModel.mockResolvedValue(null);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    saveButton(m).focus();
+    await fireEvent.click(saveButton(m));
+    await flush();
+    await flush();
+    expect(m.getByTestId("first-run-error")).toBeTruthy();
+    expect(saveButton(m).disabled).toBe(false);
+    expect(document.activeElement).toBe(saveButton(m));
+  });
+
+  it("a committed add sets it as the default, once, and completes", async () => {
     addModel.mockResolvedValue("new-id");
     const m = mount();
     await typeModelId(m, "qwen");
     await fireEvent.click(saveButton(m));
+    await flush();
 
+    expect(addModel).toHaveBeenCalledTimes(1);
     expect(addModel.mock.calls[0][0]).toMatchObject({ modelId: "qwen" });
+    expect(setDefault).toHaveBeenCalledTimes(1);
     expect(setDefault).toHaveBeenCalledWith("new-id");
     expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
@@ -237,16 +261,23 @@ describe("FirstRunModelPickerModal — saving", () => {
     expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed default after a committed add closes as a success and clears the store's error (RW-5)", async () => {
+  it("a failed default after a committed add closes as a success and clears the store's error after the rollback (RW-5)", async () => {
     addModel.mockResolvedValue("new-id");
-    setDefault.mockResolvedValue(false);
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
     const m = mount();
     await typeModelId(m, "qwen");
     await fireEvent.click(saveButton(m));
     await flush();
 
+    // The default is in flight: nothing cleared, nothing completed yet.
     expect(setDefault).toHaveBeenCalledTimes(1);
-    expect(clearError).toHaveBeenCalled();
+    expect(clearError).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
+
+    def.resolve(false); // the store has rolled back and set its error
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
     expect(m.onComplete).toHaveBeenCalledTimes(1);
     expect(m.queryByText(/couldn't set it as the default/i)).toBeNull();
   });
@@ -273,6 +304,23 @@ describe("FirstRunModelPickerModal — closed during a save (R2.4)", () => {
       expect(m.onComplete).toHaveBeenCalledTimes(1);
     });
   }
+
+  it("a click on the scrim during a pending add, then the add commits: no default, the error cleared after", async () => {
+    const add = deferred<string | null>();
+    addModel.mockReturnValue(add.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await fireEvent.click(m.getByTestId("first-run-model-modal")); // the scrim itself
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    clearError.mockClear();
+
+    add.resolve("new-id");
+    await flush();
+    expect(setDefault).not.toHaveBeenCalled();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+  });
 
   it("Escape during a pending add, then the add rolls back: the error is cleared after", async () => {
     const add = deferred<string | null>();
