@@ -2480,6 +2480,10 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     await off;
   });
 
+  // These cannot fail on a single guard term's removal (#2458's table): the
+  // chat's pass declines here on `standby === undefined` or finds Claude
+  // running. The case for the pass's `isAlive()` term is in
+  // supervisor-local-period.test.ts ("#2358 PR 3b-2b1b-R0, R0.5").
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
     it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);
@@ -2547,8 +2551,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
 
   it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds the standby cleared", async () => {
     // Q stops at `standby === undefined` (P's spawn cleared it), before
-    // `isAlive()` is read: removing `isAlive()` alone fails nothing here
-    // (defence in depth); removing the guard does.
+    // `isAlive()` is read: removing `isAlive()` alone fails nothing here;
+    // removing the guard does. The case that `isAlive()` alone decides is in
+    // supervisor-local-period.test.ts ("#2358 PR 3b-2b1b-R0, R0.5").
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     onSpawn = () => {

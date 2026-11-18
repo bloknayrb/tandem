@@ -1032,3 +1032,71 @@ describe("#1123 A2 — the real queue, the real switch and the real supervisor",
     unsubscribe(watchCb);
   });
 });
+describe("#2358 PR 3b-2b1b-R0, R0.5 — the start pass's isAlive() term", () => {
+  it("a crash restart held across another start sets a standby beside a live child; a chat then starts nothing and kills nothing", async () => {
+    // The state the start pass's `isAlive()` re-check alone decides: a standby
+    // set while a child is live. A crash restart (unlocked) waits on its
+    // settings read; a refused Start then licence activation spawn B under the
+    // lock without moving the stop epoch; a local period begins; the restart
+    // resumes past every re-check in `planAndSpawn` and holds itself, setting
+    // `awaiting-start` with B alive. The switch back finds B alive and leaves
+    // the standby. A chat is then accepted by the standby watch, and its pass
+    // must decline on `isAlive()`: without that term it would stop B and
+    // start another Claude. (The brief for this PR argued no such state
+    // exists; the plan review found this one, so the item is this case.)
+    let refused = false;
+    let holdNextRead = false;
+    let readHeld = false;
+    let releaseRead = (): void => {};
+    const lp = localPeriodSeam(false);
+    const { sup, emit } = makeSupervisor({
+      localPeriod: lp.seam,
+      aiRefusal: () => (refused ? REFUSED : null),
+      readSettings: async () => {
+        if (holdNextRead) {
+          holdNextRead = false;
+          readHeld = true;
+          await new Promise<void>((r) => {
+            releaseRead = r;
+          });
+        }
+        return {
+          source: "default",
+          settings: { startMode: "auto", lifetime: "always", idleMinutes: 30 },
+        };
+      },
+    });
+    await sup.start();
+    const c1 = await nthChild(1);
+    await settle();
+    holdNextRead = true;
+    exitChild(c1, 1); // a crash: the restart's settings read is held
+    await waitFor(() => readHeld, "the crash restart's settings read");
+    refused = true;
+    await expect(sup.startByUser()).rejects.toThrow(); // records the refusal, stops nothing
+    refused = false;
+    await sup.resumeAfterLicence(); // B, under the lock; the epoch is unchanged
+    const b = await nthChild(2);
+    await settle();
+    lp.toLocal();
+    releaseRead();
+    // The restart held itself beside B (its log line), which is the state.
+    await waitFor(
+      () =>
+        errSpy.mock.calls.some((c) =>
+          String(c[0]).includes("not starting Claude (crash) until it is answered by Claude again"),
+        ),
+      "the restart's local hold",
+    );
+    expect(children).toHaveLength(2);
+    expect(b.killed).toBe(false);
+    // B is alive, so the switch back clears the held start and leaves the
+    // standby (`status()` does not show a standby while a child runs).
+    lp.toClaude(true);
+    await settle();
+    emit(chatEvent());
+    await quiet();
+    expect(children).toHaveLength(2);
+    expect(b.killed).toBe(false);
+  });
+});
