@@ -1,0 +1,190 @@
+// @vitest-environment happy-dom
+
+/**
+ * The editor's agent-comment aria-label while local models are on (#1123,
+ * ADR-039 amendment 2026-11-17 (agent labels); the agent-labels brief's R1.1,
+ * R1.3 and R1.5 "Direct", "Surfaces" and "Local names").
+ *
+ * `readAgentFamilyLabel` is module-private, so it is read through the
+ * decoration plugin, with the ProseMirror mocks of `annotation-decoration.test.ts`'s
+ * AR2 harness. A Claude-side comment reads "Claude comment annotation" whatever
+ * the Models store holds (master: "Local model", "Assistant", "GPT" in states
+ * (a), (b), (c)); a comment the local model wrote names its stamped model, and
+ * an empty stamped name reads "Local model" (AL-7).
+ *
+ * `BYO_MODELS_ENABLED` is flipped on by mocking the constant (#2449); the store
+ * is seeded through `loadFromServer` with a stubbed `fetch`. The dark twin is
+ * `agent-label-decoration-dark.test.ts`.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
+
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
+  BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
+}));
+
+// --- ProseMirror mocks (as annotation-decoration.test.ts) ---
+
+const EMPTY_SENTINEL: { _tag: string; map: () => unknown } = {
+  _tag: "DecorationSet.empty",
+  map: () => EMPTY_SENTINEL,
+};
+
+vi.mock("@tiptap/pm/view", () => ({
+  DecorationSet: {
+    empty: EMPTY_SENTINEL,
+    create(_doc: unknown, decorations: unknown[]) {
+      if (decorations.length === 0) return EMPTY_SENTINEL;
+      return { decorations, _tag: "created" };
+    },
+  },
+  Decoration: {
+    inline(from: number, to: number, attrs: Record<string, string>) {
+      return { from, to, attrs, _type: "inline" };
+    },
+  },
+}));
+
+vi.mock("@tiptap/pm/state", () => ({
+  Plugin: class {
+    constructor(public spec: any) {}
+  },
+  PluginKey: class {
+    key: string;
+    constructor(public name: string) {
+      this.key = `tandemAnnotations$`;
+    }
+    getState() {
+      return null;
+    }
+  },
+}));
+
+vi.mock("@tiptap/core", () => ({
+  Extension: {
+    create<T>(config: T) {
+      return config;
+    },
+  },
+}));
+
+// `PmPos` is a branded number, so a plain literal needs the cast.
+vi.mock(import("../../src/client/positions"), () => ({
+  annotationToPmRange(_ann: unknown, _doc: unknown, _ydoc: unknown) {
+    return { from: 1, to: 5, method: "flat" } as unknown as NonNullable<
+      ReturnType<typeof import("../../src/client/positions").annotationToPmRange>
+    >;
+  },
+}));
+
+const { AnnotationExtension } = await import("../../src/client/editor/extensions/annotation");
+const { _resetModelsStoreForTests, getModelsSnapshot, loadFromServer } = await import(
+  "../../src/client/hooks/useModels.svelte.js"
+);
+
+const fakeState = { doc: { content: { size: 100 } } };
+
+function ariaLabelFor(agentIdentity?: { provider: string; displayName: string }): string {
+  const ydoc = new Y.Doc();
+  ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann-1", {
+    id: "ann-1",
+    type: "comment",
+    status: "pending",
+    content: "test",
+    author: "claude",
+    audience: "outbound",
+    timestamp: 0,
+    range: { from: 1, to: 5 },
+    ...(agentIdentity ? { agentIdentity } : {}),
+  });
+  const ext = AnnotationExtension as any;
+  const plugin = ext.addProseMirrorPlugins.call({ options: { ydoc } })[0];
+  const result = plugin.spec.state.init(undefined, fakeState) as any;
+  expect(result).not.toBe(EMPTY_SENTINEL);
+  return result.decorations[0].attrs["aria-label"];
+}
+
+type ServerFile = {
+  schemaVersion: 1;
+  models: Array<Record<string, unknown>>;
+  defaultModelId: string | null;
+};
+
+const QWEN = {
+  id: "l1",
+  provider: "local-ollama",
+  displayName: "Qwen",
+  modelId: "qwen2.5:14b",
+  enabled: true,
+};
+
+const STATES: Record<"a" | "b" | "c", { file: ServerFile; master: string }> = {
+  a: { file: { schemaVersion: 1, models: [QWEN], defaultModelId: null }, master: "Local model" },
+  b: { file: { schemaVersion: 1, models: [], defaultModelId: null }, master: "Assistant" },
+  c: {
+    file: {
+      schemaVersion: 1,
+      models: [
+        { id: "o1", provider: "openai", displayName: "My GPT", modelId: "gpt-4o", enabled: true },
+      ],
+      defaultModelId: "o1",
+    },
+    master: "GPT",
+  },
+};
+
+async function seedStore(file: ServerFile): Promise<void> {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ file, etag: "e-1" }), { status: 200 })),
+  );
+  await loadFromServer();
+  vi.unstubAllGlobals();
+  expect(getModelsSnapshot().models.map((m) => m.id)).toEqual(file.models.map((m) => m.id));
+}
+
+beforeEach(() => {
+  _resetModelsStoreForTests();
+  localStorage.clear();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("editor aria-label, lit: Claude-side comments read Claude (R1.1)", () => {
+  for (const [name, { file, master }] of Object.entries(STATES)) {
+    it(`state (${name}): "Claude comment annotation" (master: "${master} comment annotation")`, async () => {
+      await seedStore(file);
+      expect(ariaLabelFor()).toBe("Claude comment annotation");
+    });
+  }
+});
+
+describe("editor aria-label, lit: a local-model comment names its own stamp", () => {
+  it("stamped 'My Llama' while the store's entry is 'Qwen': 'My Llama comment annotation'", async () => {
+    await seedStore(STATES.a.file);
+    expect(ariaLabelFor({ provider: "local-ollama", displayName: "My Llama" })).toBe(
+      "My Llama comment annotation",
+    );
+  });
+
+  it("stamped with an empty name: 'Local model comment annotation' (AL-7)", async () => {
+    await seedStore(STATES.a.file);
+    expect(ariaLabelFor({ provider: "local-ollama", displayName: "" })).toBe(
+      "Local model comment annotation",
+    );
+  });
+});
+
+describe("anchor", () => {
+  it("the file-level mock applied, so every case in this file is lit", async () => {
+    const { BYO_MODELS_ENABLED } = await import("../../src/shared/constants.js");
+    expect(BYO_MODELS_ENABLED).toBe(true);
+  });
+});

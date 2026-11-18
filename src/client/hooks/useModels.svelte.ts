@@ -49,7 +49,10 @@ import {
  * therefore reads localStorage settings while dark (byte-identical to pre-M2) and
  * the store only when lit — that is the real dark invariant, NOT "store is empty
  * → Assistant" (which regressed the v0.13.x cohort's "GPT"/"Claude" byline to
- * "Assistant"). The localStorage→server *reconcile* runs un-gated (it does NOT
+ * "Assistant"). Since the agent-labels change (ADR-039 amendment 2026-11-17
+ * (agent labels)) the label no longer reads the store when lit: Claude-side work
+ * reads "Claude" there, so `agentLabelSource()`'s store branch feeds no label.
+ * The localStorage→server *reconcile* runs un-gated (it does NOT
  * touch this store's `$state`); see `actions/reconcile-models-registry.ts`.
  *
  * Plaintext keys travel through `addModel`/`updateModel` as `plaintextApiKey` and
@@ -457,7 +460,9 @@ export function getModelsSnapshot(): AgentLabelSource {
  * localStorage settings while dark (byte-identical to pre-M2) and the
  * server-authoritative store only when lit. This is the load-bearing dark
  * invariant: an empty store must NOT blank a v0.13.x cohort's "GPT"/"Claude"
- * byline to "Assistant".
+ * byline to "Assistant". Lit, no label consumer calls this today:
+ * `createAgentLabel` and `annotation.ts`'s `readAgentFamilyLabel` answer
+ * "Claude" without reading it (ADR-039 amendment 2026-11-17 (agent labels)).
  *
  * The dark branch reads `loadSettings()` (a plain, NON-reactive localStorage
  * read), so a `$derived` over `agentLabelSource()` does not track settings

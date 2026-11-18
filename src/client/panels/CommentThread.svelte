@@ -2,6 +2,7 @@
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
+import { agentBylineLabel } from "../utils/agentLabel";
 import AnnotationBody from "./AnnotationBody.svelte";
 import { formatRelativeTime } from "./annotation-card-helpers";
 import {
@@ -90,10 +91,12 @@ const blockedReasonId = `${uid}-accept-blocked`;
                 style={agentTint ? `background: ${agentTint};` : undefined}
                 aria-hidden="true"
               ></span>
-              <!-- #1123 M3: a local-model reply bylines with its specific model
-                   name, matching the card + chat surfaces; else the active
-                   family label. Dark ⇒ agentIdentity absent ⇒ family label. -->
-              {reply.agentIdentity?.displayName ?? agentLabel.family}
+              <!-- #1123: a reply the local model wrote names it (its stamped
+                   agentIdentity; "Local model" when that name is empty),
+                   matching the card + chat surfaces; every other agent reply
+                   takes the label for Claude-side work. Dark builds never
+                   write agentIdentity. -->
+              {agentBylineLabel(reply.agentIdentity, agentLabel.family)}
             {:else if kind === "import"}
               <span data-testid="reply-import-byline-{reply.id}">
                 {reply.importAuthor ?? "Imported"}
