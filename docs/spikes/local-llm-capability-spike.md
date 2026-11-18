@@ -227,7 +227,7 @@ npx tsx probe/local-model-spike/report.ts --run <run id>
 
 ### Results of the new measurement
 
-**Measured 2026-11-13 on a desktop; published 2026-11-15.** One reader (the measuring Claude session) read every reply against the rubric. The fingerprint is `d4fe758ee095440befd726c66e14b80b`, recorded as published in `fingerprint.json`. The runs directories are gitignored; the numbers below are copied from `report.ts`, re-run on this commit.
+**Measured 2026-11-13 on a desktop; published 2026-11-15.** One reader (the measuring Claude session) read every reply against the rubric. The fingerprint is `d4fe758ee095440befd726c66e14b80b`, recorded as published in `fingerprint.json`. The runs directories are gitignored; the numbers below are copied from `report.ts`, re-run on the commit that first carried this write-up (`053e2a2e`, PR #2434); the harness on master has changed since.
 
 **Outcome: no model passed the chat tier.** The one full run, gemma4:12b, fails on the third gating group: 10 of 22 requests that only the editing tier can carry out, against the 80% it needs. Its other two gating groups and the no-action messages clear easily. It had no false claim, no timeout and no empty reply. Its editing tier, which is reported and never gates, scored 39 of 41 on the scorer and the reader's false-claim verdicts.
 
@@ -245,7 +245,7 @@ npx tsx probe/local-model-spike/report.ts --run <run id>
   - The rubric diff touches only text inside `<think>`, plus a note that `<thinking>` and `<reasoning>` are not hidden.
   - No trial record of any run holds `<think`, `</think`, `<thinking` or `<reasoning` (a case-insensitive search of every `trials.jsonl`).
 
-  With the verdicts re-stamped, all six reports were re-run on this commit and gave the same outcomes. An unchanged fingerprint is not itself evidence that runs compare across part C; the argument rests on the per-record check.
+  With the verdicts re-stamped, all six reports were re-run on that commit (`053e2a2e`) and gave the same outcomes. An unchanged fingerprint is not itself evidence that runs compare across part C; the argument rests on the per-record check.
 
 | Model | Digest (first 12) | Model blob on disk | Context length the run used |
 |---|---|---|---|
