@@ -1417,6 +1417,12 @@ async function savedStartMode(): Promise<string> {
   return (await readLauncherSettings(baseDir)).settings.startMode;
 }
 
+/** The per-test timeout of a case that runs `tripBreaker` (#2358 PR 3b-2b1a,
+ *  R0.5): up to 12 spawn cycles, each waiting on real file I/O, under a
+ *  default `testTimeout` of 15 s. Measured at 50-80 ms each on Linux; the
+ *  headroom is for a loaded Windows runner, not a wall-clock claim. */
+const BREAKER_TIMEOUT_MS = 60_000;
+
 /** Crash `c` and its restarts until the windowed breaker trips (the [0]
  *  backoff is a faked timer). */
 async function tripBreaker(h: ReturnType<typeof makeSupervisor>, first: FakeChild): Promise<void> {
@@ -1929,62 +1935,74 @@ describe("3b-2a R2: startOrWake", () => {
       expect(c2.stdin.writes).toHaveLength(0);
     });
 
-    it("a tripped breaker (standby unset, no restart timer): nothing", async () => {
-      const waiting = waitingDouble(true);
-      const h = makeSupervisor({ workWaiting: waiting.fn });
-      await tripBreaker(h, await runningIdle(h));
-      const n = children.length;
-      h.sup.startOrWake?.("document");
-      await lockBarrier(h);
-      expect(children).toHaveLength(n);
-      // Nothing owed: the user's Start (which resets the breaker) writes no
-      // wake. That half can fail only on a resumed spawn (a fresh spawn's
-      // bootstrap clears an owed wake), so the spawn's kind is asserted
-      // first. The harness gives a resumed one here (observed while building
-      // #2358 PR 3b-2b1a, R0.4, where the brief expected a fresh one): the
-      // crash loop alternates, since a resumed child's unconfirmed non-zero
-      // exit clears the saved session (`shouldClearSession`) and the fresh
-      // spawn after it saves a new one, which the Start then resumes.
-      await h.sup.startByUser();
-      const next = await childN(n + 1);
-      await settle();
-      expect(argAfter(next, "--resume")).toBeDefined();
-      expect(wakes(next)).toBe(0);
-    });
+    it(
+      "a tripped breaker (standby unset, no restart timer): nothing",
+      async () => {
+        const waiting = waitingDouble(true);
+        const h = makeSupervisor({ workWaiting: waiting.fn });
+        await tripBreaker(h, await runningIdle(h));
+        const n = children.length;
+        h.sup.startOrWake?.("document");
+        await lockBarrier(h);
+        expect(children).toHaveLength(n);
+        // Nothing owed: the user's Start (which resets the breaker) writes no
+        // wake. That half can fail only on a resumed spawn (a fresh spawn's
+        // bootstrap clears an owed wake), so the spawn's kind is asserted
+        // first. The harness gives a resumed one here (observed while building
+        // #2358 PR 3b-2b1a, R0.4, where the brief expected a fresh one): the
+        // crash loop alternates, since a resumed child's unconfirmed non-zero
+        // exit clears the saved session (`shouldClearSession`) and the fresh
+        // spawn after it saves a new one, which the Start then resumes.
+        await h.sup.startByUser();
+        const next = await childN(n + 1);
+        await settle();
+        expect(argAfter(next, "--resume")).toBeDefined();
+        expect(wakes(next)).toBe(0);
+      },
+      BREAKER_TIMEOUT_MS,
+    );
 
-    it("a tripped breaker with a standby set (trip, Off, mode on): no spawn", async () => {
-      // The state the pass's breaker guards exist for: Off then a mode change
-      // leave the standby `awaiting-start` and the breaker tripped (only a
-      // non-message respawn resets it), and a message-kind respawn neither
-      // refuses nor resets it.
-      const waiting = waitingDouble(true);
-      const h = makeSupervisor({ workWaiting: waiting.fn });
-      await tripBreaker(h, await runningIdle(h));
-      await h.sup.updateSettings({ startMode: "off" });
-      await h.sup.updateSettings({ startMode: "auto" });
-      expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
-      const n = children.length;
-      h.sup.startOrWake?.("document");
-      await lockBarrier(h);
-      expect(waiting.calls).toBe(1);
-      expect(children).toHaveLength(n);
-    });
+    it(
+      "a tripped breaker with a standby set (trip, Off, mode on): no spawn",
+      async () => {
+        // The state the pass's breaker guards exist for: Off then a mode change
+        // leave the standby `awaiting-start` and the breaker tripped (only a
+        // non-message respawn resets it), and a message-kind respawn neither
+        // refuses nor resets it.
+        const waiting = waitingDouble(true);
+        const h = makeSupervisor({ workWaiting: waiting.fn });
+        await tripBreaker(h, await runningIdle(h));
+        await h.sup.updateSettings({ startMode: "off" });
+        await h.sup.updateSettings({ startMode: "auto" });
+        expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+        const n = children.length;
+        h.sup.startOrWake?.("document");
+        await lockBarrier(h);
+        expect(waiting.calls).toBe(1);
+        expect(children).toHaveLength(n);
+      },
+      BREAKER_TIMEOUT_MS,
+    );
 
-    it("positive twin: the same after the user's Start has reset the breaker: one spawn", async () => {
-      const waiting = waitingDouble(true);
-      const h = makeSupervisor({ workWaiting: waiting.fn });
-      await tripBreaker(h, await runningIdle(h));
-      await h.sup.startByUser(); // resets the breaker
-      await childN(children.length);
-      await h.sup.updateSettings({ startMode: "off" });
-      await h.sup.updateSettings({ startMode: "auto" });
-      expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
-      const n = children.length;
-      h.sup.startOrWake?.("document");
-      await lockBarrier(h);
-      await childN(n + 1);
-      expect(children).toHaveLength(n + 1);
-    });
+    it(
+      "positive twin: the same after the user's Start has reset the breaker: one spawn",
+      async () => {
+        const waiting = waitingDouble(true);
+        const h = makeSupervisor({ workWaiting: waiting.fn });
+        await tripBreaker(h, await runningIdle(h));
+        await h.sup.startByUser(); // resets the breaker
+        await childN(children.length);
+        await h.sup.updateSettings({ startMode: "off" });
+        await h.sup.updateSettings({ startMode: "auto" });
+        expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+        const n = children.length;
+        h.sup.startOrWake?.("document");
+        await lockBarrier(h);
+        await childN(n + 1);
+        expect(children).toHaveLength(n + 1);
+      },
+      BREAKER_TIMEOUT_MS,
+    );
   });
 
   describe("R2.6: the licence inside the pass", () => {
