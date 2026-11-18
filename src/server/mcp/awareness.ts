@@ -70,6 +70,7 @@ import {
   seenBy,
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
+import { isDocumentWaiting } from "./inbox-selection.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -557,6 +558,60 @@ export function handOverDocumentInbox(documentId: string): void {
   }
   for (const key of [...replySurfacedIds]) {
     if (key.startsWith(prefix)) replySurfacedIds.delete(key);
+  }
+}
+
+/** Fixed text: nothing from the error, no record and no document. */
+const DOCUMENT_WAITING_FAILED =
+  "[Tandem] waiting could not be computed for a document; it is read as holding nothing waiting.";
+
+/**
+ * Waiting on a document (ownership design §8.5; #2358 PR 3b-2b1b): whether
+ * `documentId` holds a user comment or user thread reply that a fresh cursor
+ * reader for Tandem's Claude, polling it now, would be handed. The rule is
+ * `inbox-selection.ts`'s `isDocumentWaiting`; this gathers its inputs.
+ *
+ * **Reached only through the ownership module's waiting seam**, which
+ * `index.ts` wires at boot and which only a flag-on change of owner asks, as
+ * with `handOverDocumentInbox`; this file reads no flag. Synchronous.
+ *
+ * **It writes nothing.** The Y.Doc comes from the non-creating getter, the
+ * store is built as {@link currentNoticeKeys} builds one, and the rule
+ * receives copies: `sanitizeAnnotation` copies shallowly (its `range`,
+ * `relRange` and `textSnapshotBreaks` are the stored objects) and the reply
+ * map returns its stored objects, so both are `structuredClone`d. The
+ * registry is read through a closure that builds the item's key itself, so
+ * the rule never restates the key format. Nothing is refreshed, registered,
+ * stamped or pushed. (Reading the mode goes through `readModeState`, which
+ * resolves the control room with the creating getter; it exists from boot in
+ * a running server, and an empty Y.Doc emits no update.)
+ *
+ * **Total**: anything that throws answers false, with one fixed log line.
+ * Not rate-limited: it is asked once per change of owner that reaches step 5,
+ * never in a loop, and a limiter's clock would be state outside this
+ * function (Ruling J: nothing existing changes, `resetInbox` included).
+ */
+export function documentWaiting(documentId: string): boolean {
+  try {
+    const doc = getCurrentDoc(documentId);
+    const ydoc = getDocument(documentId);
+    if (!doc || !ydoc) return false;
+    const store = new YDocStore(ydoc, doc.filePath, doc.id);
+    return isDocumentWaiting({
+      documentId,
+      annotations: structuredClone(store.listAnnotations()),
+      repliesOf: (annotation) =>
+        structuredClone(channelVisibleReplies(annotation, (id) => store.listReplies(id))),
+      mode: readModeState(),
+      handedAtOrAbove: (kind, id, editedAt) =>
+        deliveryRegistry
+          .versionsOf(kind, ledgerKey(documentId, id))
+          .some((entry) => entry.acked && entry.editedAt >= editedAt),
+      isLocalModelRecord,
+    });
+  } catch {
+    console.error(DOCUMENT_WAITING_FAILED);
+    return false;
   }
 }
 
