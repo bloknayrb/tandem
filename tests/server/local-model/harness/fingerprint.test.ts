@@ -61,8 +61,9 @@ describe("the fingerprint", () => {
     expect(typeof tracked.statement).toBe("string");
     expect(String(tracked.statement).trim().length).toBeGreaterThan(20);
     expect(String(tracked.statement)).not.toContain("\n");
-    // Nothing has been measured in this repository yet.
-    expect(tracked.published).toBeNull();
+    // The desktop measurement of 2026-11-15 (docs/spikes/local-llm-capability-spike.md,
+    // "Results of the new measurement") was published on this fingerprint.
+    expect(tracked.published).toBe("d4fe758ee095440befd726c66e14b80b");
   });
 
   it("covers everything the model sees or is limited by", async () => {
