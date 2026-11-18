@@ -437,6 +437,12 @@ describe("dispatch — replies aimed at a record the model must not reach (ADR-0
       expect(text).not.toContain("the first phase");
       expect(text).not.toContain(id);
       expect(Object.keys(out.result as object).sort()).toEqual(["error", "message"]);
+      // The sentence is the one both callers share, and names neither.
+      expect(out.result).toEqual({
+        error: "INVALID_ARGUMENT",
+        message: "You can only reply to comments that are shared with you",
+      });
+      expect(text).not.toMatch(/claude/i);
     });
   }
 
@@ -487,6 +493,10 @@ describe("dispatch — replies to a user-authored comment (#2216)", () => {
     expect(result.error).toBe("NOT_OWNED");
     expect(result.message).not.toMatch(/tandem_/);
     expect(result.message).toContain("comment_on_quote");
+    expect(result.message).toBe(
+      "You cannot reply on this annotation; start a fresh thread on the user's text with comment_on_quote instead",
+    );
+    expect(result.message).not.toMatch(/claude/i);
     expect(out.effect.kind).toBe("reply");
     if (out.effect.kind === "reply") {
       expect(out.effect.ok).toBe(false);
