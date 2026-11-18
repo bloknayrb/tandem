@@ -1938,10 +1938,17 @@ describe("3b-2a R2: startOrWake", () => {
       await lockBarrier(h);
       expect(children).toHaveLength(n);
       // Nothing owed: the user's Start (which resets the breaker) writes no
-      // wake (it may be fresh — the crash loop can drop the saved session).
+      // wake. That half can fail only on a resumed spawn (a fresh spawn's
+      // bootstrap clears an owed wake), so the spawn's kind is asserted
+      // first. The harness gives a resumed one here (observed while building
+      // #2358 PR 3b-2b1a, R0.4, where the brief expected a fresh one): the
+      // crash loop alternates, since a resumed child's unconfirmed non-zero
+      // exit clears the saved session (`shouldClearSession`) and the fresh
+      // spawn after it saves a new one, which the Start then resumes.
       await h.sup.startByUser();
       const next = await childN(n + 1);
       await settle();
+      expect(argAfter(next, "--resume")).toBeDefined();
       expect(wakes(next)).toBe(0);
     });
 
