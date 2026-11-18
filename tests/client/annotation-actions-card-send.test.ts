@@ -170,8 +170,13 @@ describe("the seam's imports (R1.1, source pin)", () => {
     ]);
     // The seam is imported for its raise only, and never re-exported (the
     // license-off panels test hand-stubs this module's exports).
-    expect(src).toMatch(/^import \{ raiseCardSend \} from "\.\/card-send-raise";$/m);
+    expect(src).toMatch(/^import \{ raiseCardSend \} from "\.\/card-send-raise";\r?$/m);
     expect(src).not.toMatch(/^export\s*(\{[^}]*\}|\*)\s*from/m);
+    // Nor a local re-export (`export { raiseCardSend }`, `export const x =
+    // raiseCardSend`): the binding appears in its import and its two calls only.
+    expect(src).not.toMatch(/^export\s*\{[^}]*\braiseCardSend\b/m);
+    expect(src.match(/\braiseCardSend\b/g)?.length).toBe(3);
+    expect(src.match(/\braiseCardSend\(\)/g)?.length).toBe(2);
     expect(src).not.toMatch(/setCardSendRaise/);
     expect(src).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });

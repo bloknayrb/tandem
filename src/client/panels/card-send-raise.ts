@@ -21,7 +21,10 @@ export function setCardSendRaise(fn: (() => void) | null): void {
 }
 
 /**
- * Called by a card send after its write has committed. A throwing raise is
+ * Called by a card send after its write has committed. Its callers run only
+ * from a DOM click or the desktop context menu's Tauri `listen` callback, never
+ * inside a Svelte effect or `$derived`: App's raise writes `$state` (the toast
+ * list), which a reaction may not do. A throwing raise is
  * caught and logged, so the write stands and the caller's count is returned
  * (Ruling SN-6). `console.warn`, not the client log helper: the node suites'
  * import pins forbid it here.

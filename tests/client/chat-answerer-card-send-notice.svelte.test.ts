@@ -91,6 +91,13 @@ function harness(init: { held: boolean; mode: TandemMode; unreachable: boolean }
   return { s, push, raise };
 }
 
+describe("the anchor", () => {
+  it("the file-level mock applied, so the flag reads true here", async () => {
+    const { BYO_MODELS_ENABLED } = await import("../../src/shared/constants.js");
+    expect(BYO_MODELS_ENABLED).toBe(true);
+  });
+});
+
 describe("the precedence table, first match wins (R3.1)", () => {
   const ROWS: Array<
     [Read, boolean, TandemMode, boolean, "none" | "W", string /* row and its source */]
