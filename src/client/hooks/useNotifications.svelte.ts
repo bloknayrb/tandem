@@ -19,6 +19,14 @@ import { MCP_BASE_URL } from "../utils/backend-ports.js";
 export interface ToastAction {
   label: string;
   onClick: () => void;
+  /**
+   * Keep the toast until its action is pressed or it is closed (#1123). Read
+   * from the toast's CURRENT action, so a coalescing re-push without it stops
+   * staying. A staying toast arms no pop timer, survives the info TTL (its tray
+   * row does not), and is evicted past the cap only when no other toast lacks
+   * the flag. Client-only like the rest of this type.
+   */
+  stay?: boolean;
 }
 
 export interface Toast extends TandemNotification {
@@ -178,18 +186,21 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
         const next = [...toasts];
         next[idx] = updated;
         toasts = next;
-        schedulePopDismiss(updated.id, updated.severity);
+        if (updated.action?.stay !== true) schedulePopDismiss(updated.id, updated.severity);
         return;
       }
     }
     const newToast: Toast = { ...notification, count: 1, action };
     const next = [...toasts, newToast];
     while (next.length > MAX_VISIBLE_TOASTS) {
-      const evicted = next.shift()!;
+      // The oldest non-staying toast, never counting the one just pushed
+      // (the last); if every other toast stays, the oldest, as before.
+      const i = next.findIndex((t, k) => k < next.length - 1 && t.action?.stay !== true);
+      const [evicted] = next.splice(i === -1 ? 0 : i, 1);
       clearPopTimer(evicted.id);
     }
     toasts = next;
-    schedulePopDismiss(newToast.id, newToast.severity);
+    if (newToast.action?.stay !== true) schedulePopDismiss(newToast.id, newToast.severity);
   };
 
   // ---- persistent activity list ----
@@ -210,7 +221,8 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
         // Presence-check before mutating (guards a late timer post-destroy).
         if (!activity.some((a) => a.id === id)) return;
         activity = activity.filter((a) => a.id !== id);
-        toasts = toasts.filter((t) => t.id !== id);
+        // The tray row goes; a toast whose action stays is kept until closed.
+        toasts = toasts.filter((t) => t.id !== id || t.action?.stay === true);
         scheduleSave();
       }, remaining),
     );

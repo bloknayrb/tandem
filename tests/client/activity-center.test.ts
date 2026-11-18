@@ -289,6 +289,199 @@ describe("toasts — existing pop and eviction paths (regression guard for `stay
   });
 });
 
+const STAY = { label: "Use it", onClick: () => {}, stay: true } as const;
+
+describe("toasts — an action with `stay` keeps its toast until pressed or closed", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    FakeEventSource.last = null;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("a staying info toast and a staying warning toast outlive their pop timers", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "si", severity: "info" }), STAY);
+    api.push(note({ id: "sw", severity: "warning" }), STAY);
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["si", "sw"]);
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.warning + 1_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["si", "sw"]);
+  });
+
+  it("a coalescing re-push whose action also stays keeps the toast, under the new id", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "a1", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(3_000);
+    api.push(note({ id: "a2", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(5_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["a2"]);
+  });
+
+  it("a coalescing re-push with no action stops staying: gone 4 s after the re-push", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "b1", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(10_000);
+    api.push(note({ id: "b2", dedupKey: "k", severity: "info" }));
+    vi.advanceTimersByTime(3_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["b2"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("a coalescing re-push with an action without `stay` stops staying: gone 4 s after the re-push", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "c1", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(10_000);
+    api.push(note({ id: "c2", dedupKey: "k", severity: "info" }), {
+      label: "Undo",
+      onClick: () => {},
+    });
+    vi.advanceTimersByTime(3_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["c2"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("an ordinary toast re-pushed with a staying action becomes staying", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "d1", dedupKey: "k", severity: "info" }));
+    vi.advanceTimersByTime(2_000);
+    api.push(note({ id: "d2", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.error + 1_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["d2"]);
+  });
+
+  it("a warning coalescing onto a staying toast with an action without `stay` is gone 6 s later", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "e1", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(10_000);
+    api.push(note({ id: "e2", dedupKey: "k", severity: "warning" }), {
+      label: "Open",
+      onClick: () => {},
+    });
+    vi.advanceTimersByTime(5_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["e2"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("the info TTL removes a staying toast's tray row but not the toast", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "ttl", severity: "info" }), STAY);
+    await tick();
+    // Same id on both surfaces, so the TTL timer's filter really meets this toast.
+    expect(toastIds(api)).toEqual(["ttl"]);
+    expect(api.activity.map((a) => a.id)).toEqual(["ttl"]);
+    vi.advanceTimersByTime(ACTIVITY_INFO_TTL_MS + 1_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["ttl"]);
+    expect(api.activity.map((a) => a.id)).not.toContain("ttl");
+  });
+
+  it("one staying toast then five ordinary: the first ordinary one is evicted, order holds", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "s1", severity: "error" }), STAY);
+    for (let i = 1; i <= 5; i++) api.push(note({ id: `o${i}`, severity: "error" }));
+    await tick();
+    expect(toastIds(api)).toEqual(["s1", "o2", "o3", "o4", "o5"]);
+  });
+
+  it("six staying toasts: the first is evicted", async () => {
+    const api = await mountStore();
+    for (let i = 1; i <= 6; i++) api.push(note({ id: `s${i}`, severity: "error" }), STAY);
+    await tick();
+    expect(toastIds(api)).toEqual(["s2", "s3", "s4", "s5", "s6"]);
+  });
+
+  it("five staying toasts then one ordinary: the new one is shown, the oldest staying one evicted", async () => {
+    const api = await mountStore();
+    for (let i = 1; i <= 5; i++) api.push(note({ id: `s${i}`, severity: "error" }), STAY);
+    api.push(note({ id: "o1", severity: "error" }));
+    await tick();
+    expect(toastIds(api)).toEqual(["s2", "s3", "s4", "s5", "o1"]);
+  });
+
+  it("dismiss(id) removes a staying toast", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "x", severity: "info" }), STAY);
+    await tick();
+    api.dismiss("x");
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+});
+
+describe("toasts — existing toasts that carry an action are unchanged by `stay`", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    FakeEventSource.last = null;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("an Undo-like info toast is gone at 4 s", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "undo", severity: "info" }), { label: "Undo", onClick: () => {} });
+    vi.advanceTimersByTime(3_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["undo"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("an Undo-like info toast is evicted as the oldest", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "undo", severity: "info" }), { label: "Undo", onClick: () => {} });
+    for (let i = 1; i <= 5; i++) api.push(note({ id: `o${i}`, severity: "error" }));
+    await tick();
+    expect(toastIds(api)).toEqual(["o1", "o2", "o3", "o4", "o5"]);
+  });
+
+  it("a warning with a CTA-like action is gone at 6 s", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "cta", severity: "warning" }), {
+      label: "Set up Claude",
+      onClick: () => {},
+    });
+    vi.advanceTimersByTime(5_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["cta"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("an info toast with no action, pushed beside a staying one, is gone at 4 s", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "keep", severity: "info" }), STAY);
+    api.push(note({ id: "plain", severity: "info" }));
+    vi.advanceTimersByTime(3_999);
+    await tick();
+    expect(toastIds(api)).toEqual(["keep", "plain"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(toastIds(api)).toEqual(["keep"]);
+  });
+});
+
 describe("loadActivity — rehydrate/prune", () => {
   const KEY = "test:activityHistory";
   beforeEach(() => localStorage.clear());
