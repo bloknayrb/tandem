@@ -53,6 +53,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     models: [],
     defaultModelId: null,
     saveError: null,
+    // #1123: the list has loaded (the first-run window waits for it).
+    loaded: true,
     loading: false,
     loadFailed: false,
     reload: vi.fn(async () => {}),

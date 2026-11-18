@@ -1,30 +1,32 @@
 // @vitest-environment happy-dom
 
 /**
- * First-run model picker (#1123 M2b §3.3 + §3.5).
+ * The first-run window, "Add a local model (optional)" (#1123; ADR-039 items
+ * 21–23, Requirement 2 of the PR 4a part 1 brief).
  *
- * Two contracts, both exercised by a direct mount (the component has no internal
- * `BYO_MODELS_ENABLED` gate — App's first-run block does):
+ * Exercised by a direct mount (the component has no internal
+ * `BYO_MODELS_ENABLED` gate — App's mount is). `createModels` is mocked so the
+ * add and the default are controllable without a server round-trip.
  *
- *   §3.4 consistency — a fresh first run defaults to a LOCAL provider (Ollama),
- *   not a cloud one whose BYO key support is v1.1.
- *
- *   §3.3 rolled-back-add guard — `addModel` returns an id only when the write
- *   committed; on a rolled-back/reconciled write it returns null. The picker must
- *   NOT `setDefault`/`onComplete` on null (which would finish onboarding pointing
- *   at a phantom default) — it keeps the modal open and surfaces `saveError`.
- *
- * `createModels` is mocked so `addModel`'s outcome is controllable without a
- * server round-trip.
+ * Contracts:
+ *   - only local providers are listed, Ollama first (P4);
+ *   - the copy is the exports of `local-model-copy.ts`, the dialog named by its
+ *     title (R2.1);
+ *   - no model id is prefilled, and a hint names no model (V8);
+ *   - Save says why it cannot save, focusable and described by the reason (V14);
+ *   - a rolled-back add keeps the window open with the store's error;
+ *   - a failed default closes as a success and clears the store's error (RW-5);
+ *   - a close during a save neither sets the default nor leaves an error (R2.4).
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  isLocalProvider,
-  LOCAL_MODEL_PROVIDERS,
-  VALID_MODEL_PROVIDERS,
-} from "../../src/shared/models/contract.js";
+  PICKER_LOCAL_SUBTITLE,
+  PICKER_MODEL_ID_HINT,
+  PICKER_TITLE,
+} from "../../src/client/utils/local-model-copy.js";
+import { isLocalProvider, VALID_MODEL_PROVIDERS } from "../../src/shared/models/contract.js";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
@@ -44,6 +46,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     // nothing before the typed mock overload (#1615).
     models: [],
     defaultModelId: null,
+    // #1123: the list has loaded (the first-run window waits for it).
+    loaded: true,
     loading: false,
     loadFailed: false,
     updateModel: vi.fn(async () => true),
@@ -73,176 +77,274 @@ afterEach(() => {
 // blocked state has its own file, settings-models-tab-own-window.test.ts.
 asTandemOwnWindow();
 
-describe("FirstRunModelPickerModal — local-first default", () => {
+function mount(onComplete = vi.fn()) {
+  const m = render(FirstRunModelPickerModal, { props: { onComplete } });
+  return { ...m, onComplete };
+}
+type Mounted = ReturnType<typeof mount>;
+const modelIdField = (m: Mounted) => m.getByTestId("first-run-modelid") as HTMLInputElement;
+const saveButton = (m: Mounted) => m.getByTestId("first-run-save") as HTMLButtonElement;
+async function typeModelId(m: Mounted, value: string) {
+  await fireEvent.input(modelIdField(m), { target: { value } });
+}
+/** A promise and its resolver, for an add or default held in flight. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe("FirstRunModelPickerModal — local providers only (P4)", () => {
   it("defaults to Ollama and shows the endpoint field, not an API key", () => {
-    const { getByTestId, queryByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete: vi.fn() },
-    });
-    const ollama = getByTestId("first-run-provider-local-ollama") as HTMLInputElement;
+    const m = mount();
+    const ollama = m.getByTestId("first-run-provider-local-ollama") as HTMLInputElement;
     expect(ollama.checked).toBe(true);
-    expect(queryByTestId("first-run-endpoint")).not.toBeNull();
-    expect(queryByTestId("first-run-apikey")).toBeNull();
+    expect(m.queryByTestId("first-run-endpoint")).not.toBeNull();
+    expect(m.queryByTestId("first-run-apikey")).toBeNull();
   });
 
-  it("lists local providers before cloud providers", () => {
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete: vi.fn() },
-    });
-    const fieldset = getByTestId("first-run-providers");
-    const values = Array.from(fieldset.querySelectorAll("input[type=radio]")).map(
-      (el) => (el as HTMLInputElement).value,
-    );
-    expect(values.slice(0, LOCAL_MODEL_PROVIDERS.length)).toEqual([...LOCAL_MODEL_PROVIDERS]);
-    expect([...values].sort()).toEqual([...VALID_MODEL_PROVIDERS].sort());
-  });
-
-  it("disables cloud radios and enables local ones (same local-only gate as the edit modal)", () => {
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete: vi.fn() },
-    });
-    const radio = (v: string) => getByTestId(`first-run-provider-${v}`) as HTMLInputElement;
-    for (const v of LOCAL_MODEL_PROVIDERS) expect(radio(v).disabled).toBe(false);
+  it("lists no cloud provider and no 'coming soon'", () => {
+    const m = mount();
     for (const v of VALID_MODEL_PROVIDERS.filter((p) => !isLocalProvider(p))) {
-      expect(radio(v).disabled).toBe(true);
+      expect(m.queryByTestId(`first-run-provider-${v}`)).toBeNull();
     }
+    const text = m.getByTestId("first-run-model-modal").textContent ?? "";
+    // "OpenAI-compatible" is Other's label, not the OpenAI row.
+    expect(text).not.toMatch(/coming soon|OpenAI(?!-compatible)|Gemini|Anthropic/i);
   });
 });
 
-describe("FirstRunModelPickerModal — rolled-back-add guard", () => {
-  it("does NOT setDefault/onComplete when addModel rolls back (returns null)", async () => {
+describe("FirstRunModelPickerModal — copy (R2.1)", () => {
+  it("the dialog is named by its title, which is the exported string", () => {
+    const m = mount();
+    const dialog = m.getByRole("dialog", { name: PICKER_TITLE });
+    expect(dialog).toBeTruthy();
+    expect(PICKER_TITLE).toBe("Add a local model (optional)");
+  });
+
+  it("the subtitle is the two sentences, with no step count", () => {
+    const m = mount();
+    const subtitle = m.getByTestId("first-run-subtitle").textContent?.trim();
+    expect(subtitle).toBe(PICKER_LOCAL_SUBTITLE);
+    expect(PICKER_LOCAL_SUBTITLE).toBe(
+      "Chat stays set to Claude. Your model server must be running on this computer for Tandem to use the model; you can also add models any time in Settings → Models.",
+    );
+    expect(m.getByTestId("first-run-model-modal").textContent).not.toMatch(/Step 1 of 2/);
+  });
+
+  it("the × is named Close, the secondary button No thanks, Save is Save", () => {
+    const m = mount();
+    expect(m.getByTestId("first-run-skip").getAttribute("aria-label")).toBe("Close");
+    expect(m.getByTestId("first-run-skip-secondary").textContent?.trim()).toBe("No thanks");
+    expect(saveButton(m).textContent?.trim()).toBe("Save");
+    expect(m.getByRole("button", { name: "Close" })).not.toBe(
+      m.getByRole("button", { name: "No thanks" }),
+    );
+  });
+});
+
+describe("FirstRunModelPickerModal — no prefilled model id (V8)", () => {
+  it("the Model ID starts empty and is described by a hint that names no model", () => {
+    const m = mount();
+    expect(modelIdField(m).value).toBe("");
+    const field = m.getByRole("textbox", { name: "Model ID", description: PICKER_MODEL_ID_HINT });
+    expect(field).toBe(modelIdField(m));
+    expect(PICKER_MODEL_ID_HINT).toBe("The model's name exactly as your server lists it.");
+    expect(PICKER_MODEL_ID_HINT).not.toMatch(/llama|qwen|gemma|local-model|:\d/i);
+  });
+});
+
+describe("FirstRunModelPickerModal — Save says why (V14)", () => {
+  const REASON_ID = "Enter a Model ID to save.";
+  const REASON_ENDPOINT = "Enter an Endpoint URL to save.";
+  const REASON_BOTH = "Enter an Endpoint URL and a Model ID to save.";
+
+  function expectInertWith(m: Mounted, reason: string) {
+    const shown = m.getByTestId("first-run-save-reason");
+    expect(shown.textContent?.trim()).toBe(reason);
+    const save = saveButton(m);
+    expect(save.disabled).toBe(false); // focusable
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("aria-describedby")).toBe(shown.id);
+    expect(shown.id).toBeTruthy();
+  }
+
+  it("names each missing field, exactly while Save cannot save", async () => {
+    const m = mount();
+    expectInertWith(m, REASON_ID);
+    await fireEvent.input(m.getByTestId("first-run-endpoint"), { target: { value: "" } });
+    expectInertWith(m, REASON_BOTH);
+    await typeModelId(m, "qwen");
+    expectInertWith(m, REASON_ENDPOINT);
+    await fireEvent.input(m.getByTestId("first-run-endpoint"), {
+      target: { value: "http://127.0.0.1:11434" },
+    });
+    expect(m.queryByTestId("first-run-save-reason")).toBeNull();
+    expect(saveButton(m).getAttribute("aria-disabled")).toBe("false");
+    expect(saveButton(m).getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("a whitespace-only Model ID counts as missing", async () => {
+    const m = mount();
+    await typeModelId(m, "   ");
+    expectInertWith(m, REASON_ID);
+  });
+
+  it("a click or Enter while Save cannot save does nothing", async () => {
+    const m = mount();
+    await fireEvent.click(saveButton(m));
+    await fireEvent.submit(saveButton(m).closest("form") as HTMLFormElement);
+    expect(addModel).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe("FirstRunModelPickerModal — saving", () => {
+  it("a rolled-back add (null) keeps the window open with the store's error, no default", async () => {
     addModel.mockResolvedValue(null);
     storeSaveError = "Model registry changed elsewhere; reloaded.";
-    const onComplete = vi.fn();
-    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
-
-    // Ollama default → modelId + endpoint prefilled → canSave true.
-    await fireEvent.click(getByTestId("first-run-save"));
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
 
     expect(addModel).toHaveBeenCalledTimes(1);
     expect(setDefault).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
-    // The store's error is surfaced and the modal stays mounted.
-    const err = await findByTestId("first-run-error");
+    expect(m.onComplete).not.toHaveBeenCalled();
+    const err = await m.findByTestId("first-run-error");
     expect(err.textContent).toMatch(/changed elsewhere/i);
-    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+    expect(m.getByTestId("first-run-model-modal")).toBeTruthy();
   });
 
-  it("setDefault + onComplete run once addModel commits (returns an id)", async () => {
+  it("a committed add sets it as the default and completes", async () => {
     addModel.mockResolvedValue("new-id");
-    const onComplete = vi.fn();
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
 
-    await fireEvent.click(getByTestId("first-run-save"));
-
-    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(addModel.mock.calls[0][0]).toMatchObject({ modelId: "qwen" });
     expect(setDefault).toHaveBeenCalledWith("new-id");
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("skip completes onboarding with no write and clears any store error", async () => {
-    const onComplete = vi.fn();
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
-
-    await fireEvent.click(getByTestId("first-run-skip-secondary"));
-
+  it("No thanks completes with no write and clears any store error", async () => {
+    const m = mount();
+    await fireEvent.click(m.getByTestId("first-run-skip-secondary"));
     expect(addModel).not.toHaveBeenCalled();
-    expect(clearError).toHaveBeenCalledTimes(1); // don't leak a store error onto the singleton
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("a rolled-back setDefault keeps the modal open with a local error and does NOT complete", async () => {
+  it("a failed default after a committed add closes as a success and clears the store's error (RW-5)", async () => {
     addModel.mockResolvedValue("new-id");
     setDefault.mockResolvedValue(false);
-    const onComplete = vi.fn();
-    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
-
-    await fireEvent.click(getByTestId("first-run-save"));
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
 
     expect(setDefault).toHaveBeenCalledTimes(1);
-    expect(onComplete).not.toHaveBeenCalled();
-    const err = await findByTestId("first-run-error");
-    expect(err.textContent).toMatch(/couldn't set it as the default/i);
-    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+    expect(clearError).toHaveBeenCalled();
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.queryByText(/couldn't set it as the default/i)).toBeNull();
   });
+});
 
-  it("retrying after a setDefault failure re-attempts ONLY setDefault (no duplicate add)", async () => {
-    addModel.mockResolvedValue("new-id");
-    setDefault.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const onComplete = vi.fn();
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
+describe("FirstRunModelPickerModal — closed during a save (R2.4)", () => {
+  for (const exit of ["first-run-skip", "first-run-skip-secondary"] as const) {
+    it(`${exit} during a pending add, then the add commits: no default, the error cleared after`, async () => {
+      const add = deferred<string | null>();
+      addModel.mockReturnValue(add.promise);
+      const m = mount();
+      await typeModelId(m, "qwen");
+      await fireEvent.click(saveButton(m));
+      expect(addModel).toHaveBeenCalledTimes(1);
+
+      await fireEvent.click(m.getByTestId(exit)); // the exit stays live during a save
+      expect(m.onComplete).toHaveBeenCalledTimes(1);
+      clearError.mockClear();
+
+      add.resolve("new-id");
+      await flush();
+      expect(setDefault).not.toHaveBeenCalled();
+      expect(clearError).toHaveBeenCalledTimes(1);
+      expect(m.onComplete).toHaveBeenCalledTimes(1);
     });
+  }
 
-    await fireEvent.click(getByTestId("first-run-save")); // add commits, setDefault fails
-    await fireEvent.click(getByTestId("first-run-save")); // retry
+  it("Escape during a pending add, then the add rolls back: the error is cleared after", async () => {
+    const add = deferred<string | null>();
+    addModel.mockReturnValue(add.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await fireEvent.keyDown(m.getByRole("dialog"), { key: "Escape" });
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    clearError.mockClear();
 
-    expect(addModel).toHaveBeenCalledTimes(1); // NOT re-added
-    expect(setDefault).toHaveBeenCalledTimes(2);
-    expect(setDefault).toHaveBeenLastCalledWith("new-id");
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    storeSaveError = "Failed to save model changes.";
+    add.resolve(null);
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(setDefault).not.toHaveBeenCalled();
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 });
 
 // #2404: a save refused because this page is not Tandem's own window. The
-// picker stays (the refusal must be explained where the user is looking), shows
-// the server's plain reason, and Save does nothing more; Skip still works.
+// window stays (the refusal must be explained where the user is looking), shows
+// the server's plain reason, and Save does nothing more; the exits still work.
 describe("FirstRunModelPickerModal — a save the server refused as not Tandem's own window", () => {
   const REASON = "Local-model settings can only be changed in Tandem's own window.";
 
-  it("keeps the picker open with the reason, makes Save unavailable and inert, and leaves Skip live", async () => {
+  it("keeps the window open with the reason, makes Save unavailable and inert, and leaves Close live", async () => {
     const { noteModelsWriteRefused } = await import("../../src/client/models/write-refusal");
     addModel.mockImplementationOnce(async () => {
       noteModelsWriteRefused(); // what the store does on 403 OWN_WINDOW_ONLY
       storeSaveError = REASON;
       return null;
     });
-    const onComplete = vi.fn();
-    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
-    const save = getByTestId("first-run-save") as HTMLButtonElement;
+    const m = mount();
+    await typeModelId(m, "qwen");
+    const save = saveButton(m);
     expect(save.getAttribute("aria-disabled")).toBe("false");
 
     await fireEvent.click(save);
 
-    // One sentence for this state: the same notice the picker shows when it
+    // One sentence for this state: the same notice the window shows when it
     // opens already blocked (here the page is Tandem's own address, refused
     // all the same, so it is the plain sentence).
-    expect((await findByTestId("first-run-error")).textContent?.trim()).toBe(
+    expect((await m.findByTestId("first-run-error")).textContent?.trim()).toBe(
       REASON.replace("Local-model settings", "These settings"),
     );
-    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+    expect(m.getByTestId("first-run-model-modal")).toBeTruthy();
     expect(save.getAttribute("aria-disabled")).toBe("true");
     expect(save.disabled).toBe(false); // still focusable
+    // The refusal wins over Save's reason.
+    expect(m.queryByTestId("first-run-save-reason")).toBeNull();
     // Click and Enter both end in the form's submit handler.
     await fireEvent.click(save);
     await fireEvent.submit(save.closest("form") as HTMLFormElement);
     expect(addModel).toHaveBeenCalledTimes(1);
-    expect(onComplete).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
 
-    await fireEvent.click(getByTestId("first-run-skip"));
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    await fireEvent.click(m.getByTestId("first-run-skip"));
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("already refused before the picker opened (the boot reconcile): Save is unavailable AND the reason is on screen, described to the button", async () => {
+  it("already refused before the window opened (the boot reconcile): Save is unavailable AND the reason is on screen, described to the button", async () => {
     const { noteModelsWriteRefused } = await import("../../src/client/models/write-refusal");
     const { _setPageOriginForTests } = await import(
       "../../src/client/hooks/useModelsWriteAccess.svelte"
     );
     _setPageOriginForTests("http://127.0.0.1:5173");
     noteModelsWriteRefused();
-    const { getByTestId } = render(FirstRunModelPickerModal, { props: { onComplete: vi.fn() } });
+    const m = mount();
 
-    const save = getByTestId("first-run-save");
-    const reason = getByTestId("first-run-error");
+    const save = saveButton(m);
+    const reason = m.getByTestId("first-run-error");
     expect(save.getAttribute("aria-disabled")).toBe("true");
     expect(reason.textContent?.trim()).toContain(
       "These settings can only be changed in Tandem's own window.",
@@ -250,16 +352,17 @@ describe("FirstRunModelPickerModal — a save the server refused as not Tandem's
     expect(reason.textContent).toContain("TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173");
     expect(save.getAttribute("aria-describedby")).toBe(reason.id);
     expect(reason.id).toBeTruthy();
+    // The refusal wins: no "Enter a Model ID" line beside it.
+    expect(m.queryByTestId("first-run-save-reason")).toBeNull();
 
     await fireEvent.click(save);
     expect(addModel).not.toHaveBeenCalled();
   });
 
-  it("on Tandem's own window there is no message and Save is not described by one", () => {
-    const { getByTestId, queryByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete: vi.fn() },
-    });
-    expect(queryByTestId("first-run-error")).toBeNull();
-    expect(getByTestId("first-run-save").getAttribute("aria-describedby")).toBeNull();
+  it("on Tandem's own window, with both fields filled, there is no message and Save is not described by one", async () => {
+    const m = mount();
+    await typeModelId(m, "qwen");
+    expect(m.queryByTestId("first-run-error")).toBeNull();
+    expect(saveButton(m).getAttribute("aria-describedby")).toBeNull();
   });
 });

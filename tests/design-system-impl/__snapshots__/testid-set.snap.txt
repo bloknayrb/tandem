@@ -230,9 +230,11 @@ first-run-endpoint-hint
 first-run-error
 first-run-model-modal
 first-run-modelid
+first-run-modelid-hint
 first-run-provider-{*}
 first-run-providers
 first-run-save
+first-run-save-reason
 first-run-skip
 first-run-skip-secondary
 first-run-subtitle

@@ -124,6 +124,9 @@ describe("integration wizard — AI models row (§3.6, flag ON)", () => {
     await tick();
 
     expect(onClose).toHaveBeenCalledTimes(1);
+    // #1123: Settings opens alone — the first-run local-model window is not
+    // offered after this close.
+    expect(onClose).toHaveBeenCalledWith("other");
     expect(onSetupModels).toHaveBeenCalledTimes(1);
   });
 });

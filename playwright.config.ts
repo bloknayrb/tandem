@@ -68,17 +68,18 @@ export default defineConfig({
     // on a retry inside a timing gate would shift the measurement.
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    // #1123: with BYO_MODELS_ENABLED on, App's first-run "Connect an AI model"
-    // window (`shouldShowModelPicker`) opens over every page with no saved
-    // default model and would cover every unrelated spec. App reads
+    // #1123: with BYO_MODELS_ENABLED on, App's first-run local-model window
+    // (`modelPickerOpen`) is offered once, when the setup wizard closes after
+    // Claude was set up in it. App reads
     // `tandem:modelPickerDismissed === "1"` (its `MODEL_PICKER_DISMISSED_KEY`)
     // to keep it closed; seeding it for the client's origin here is inert while
     // the flag is off. Built inline from E2E_VITE_PORT rather than a checked-in
     // JSON so the port is never hardcoded. scripts/screenshots and
     // scripts/design-baselines inherit it; tests/perf defines its own `use` and
     // does not (it runs no Models spec). `agent-identity.spec.ts`, which expects
-    // the window, opts out with an empty `storageState`. Whether this stays is
-    // for the readiness change for the first-run window to decide.
+    // the window, opts out with an empty `storageState`. The key stays the
+    // window's per-profile guard; the window is unreachable in E2E while the
+    // wizard is disabled there.
     storageState: {
       cookies: [],
       origins: [

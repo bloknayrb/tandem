@@ -194,7 +194,7 @@ import { openFileForRuntime } from "./utils/browse-file";
 import { createLaunchLatch } from "./utils/launch-latch.svelte";
 import { planLicenseGraceNotice } from "./utils/license-ui";
 import { resolveDefaultModelChip } from "./utils/model-chip";
-import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
+import { shouldOfferModelPicker, type WizardCloseReason } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 import { wireSidecarRestarted } from "./utils/sidecar-restart-toast";
@@ -659,6 +659,29 @@ $effect(() => {
   }
 });
 
+// #1123 (R1.1a): the same cold start for the model list. `main.ts` loads it
+// once before mount with no retry, and on a desktop cold start that load is
+// likely to fail while the sidecar spawns; the first-run local-model window is
+// offered only once the list has loaded. So once the server is reachable,
+// retry it — once per connection (a later reconnect retries a failed one),
+// never while a load is already running (the boot load, or this one), and
+// never from the effect body: `reload()` writes `$state` synchronously, so it
+// runs in a promise continuation. Its own continuation, not inside the
+// `firstRun` re-check's `.then` above, which runs only while `needed !== true`.
+let modelsReloadTriedThisConnection = false;
+$effect(() => {
+  if (!BYO_MODELS_ENABLED) return;
+  if (!yjsSync.connected) {
+    modelsReloadTriedThisConnection = false;
+    return;
+  }
+  if (modelsStore.loaded || modelsStore.loading || modelsReloadTriedThisConnection) return;
+  modelsReloadTriedThisConnection = true;
+  void Promise.resolve().then(() => {
+    if (!modelsStore.loaded && !modelsStore.loading) return modelsStore.reload();
+  });
+});
+
 /** Opens the Claude Code integration wizard (the "Connect AI" CTA). Reuses the
  *  existing manual-reopen event path so dismissal isn't burned (see the
  *  `tandem:open-integration-wizard` listener below). */
@@ -999,6 +1022,13 @@ const WIZARD_CLOSED_LAUNCH_KEY = "tandem:wizard-closed-for-launch";
 let dismissedForVersion = $state<string | null>(readDismissed());
 const wizardClosedLatch = createLaunchLatch(WIZARD_CLOSED_LAUNCH_KEY, () => firstRun.launchId);
 let manuallyReopened = $state(false);
+/** #1123: the first-run local-model window is shown in this page. Written in
+ * exactly two places: true in `closeIntegrationWizard`, false in
+ * `dismissModelPicker` (see the "First-run local-model window" block). */
+let modelPickerShown = $state(false);
+/** The window's one mount condition, also read by the tutorial gate and by
+ * every entry point that refuses to open over it (RW-2). */
+const modelPickerOpen = $derived(BYO_MODELS_ENABLED && modelPickerShown);
 
 function readDismissed(): string | null {
   try {
@@ -1054,7 +1084,11 @@ $effect(() => {
   if (shouldShowWizard) settingsModalOpen = false;
 });
 
-function closeIntegrationWizard(): void {
+function closeIntegrationWizard(reason: WizardCloseReason = "other"): void {
+  // #1123: what the wizard was, read before the writes below change it.
+  const closeWasAutoOpen = isAutoOpenFirstRun;
+  const closeWasManual = manuallyReopened;
+  const closeWasWalkthrough = firstRun.walkthrough;
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
   // would otherwise burn the dismissal slot for `serverVersion`.
@@ -1062,11 +1096,34 @@ function closeIntegrationWizard(): void {
   // The walkthrough (#2198) is NOT dismissed for the version: only Keep or a
   // successful Apply ends it, on the server. Closing it ends it for this
   // session alone.
-  if (isAutoOpenFirstRun && firstRun.serverVersion !== null) {
+  if (closeWasAutoOpen && firstRun.serverVersion !== null) {
     if (!firstRun.walkthrough) dismissForVersion(firstRun.serverVersion);
     wizardClosedLatch.mark();
   }
   manuallyReopened = false;
+  // #1123 (W1): offer the first-run local-model window once, decided here and
+  // only here — after the writes above, so the closing wizard no longer reads
+  // as an open dialog. Never writes false: a wizard opened from the tray beside
+  // an open window must not unmount it.
+  if (
+    BYO_MODELS_ENABLED &&
+    shouldOfferModelPicker({
+      reason,
+      autoOpened: closeWasAutoOpen,
+      manuallyReopened: closeWasManual,
+      walkthrough: closeWasWalkthrough,
+      loaded: modelsStore.loaded,
+      savedModelCount: modelsStore.models.length,
+      wizardShowing: shouldShowWizard,
+      settingsOpen: settingsModalOpen,
+      helpOpen: showHelp,
+      paletteOpen,
+      fileOpenDialogOpen,
+      dismissed: modelPickerDismissed,
+      pageCannotChangeModels: modelsPageAccess() === "foreign",
+    })
+  )
+    modelPickerShown = true;
   wizardFocusClaudeCodeOffer = false;
   // Re-read: a successful Apply or Keep may have just ended the walkthrough on
   // the server, and a later Settings → Reopen must not show its copy again.
@@ -1194,6 +1251,8 @@ let fileOpenDialogOpen = $state(false);
 // `browseNativeFile` via the `onError` callback; void callers can fire-and-
 // forget safely.
 function requestOpenFile(): Promise<void> {
+  // #1123 (RW-2): nothing opens over the first-run local-model window.
+  if (modelPickerOpen) return Promise.resolve();
   return openFileForRuntime({
     isTauri: isTauriRuntime(),
     openModal: () => {
@@ -1222,6 +1281,8 @@ function openSettingsModalWithAck() {
   // from every entry point routed through here (keyboard shortcut, toolbar,
   // command palette, the model-chip shortcut). Refuse instead.
   if (shouldShowWizard) return;
+  // #1123 (RW-2): nor over the first-run local-model window.
+  if (modelPickerOpen) return;
   updateAvailable.acknowledge();
   settingsModalOpen = true;
 }
@@ -1875,6 +1936,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
       return;
     }
+    // #1123 (RW-2): Help does not open over the first-run local-model window.
+    if (modelPickerOpen) return;
     e.preventDefault();
     showHelp = untrack(() => !showHelp);
   },
@@ -1958,6 +2021,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     ) {
       return;
     }
+    // #1123 (RW-2, RW-8): its own guard line, so the pin above stays exact.
+    if (!untrack(() => paletteOpen) && modelPickerOpen) return;
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -2082,6 +2147,9 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
       // Palette/find UI is the active context; user understands why.
       return;
     }
+    // #1123 (RW-2): nor behind the first-run local-model window's scrim. Its
+    // own line, so the exact pin on the set above stays as it is.
+    if (modelPickerOpen) return;
     if (!hasSelection) {
       notifications.push({
         id: `comment-shortcut-no-selection-${Date.now()}`,
@@ -2757,21 +2825,18 @@ const tutorial = createTutorial(
   () => review.getRecentlyResolved(),
 );
 
-// First-run model picker (#1123) — an OPTIONAL, skippable step sequenced AFTER
-// the integration wizard and BEFORE the tutorial.
+// First-run local-model window (#1123, ADR-039 item 21 as amended by W1):
+// "Add a local model (optional)". Offered at most once per page, decided once
+// when the integration wizard closes (`closeIntegrationWizard`, the only place
+// `modelPickerShown` is written true), and gone only by its own close
+// (`dismissModelPicker`, the only place it is written false). Once shown, the
+// model list, a saved model and the default never unmount or remount it.
+// Dismissal is PERSISTED (localStorage), so it is offered once per profile.
 //
-// M4 decoupled the picker from the tutorial: M2b borrowed `tutorial.tutorialActive`
-// as its existence condition, which meant a no/completed-tutorial user never saw
-// it and a tutorial *replay* re-summoned it. The signal now keys on the model
-// registry's own state (`resolveModelFirstRunNeeded`, which takes NO tutorial
-// input) — show once BYO is on, the wizard isn't showing, the registry has
-// settled with no configured default, and the user hasn't dismissed it. Dismissal
-// is PERSISTED (localStorage) so a skip isn't re-nagged on the next launch.
-//
-// Dark guarantee: `BYO_MODELS_ENABLED &&` remains the leading short-circuit
-// conjunct, so while dark `shouldShowModelPicker` is always false and the
-// registry reads never evaluate — the tutorial gate (`!shouldShowModelPicker`)
-// reduces to today's exact `tutorial.tutorialActive && !shouldShowWizard`.
+// Dark guarantee: `modelPickerOpen` leads with `BYO_MODELS_ENABLED &&` and
+// `modelPickerShown` is written true only behind the same flag, so while dark
+// the window never mounts and the tutorial gate and the entry points that
+// refuse over it behave exactly as before.
 const MODEL_PICKER_DISMISSED_KEY = "tandem:modelPickerDismissed";
 function loadModelPickerDismissed(): boolean {
   try {
@@ -2782,24 +2847,15 @@ function loadModelPickerDismissed(): boolean {
 }
 let modelPickerDismissed = $state(loadModelPickerDismissed());
 function dismissModelPicker() {
+  modelPickerShown = false;
   modelPickerDismissed = true;
   try {
     localStorage.setItem(MODEL_PICKER_DISMISSED_KEY, "1");
   } catch {
     // Storage-disabled (incognito) — a session-scoped dismissal is an acceptable
-    // fallback; the picker still won't re-open within this session.
+    // fallback; the window still won't re-open within this session.
   }
 }
-const shouldShowModelPicker = $derived(
-  BYO_MODELS_ENABLED &&
-    resolveModelFirstRunNeeded({
-      wizardShowing: shouldShowWizard,
-      hasConfiguredDefault: modelsStore.defaultModelId !== null,
-      dismissed: modelPickerDismissed,
-      loading: modelsStore.loading,
-      pageCannotChangeModels: modelsPageAccess() === "foreign",
-    }),
-);
 </script>
 
 <div
@@ -2811,7 +2867,9 @@ const shouldShowModelPicker = $derived(
     onModeChange={modeState.setTandemMode}
     theme={settingsState.settings.theme}
     onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
-    onOpenHelp={() => (showHelp = true)}
+    onOpenHelp={() => {
+      if (!modelPickerOpen) showHelp = true;
+    }}
     onOpenSettings={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
@@ -2883,7 +2941,7 @@ const shouldShowModelPicker = $derived(
            silent when the gate is dark or a license is active). -->
       <LicenseBanner />
 
-      {#if tutorial.tutorialActive && !shouldShowWizard && !shouldShowModelPicker}
+      {#if tutorial.tutorialActive && !shouldShowWizard && !modelPickerOpen}
         <!-- #1711: the getting-started checklist. In normal flow inside the
              measured stack, so it sits above the document rather than over it.
              Waits behind the first-run wizard and the model picker (#1123 M2b),
@@ -3280,10 +3338,11 @@ const shouldShowModelPicker = $derived(
       />
     {/if}
 
-    {#if shouldShowModelPicker}
-      <!-- Optional post-wizard model step (#1123 M2b, dark until M4). Skip or
-           complete dismisses it for the session, revealing the tutorial (gated
-           on `!shouldShowModelPicker` below). Never mounts while dark. -->
+    {#if modelPickerOpen}
+      <!-- The first-run local-model window (#1123): offered once, when the
+           wizard closes after Claude was set up in it. Its own close dismisses
+           it, revealing the tutorial (gated on `!modelPickerOpen` above).
+           Never mounts while dark. -->
       <FirstRunModelPickerModal onComplete={dismissModelPicker} />
     {/if}
 

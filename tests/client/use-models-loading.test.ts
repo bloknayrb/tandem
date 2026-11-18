@@ -105,3 +105,57 @@ describe("models store — loading / reload (flag mocked ON)", () => {
     expect(models.models.map((m) => m.id)).toEqual(["srv-1"]);
   });
 });
+
+// #1123 (R1.3): `loaded` says the list has loaded in this page, for the
+// first-run window. It is set by the first successful load and never cleared.
+describe("models store — loaded (flag mocked ON)", () => {
+  function failThenSucceed(failures: number) {
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        call++;
+        if (call <= failures) return new Response("nope", { status: 500 });
+        return new Response(JSON.stringify({ file: serverFile, etag: "e-ok" }), { status: 200 });
+      }),
+    );
+  }
+
+  it("is false before and during the first load, and true after it succeeds", async () => {
+    const models = createModels();
+    expect(models.loaded).toBe(false);
+    const p = loadFromServer();
+    expect(models.loaded).toBe(false);
+    await p;
+    expect(models.loaded).toBe(true);
+  });
+
+  it("stays true after a later failed reload", async () => {
+    const models = createModels();
+    await loadFromServer();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
+    await models.reload();
+    expect(models.loadFailed).toBe(true);
+    expect(models.loaded).toBe(true);
+  });
+
+  it("is false after a failed first load, and true once a reload succeeds", async () => {
+    failThenSucceed(1);
+    const models = createModels();
+    await loadFromServer();
+    expect(models.loaded).toBe(false);
+    await models.reload();
+    expect(models.loaded).toBe(true);
+  });
+
+  it("is false again after the test reset", async () => {
+    const models = createModels();
+    await loadFromServer();
+    expect(models.loaded).toBe(true);
+    _resetModelsStoreForTests();
+    expect(models.loaded).toBe(false);
+  });
+});
