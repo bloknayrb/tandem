@@ -1113,7 +1113,7 @@ const HANDOVER_FAILED_TEXT =
   "[ownership] a document changed hands but its inbox handover did not complete: some of what its previous owner was shown may still count as seen, or the document's handover mark was not moved";
 
 describe("the agreement table: waiting answers as a fresh poll of Tandem's Claude would hand (rows 1 to 46)", () => {
-  it("has the briefs' 46 rows, numbered in order", () => {
+  it("has all 46 rows, numbered in order", () => {
     expect(ROWS.map((r) => Number.parseInt(r.name, 10))).toEqual(
       Array.from({ length: 46 }, (_, i) => i + 1),
     );

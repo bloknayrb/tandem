@@ -577,7 +577,8 @@ const DOCUMENT_WAITING_FAILED =
  *
  * **It makes no Y.Doc write.** (It does not write nothing at all: like every
  * caller of `store.listAnnotations()`, it can log a legacy migration and add
- * to the migration log's in-memory dedup set, `migration-log.ts`.) The Y.Doc
+ * to the migration log's in-memory dedup set, `migration-log.ts`, and log a
+ * malformed key.) The Y.Doc
  * comes from the non-creating getter, the store is built as
  * {@link currentNoticeKeys} builds one, and the rule
  * receives copies: `sanitizeAnnotation` copies shallowly (its `range`,
