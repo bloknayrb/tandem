@@ -2,7 +2,13 @@
 /**
  * The first-run window, "Add a local model (optional)" (#1123, ADR-039 items
  * 21–23): pick a local provider, name the model, save it and make it the
- * default. The caller's `onComplete` fires on save or on any close.
+ * Default. Choosing a model here counts as the user choosing the Default,
+ * replacing any earlier one (Bryan, 2026-11-18, review round 1 of #2462).
+ * Usually the Models store has already marked it inside the add's own write
+ * (the automatic default, Label decision L6 of 2026-11-17), and then there is
+ * no second write; otherwise the window sets it with `setDefault`, a chosen
+ * default that carries no automatic marker. The caller's `onComplete` fires
+ * on save or on any close.
  *
  * Mounted by `App.svelte` behind `modelPickerOpen` (offered once, when the
  * integration wizard closes after Claude was set up in it), which is gated on
@@ -88,8 +94,10 @@ let saveError = $state<string | null>(null);
 // no other error is on screen.
 const shownError = $derived(saveError ?? (access.blocked ? access.notice : null));
 // Set when the window has closed (any exit, a finished save, or unmount). A save
-// still in flight then neither sets the default nor leaves an error on the
-// shared store (R2.4). Plain, not `$state`: nothing renders from it.
+// still in flight then leaves no error on the shared store and does not
+// complete twice (R2.4). A close during the add skips the window's own
+// `setDefault`, but cannot stop a default the store marked inside the add's
+// own write (CD-2). Plain, not `$state`: nothing renders from it.
 let closed = false;
 onDestroy(() => {
   closed = true;
@@ -174,7 +182,8 @@ async function handleSave(e: SubmitEvent) {
   // Save is natively disabled while saving, and a browser moves focus off a
   // disabled control to <body>, where the dialog's Escape no longer reaches.
   // Keep focus in the dialog so the exits stay live from the keyboard (R2.4);
-  // a failed save hands it back to Save below.
+  // a failed save then puts it on Save below, whichever control submitted
+  // (CD-7: Enter from a field included).
   const parkedFocus =
     dialogEl !== null &&
     dialogEl.contains(document.activeElement) &&
@@ -192,7 +201,8 @@ async function handleSave(e: SubmitEvent) {
       isCloud ? apiKey.trim() : undefined,
     );
     // Closed while the add was in flight (R2.4): the model is saved if the add
-    // committed, and not otherwise; either way it is not made the default, and
+    // committed, and not otherwise (and made the default only when its own
+    // write marked it, CD-2: the window's own `setDefault` below is skipped);
     // a rollback's error is not left on the store for Settings → Models.
     if (closed) {
       models.clearError();
@@ -208,14 +218,20 @@ async function handleSave(e: SubmitEvent) {
         : (models.saveError ?? "Failed to save model changes.");
       return;
     }
-    // The model committed. Making it the default can still roll back (a
-    // concurrent writer / blip); the model exists either way, so the window
-    // closes as a success and drops the store's rollback message, which would
-    // otherwise surface later in Settings → Models (RW-5). A sole enabled local
-    // model needs no default.
-    const defaulted = await models.setDefault(id);
-    if (!defaulted) models.clearError();
-    if (closed) return;
+    // The model committed. The window's model becomes the Default (Bryan,
+    // 2026-11-18): when the add's own write did not already mark it (another
+    // default was set, possibly by another window between the offer and
+    // Save, or another enabled local model left the rule silent), set it as
+    // a chosen default. That write can still roll back (a concurrent writer
+    // or a blip); the model exists either way, so the window closes as a
+    // success and drops the store's rollback message, which would otherwise
+    // surface later in Settings → Models (RW-5). Closed while it is pending:
+    // the window has already completed, so only the error is dropped.
+    if (models.defaultModelId !== id) {
+      const defaulted = await models.setDefault(id);
+      if (!defaulted) models.clearError();
+      if (closed) return;
+    }
     finish();
   } catch (err) {
     if (closed) {
@@ -225,10 +241,11 @@ async function handleSave(e: SubmitEvent) {
     saveError = err instanceof Error ? err.message : "Failed to save";
   } finally {
     saving = false;
-    // A failed save leaves the window open with the reason shown: give focus
-    // back to Save (enabled again after this render) if it is still parked on
-    // the dialog, so a keyboard user is where they were. In `finally`, because
-    // the failure branches `return` out of the `try`.
+    // A failed save leaves the window open with the reason shown: move focus
+    // to Save (enabled again after this render) if it is still parked on the
+    // dialog, whichever control submitted — after Enter from a field that is
+    // Save, not the field (CD-7). In `finally`, because the failure branches
+    // `return` out of the `try`.
     if (parkedFocus && !closed && saveError !== null && document.activeElement === dialogEl) {
       await tick();
       saveEl?.focus();
@@ -237,8 +254,8 @@ async function handleSave(e: SubmitEvent) {
 }
 
 function handleSkip() {
-  // Drop any error left on the shared store singleton (e.g. a rolled-back add or
-  // setDefault) so it can't co-show on the next Settings → Models open.
+  // Drop any error left on the shared store singleton (e.g. a rolled-back add)
+  // so it can't co-show on the next Settings → Models open.
   models.clearError();
   finish();
 }

@@ -32,6 +32,7 @@ import {
   createModels,
   getModelsSnapshot,
 } from "../../src/client/hooks/useModels.svelte.js";
+import { API_MODELS } from "../../src/shared/models/contract.js";
 
 /**
  * Default fetch stub: keychain secret POST → 204 / DELETE → 200; models registry
@@ -852,4 +853,800 @@ describe("models store — the new local providers count as local", () => {
       }
     });
   }
+});
+
+// #1123, the automatic default, client half (Label decision L6 of 2026-11-17,
+// Default decisions DD1 to DD4 of 2026-11-18). Inside the `apply` of every
+// models write, after the write's own change, the shared `autoDefaultFor` rule
+// runs on the state that run produced: with no default at all (null, or naming
+// no entry) and exactly one enabled local entry, that entry becomes the
+// default in the same write, and the POST carries `autoDefaultId`. A default
+// that names an entry is never changed; `setDefault` is outside the rule.
+describe("models store — the automatic default (rows as data)", () => {
+  type Ids = Record<string, string>;
+  type Body = {
+    file: {
+      models: { id: string; provider: string; enabled: boolean; displayName: string }[];
+      defaultModelId: string | null;
+    };
+    autoDefaultId?: string;
+  };
+  type Models = ReturnType<typeof createModels>;
+  type Row = {
+    row: string;
+    name: string;
+    /** Ordinary writes, then `setDefault(...)` (outside the rule). */
+    seed: (m: Models, ids: Ids) => Promise<void>;
+    /** The default the seed must leave, asserted before the write. */
+    seeded: (ids: Ids) => string | null;
+    /** A server file the 409 reload returns (rows 9a to 9e). */
+    server?: (ids: Ids) => { models: unknown[]; defaultModelId: string | null };
+    /** Status of each models POST the write makes (default: 200). */
+    statuses?: number[];
+    write: (m: Models, ids: Ids) => Promise<void>;
+    expected: (ids: Ids) => string | null;
+    /** The rule marked in the run whose POST is checked. */
+    marked: boolean;
+    /** Models POSTs the write makes (rows 1 to 8: one; 9a to 9f: two). */
+    posts?: number;
+    /** 9f: every POST of the write carries the marker. */
+    everyPostMarked?: boolean;
+    /** 9a, 9b, 9e: the first (pre-409) POST carried this marker, the re-run's none. */
+    firstMarked?: (ids: Ids) => string;
+    /** The ids the last POST must list, in order (rows that add or reload). */
+    posted?: (ids: Ids) => string[];
+    /** An edited entry's fields as the last POST must carry them. */
+    edited?: (ids: Ids) => { id: string; fields: Record<string, unknown> };
+  };
+
+  const local = (name: string, enabled = true) => ({
+    provider: "local-ollama" as const,
+    displayName: name,
+    modelId: `m-${name}`,
+    endpoint: "http://127.0.0.1:11434",
+    enabled,
+  });
+  const cloud = (name: string, enabled = true) => ({
+    provider: "anthropic" as const,
+    displayName: name,
+    modelId: "claude-opus-4-7",
+    enabled,
+  });
+  const srvLocal = (id: string, enabled = true) => ({ id, ...local(id, enabled) });
+  const srvCloud = (id: string) => ({ id, ...cloud(id) });
+
+  /** Add and record the id (asserting the add committed). */
+  async function add(m: Models, ids: Ids, key: string, entry: Parameters<Models["addModel"]>[0]) {
+    const id = await m.addModel(entry);
+    expect(id).not.toBeNull();
+    ids[key] = id as string;
+  }
+
+  /** Models POST bodies only (a keyed add also POSTs to `/secrets/`). */
+  let bodies: Body[] = [];
+  let statuses: number[] = [];
+  function ruleFetch() {
+    return vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (u.includes("/secrets/")) {
+        return new Response(method === "DELETE" ? '{"existed":true}' : null, {
+          status: method === "DELETE" ? 200 : 204,
+        });
+      }
+      if (method === "POST" && u.endsWith(API_MODELS)) {
+        bodies.push(JSON.parse(init?.body as string) as Body);
+        const status = statuses.length > 0 ? (statuses.shift() as number) : 200;
+        if (status === 200) {
+          return new Response(JSON.stringify({ etag: `etag-${++etagSeq}` }), { status: 200 });
+        }
+        const code =
+          status === 409 ? "MODELS_STALE" : status === 429 ? "MODELS_BUSY" : "MODELS_WRITE_FAILED";
+        return new Response(JSON.stringify({ code, etag: "srv-cur" }), { status });
+      }
+      return new Response(JSON.stringify({ file: serverFile, etag: "srv-cur" }), { status: 200 });
+    });
+  }
+
+  beforeEach(() => {
+    bodies = [];
+    statuses = [];
+    vi.stubGlobal("fetch", ruleFetch());
+  });
+
+  const seedLocalA = async (m: Models, ids: Ids) => add(m, ids, "A", local("A"));
+  /** One enabled local A with no default (A is marked on its add, then cleared by hand). */
+  const seedLocalAUnmarked = async (m: Models, ids: Ids) => {
+    await seedLocalA(m, ids);
+    await m.setDefault(null);
+  };
+
+  const ROWS: Row[] = [
+    {
+      row: "1",
+      name: "no enabled local, no default; add an enabled local → the new entry (L6)",
+      seed: async () => {},
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: (ids) => ids.N,
+      posted: (ids) => [ids.N],
+      marked: true,
+    },
+    {
+      row: "1a",
+      name: "cloud default; add an enabled local → cloud default kept (DD1)",
+      seed: async (m, ids) => {
+        // Keyed: its `/secrets/` POST is not a models POST.
+        ids.C = (await m.addModel(cloud("C"), "sk-test-DO-NOT-USE")) as string;
+        expect(ids.C).toBeTruthy();
+        await m.setDefault(ids.C);
+      },
+      seeded: (ids) => ids.C,
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: (ids) => ids.C,
+      marked: false,
+    },
+    {
+      row: "1b",
+      name: "switched-off local default; add an enabled local → unchanged (DD1)",
+      seed: async (m, ids) => {
+        await add(m, ids, "D", local("D", false));
+        await m.setDefault(ids.D);
+      },
+      seeded: (ids) => ids.D,
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: (ids) => ids.D,
+      marked: false,
+    },
+    {
+      row: "1c",
+      name: "an enabled cloud entry, no default; add an enabled local → the new entry",
+      seed: async (m, ids) => add(m, ids, "C", cloud("C")),
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: (ids) => ids.N,
+      posted: (ids) => [ids.C, ids.N],
+      marked: true,
+    },
+    {
+      row: "1d",
+      name: 'one enabled local A, default "ghost"; rename A → A (dangling is none)',
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await m.setDefault("ghost");
+      },
+      seeded: () => "ghost",
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { displayName: "A renamed" });
+      },
+      expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
+      marked: true,
+    },
+    {
+      row: "2",
+      name: "one enabled local, the default; add a second enabled local → unchanged",
+      seed: seedLocalA,
+      seeded: (ids) => ids.A,
+      write: (m, ids) => add(m, ids, "B", local("B")),
+      expected: (ids) => ids.A,
+      marked: false,
+    },
+    {
+      row: "2a",
+      name: "one enabled local A, no default; add a second enabled local → none (Ruling 1)",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "B", local("B")),
+      expected: () => null,
+      marked: false,
+    },
+    {
+      row: "2b",
+      name: "one enabled local A, no default; rename A → A (DD2)",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { displayName: "A renamed" });
+      },
+      expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
+      marked: true,
+    },
+    {
+      row: "2b",
+      name: "one enabled local A, no default; rename another entry → A (DD2)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "C", cloud("C"));
+        await m.setDefault(null);
+      },
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.C, { displayName: "C renamed" });
+      },
+      expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.C, fields: { displayName: "C renamed" } }),
+      marked: true,
+    },
+    {
+      row: "2c",
+      name: "one enabled local A, no default; add a switched-off local → A (DD2)",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "D", local("D", false)),
+      expected: (ids) => ids.A,
+      posted: (ids) => [ids.A, ids.D],
+      marked: true,
+    },
+    {
+      row: "2d",
+      name: "one enabled local A, no default; add a cloud entry → A (DD2)",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "C", cloud("C")),
+      expected: (ids) => ids.A,
+      posted: (ids) => [ids.A, ids.C],
+      marked: true,
+    },
+    {
+      row: "2e",
+      name: "one enabled local A, no default; toggle A off → none",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: (m, ids) => m.toggleEnabled(ids.A),
+      expected: () => null,
+      marked: false,
+    },
+    {
+      row: "2e",
+      name: "one enabled local A, no default; edit A to disabled → none",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { enabled: false });
+      },
+      expected: () => null,
+      edited: (ids) => ({ id: ids.A, fields: { enabled: false } }),
+      marked: false,
+    },
+    {
+      row: "2e",
+      name: "one enabled local A, no default; delete A → none",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: () => null,
+      marked: false,
+    },
+    {
+      row: "2f",
+      name: "A made the default by setDefault(A); rename A → unchanged, no marker",
+      seed: async (m, ids) => {
+        await seedLocalAUnmarked(m, ids);
+        await m.setDefault(ids.A);
+      },
+      seeded: (ids) => ids.A,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { displayName: "A renamed" });
+      },
+      expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
+      marked: false,
+    },
+    {
+      row: "2f",
+      name: "A made the default by setDefault(A); add a cloud entry → unchanged, no marker",
+      seed: async (m, ids) => {
+        await seedLocalAUnmarked(m, ids);
+        await m.setDefault(ids.A);
+      },
+      seeded: (ids) => ids.A,
+      write: (m, ids) => add(m, ids, "C", cloud("C")),
+      expected: (ids) => ids.A,
+      marked: false,
+    },
+    {
+      row: "3",
+      name: "no enabled local, no default; add a switched-off local → none",
+      seed: async () => {},
+      seeded: () => null,
+      write: (m, ids) => add(m, ids, "D", local("D", false)),
+      expected: () => null,
+      marked: false,
+    },
+    {
+      row: "4",
+      name: "no enabled local, no default; turn on a switched-off local by toggle → it (DD3)",
+      seed: async (m, ids) => add(m, ids, "D", local("D", false)),
+      seeded: () => null,
+      write: (m, ids) => m.toggleEnabled(ids.D),
+      expected: (ids) => ids.D,
+      marked: true,
+    },
+    {
+      row: "4",
+      name: "no enabled local, no default; turn on a switched-off local by edit → it (DD3)",
+      seed: async (m, ids) => add(m, ids, "D", local("D", false)),
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.D, { enabled: true });
+      },
+      expected: (ids) => ids.D,
+      edited: (ids) => ({ id: ids.D, fields: { enabled: true } }),
+      marked: true,
+    },
+    {
+      row: "4a",
+      name: "another enabled local, the default; turn on a switched-off local → unchanged",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "D", local("D", false));
+      },
+      seeded: (ids) => ids.A,
+      write: (m, ids) => m.toggleEnabled(ids.D),
+      expected: (ids) => ids.A,
+      marked: false,
+    },
+    {
+      row: "4b",
+      name: "cloud default; turn on a switched-off local → unchanged (DD1)",
+      seed: async (m, ids) => {
+        await add(m, ids, "C", cloud("C"));
+        await m.setDefault(ids.C);
+        await add(m, ids, "D", local("D", false));
+      },
+      seeded: (ids) => ids.C,
+      write: (m, ids) => m.toggleEnabled(ids.D),
+      expected: (ids) => ids.C,
+      marked: false,
+    },
+    {
+      row: "4b",
+      name: "switched-off local default; turn on a different switched-off local → unchanged (DD1)",
+      seed: async (m, ids) => {
+        await add(m, ids, "D1", local("D1", false));
+        await m.setDefault(ids.D1);
+        await add(m, ids, "D2", local("D2", false));
+      },
+      seeded: (ids) => ids.D1,
+      write: (m, ids) => m.toggleEnabled(ids.D2),
+      expected: (ids) => ids.D1,
+      marked: false,
+    },
+    {
+      row: "4c",
+      name: "no default, a cloud entry; edit it to a local provider, enabled → it",
+      seed: async (m, ids) => add(m, ids, "C", cloud("C")),
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.C, {
+          provider: "local-ollama",
+          endpoint: "http://127.0.0.1:11434",
+          enabled: true,
+        });
+      },
+      expected: (ids) => ids.C,
+      edited: (ids) => ({
+        id: ids.C,
+        fields: { provider: "local-ollama", endpoint: "http://127.0.0.1:11434", enabled: true },
+      }),
+      marked: true,
+    },
+    {
+      row: "4d",
+      name: "one enabled local A, no default; edit A to a cloud provider → none",
+      seed: seedLocalAUnmarked,
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { provider: "anthropic" });
+      },
+      expected: () => null,
+      edited: (ids) => ({ id: ids.A, fields: { provider: "anthropic" } }),
+      marked: false,
+    },
+    {
+      row: "5",
+      name: "default and one other enabled local; delete the default → the other (DD2)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.A,
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: (ids) => ids.B,
+      marked: true,
+    },
+    {
+      row: "5a",
+      name: "cloud default, one enabled local; delete the default → the local one",
+      seed: async (m, ids) => {
+        await add(m, ids, "C", cloud("C"));
+        await m.setDefault(ids.C);
+        await add(m, ids, "A", local("A"));
+      },
+      seeded: (ids) => ids.C,
+      write: (m, ids) => m.deleteModel(ids.C),
+      expected: (ids) => ids.A,
+      marked: true,
+    },
+    {
+      row: "5a",
+      name: "switched-off default, one enabled local; delete the default → the local one",
+      seed: async (m, ids) => {
+        await add(m, ids, "D", local("D", false));
+        await m.setDefault(ids.D);
+        await add(m, ids, "A", local("A"));
+      },
+      seeded: (ids) => ids.D,
+      write: (m, ids) => m.deleteModel(ids.D),
+      expected: (ids) => ids.A,
+      marked: true,
+    },
+    {
+      row: "6",
+      name: "default and two other enabled locals; delete the default → none (Accepted)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+        await add(m, ids, "E", local("E"));
+      },
+      seeded: (ids) => ids.A,
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: () => null,
+      marked: false,
+    },
+    ...(
+      [
+        ["delete one", (m: Models, ids: Ids) => m.deleteModel(ids.A)],
+        ["toggle one off", (m: Models, ids: Ids) => m.toggleEnabled(ids.A)],
+        [
+          "edit one to disabled",
+          async (m: Models, ids: Ids) => {
+            await m.updateModel(ids.A, { enabled: false });
+          },
+        ],
+      ] as const
+    ).map(
+      ([what, write]): Row => ({
+        row: "6a",
+        name: `two enabled locals, no default; ${what} → the other (DD2)`,
+        seed: async (m, ids) => {
+          await seedLocalA(m, ids);
+          await add(m, ids, "B", local("B"));
+          await m.setDefault(null);
+        },
+        seeded: () => null,
+        write,
+        expected: (ids) => ids.B,
+        marked: true,
+      }),
+    ),
+    {
+      row: "6b",
+      name: "cloud default, two enabled locals; delete one local → cloud default (DD1)",
+      seed: async (m, ids) => {
+        await add(m, ids, "C", cloud("C"));
+        await m.setDefault(ids.C);
+        await add(m, ids, "A", local("A"));
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.C,
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: (ids) => ids.C,
+      marked: false,
+    },
+    {
+      row: "6c",
+      name: "three enabled locals, no default; delete one → none (Accepted)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+        await add(m, ids, "E", local("E"));
+        await m.setDefault(null);
+      },
+      seeded: () => null,
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: () => null,
+      marked: false,
+    },
+    {
+      row: "6d",
+      name: "two enabled locals, no default; edit one to a cloud provider → the other",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+        await m.setDefault(null);
+      },
+      seeded: () => null,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { provider: "anthropic" });
+      },
+      expected: (ids) => ids.B,
+      edited: (ids) => ({ id: ids.A, fields: { provider: "anthropic" } }),
+      marked: true,
+    },
+    {
+      row: "7",
+      name: "default and one other enabled local; switch the default off by toggle → kept (DD1, CD-8)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.A,
+      write: (m, ids) => m.toggleEnabled(ids.A),
+      expected: (ids) => ids.A,
+      marked: false,
+    },
+    {
+      row: "7",
+      name: "default and one other enabled local; switch the default off by edit → kept (DD1, CD-8)",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.A,
+      write: async (m, ids) => {
+        await m.updateModel(ids.A, { enabled: false });
+      },
+      expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { enabled: false } }),
+      marked: false,
+    },
+    {
+      row: "8",
+      name: "cloud default and one enabled local; add a second enabled local → cloud default (DD1)",
+      seed: async (m, ids) => {
+        await add(m, ids, "C", cloud("C"));
+        await m.setDefault(ids.C);
+        await add(m, ids, "A", local("A"));
+      },
+      seeded: (ids) => ids.C,
+      write: (m, ids) => add(m, ids, "B", local("B")),
+      expected: (ids) => ids.C,
+      marked: false,
+    },
+    {
+      row: "9a",
+      name: "409: the server gained an enabled local default → the other window's default, no marker",
+      seed: async () => {},
+      seeded: () => null,
+      server: () => ({ models: [srvLocal("X")], defaultModelId: "X" }),
+      statuses: [409, 200],
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: () => "X",
+      posted: (ids) => ["X", ids.N],
+      firstMarked: (ids) => ids.N,
+      marked: false,
+      posts: 2,
+    },
+    {
+      row: "9b",
+      name: "409: the server gained an enabled local, no default → none (two enabled), no marker",
+      seed: async () => {},
+      seeded: () => null,
+      server: () => ({ models: [srvLocal("X")], defaultModelId: null }),
+      statuses: [409, 200],
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: () => null,
+      posted: (ids) => ["X", ids.N],
+      firstMarked: (ids) => ids.N,
+      marked: false,
+      posts: 2,
+    },
+    {
+      row: "9c",
+      name: "409: the server deleted the mirror's default → the new entry, marked",
+      seed: seedLocalA,
+      seeded: (ids) => ids.A,
+      server: () => ({ models: [], defaultModelId: null }),
+      statuses: [409, 200],
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: (ids) => ids.N,
+      posted: (ids) => [ids.N],
+      marked: true,
+      posts: 2,
+    },
+    {
+      row: "9d",
+      name: "409: delete the default while the server gained a third enabled local → none",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.A,
+      server: (ids) => ({
+        models: [srvLocal(ids.A), srvLocal(ids.B), srvLocal("E")],
+        defaultModelId: ids.A,
+      }),
+      statuses: [409, 200],
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: () => null,
+      posted: (ids) => [ids.B, "E"],
+      marked: false,
+      posts: 2,
+    },
+    {
+      row: "9e",
+      name: "409: the server set a cloud default → cloud default, no marker",
+      seed: async () => {},
+      seeded: () => null,
+      server: () => ({ models: [srvCloud("C")], defaultModelId: "C" }),
+      statuses: [409, 200],
+      write: (m, ids) => add(m, ids, "N", local("N")),
+      expected: () => "C",
+      posted: (ids) => ["C", ids.N],
+      firstMarked: (ids) => ids.N,
+      marked: false,
+      posts: 2,
+    },
+    {
+      row: "9f",
+      name: "429 then 200: delete the default → B, and both POSTs carry the marker",
+      seed: async (m, ids) => {
+        await seedLocalA(m, ids);
+        await add(m, ids, "B", local("B"));
+      },
+      seeded: (ids) => ids.A,
+      statuses: [429, 200],
+      write: (m, ids) => m.deleteModel(ids.A),
+      expected: (ids) => ids.B,
+      marked: true,
+      posts: 2,
+      everyPostMarked: true,
+    },
+  ];
+
+  for (const r of ROWS) {
+    it(`row ${r.row}: ${r.name}`, async () => {
+      const m = createModels();
+      const ids: Ids = {};
+      await r.seed(m, ids);
+      expect(m.defaultModelId).toBe(r.seeded(ids));
+      expect(m.saveError).toBeNull();
+      if (r.server) serverFile = { schemaVersion: 1, ...r.server(ids) };
+      statuses = [...(r.statuses ?? [])];
+      const before = bodies.length;
+
+      await r.write(m, ids);
+
+      const posted = bodies.slice(before);
+      expect(posted.length).toBe(r.posts ?? 1);
+      expect(m.saveError).toBeNull();
+      const expected = r.expected(ids);
+      expect(m.defaultModelId).toBe(expected);
+      const last = posted[posted.length - 1];
+      expect(last.file.defaultModelId).toBe(expected);
+      // The POSTed list is the store's list (adds and edits included).
+      expect(last.file.models.map((e) => [e.id, e.provider, e.enabled, e.displayName])).toEqual(
+        m.models.map((e) => [e.id, e.provider, e.enabled, e.displayName]),
+      );
+      if (r.marked) {
+        expect(last.autoDefaultId).toBe(expected);
+      } else {
+        expect("autoDefaultId" in last).toBe(false);
+      }
+      if (r.everyPostMarked) {
+        for (const b of posted) expect(b.autoDefaultId).toBe(expected);
+      }
+      if (r.firstMarked) expect(posted[0].autoDefaultId).toBe(r.firstMarked(ids));
+      if (r.posted) expect(last.file.models.map((e) => e.id)).toEqual(r.posted(ids));
+      if (r.edited) {
+        const { id, fields } = r.edited(ids);
+        expect(last.file.models.find((e) => e.id === id)).toMatchObject(fields);
+      }
+    });
+  }
+
+  it("setDefault never sends the marker: marked add, then setDefault(null), then setDefault(A)", async () => {
+    const m = createModels();
+    const ids: Ids = {};
+    await add(m, ids, "A", local("A"));
+    expect(bodies[bodies.length - 1].autoDefaultId).toBe(ids.A);
+
+    await m.setDefault(null);
+    expect(m.defaultModelId).toBeNull();
+    expect(bodies[bodies.length - 1].file.defaultModelId).toBeNull();
+    expect("autoDefaultId" in bodies[bodies.length - 1]).toBe(false);
+
+    await m.setDefault(ids.A);
+    expect(bodies.length).toBe(3);
+    expect(m.defaultModelId).toBe(ids.A);
+    expect(bodies[2].file.defaultModelId).toBe(ids.A);
+    expect("autoDefaultId" in bodies[2]).toBe(false);
+  });
+
+  it("a rolled-back marked write restores no default, and the next write (one that marks nothing) posts no marker", async () => {
+    const m = createModels();
+    const ids: Ids = {};
+    statuses = [500];
+    expect(await m.addModel(local("A"))).toBeNull();
+    expect(bodies[0].autoDefaultId).toBeDefined(); // the failed POST was marked
+    expect(m.models).toEqual([]);
+    expect(m.defaultModelId).toBeNull();
+
+    await add(m, ids, "C", cloud("C"));
+    expect(bodies.length).toBe(2);
+    expect("autoDefaultId" in bodies[1]).toBe(false);
+    expect(bodies[1].file.defaultModelId).toBeNull();
+  });
+
+  it("the default is set in the write's own apply, before the POST is gated (not at POST time)", async () => {
+    _resetModelsStoreForTests(); // the reconcile gate left pending
+    const m = createModels();
+    const p = m.addModel(local("N"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(m.models).toHaveLength(1);
+    const n = m.models[0].id;
+    expect(m.defaultModelId).toBe(n); // optimistic, inside apply
+    expect(bodies).toHaveLength(0); // nothing posted yet
+    _settleReconcile();
+    expect(await p).toBe(n);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].autoDefaultId).toBe(n);
+  });
+
+  // Review round 1 (#2462): the rule is decided at each write's queue turn,
+  // never when the mutator is called. Calls that are not awaited queue behind
+  // one another; a decision taken at call time would act on stale state.
+  it("an un-awaited setDefault(cloud) then an add of a local: the cloud default stays, the add's POST has no marker", async () => {
+    const m = createModels();
+    const ids: Ids = {};
+    await add(m, ids, "C", cloud("C"));
+    const before = bodies.length;
+    const pDefault = m.setDefault(ids.C);
+    const pAdd = m.addModel(local("N"));
+    expect(await pDefault).toBe(true);
+    const n = await pAdd;
+    expect(n).not.toBeNull();
+    const posted = bodies.slice(before);
+    expect(posted).toHaveLength(2);
+    expect(posted[1].file.defaultModelId).toBe(ids.C);
+    expect("autoDefaultId" in posted[1]).toBe(false);
+    expect(m.defaultModelId).toBe(ids.C);
+  });
+
+  it("two un-awaited adds of enabled locals: the first is marked, the second is not, no default replaced", async () => {
+    const m = createModels();
+    const p1 = m.addModel(local("A"));
+    const p2 = m.addModel(local("B"));
+    const a = await p1;
+    const b = await p2;
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].autoDefaultId).toBe(a);
+    expect(bodies[0].file.defaultModelId).toBe(a);
+    expect("autoDefaultId" in bodies[1]).toBe(false);
+    expect(bodies[1].file.defaultModelId).toBe(a);
+    expect(m.defaultModelId).toBe(a);
+  });
+
+  // Every local provider counts, through the one shared rule.
+  for (const provider of ["local-llamacpp", "local-lmstudio", "local-other"] as const) {
+    it(`row 1 with ${provider}: the new entry is marked`, async () => {
+      const m = createModels();
+      const id = await m.addModel({ ...local("N"), provider });
+      expect(id).not.toBeNull();
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0].autoDefaultId).toBe(id);
+      expect(m.defaultModelId).toBe(id);
+    });
+  }
+
+  it("the store imports the shared rule and defines no copy of its own", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(__dirname, "../../src/client/hooks/useModels.svelte.ts"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    expect(src).toContain('import { autoDefaultFor } from "../../shared/models/auto-default.js";');
+    expect(src).not.toMatch(/function\s+autoDefaultFor\b|autoDefaultFor\s*=/);
+    expect([...src.matchAll(/\bautoDefaultFor\s*\(/g)]).toHaveLength(1);
+    // Nothing else in the store decides "the one enabled local entry" itself.
+    expect(src).not.toMatch(
+      /isLocalProvider\([^)]*\)\s*&&\s*\w+\.enabled|enabled\s*&&\s*isLocalProvider/,
+    );
+  });
 });

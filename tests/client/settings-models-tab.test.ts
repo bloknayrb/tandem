@@ -22,6 +22,12 @@ import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.sv
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const reload = vi.fn(async () => {});
+// Hoisted handles (#1123 R1.7): the mock below builds its object per call, so
+// call assertions need these, not the members of one `createModels()` result.
+const addModel = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]): Promise<string | null> => "id"),
+);
+const setDefault = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 
 interface StoreState {
   models?: ModelRegistryEntry[];
@@ -53,11 +59,11 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     },
     reload,
     clearError: vi.fn(),
-    addModel: vi.fn(async () => "id"),
+    addModel,
     updateModel: vi.fn(async () => true),
     deleteModel: vi.fn(async () => {}),
     toggleEnabled: vi.fn(async () => {}),
-    setDefault: vi.fn(async () => true),
+    setDefault,
   }),
 }));
 
@@ -92,6 +98,8 @@ function mount() {
 afterEach(() => {
   storeState = {};
   reload.mockClear();
+  addModel.mockClear();
+  setDefault.mockClear();
   cleanup();
 });
 
@@ -152,5 +160,31 @@ describe("SettingsModelsTab — load / error / empty states", () => {
     await fireEvent.click(getByTestId("model-add-btn"));
     expect(queryByTestId("models-save-error")).toBeNull();
     expect(queryByTestId("model-edit-modal")).not.toBeNull();
+  });
+});
+
+// #1123 R1.7, a regression guard: the default is marked by the Models store
+// inside the add's own write, so Settings' add path makes no second write.
+describe("SettingsModelsTab — the add window's save", () => {
+  it("calls addModel once and setDefault never", async () => {
+    storeState = { models: [] };
+    const { getByTestId, queryByTestId } = mount();
+    await fireEvent.click(getByTestId("model-add-btn"));
+    await fireEvent.input(getByTestId("model-edit-displayname"), { target: { value: "Qwen" } });
+    await fireEvent.input(getByTestId("model-edit-modelid"), { target: { value: "qwen2.5:14b" } });
+    await fireEvent.input(getByTestId("model-edit-endpoint"), {
+      target: { value: "http://127.0.0.1:11434" },
+    });
+    await fireEvent.click(getByTestId("model-edit-save"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(addModel.mock.calls[0][0]).toMatchObject({
+      provider: "local-ollama",
+      displayName: "Qwen",
+      enabled: true,
+    });
+    expect(setDefault).not.toHaveBeenCalled();
+    expect(queryByTestId("model-edit-modal")).toBeNull(); // closed as saved
   });
 });

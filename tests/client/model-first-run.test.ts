@@ -161,7 +161,9 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
       "wizardClosedLatch.mark()",
       "manuallyReopened = false",
     ]) {
-      const at = flat.indexOf(write);
+      // The LAST occurrence: a second write after the decision (a scratch
+      // second `wizardClosedLatch.mark()`) must fail this, not hide behind the first.
+      const at = flat.lastIndexOf(write);
       expect(at, write).toBeGreaterThan(-1);
       expect(decide, `the decision after ${write}`).toBeGreaterThan(at);
     }
@@ -233,14 +235,20 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     const open: string[] = [];
     for (const m of markup
       .slice(0, mountAt)
-      .matchAll(/\{#(if|each|await|key|snippet)\b[^}]*\}|\{\/(if|each|await|key|snippet)\}/g)) {
+      .matchAll(
+        /\{#(if|each|await|key|snippet)\b[^}]*\}|\{\/(if|each|await|key|snippet)\}|\{:(else|then|catch)\b[^}]*\}/g,
+      )) {
       if (m[1]) open.push(m[0]);
-      else open.pop();
+      else if (m[2]) open.pop();
+      // An `{:else ...}` (or an await's `{:then}` / `{:catch}`) is recorded
+      // against the block on top of the stack: a mount inside a branch is not
+      // a mount inside the block's first arm.
+      else open[open.length - 1] += m[0];
     }
-    // The app shell's own block (its `{:else}` holds the whole app, the wizard
-    // included; `yjsSync.ready` goes false only at teardown), then the
-    // window's: nothing else.
-    expect(open).toEqual(["{#if !yjsSync.ready}", "{#if modelPickerOpen}"]);
+    // The app shell's own block, in its `{:else}` (which holds the whole app,
+    // the wizard included; `yjsSync.ready` goes false only at teardown), then
+    // the window's first arm: nothing else.
+    expect(open).toEqual(["{#if !yjsSync.ready}{:else}", "{#if modelPickerOpen}"]);
   });
 
   it("the tutorial waits behind the window (R1.5)", () => {
@@ -310,6 +318,14 @@ describe("App.svelte wires the first-run local-model window (#1123, R1)", () => 
     expect(effect).toMatch(
       /\.then\(\(\) => \{\s*if \(!modelsStore\.loaded && !modelsStore\.loading\) return $/,
     );
+    // Nothing else writes the latch: every assignment in App, in any form,
+    // the declaration excluded, is the reset and the set above.
+    const writes = [
+      ...app.matchAll(
+        /(?<!let )\bmodelsReloadTriedThisConnection\s*(\|\|=|&&=|\?\?=|=(?!=))\s*([^;\n]*)/g,
+      ),
+    ].map((m) => `${m[1]} ${m[2].trim()}`);
+    expect(writes.sort()).toEqual(["= false", "= true"]);
   });
 
   it("no longer derives the window from the registry", () => {

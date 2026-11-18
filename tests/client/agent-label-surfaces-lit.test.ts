@@ -72,6 +72,11 @@ const STATE_A = {
   defaultModelId: null,
 };
 
+// R0.6 (#1123, the automatic default): the same entry marked as the default,
+// as the Models store now leaves a first local model. The lit agent label is
+// a constant, so a marked default changes no label.
+const STATE_A_DEFAULT = { ...STATE_A, defaultModelId: "l1" };
+
 const MY_LLAMA = { provider: "local-llamacpp" as const, displayName: "My Llama" };
 const EMPTY_NAME = { provider: "local-llamacpp" as const, displayName: "" };
 
@@ -95,38 +100,71 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("lit, state (a): Claude-side work reads Claude on every surface (R1.1)", () => {
-  it("chat byline", async () => {
-    expect(await chatByline()).toBe("Claude");
-  });
+// #1123 (review round 1 of #2462): the automatic default is decided only
+// inside a models write. Loading a registry with one enabled local model and
+// no default marks nothing and posts nothing; a client-only default set at
+// load would be posted by the next write with no marker, which the server
+// reads as the user's choice.
+it("loading one enabled local model with no default marks nothing and makes no POST", () => {
+  expect(getModelsSnapshot().defaultModelId).toBeNull();
+  const methods = vi
+    .mocked(fetch)
+    .mock.calls.map(([, init]) =>
+      ((init as RequestInit | undefined)?.method ?? "GET").toUpperCase(),
+    );
+  expect(methods).toEqual(["GET"]);
+});
 
-  it("reply byline", async () => {
-    expect(await replyByline()).toBe("Claude");
-  });
+for (const [label, state] of [
+  ["state (a)", STATE_A],
+  ["state (a) with the entry as the default", STATE_A_DEFAULT],
+] as const) {
+  describe(`lit, ${label}: Claude-side work reads Claude on every surface (R1.1)`, () => {
+    beforeEach(async () => {
+      if (state === STATE_A) return;
+      _resetModelsStoreForTests();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () => new Response(JSON.stringify({ file: state, etag: "e-2" }), { status: 200 }),
+        ),
+      );
+      await loadFromServer();
+      expect(getModelsSnapshot().defaultModelId).toBe("l1");
+    });
 
-  it("card author", () => {
-    expect(cardAuthor()).toBe("Claude");
-  });
+    it("chat byline", async () => {
+      expect(await chatByline()).toBe("Claude");
+    });
 
-  it("card working indicator, aria-label and title", () => {
-    expect(cardWorking()).toEqual({
-      ariaLabel: "Claude is working on this annotation",
-      title: "Claude is working on this annotation",
+    it("reply byline", async () => {
+      expect(await replyByline()).toBe("Claude");
+    });
+
+    it("card author", () => {
+      expect(cardAuthor()).toBe("Claude");
+    });
+
+    it("card working indicator, aria-label and title", () => {
+      expect(cardWorking()).toEqual({
+        ariaLabel: "Claude is working on this annotation",
+        title: "Claude is working on this annotation",
+      });
+    });
+
+    it("status bar working pill, whole text (AL-1)", () => {
+      expect(statusPill()).toBe("Claude is editing…");
+    });
+
+    it("card Send to (V3)", () => {
+      expect(cardSendTo()).toBe("Send to Claude");
+    });
+
+    it("batch Send {n} to and Send to (V3)", () => {
+      expect(batchSendTo()).toEqual({ request: "Send 2 to Claude", commit: "Send to Claude" });
     });
   });
-
-  it("status bar working pill, whole text (AL-1)", () => {
-    expect(statusPill()).toBe("Claude is editing…");
-  });
-
-  it("card Send to (V3)", () => {
-    expect(cardSendTo()).toBe("Send to Claude");
-  });
-
-  it("batch Send {n} to and Send to (V3)", () => {
-    expect(batchSendTo()).toEqual({ request: "Send 2 to Claude", commit: "Send to Claude" });
-  });
-});
+}
 
 describe("lit, state (a), with chat on the local model: Claude-side work still reads Claude (R1.1, R1.2)", () => {
   // "whichever answers chat": the props the chat panel and the status bar

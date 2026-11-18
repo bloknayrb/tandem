@@ -24,8 +24,9 @@
  *
  * **Which entry answers** (Bryan, 2026-11-11): the default, when one is set.
  * With no default, a SOLE enabled local model answers without being marked —
- * adding a model from Settings does not set a default, and the client's label
- * already treats a lone model as the active one. A default that is set but
+ * a registry from before the automatic default, or one another writer left;
+ * the Models store marks such a model as the default at its next models write
+ * (ADR-039's 2026-11-18 amendment). A default that is set but
  * disabled or cloud is never overridden by a spare local model: that is the
  * user saying "Claude is my collaborator".
  *
