@@ -57,6 +57,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     get saveError() {
       return modelsPose.saveError ?? null;
     },
+    // #1123: the list has loaded (the first-run window waits for it).
+    loaded: true,
     get loading() {
       return modelsPose.loading ?? false;
     },

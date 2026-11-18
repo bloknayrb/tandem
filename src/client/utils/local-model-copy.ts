@@ -32,6 +32,28 @@ export function endpointHint(prefill: string): string {
   return `The server's address on this computer, ${example}. Leave off /chat/completions; a trailing /v1 is ignored.`;
 }
 
-/** S6: the first-run picker's subtitle while a local provider is selected. */
+/** The first-run window's title, and its dialog's accessible name (#1123,
+ *  ADR-039 item 21: reworded to say it is optional). */
+export const PICKER_TITLE = "Add a local model (optional)";
+
+/** The first-run window's subtitle (#1123 item 21; the name is S6's, kept so
+ *  the dark test still finds it absent). Two sentences; no step count. */
 export const PICKER_LOCAL_SUBTITLE =
-  "Step 1 of 2 — Tandem can use a model server on this computer.";
+  "Chat stays set to Claude. Your model server must be running on this computer for Tandem to use the model; you can also add models any time in Settings → Models.";
+
+/** Under the first-run window's Model ID field (V8): names no model. */
+export const PICKER_MODEL_ID_HINT = "The model's name exactly as your server lists it.";
+
+/**
+ * Why the first-run window's Save cannot save yet (V14), or null when it can.
+ * Trims both fields itself, so the window's `canSave` is derived from this and
+ * the two never disagree on a whitespace-only field.
+ */
+export function pickerSaveReason(fields: { endpoint: string; modelId: string }): string | null {
+  const noEndpoint = fields.endpoint.trim() === "";
+  const noModelId = fields.modelId.trim() === "";
+  if (noEndpoint && noModelId) return "Enter an Endpoint URL and a Model ID to save.";
+  if (noEndpoint) return "Enter an Endpoint URL to save.";
+  if (noModelId) return "Enter a Model ID to save.";
+  return null;
+}

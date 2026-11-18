@@ -22,6 +22,8 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     // nothing before the typed mock overload (#1615).
     models: [],
     defaultModelId: null,
+    // #1123: the list has loaded (the first-run window waits for it).
+    loaded: true,
     loading: false,
     loadFailed: false,
     updateModel: vi.fn(async () => true),
@@ -91,7 +93,7 @@ async function typeEndpoint(m: Mounted, value: string) {
 }
 
 describe("first-run picker — local providers offered", () => {
-  it("offers every local provider, enabled, in contract order before the cloud rows", () => {
+  it("offers every local provider, enabled, in contract order, and no cloud row (P4)", () => {
     const m = mount();
     for (const p of LOCAL_MODEL_PROVIDERS) {
       const radio = m.getByTestId(`first-run-provider-${p}`) as HTMLInputElement;
@@ -99,21 +101,13 @@ describe("first-run picker — local providers offered", () => {
     }
     expect(m.getByText("LM Studio (local)")).toBeTruthy();
     expect(m.getByText("Other local server (OpenAI-compatible)")).toBeTruthy();
-    // The radios' DOM order, as a literal list: the locals first, then cloud.
+    // The radios' DOM order, as a literal list: the locals only.
     const order = Array.from(
       m
         .getByTestId("first-run-providers")
         .querySelectorAll<HTMLInputElement>("input[type='radio']"),
     ).map((r) => r.value);
-    expect(order).toEqual([
-      "local-ollama",
-      "local-llamacpp",
-      "local-lmstudio",
-      "local-other",
-      "anthropic",
-      "openai",
-      "gemini",
-    ]);
+    expect(order).toEqual(["local-ollama", "local-llamacpp", "local-lmstudio", "local-other"]);
   });
 });
 
@@ -179,21 +173,53 @@ describe("first-run picker — address prefill (R2.3)", () => {
     expect(endpointField(m).value).toBe("http://127.0.0.1:1234");
   });
 
-  it("LM Studio and Other start with no model id, so Save stays disabled until it is filled", async () => {
-    for (const p of ["local-lmstudio", "local-other"] as const) {
+  // V8: no provider prefills the Model ID, so Save cannot save until it is
+  // filled; it stays focusable and says why (V14).
+  for (const p of LOCAL_MODEL_PROVIDERS) {
+    it(`${p} starts with no model id, so Save cannot save until it is filled`, async () => {
       const m = mount();
       await choose(m, p);
       expect((m.getByTestId("first-run-modelid") as HTMLInputElement).value).toBe("");
       await typeEndpoint(m, "http://127.0.0.1:1234");
-      expect((m.getByTestId("first-run-save") as HTMLButtonElement).disabled).toBe(true);
+      const save = m.getByTestId("first-run-save") as HTMLButtonElement;
+      expect(save.getAttribute("aria-disabled")).toBe("true");
+      expect(m.getByTestId("first-run-save-reason").textContent?.trim()).toBe(
+        "Enter a Model ID to save.",
+      );
       await fireEvent.input(m.getByTestId("first-run-modelid"), { target: { value: "qwen" } });
-      expect((m.getByTestId("first-run-save") as HTMLButtonElement).disabled).toBe(false);
+      expect(save.getAttribute("aria-disabled")).toBe("false");
+      expect(m.queryByTestId("first-run-save-reason")).toBeNull();
+    });
+  }
+
+  it("the Model ID stays empty through every switch, and a typed one is kept", async () => {
+    const m = mount();
+    const id = () => (m.getByTestId("first-run-modelid") as HTMLInputElement).value;
+    for (const p of [...LOCAL_MODEL_PROVIDERS].reverse()) {
+      await choose(m, p);
+      expect(id()).toBe("");
+    }
+    await fireEvent.input(m.getByTestId("first-run-modelid"), { target: { value: "mine" } });
+    for (const p of LOCAL_MODEL_PROVIDERS) {
+      await choose(m, p);
+      expect(id()).toBe("mine");
+    }
+  });
+
+  // V2: llama.cpp and Other have no address prefill, so Save names both fields.
+  it("llama.cpp and Other: Save names the Endpoint URL and the Model ID", async () => {
+    for (const p of ["local-llamacpp", "local-other"] as const) {
+      const m = mount();
+      await choose(m, p);
+      expect(m.getByTestId("first-run-save-reason").textContent?.trim()).toBe(
+        "Enter an Endpoint URL and a Model ID to save.",
+      );
       cleanup();
     }
   });
 });
 
-describe("first-run picker — copy (S3, S6, Ruling L-h)", () => {
+describe("first-run picker — copy (S3, the subtitle, Ruling L-h)", () => {
   for (const p of LOCAL_MODEL_PROVIDERS) {
     it(`${p}: the hint describes the Endpoint URL field, outside its label`, async () => {
       const m = mount();
@@ -203,8 +229,9 @@ describe("first-run picker — copy (S3, S6, Ruling L-h)", () => {
       const field = m.getByRole("textbox", { name: "Endpoint URL", description: hint });
       expect(field).toBe(endpointField(m));
       expect(m.getByTestId("first-run-endpoint-hint").textContent?.trim()).toBe(hint);
+      // The subtitle no longer counts steps (#1123 item 21).
       expect(m.getByTestId("first-run-subtitle").textContent?.trim()).toBe(
-        "Step 1 of 2 — Tandem can use a model server on this computer.",
+        "Chat stays set to Claude. Your model server must be running on this computer for Tandem to use the model; you can also add models any time in Settings → Models.",
       );
       expect(m.queryByText(/OS keychain/)).toBeNull();
     });
@@ -247,6 +274,7 @@ describe("first-run picker — copy (S3, S6, Ruling L-h)", () => {
     expect((m.getByTestId("first-run-displayname") as HTMLInputElement).placeholder).toBe(
       "LM Studio (local)",
     );
+    // No model id is prefilled (V8), so one is typed before Save.
     await fireEvent.input(m.getByTestId("first-run-modelid"), { target: { value: "m" } });
     await fireEvent.click(m.getByTestId("first-run-save"));
     expect(addModel.mock.calls[0][0]).toMatchObject({
