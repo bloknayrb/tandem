@@ -24,6 +24,7 @@ import NotificationsHarness from "../../src/client/svelte-harness/NotificationsH
 import {
   ACTIVITY_HISTORY_CAP,
   ACTIVITY_INFO_TTL_MS,
+  MAX_VISIBLE_TOASTS,
   TOAST_DISMISS_MS,
 } from "../../src/shared/constants.js";
 import type { TandemNotification } from "../../src/shared/types.js";
@@ -226,6 +227,65 @@ describe("activity center — info-TTL timer lifecycle", () => {
     } finally {
       localStorage.clear();
     }
+  });
+});
+
+const toastIds = (api: NotificationsState) => api.toasts.map((t) => t.id);
+
+describe("toasts — existing pop and eviction paths (regression guard for `stay`)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    FakeEventSource.last = null;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("six ordinary toasts: the first is evicted, the other five remain in push order", async () => {
+    expect(MAX_VISIBLE_TOASTS).toBe(5);
+    const api = await mountStore();
+    for (let i = 1; i <= 6; i++) api.push(note({ id: `o${i}`, severity: "error" }));
+    await tick();
+    expect(toastIds(api)).toEqual(["o2", "o3", "o4", "o5", "o6"]);
+  });
+
+  it("an ordinary coalesce re-arms the timer: re-pushed at 3 s, present at 6 s, gone after 7 s", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "c1", dedupKey: "k", severity: "info" }));
+    vi.advanceTimersByTime(3_000);
+    api.push(note({ id: "c2", dedupKey: "k", severity: "info" }));
+    vi.advanceTimersByTime(3_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["c2"]);
+    vi.advanceTimersByTime(1_000);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("an error toast is present at 7.9 s and gone after 8 s", async () => {
+    expect(TOAST_DISMISS_MS.error).toBe(8_000);
+    const api = await mountStore();
+    api.push(note({ id: "err", severity: "error" }));
+    vi.advanceTimersByTime(7_900);
+    await tick();
+    expect(toastIds(api)).toEqual(["err"]);
+    vi.advanceTimersByTime(100);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  it("a warning toast is present at 5.9 s and gone after 6 s", async () => {
+    expect(TOAST_DISMISS_MS.warning).toBe(6_000);
+    const api = await mountStore();
+    api.push(note({ id: "warn", severity: "warning" }));
+    vi.advanceTimersByTime(5_900);
+    await tick();
+    expect(toastIds(api)).toEqual(["warn"]);
+    vi.advanceTimersByTime(100);
+    await tick();
+    expect(toastIds(api)).toEqual([]);
   });
 });
 
