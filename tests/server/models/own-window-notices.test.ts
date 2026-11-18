@@ -1796,12 +1796,16 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect(JSON.stringify(getStartupNotices())).not.toContain(SENTINEL);
       expect(openOwnWindowStream()).not.toContain(SENTINEL);
       // Files only: a subdirectory of the temp dir would make readFileSync throw.
+      let filesRead = 0;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;
+        filesRead++;
         expect(fs.readFileSync(path.join(dir, entry.name), "utf8"), entry.name).not.toContain(
           SENTINEL,
         );
       }
+      // Not a pass on zero: the write above put the registry there.
+      expect(filesRead).toBeGreaterThan(0);
     });
   });
 });

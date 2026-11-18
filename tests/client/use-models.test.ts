@@ -1020,6 +1020,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { displayName: "A renamed" });
       },
       expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
       marked: true,
     },
     {
@@ -1049,6 +1050,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { displayName: "A renamed" });
       },
       expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
       marked: true,
     },
     {
@@ -1064,6 +1066,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.C, { displayName: "C renamed" });
       },
       expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.C, fields: { displayName: "C renamed" } }),
       marked: true,
     },
     {
@@ -1128,6 +1131,7 @@ describe("models store — the automatic default (rows as data)", () => {
         await m.updateModel(ids.A, { displayName: "A renamed" });
       },
       expected: (ids) => ids.A,
+      edited: (ids) => ({ id: ids.A, fields: { displayName: "A renamed" } }),
       marked: false,
     },
     {
@@ -1552,7 +1556,7 @@ describe("models store — the automatic default (rows as data)", () => {
     expect("autoDefaultId" in bodies[2]).toBe(false);
   });
 
-  it("a rolled-back marked write restores no default, and the next write's POST carries no stale marker", async () => {
+  it("a rolled-back marked write restores no default, and the next write (one that marks nothing) posts no marker", async () => {
     const m = createModels();
     const ids: Ids = {};
     statuses = [500];
@@ -1580,5 +1584,69 @@ describe("models store — the automatic default (rows as data)", () => {
     expect(await p).toBe(n);
     expect(bodies).toHaveLength(1);
     expect(bodies[0].autoDefaultId).toBe(n);
+  });
+
+  // Review round 1 (#2462): the rule is decided at each write's queue turn,
+  // never when the mutator is called. Calls that are not awaited queue behind
+  // one another; a decision taken at call time would act on stale state.
+  it("an un-awaited setDefault(cloud) then an add of a local: the cloud default stays, the add's POST has no marker", async () => {
+    const m = createModels();
+    const ids: Ids = {};
+    await add(m, ids, "C", cloud("C"));
+    const before = bodies.length;
+    const pDefault = m.setDefault(ids.C);
+    const pAdd = m.addModel(local("N"));
+    expect(await pDefault).toBe(true);
+    const n = await pAdd;
+    expect(n).not.toBeNull();
+    const posted = bodies.slice(before);
+    expect(posted).toHaveLength(2);
+    expect(posted[1].file.defaultModelId).toBe(ids.C);
+    expect("autoDefaultId" in posted[1]).toBe(false);
+    expect(m.defaultModelId).toBe(ids.C);
+  });
+
+  it("two un-awaited adds of enabled locals: the first is marked, the second is not, no default replaced", async () => {
+    const m = createModels();
+    const p1 = m.addModel(local("A"));
+    const p2 = m.addModel(local("B"));
+    const a = await p1;
+    const b = await p2;
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].autoDefaultId).toBe(a);
+    expect(bodies[0].file.defaultModelId).toBe(a);
+    expect("autoDefaultId" in bodies[1]).toBe(false);
+    expect(bodies[1].file.defaultModelId).toBe(a);
+    expect(m.defaultModelId).toBe(a);
+  });
+
+  // Every local provider counts, through the one shared rule.
+  for (const provider of ["local-llamacpp", "local-lmstudio", "local-other"] as const) {
+    it(`row 1 with ${provider}: the new entry is marked`, async () => {
+      const m = createModels();
+      const id = await m.addModel({ ...local("N"), provider });
+      expect(id).not.toBeNull();
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0].autoDefaultId).toBe(id);
+      expect(m.defaultModelId).toBe(id);
+    });
+  }
+
+  it("the store imports the shared rule and defines no copy of its own", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(__dirname, "../../src/client/hooks/useModels.svelte.ts"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    expect(src).toContain('import { autoDefaultFor } from "../../shared/models/auto-default.js";');
+    expect(src).not.toMatch(/function\s+autoDefaultFor\b|autoDefaultFor\s*=/);
+    expect([...src.matchAll(/\bautoDefaultFor\s*\(/g)]).toHaveLength(1);
+    // Nothing else in the store decides "the one enabled local entry" itself.
+    expect(src).not.toMatch(
+      /isLocalProvider\([^)]*\)\s*&&\s*\w+\.enabled|enabled\s*&&\s*isLocalProvider/,
+    );
   });
 });

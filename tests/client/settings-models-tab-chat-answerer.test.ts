@@ -741,6 +741,36 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
     expect(line(v)).toBeNull();
   });
 
+  it("follows the saved list after mount: the line appears and goes as an enabled local model is saved and removed", async () => {
+    pose([CLOUD], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)).toBeNull();
+    modelsPose.models = [CLOUD, LOCAL];
+    await tick();
+    expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    modelsPose.models = [CLOUD, { ...LOCAL, enabled: false }];
+    await tick();
+    expect(line(v)).toBeNull();
+  });
+
+  it("a whitespace-only name is left out as an empty one is", async () => {
+    pose([{ ...CLOUD, displayName: "   " }, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)?.textContent?.trim()).toBe(
+      "Your Default model is a cloud model, so your local models won't answer chat." + LONG,
+    );
+  });
+
+  it("the line makes no request: only the mount's chat-answerer read", async () => {
+    pose([CLOUD, LOCAL], CLOUD.id);
+    const v = await mounted(known("claude"));
+    expect(line(v)).not.toBeNull();
+    modelsPose.models = [CLOUD, LOCAL, { ...LOCAL, id: "l2", displayName: "Two" }];
+    await tick();
+    await drain();
+    expect(held.calls.map((c) => c.method)).toEqual(["GET"]);
+  });
+
   it("no default, or a default naming no entry: no line", async () => {
     pose([CLOUD, LOCAL], null);
     expect(line(await mounted(known("claude")))).toBeNull();

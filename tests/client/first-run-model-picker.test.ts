@@ -6,9 +6,10 @@
  *
  * Exercised by a direct mount (the component has no internal
  * `BYO_MODELS_ENABLED` gate — App's mount is). `createModels` is mocked so the
- * add is controllable without a server round-trip. The window makes no
- * default itself: the Models store marks one inside the add's own write
- * (#1123, the automatic default), so `setDefault` is never called here.
+ * add is controllable without a server round-trip. The window's model
+ * becomes the Default (Bryan, 2026-11-18): when the store already marked it
+ * inside the add's own write there is no `setDefault`; otherwise the window
+ * sets it. The real-store half is first-run-model-picker-store.test.ts.
  *
  * Contracts:
  *   - only local providers are listed, Ollama first (P4);
@@ -17,7 +18,9 @@
  *   - no model id is prefilled, and a hint names no model (V8);
  *   - Save says why it cannot save, focusable and described by the reason (V14);
  *   - a rolled-back add keeps the window open with the store's error;
- *   - a committed add completes once, with one `addModel` and no `setDefault`;
+ *   - a committed add the store marked completes once, with no `setDefault`;
+ *   - a committed add the store did not mark sets it as the default, once;
+ *   - a failed default closes as a success and clears the store's error (RW-5);
  *   - a close during a save leaves no error and never completes twice (R2.4).
  */
 
@@ -35,6 +38,9 @@ const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
 const clearError = vi.fn();
 let storeSaveError: string | null = null;
+// The store's default after the add: what the window reads to decide whether
+// its model still needs `setDefault`.
+let storeDefault: string | null = null;
 
 vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
   createModels: () => ({
@@ -47,7 +53,9 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     // The rest of `ModelsState`. This double named four members and matched
     // nothing before the typed mock overload (#1615).
     models: [],
-    defaultModelId: null,
+    get defaultModelId() {
+      return storeDefault;
+    },
     // #1123: the list has loaded (the first-run window waits for it).
     loaded: true,
     loading: false,
@@ -69,7 +77,14 @@ beforeEach(() => {
   clearError.mockReset();
   setDefault.mockResolvedValue(true);
   storeSaveError = null;
+  storeDefault = null;
 });
+
+/** An add that commits and that the store's rule marked as the default. */
+const markedAdd = (id: string) => async () => {
+  storeDefault = id;
+  return id;
+};
 
 afterEach(() => {
   cleanup();
@@ -256,8 +271,8 @@ describe("FirstRunModelPickerModal — saving", () => {
     expect(document.activeElement).toBe(saveButton(m));
   });
 
-  it("a committed add completes once, with one addModel and no setDefault (the store marks the default)", async () => {
-    addModel.mockResolvedValue("new-id");
+  it("a committed add the store marked completes once, with one addModel and no setDefault", async () => {
+    addModel.mockImplementation(markedAdd("new-id"));
     const m = mount();
     await typeModelId(m, "qwen");
     await fireEvent.click(saveButton(m));
@@ -276,6 +291,86 @@ describe("FirstRunModelPickerModal — saving", () => {
     await fireEvent.click(m.getByTestId("first-run-skip-secondary"));
     expect(addModel).not.toHaveBeenCalled();
     expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FirstRunModelPickerModal — the window's model becomes the Default (Bryan, 2026-11-18)", () => {
+  for (const [what, before] of [
+    ["another model is the default", "other-id"],
+    ["no default (the rule stayed silent)", null],
+  ] as const) {
+    it(`a committed add the store did not mark (${what}): setDefault once with its id, completes once`, async () => {
+      storeDefault = before;
+      addModel.mockResolvedValue("new-id");
+      const m = mount();
+      await typeModelId(m, "qwen");
+      await fireEvent.click(saveButton(m));
+      await flush();
+
+      expect(addModel).toHaveBeenCalledTimes(1);
+      expect(setDefault).toHaveBeenCalledTimes(1);
+      expect(setDefault).toHaveBeenCalledWith("new-id");
+      expect(clearError).not.toHaveBeenCalled();
+      expect(m.onComplete).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("a failed default after a committed add closes as a success and clears the store's error after the rollback (RW-5)", async () => {
+    storeDefault = "other-id";
+    addModel.mockResolvedValue("new-id");
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+
+    // The default is in flight: nothing cleared, nothing completed yet.
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    expect(clearError).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
+
+    def.resolve(false); // the store has rolled back and set its error
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    expect(m.queryByTestId("first-run-error")).toBeNull();
+  });
+
+  it("closed while setDefault is pending: completes once, and a failed default is cleared", async () => {
+    storeDefault = "other-id";
+    addModel.mockResolvedValue("new-id");
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    await fireEvent.click(m.getByTestId("first-run-skip-secondary"));
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+    clearError.mockClear();
+    def.resolve(false);
+    await flush();
+    expect(clearError).toHaveBeenCalledTimes(1);
+    expect(m.onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("closed while setDefault is pending, and it commits: completes once, nothing cleared", async () => {
+    storeDefault = "other-id";
+    addModel.mockResolvedValue("new-id");
+    const def = deferred<boolean>();
+    setDefault.mockReturnValue(def.promise);
+    const m = mount();
+    await typeModelId(m, "qwen");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    await fireEvent.click(m.getByTestId("first-run-skip"));
+    clearError.mockClear();
+    def.resolve(true);
+    await flush();
+    expect(clearError).not.toHaveBeenCalled();
     expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 });

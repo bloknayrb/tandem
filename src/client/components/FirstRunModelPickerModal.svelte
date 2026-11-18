@@ -1,11 +1,14 @@
 <script lang="ts">
 /**
  * The first-run window, "Add a local model (optional)" (#1123, ADR-039 items
- * 21–23): pick a local provider, name the model and save it. The window
- * makes no default itself: with no default set and this the only enabled
- * local model, the Models store marks it as the default inside the add's own
- * write (the automatic default, Label decision L6 of 2026-11-17). The
- * caller's `onComplete` fires on save or on any close.
+ * 21–23): pick a local provider, name the model, save it and make it the
+ * Default. Choosing a model here counts as the user choosing the Default,
+ * replacing any earlier one (Bryan, 2026-11-18, review round 1 of #2462).
+ * Usually the Models store has already marked it inside the add's own write
+ * (the automatic default, Label decision L6 of 2026-11-17), and then there is
+ * no second write; otherwise the window sets it with `setDefault`, a chosen
+ * default that carries no automatic marker. The caller's `onComplete` fires
+ * on save or on any close.
  *
  * Mounted by `App.svelte` behind `modelPickerOpen` (offered once, when the
  * integration wizard closes after Claude was set up in it), which is gated on
@@ -92,7 +95,8 @@ let saveError = $state<string | null>(null);
 const shownError = $derived(saveError ?? (access.blocked ? access.notice : null));
 // Set when the window has closed (any exit, a finished save, or unmount). A save
 // still in flight then leaves no error on the shared store and does not
-// complete twice (R2.4). It cannot stop the default: that rides in the add's
+// complete twice (R2.4). A close during the add skips the window's own
+// `setDefault`, but cannot stop a default the store marked inside the add's
 // own write (CD-2). Plain, not `$state`: nothing renders from it.
 let closed = false;
 onDestroy(() => {
@@ -197,9 +201,9 @@ async function handleSave(e: SubmitEvent) {
       isCloud ? apiKey.trim() : undefined,
     );
     // Closed while the add was in flight (R2.4): the model is saved if the add
-    // committed, and not otherwise (and made the default exactly when its own
-    // write marked it, CD-2); a rollback's error is not left on the store for
-    // Settings → Models.
+    // committed, and not otherwise (and made the default only when its own
+    // write marked it, CD-2: the window's own `setDefault` below is skipped);
+    // a rollback's error is not left on the store for Settings → Models.
     if (closed) {
       models.clearError();
       return;
@@ -214,8 +218,20 @@ async function handleSave(e: SubmitEvent) {
         : (models.saveError ?? "Failed to save model changes.");
       return;
     }
-    // The model committed, and with it the default when the store's rule
-    // marked one in the same write: there is no second write to fail.
+    // The model committed. The window's model becomes the Default (Bryan,
+    // 2026-11-18): when the add's own write did not already mark it (another
+    // default was set, possibly by another window between the offer and
+    // Save, or another enabled local model left the rule silent), set it as
+    // a chosen default. That write can still roll back (a concurrent writer
+    // or a blip); the model exists either way, so the window closes as a
+    // success and drops the store's rollback message, which would otherwise
+    // surface later in Settings → Models (RW-5). Closed while it is pending:
+    // the window has already completed, so only the error is dropped.
+    if (models.defaultModelId !== id) {
+      const defaulted = await models.setDefault(id);
+      if (!defaulted) models.clearError();
+      if (closed) return;
+    }
     finish();
   } catch (err) {
     if (closed) {

@@ -100,6 +100,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// #1123 (review round 1 of #2462): the automatic default is decided only
+// inside a models write. Loading a registry with one enabled local model and
+// no default marks nothing and posts nothing; a client-only default set at
+// load would be posted by the next write with no marker, which the server
+// reads as the user's choice.
+it("loading one enabled local model with no default marks nothing and makes no POST", () => {
+  expect(getModelsSnapshot().defaultModelId).toBeNull();
+  const methods = vi
+    .mocked(fetch)
+    .mock.calls.map(([, init]) =>
+      ((init as RequestInit | undefined)?.method ?? "GET").toUpperCase(),
+    );
+  expect(methods).toEqual(["GET"]);
+});
+
 for (const [label, state] of [
   ["state (a)", STATE_A],
   ["state (a) with the entry as the default", STATE_A_DEFAULT],

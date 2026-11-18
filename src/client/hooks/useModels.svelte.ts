@@ -114,7 +114,8 @@ let _etag: string | null = null; // last-seen server ETag (not reactive — no U
 // run, or null. Reset at the start of every `apply` run (the 409 re-run
 // included) and on rollback; set only by the rule inside `writeThrough`.
 // `postCurrent` sends it as `autoDefaultId` and decides nothing; the busy
-// retry re-posts the same body, so it is not consumed per POST. Also cleared
+// retry re-posts the current state, marker included, without re-running
+// `apply`, so it is not consumed per POST. Also cleared
 // whenever server state is adopted (`fetchAndApply`), so a load landing
 // between a run and its POST cannot post a marker for state it replaced.
 // `postCurrent`'s only caller is `writeThrough`, which is what keeps a marker
