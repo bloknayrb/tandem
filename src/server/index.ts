@@ -41,7 +41,12 @@ import {
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
 import { installLogRedaction } from "./log-redact.js";
-import { handOverDocumentInbox, onTandemReply, ownershipChatSide } from "./mcp/awareness.js";
+import {
+  documentWaiting,
+  handOverDocumentInbox,
+  onTandemReply,
+  ownershipChatSide,
+} from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -93,6 +98,7 @@ import {
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  setWaitingProbe,
   undoClientChatWrites,
 } from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
@@ -849,6 +855,10 @@ async function main() {
   // The inbox half of a handover (ownership design §6.3), wired beside it for
   // the same reason. Only a flag-on ownership change ever calls it.
   setOwnershipInboxHandover(handOverDocumentInbox);
+  // Waiting on a document (#2358 PR 3b-2b1b; ownership design §8.5): what
+  // ownership's step 5 asks when a document goes to Tandem's Claude. Beside
+  // the handover for the same reason; only a flag-on `setDocOwner` asks it.
+  setWaitingProbe(documentWaiting);
   // The chat side of ownership (the chat owners PR, R2.2): which messages are
   // handled, which are on a document, a row's facts, and the re-owe. And the
   // other direction: a deleted chat row's per-message owner goes (R3.6).
