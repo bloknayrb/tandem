@@ -715,6 +715,40 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
     expectWithdrawn(id);
   };
 
+  it("the label and the five notices, word for word (R4)", () => {
+    expect(store.USE_IT_FOR_CHAT_LABEL).toBe("Use it for chat");
+    expect(N).toEqual({
+      set: {
+        severity: "info",
+        dedupKey: "use-it-for-chat-set",
+        message: "Chat was set to your local model.",
+      },
+      notSaved: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-saved",
+        message:
+          "Chat was set to your local model, but Tandem could not save that choice, so chat may be set back to Claude when Tandem restarts.",
+      },
+      refused: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-refused",
+        message: "Chat could not be set to your local model. It was left set to Claude.",
+      },
+      notConfirmed: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-confirmed",
+        message:
+          "Tandem could not confirm that chat was set to your local model. You can set it under Who answers your chat in Settings → Models.",
+      },
+      notRead: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-read",
+        message:
+          "Chat was not set to your local model, because Tandem could not read the current setting. You can set it under Who answers your chat in Settings → Models.",
+      },
+    });
+  });
+
   describe("the push (R2)", () => {
     for (const [label, body] of [
       ["usable", known("claude", { localModelState: "usable", localModelResolves: true })],
@@ -962,7 +996,8 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
         click();
         await (await held.request(2)).answer(200, known("claude"));
         const post = await held.request(3);
-        expect(post).toMatchObject({ method: "POST", body: { answerer: "local" } });
+        expect(post.method).toBe("POST");
+        expect(post.body).toEqual({ answerer: "local" });
         if (status === 0) await post.fail();
         else if (status === -1) await post.timeout();
         else await post.answer(status, body);
