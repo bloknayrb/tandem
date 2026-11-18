@@ -575,8 +575,11 @@ const DOCUMENT_WAITING_FAILED =
  * `index.ts` wires at boot and which only a flag-on change of owner asks, as
  * with `handOverDocumentInbox`; this file reads no flag. Synchronous.
  *
- * **It writes nothing.** The Y.Doc comes from the non-creating getter, the
- * store is built as {@link currentNoticeKeys} builds one, and the rule
+ * **It makes no Y.Doc write.** (It does not write nothing at all: like every
+ * caller of `store.listAnnotations()`, it can log a legacy migration and add
+ * to the migration log's in-memory dedup set, `migration-log.ts`.) The Y.Doc
+ * comes from the non-creating getter, the store is built as
+ * {@link currentNoticeKeys} builds one, and the rule
  * receives copies: `sanitizeAnnotation` copies shallowly (its `range`,
  * `relRange` and `textSnapshotBreaks` are the stored objects) and the reply
  * map returns its stored objects, so both are `structuredClone`d. The

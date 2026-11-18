@@ -11,7 +11,9 @@
  * then polls D through the real `tandem_checkInbox` as a fresh reader for
  * Tandem's Claude, and asserts that the poll hands the candidate if and only
  * if waiting answered true, and that this is the row's expected answer. Rows
- * 41 to 43 are the recorded differences and assert both sides.
+ * 41 to 43 are the recorded differences and assert both sides. Rows 44 to 46,
+ * the positive anchors and the ask-change-ask case are #2358 PR
+ * 3b-2b1b-chat-R0's (the items carried from #2464's review).
  *
  * The world is `ownership-chat.test.ts`'s, pared: registered terminals, the
  * real MCP tools through an in-memory client, and the seams `index.ts` wires
@@ -30,7 +32,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
@@ -377,6 +379,10 @@ interface RowWorld {
   candidate: string;
   parent: string;
   readers: Record<"r0" | "r1" | "r2" | "a", ReturnType<typeof reader>>;
+  /** What each `a-poll` returned, in order (R0.5). */
+  aInboxes: Inbox[];
+  /** The `console.error` spy the `handover-throws` act created (R0.4). */
+  handoverErrors?: MockInstance<typeof console.error>;
 }
 
 /** The world every row starts from: D open, Tandem's Claude present and holding it by a write. */
@@ -397,6 +403,7 @@ async function rowWorld(): Promise<RowWorld> {
     candidate: "",
     parent: "",
     readers: { r0: reader(TANDEM), r1: reader(TANDEM), r2: reader(TANDEM), a: reader(A) },
+    aInboxes: [],
   };
 }
 
@@ -404,6 +411,7 @@ type ItemKind =
   | "user-comment"
   | "user-comment-accepted"
   | "user-comment-dismissed"
+  | "user-comment-unknown-status"
   | "user-comment-agent"
   | "user-comment-bad-content"
   | "user-comment-on-E"
@@ -445,7 +453,8 @@ type Act =
   | "solo"
   | "mode-unknown"
   | "handover-throws"
-  | "honour-local";
+  | "honour-local"
+  | "reply-text-edit";
 
 interface Row {
   name: string;
@@ -458,6 +467,10 @@ interface Row {
   difference?: "poll-hands-it" | "poll-hands-notice";
   /** The fresh poll skips the SDK client's schema check (row 33). */
   rawPoll?: true;
+  /** The bucket in which the first `a-poll` handed the candidate (R0.5: rows 10 and 20). */
+  aHandedIn?: "userActions" | "userReplies";
+  /** The row's `handover-throws` act logs the handover-failed line exactly once (R0.4: rows 39 and 40). */
+  handoverLogged?: true;
 }
 
 async function makeParent(w: RowWorld, kind: ParentKind): Promise<void> {
@@ -563,6 +576,12 @@ async function makeItem(w: RowWorld, kind: ItemKind): Promise<void> {
     case "user-comment-dismissed":
       w.candidate = userComment(ydoc, c, { status: "dismissed", resolvedBy: "user" });
       return;
+    case "user-comment-unknown-status":
+      // Outside the status enum (`AnnotationStatusSchema`): waiting refuses it
+      // through the item schema; the collector lets it past its settled gate
+      // (`isSettledStatus` names the two end states only) and admit drops it.
+      w.candidate = userComment(ydoc, c, { status: "resolved" });
+      return;
     case "user-comment-agent":
       w.candidate = userComment(ydoc, c, { agentIdentity: { kind: "local", label: "Local" } });
       return;
@@ -663,7 +682,7 @@ async function runAct(w: RowWorld, act: Act, row: Row): Promise<void> {
       expect(getDocOwner(id)?.ownerId).toBe(A);
       return;
     case "a-poll":
-      await w.readers.a.poll(id);
+      w.aInboxes.push(await w.readers.a.poll(id));
       return;
     case "a-lapse":
       lapseByGrace(A);
@@ -693,7 +712,7 @@ async function runAct(w: RowWorld, act: Act, row: Row): Promise<void> {
       setCtrlMode(null);
       return;
     case "handover-throws":
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      w.handoverErrors = vi.spyOn(console, "error").mockImplementation(() => {});
       vi.spyOn(console, "warn").mockImplementation(() => {});
       setOwnershipInboxHandover(() => {
         throw new Error("x");
@@ -702,6 +721,20 @@ async function runAct(w: RowWorld, act: Act, row: Row): Promise<void> {
     case "honour-local":
       __setHonourLocalPeriodRecordsForTests(true);
       return;
+    case "reply-text-edit": {
+      // Not `edit:`, which patches the annotations map: a reply lives in the
+      // replies map, rewritten here as a browser edit would.
+      const current = replies(w.d.ydoc).get(w.candidate) as Record<string, unknown> | undefined;
+      expect(current, `reply ${w.candidate}`).toBeDefined();
+      withBrowser(w.d.ydoc, () =>
+        replies(w.d.ydoc).set(w.candidate, {
+          ...current,
+          text: `${String(current?.text)} (edited)`,
+          editedAt: 100,
+        }),
+      );
+      return;
+    }
   }
 }
 
@@ -764,7 +797,7 @@ const ROWS: readonly Row[] = [
     expected: "not",
   },
   {
-    name: "9 a cursor poll undone",
+    name: "9 a cursor poll undone (cannot discriminate: an undone poll leaves what no poll leaves)",
     item: "user-comment",
     parent: "none",
     acts: ["item", "undone-poll"],
@@ -776,6 +809,7 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["take-a", "item", "a-poll", "a-poll", "a-lapse"],
     expected: "waiting",
+    aHandedIn: "userActions",
   },
   {
     name: "11 resolved (accepted), never handed",
@@ -847,6 +881,7 @@ const ROWS: readonly Row[] = [
     parent: "claude",
     acts: ["take-a", "item", "a-poll", "a-poll", "a-lapse"],
     expected: "waiting",
+    aHandedIn: "userReplies",
   },
   {
     name: "21 reply on a resolved Claude comment, never polled (reply first, then Claude's own dismiss)",
@@ -987,6 +1022,7 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["take-a", "item", "a-poll", "a-poll", "handover-throws", "a-lapse"],
     expected: "not",
+    handoverLogged: true,
   },
   {
     name: "40 a failed handover, entries left unacknowledged",
@@ -994,6 +1030,7 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["take-a", "item", "a-poll", "handover-throws", "a-lapse"],
     expected: "waiting",
+    handoverLogged: true,
   },
   // The differences, both sides asserted.
   {
@@ -1020,22 +1057,88 @@ const ROWS: readonly Row[] = [
     expected: "not",
     difference: "poll-hands-notice",
   },
+  // The items carried from #2464's review (#2358 PR 3b-2b1b-chat-R0, R0.2).
+  {
+    // Wrong build: a settled term that ignores an acknowledgement at the
+    // edited version (it would answer true while the poll hands nothing).
+    name: "44 a settled comment, edited, then handed and acknowledged",
+    item: "user-comment-dismissed",
+    parent: "none",
+    acts: ["item", "edit:100", "poll", "poll-again"],
+    expected: "not",
+  },
+  {
+    name: '45 a user comment stored with status "resolved", outside the enum (cannot discriminate the settled term)',
+    item: "user-comment-unknown-status",
+    parent: "none",
+    acts: [],
+    expected: "not",
+  },
+  {
+    // Wrong build: replies versioned by `editedAt` or by text (replies are
+    // versioned at 0, so the acknowledgement still covers the edited reply).
+    name: "46 a user reply on Claude's comment, handed and acknowledged, then its text edited",
+    item: "user-reply",
+    parent: "claude",
+    acts: ["item", "poll", "poll-again", "reply-text-edit"],
+    expected: "not",
+  },
 ];
 
-describe("the agreement table: waiting answers as a fresh poll of Tandem's Claude would hand (rows 1 to 43)", () => {
-  it("has the brief's 43 rows, numbered in order", () => {
+/**
+ * The rows that get a positive anchor (R0.1): every agreeing "not" row,
+ * except the Solo rows, where Solo would hold the anchor too.
+ */
+const anchored = (row: Row): boolean =>
+  row.expected === "not" && row.difference === undefined && !row.acts.includes("solo");
+
+/** Build a row's world and run its acts; the candidate is built. */
+async function buildRow(row: Row): Promise<RowWorld> {
+  const w = await rowWorld();
+  await makeParent(w, row.parent);
+  const acts = row.acts.includes("item") ? row.acts : (["item", ...row.acts] as Act[]);
+  for (const act of acts) await runAct(w, act, row);
+  expect(w.candidate, "the row built its candidate").not.toBe("");
+  return w;
+}
+
+const rowNamed = (n: number): Row => {
+  const row = ROWS.find((r) => Number.parseInt(r.name, 10) === n);
+  expect(row, `row ${n}`).toBeDefined();
+  return row as Row;
+};
+
+/** The handover-failed line, a non-exported constant of `ownership.ts` (copied). */
+const HANDOVER_FAILED_TEXT =
+  "[ownership] a document changed hands but its inbox handover did not complete: some of what its previous owner was shown may still count as seen, or the document's handover mark was not moved";
+
+describe("the agreement table: waiting answers as a fresh poll of Tandem's Claude would hand (rows 1 to 46)", () => {
+  it("has the briefs' 46 rows, numbered in order", () => {
     expect(ROWS.map((r) => Number.parseInt(r.name, 10))).toEqual(
-      Array.from({ length: 43 }, (_, i) => i + 1),
+      Array.from({ length: 46 }, (_, i) => i + 1),
     );
+  });
+
+  it("the anchor predicate selects every agreeing not row but the two Solo rows (R0.1)", () => {
+    const nots = ROWS.filter((r) => r.expected === "not" && r.difference === undefined);
+    const num = (r: Row) => Number.parseInt(r.name, 10);
+    expect(nots.filter((r) => !anchored(r)).map(num)).toEqual([35, 36]);
+    expect(ROWS.filter(anchored).map(num)).toEqual(expect.arrayContaining([44, 45, 46]));
   });
 
   for (const row of ROWS) {
     it(row.name, async () => {
-      const w = await rowWorld();
-      await makeParent(w, row.parent);
-      const acts = row.acts.includes("item") ? row.acts : (["item", ...row.acts] as Act[]);
-      for (const act of acts) await runAct(w, act, row);
-      expect(w.candidate, "the row built its candidate").not.toBe("");
+      const w = await buildRow(row);
+
+      // R0.5: the terminal's first poll handed the candidate, in the row's bucket.
+      if (row.aHandedIn !== undefined) {
+        expect(w.aInboxes.length, "a-polls").toBeGreaterThan(0);
+        const first = w.aInboxes[0] as Inbox;
+        expect(
+          first[row.aHandedIn].map((x) => String(x.id)),
+          "the first a-poll handed the candidate",
+        ).toContain(w.candidate);
+      }
 
       // Spies around the waiting call only (the poll's admit logs its own drops):
       // a "not" answer must be computed, never the catch's.
@@ -1064,8 +1167,55 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
         expect(pollHands).toBe(false);
         expect(inbox.userResponses.map((r) => String(r.id))).toEqual([w.candidate]);
       }
+
+      // R0.4: the failed handover logged its fixed line, once (rate-limited per key).
+      if (row.handoverLogged) {
+        expect(w.handoverErrors, "the handover-throws act's spy").toBeDefined();
+        expect(w.handoverErrors?.mock.calls).toEqual([[HANDOVER_FAILED_TEXT]]);
+      }
+
+      // R0.1: a positive anchor. The same world, given a new user comment,
+      // reads as waiting, and a new fresh poll hands exactly that comment.
+      if (anchored(row)) {
+        const anchor = userComment(w.d.ydoc, `${prefix}-anchor`);
+        expect(documentWaiting(w.d.id), "waiting, with the anchor").toBe(true);
+        expect(handed(await reader(TANDEM).poll(w.d.id)), "the anchor's fresh poll").toEqual([
+          anchor,
+        ]);
+      }
     });
   }
+
+  it("33's companion: the same world polled through the SDK client's checked callTool is rejected (#2465)", async () => {
+    const w = await buildRow(rowNamed(33));
+    callingAs = TANDEM;
+    // #2465: when fixed, invert this to a resolving call that hands the
+    // candidate, and drop the raw poll in the agentIdentity row.
+    await expect(
+      client.callTool({
+        name: "tandem_checkInbox",
+        arguments: { cursor: "start", documentId: w.d.id },
+      }),
+    ).rejects.toThrow(/output schema/);
+  });
+});
+
+describe("ask, change, ask (R0.3): no cached answer", () => {
+  it("a pending user comment: waiting, then not once acknowledged, then waiting again after a user edit; a fresh poll agrees each time", async () => {
+    const w = await rowWorld();
+    const { id, ydoc } = w.d;
+    const c = userComment(ydoc, `${prefix}-c`);
+    const ask = async (expected: boolean) => {
+      expect(documentWaiting(id), "waiting").toBe(expected);
+      expect(handed(await reader(TANDEM).poll(id)), "a fresh poll").toEqual(expected ? [c] : []);
+    };
+    await ask(true);
+    expect(handed(await w.readers.r1.poll(id))).toEqual([c]);
+    expect(handed(await w.readers.r1.poll(id))).toEqual([]);
+    await ask(false);
+    patchRecord(ydoc, c, { editedAt: 100 });
+    await ask(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

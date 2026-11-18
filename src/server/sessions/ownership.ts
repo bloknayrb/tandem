@@ -560,9 +560,10 @@ export function isTandemPresent(): boolean {
  * wires the inbox's document half, `documentWaiting` (#2358 PR 3b-2b1b),
  * pinned from source in `tests/server/ownership-source-pins.test.ts`;
  * unwired it answers false. Asked only flag on, only when the new owner is
- * Tandem's Claude and the caller is not, which nothing in production reaches
- * yet (the default rule needs presence, which nothing sets); and while
- * `startOrWake` is a stub its answer starts nothing. The chat half and the
+ * Tandem's Claude and the caller is not, and the cause is not `take-back`,
+ * which nothing in production reaches yet (the default rule needs presence,
+ * which nothing sets); and while `startOrWake` is a stub its answer starts
+ * nothing. The chat half and the
  * forward to the supervisor are later PRs.
  */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
