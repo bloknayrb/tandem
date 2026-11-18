@@ -82,6 +82,17 @@ function srcTsFiles(dir = join(ROOT, "src")): string[] {
   return out.sort();
 }
 
+/** Every file under `src/` that is neither `.ts` nor `.css` (today: Svelte only). */
+function srcOtherFiles(dir = join(ROOT, "src")): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) out.push(...srcOtherFiles(p));
+    else if (!/\.(ts|css)$/.test(name)) out.push(posix(relative(ROOT, p)));
+  }
+  return out.sort();
+}
+
 type Leaf = {
   devAllowanceBuild: (argv: readonly string[]) => string;
   E2E_HARNESS_ARGV_FLAG: string;
@@ -193,6 +204,23 @@ describe("the one call, and nothing else decides it", () => {
     ]);
   });
 
+  it("no other kind of source file under src/ names the variable or the harness argument", () => {
+    const others = srcOtherFiles();
+    expect(
+      others.every((f) => f.endsWith(".svelte")),
+      others.join(", "),
+    ).toBe(true);
+    for (const f of others) {
+      expect(read(f), f).not.toMatch(
+        /MODELS_DEV_ORIGIN_ENV|TANDEM_MODELS_DEV_ORIGIN|tandem-e2e-harness|devAllowanceBuild/,
+      );
+    }
+  });
+
+  it("own-window.ts reads no environment of its own, in any spelling", () => {
+    expect(code("src/server/models/own-window.ts")).not.toMatch(/\bprocess\b|\bglobalThis\b/);
+  });
+
   it("the variable is read from the environment once, in server.ts", () => {
     const reads = srcTsFiles().flatMap((f) =>
       [
@@ -229,7 +257,11 @@ describe("the harness signal's reach", () => {
   it("no server code changes process.argv", () => {
     const mutators = srcTsFiles()
       .filter((f) => f.startsWith("src/server/"))
-      .filter((f) => /process\.argv\s*=|process\.argv\.(push|unshift|splice)/.test(code(f)));
+      .filter((f) =>
+        /process\.argv\s*=(?!=)|process\.argv\.(push|unshift|splice|length\s*=(?!=))|process\.argv\[[^\]]*\]\s*=(?!=)|defineProperty\(\s*process/.test(
+          code(f),
+        ),
+      );
     expect(mutators).toEqual([]);
   });
 });
@@ -242,6 +274,9 @@ describe("the shipped launchers pass nothing else", () => {
     );
     expect(spawns).toHaveLength(1);
     expect(start).toMatch(/spawn\(process\.execPath, \[SERVER_DIST\],/);
+    // …and nothing launches it any other way, nor builds its arguments elsewhere.
+    expect(start).not.toMatch(/\b(?:fork|execFile|execFileSync|spawnSync|execSync|exec)\(/);
+    expect(start.split("SERVER_DIST").length - 1).toBe(4);
   });
 
   it("sidecar.rs: every `.args(` is a known one, and there is no `.arg(`", () => {
@@ -344,6 +379,7 @@ describe("CI's check runs the built-bundle check after Build", () => {
     expect(steps[i]).toEqual({
       name: "Release bundle ignores TANDEM_MODELS_DEV_ORIGIN outside the E2E harness",
       run: RUN,
+      "timeout-minutes": 2,
     });
   });
 

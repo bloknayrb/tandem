@@ -66,12 +66,11 @@ to be told that this one page may: `TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:51
 `npm run dev:standalone` sets it for the server it starts; `npm run dev:server` on its own does
 not, so export it in the shell first. Only a server run from source honours it: a release build
 (`dist/server`, including the sidecar `npm run dev:tauri` starts from it, once `dist/` has been
-rebuilt since #2410) ignores it and logs one line, unless the E2E harness's launcher started it
-(ADR-039 V15). So for `dev:tauri`, run the server from source with the variable on `:3479` first
-(`npm run dev:server` with it exported, or `npm run dev:standalone`); a debug `dev:tauri` window
-adopts a server already running on `:3479`, with whatever environment that server was started
-with, instead of starting its own; its window is the Vite page, so the variable names
-`http://127.0.0.1:5173`. A
+rebuilt with this change) ignores it and logs one line, unless the E2E harness's launcher started
+it (ADR-039 V15). So for `dev:tauri`, export the variable and run `npm run dev:server` (from source,
+on `:3479`) first, then `npm run dev:tauri`. A debug build adopts a server already answering on
+`:3479`, with whatever environment that server was started with, instead of starting its own
+sidecar, and its window is the Vite page, so the variable names `http://127.0.0.1:5173`. A
 debug-built desktop binary attached that way presents the desktop window's origin to a server
 that is not the desktop sidecar, which refuses it unless the variable names that origin. Without
 the variable the Models tab says these settings can only be changed in Tandem's own window, and the
