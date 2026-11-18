@@ -131,7 +131,9 @@ describe("ModelEditModal traps Tab (#1778, dark)", () => {
 
 describe("FirstRunModelPickerModal traps Tab (#1778, dark)", () => {
   it("wraps forward, backward, and recovers stranded focus", () => {
-    const { container } = render(FirstRunModelPickerModal, { props: { onComplete: vi.fn() } });
+    const { container } = render(FirstRunModelPickerModal, {
+      props: { onComplete: vi.fn(), onNotify: vi.fn() },
+    });
     const dialog = container.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
     expect(dialog).toBeTruthy();
     assertTrapped(dialog as HTMLElement);

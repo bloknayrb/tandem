@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetChatAnswererForTests,
+  createCardSendNotice,
   createChatAnswerer,
   inLocalPeriod,
   noteChatSent,
@@ -24,7 +25,7 @@ import {
 } from "../../src/client/hooks/useChatAnswerer.svelte";
 import { signalModelsWriteCommitted } from "../../src/client/models/models-write-signal";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
-import type { ChatMessage } from "../../src/shared/types";
+import type { ChatMessage, TandemNotification } from "../../src/shared/types";
 import { drain } from "../helpers/held-fetch";
 
 // This whole file is the dark state, so it forces the flag off whatever the
@@ -85,5 +86,36 @@ describe("chat-answerer store, flag off", () => {
     expect(takeSendRead()).toBeNull();
     noteChatSent(msg, { aiOff: false, held: true });
     expect(takeSendRead()).toBeNull();
+  });
+
+  // The send notice (#1123, R5): dark, a card send's decision shows nothing
+  // and fetches nothing. The guard is `inLocalPeriod`'s first line (App never
+  // fills the seam while dark either; the wiring pin holds that half).
+  it("the send notice, held true, tandem, reachable: no toast, no fetch", async () => {
+    const push = vi.fn<(n: TandemNotification) => void>();
+    const raise = createCardSendNotice({
+      getHeld: () => true,
+      getMode: () => "tandem",
+      getServerUnreachable: () => false,
+      push,
+    });
+    raise();
+    await drain();
+    expect(push).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("the send notice, held true, tandem, unreachable: no toast, no fetch (row 2)", async () => {
+    const push = vi.fn<(n: TandemNotification) => void>();
+    const raise = createCardSendNotice({
+      getHeld: () => true,
+      getMode: () => "tandem",
+      getServerUnreachable: () => true,
+      push,
+    });
+    raise();
+    await drain();
+    expect(push).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

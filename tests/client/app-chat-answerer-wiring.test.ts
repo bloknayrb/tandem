@@ -46,6 +46,8 @@
  * There is no mount test of App (Ruling S-e): 129 imports and a live
  * Hocuspocus provider.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chatMount, readAppSource } from "../helpers/app-source";
 
@@ -96,6 +98,27 @@ describe("App wires who answers chat (R1.2, R5.5, R7, R8)", () => {
     expect(announce.slice(0, 600)).toMatch(
       /queueMicrotask\(\(\) => \{[\s\S]*noteNoticeRowArrived\(\)/,
     );
+  });
+
+  it("the send notice: App fills the card-send seam once, under its own flag check, whole", () => {
+    // The brief "the send notice", R4: its own `if (BYO_MODELS_ENABLED)` block,
+    // the getters and the push exactly as written; nothing reshaped.
+    expect(count(app, "setCardSendRaise(")).toBe(1);
+    expect(app).toMatch(
+      /if \(BYO_MODELS_ENABLED\)\s*\{?\s*setCardSendRaise\(\s*createCardSendNotice\(\{\s*getHeld: \(\) => aiReadiness\.launcherHeldForLocalModel,\s*getMode: \(\) => modeState\.tandemMode,\s*getServerUnreachable: \(\) => aiReadiness\.serverUnreachable,\s*push: \(n\) => notifications\.push\(n\),?\s*\}\),?\s*\)/,
+    );
+  });
+
+  it("the send notice's decision reads the local period through inLocalPeriod, with no flag check of its own", () => {
+    // The reviewing session's ruling "no separate flag check" (R3.1): the flag
+    // reaches the decision only through `inLocalPeriod`'s first line.
+    const store = readFileSync(
+      join(process.cwd(), "src/client/hooks/useChatAnswerer.svelte.ts"),
+      "utf8",
+    );
+    const factory = sliceFrom(store, "export function createCardSendNotice(", "\n}\n");
+    expect(factory).toContain("inLocalPeriod(deps.getHeld())");
+    expect(factory).not.toContain("BYO_MODELS_ENABLED");
   });
 
   it("each trigger is passed the live value, anchored to its own call (#2433 M2)", () => {

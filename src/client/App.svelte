@@ -79,6 +79,7 @@ import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
 import {
+  createCardSendNotice,
   createChatAnswerer,
   localChatSettingFor,
   noteChatSent,
@@ -159,6 +160,7 @@ import {
   replyToAnnotation as marginReplyToAnnotation,
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
+import { setCardSendRaise } from "./panels/card-send-raise";
 import { motionOff } from "./panels/cardMotion";
 import { claudeCodeOfferEligible } from "./panels/chat-claude-code-offer";
 import { exportChatMarkdown } from "./panels/chat-export";
@@ -326,6 +328,20 @@ const notifications = createNotifications({
 });
 // R3: the first local model's toast goes where every client toast goes.
 if (BYO_MODELS_ENABLED) setChatAnswererToastSink((n) => notifications.push(n));
+// The send notice (#1123): a card send in the local period raises the
+// composer's `local-comment` toast. Its own `if`, never merged with the line
+// above; the getters are read only when a raise runs (after mount), so
+// `aiReadiness`, declared below, is safe here.
+if (BYO_MODELS_ENABLED) {
+  setCardSendRaise(
+    createCardSendNotice({
+      getHeld: () => aiReadiness.launcherHeldForLocalModel,
+      getMode: () => modeState.tandemMode,
+      getServerUnreachable: () => aiReadiness.serverUnreachable,
+      push: (n) => notifications.push(n),
+    }),
+  );
+}
 
 // #1722/#1792: a settings blob written by a NEWER Tandem makes every
 // `updateSettings` call a silent no-op — the theme picker, rail toggles,
@@ -1292,14 +1308,19 @@ function openSettingsModalWithAck() {
   settingsModalOpen = true;
 }
 
-// #1123 M4: the loading gate (returns null while a registry load is in flight)
-// lives in `resolveDefaultModelChip` so it's unit-testable; the `? : null`
-// BYO wrapper at the prop keeps the chip dark-hidden.
+// #1123 Label decision L2: the title bar's chip shows only while chat is set
+// to the local model (the pill's own `localChatSetting`), the licence does not
+// refuse AI, the list has loaded and the saved Default is an enabled local
+// model. The whole decision is `resolveDefaultModelChip` (unit-tested); the
+// `? : null` wrapper at the prop keeps the chip hidden while dark. Pinned by
+// tests/client/app-model-chip-wiring.test.ts.
 const defaultModelLabel = $derived(
   resolveDefaultModelChip({
     defaultModelId: modelsStore.defaultModelId,
     models: modelsStore.models,
-    loading: modelsStore.loading,
+    loaded: modelsStore.loaded,
+    chatSetting: localChatSetting,
+    aiOff: aiReadiness.aiNotice !== null,
   }),
 );
 
@@ -3348,7 +3369,10 @@ function dismissModelPicker() {
            wizard closes after Claude was set up in it. Its own close dismisses
            it, revealing the tutorial (gated on `!modelPickerOpen` above).
            Never mounts while dark. -->
-      <FirstRunModelPickerModal onComplete={dismissModelPicker} />
+      <FirstRunModelPickerModal
+        onComplete={dismissModelPicker}
+        onNotify={(n) => notifications.push(n)}
+      />
     {/if}
 
     {#if fileOpenDialogOpen}

@@ -1,41 +1,116 @@
 import { describe, expect, it } from "vitest";
-import { resolveDefaultModelChip } from "../../src/client/utils/model-chip";
+import {
+  type ChipModelEntry,
+  type DefaultModelChipInput,
+  resolveDefaultModelChip,
+} from "../../src/client/utils/model-chip";
+import type { ModelProvider } from "../../src/shared/models/contract";
 
-const MODELS = [
-  { id: "m1", displayName: "Qwen 2.5" },
-  { id: "m2", displayName: "Llama 3.1" },
-];
+/**
+ * The title bar's chip decision (#1123, ADR-039 Label decision L2: shown only
+ * while chat is set to the local model). Flag-free: the function reads no flag.
+ * Every fixture holds at least one enabled local entry, so a build that shows
+ * "any enabled local model" fails each hidden row.
+ */
 
-describe("resolveDefaultModelChip (#1123 M4 chip loading-gate)", () => {
-  it("hides the chip while a registry load is in flight (kills the empty→label pop)", () => {
-    // Even with a resolvable default, loading:true must yield null so the chip
-    // never flashes before the async load settles.
+const local = (id: string, displayName: string, provider: ModelProvider = "local-ollama") =>
+  ({ id, displayName, provider, enabled: true }) satisfies ChipModelEntry;
+const LOCAL = local("l1", "Qwen 2.5");
+const CLOUD: ChipModelEntry = {
+  id: "c1",
+  displayName: "Opus",
+  provider: "anthropic",
+  enabled: true,
+};
+const OFF: ChipModelEntry = { ...local("off", "Llama off"), enabled: false };
+
+/** Row 9's inputs: chat set to the local model, a loaded list, an enabled local Default. */
+const SHOWN: DefaultModelChipInput = {
+  defaultModelId: LOCAL.id,
+  models: [LOCAL],
+  loaded: true,
+  chatSetting: "local",
+  aiOff: false,
+};
+
+describe("resolveDefaultModelChip — hidden rows, each with a valid enabled local Default", () => {
+  it("the row-9 baseline shows (so every hidden row below differs by one input)", () => {
+    expect(resolveDefaultModelChip(SHOWN)).toBe("Qwen 2.5");
+  });
+
+  it("row 2: hidden while the licence refuses AI (CT-1)", () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, aiOff: true })).toBeNull();
+  });
+
+  it("row 3: hidden while chat is not set to the local model (L2)", () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, chatSetting: null })).toBeNull();
+  });
+
+  it('row 4: hidden while chat is set to the local model but none can be used ("unusable")', () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, chatSetting: "unusable" })).toBeNull();
+  });
+
+  it("row 5: hidden until the list has loaded", () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, loaded: false })).toBeNull();
+  });
+});
+
+describe("resolveDefaultModelChip — the Default", () => {
+  it("row 6: no Default, with one enabled local model: hidden", () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, defaultModelId: null })).toBeNull();
+  });
+
+  it("row 6: a Default naming no entry, with one enabled local model: hidden", () => {
+    expect(resolveDefaultModelChip({ ...SHOWN, defaultModelId: "ghost" })).toBeNull();
+  });
+
+  it("row 7: a cloud Default beside an enabled local model: hidden (DD1)", () => {
     expect(
-      resolveDefaultModelChip({ defaultModelId: "m1", models: MODELS, loading: true }),
+      resolveDefaultModelChip({ ...SHOWN, models: [CLOUD, LOCAL], defaultModelId: CLOUD.id }),
     ).toBeNull();
   });
 
-  it("shows the default entry's displayName once loaded", () => {
-    expect(resolveDefaultModelChip({ defaultModelId: "m2", models: MODELS, loading: false })).toBe(
-      "Llama 3.1",
-    );
-  });
-
-  it("hides the chip when there is no configured default", () => {
+  it("row 8: a switched-off Default beside an enabled local model: hidden (DD1)", () => {
     expect(
-      resolveDefaultModelChip({ defaultModelId: null, models: MODELS, loading: false }),
+      resolveDefaultModelChip({ ...SHOWN, models: [LOCAL, OFF], defaultModelId: OFF.id }),
     ).toBeNull();
   });
 
-  it("hides the chip when the default id resolves to no entry", () => {
+  it("row 9: two enabled local models, the Default the second: names the second", () => {
+    const second = local("l2", "Llama 3.1");
     expect(
-      resolveDefaultModelChip({ defaultModelId: "gone", models: MODELS, loading: false }),
-    ).toBeNull();
+      resolveDefaultModelChip({ ...SHOWN, models: [LOCAL, second], defaultModelId: second.id }),
+    ).toBe("Llama 3.1");
   });
 
-  it("is null in the dark shape (no models, not loading, no default) — byte-identical", () => {
-    expect(
-      resolveDefaultModelChip({ defaultModelId: null, models: [], loading: false }),
-    ).toBeNull();
+  for (const provider of [
+    "local-ollama",
+    "local-llamacpp",
+    "local-lmstudio",
+    "local-other",
+  ] as const) {
+    it(`row 9: shows for a ${provider} Default`, () => {
+      const e = local("p", `Model ${provider}`, provider);
+      expect(resolveDefaultModelChip({ ...SHOWN, models: [e], defaultModelId: e.id })).toBe(
+        `Model ${provider}`,
+      );
+    });
+  }
+});
+
+describe("resolveDefaultModelChip — the name (CT-2)", () => {
+  const named = (displayName: string) =>
+    resolveDefaultModelChip({ ...SHOWN, models: [{ ...LOCAL, displayName }] });
+
+  it("trims the name", () => {
+    expect(named("  Qwen  ")).toBe("Qwen");
+  });
+
+  it('a whitespace-only name reads "Local model"', () => {
+    expect(named("   ")).toBe("Local model");
+  });
+
+  it('an empty name reads "Local model"', () => {
+    expect(named("")).toBe("Local model");
   });
 });
