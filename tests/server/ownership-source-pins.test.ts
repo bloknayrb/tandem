@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
-import { SRC_FILES } from "../helpers/src-tree.js";
+import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 /**
  * Source and wire pins the ownership identity rests on (#2358, ADR-054).
@@ -954,5 +954,44 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
     );
     const fn = server.slice(server.indexOf("function noteOwnerHandleBind("));
     expect(fn.slice(0, fn.indexOf("\n}\n"))).not.toMatch(/\bawait\b/);
+  });
+});
+
+describe("the supervisor's start-or-wake and requestWake are called by nothing yet (#2358 PR 3b-2a, R2.8)", () => {
+  // 3b-2b deletes this describe in the PR that wires them. Token-level, not a
+  // call regex: a `.startOrWake(` regex misses an optional call (`?.`), a
+  // reference passed on without being called, bracket access and a
+  // destructuring (including in a parameter), all of which name the token.
+  const SUPERVISOR = "src/server/launcher/supervisor.ts";
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+
+  it("no src file but the supervisor names requestWake or the waiting decision", () => {
+    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual([]);
+    // Covers `index.ts`'s `createSupervisor` options however they are built
+    // (a literal, an object built first, a spread).
+    expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual([]);
+  });
+
+  it("startOrWake outside the supervisor is only ownership.ts's own function: its definition and two bare calls", () => {
+    expect(filesMentioning("startOrWake", [SUPERVISOR])).toEqual([OWNERSHIP]);
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    const sites = [...text.matchAll(/\bstartOrWake\b/g)].map((m) => {
+      const before = text.slice(0, m.index).trimEnd();
+      return {
+        prev: before.slice(-1),
+        next: text.slice(m.index + "startOrWake".length).slice(0, 1),
+      };
+    });
+    // Every site is a bare call or the definition: followed by `(` (so never
+    // a destructured name or a reference passed on) and not preceded by `.`
+    // or `[` (so never a member or bracket access, `?.` included).
+    expect(sites).toHaveLength(3);
+    for (const site of sites) {
+      expect(site.next).toBe("(");
+      expect([".", "["]).not.toContain(site.prev);
+    }
+    expect(text).toMatch(/export function startOrWake\(cause: WakeCause\): void \{/);
+    expect(text).toMatch(/\bstartOrWake\("message-owner"\);/);
+    expect(text).toMatch(/\bstartOrWake\(cause\);/);
   });
 });

@@ -372,6 +372,38 @@ interface SupervisorOpts {
   bindWindowMs?: number;
   /** Test-only override for `PRESENCE_SETTLE_MS` (#2358 PR 3b-1). Ownership on only. */
   presenceSettleMs?: number;
+  /**
+   * The waiting decision (#2358 PR 3b-2a; design §8.5): is anything waiting
+   * for Tandem's Claude? Read by a start-or-wake pass before it wakes or
+   * starts anything. MUST be synchronous and total — the supervisor never
+   * awaits a document queue (design §4.4). Absent, or a throw, reads as
+   * "nothing waiting", so a forgotten wiring starts nothing. Not Solo-gated
+   * here: a Solo-held item is never waiting, and that is the computation's
+   * job (3b-2b). `index.ts` does not pass it yet (a source pin holds that).
+   */
+  workWaiting?: () => boolean;
+}
+
+/**
+ * Why ownership asked the supervisor to start or wake Tandem's Claude (#2358
+ * PR 3b-2a). The supervisor's own type: it and the ownership module do not
+ * import each other, so 3b-2b maps ownership's `WakeCause` onto it. Goes into
+ * a log line only; it carries no session or document id.
+ */
+export type StartOrWakeCause = "document" | "message" | "solo-release";
+/** The causes a log line may name; anything else is logged as `other`, so a
+ *  caller that forwards an arbitrary string cannot put it in the log. */
+const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
+  "document",
+  "message",
+  "solo-release",
+]);
+
+/** An error's constructor name only, for the 3b-2a log lines: a decision
+ *  supplied by another module may throw a message carrying a document or
+ *  session id, which the log sink does not redact. */
+function errorName(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err;
 }
 
 /**
@@ -433,18 +465,27 @@ export interface TandemPresenceSeam {
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
    * **Called synchronously from the judging site**: inside the child's exit
-   * handler (site a), or just before a stop releases the spawn's turn delivery
+   * handler (site a), just before a stop releases the spawn's turn delivery
    * (site b), while `activeTurnDelivery` may still point at the spawn being
-   * torn down. A subscriber that writes a turn, starts or wakes anything
-   * (3b-2's failed-bind wake, design §8.7) must defer that work (a microtask
-   * or later), or it writes into the dying spawn. Kept synchronous so the
-   * failed-bind event precedes the presence announcement it causes.
+   * torn down, or from the bind window's timer when it expires (site c). At
+   * site (c) the spawn is not torn down — teardown cancels that timer — so
+   * `activeTurnDelivery` is that live, unbound spawn. A subscriber that writes
+   * a turn, starts or wakes anything (3b-2's failed-bind wake, design §8.7)
+   * must defer that work (a microtask or later), or it writes into a spawn
+   * the judging site is still acting on. Kept synchronous so the failed-bind
+   * event precedes the presence announcement it causes.
    */
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
   /** The live `standby !== "off"` read (design §8.1's widening arm). */
   standbyNotOff(): boolean;
   /** Test-only diagnostics. */
-  diagnosticsForTests(): { recomputes: number; settlePending: boolean; lastRunBound: boolean };
+  diagnosticsForTests(): {
+    recomputes: number;
+    settlePending: boolean;
+    lastRunBound: boolean;
+    /** Start passes that reached the op lock (#2358 PR 3b-2a), flag on only. */
+    startPasses: number;
+  };
 }
 
 /** How long a spawn may go from its first turn to its first bind (#2358 PR
@@ -793,6 +834,23 @@ export interface Supervisor {
    * Optional so the test fakes of this interface need not implement it; the
    * real supervisor always has it. */
   tandemPresence?(): TandemPresenceSeam;
+  /**
+   * Wake a running Tandem's Claude for work that is its own (#2358 PR 3b-2a;
+   * design §8.6). Ownership on only. Licence-refused, during a local-model
+   * period, or with no live child, it writes and owes nothing. Never throws.
+   * Called by nothing in production yet (3b-2b wires it; a source pin holds
+   * that). Optional for the same reason as `tandemPresence`.
+   */
+  requestWake?(): void;
+  /**
+   * Start or wake Tandem's Claude for work that is its own (#2358 PR 3b-2a;
+   * design §8.4 as the 3b-2a brief amends it). Fire-and-forget: returns
+   * nothing, never throws, leaves no rejection unhandled. Ownership on only.
+   * Dropped at the call when the licence refuses, the live standby is Off or
+   * shutdown has begun; otherwise it joins the one queued start pass, which
+   * asks the waiting decision first. Called by nothing in production yet.
+   */
+  startOrWake?(cause: StartOrWakeCause): void;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -1398,6 +1456,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     clearOwedWakes: () => void;
     /** This spawn's run-state record (#2358 PR 3b-1), or null flag off. */
     record: SpawnRecord | null;
+    /** Wake this spawn as an event's wake does, minus the event filter
+     *  (#2358 PR 3b-2a, R1.1). Only `requestWake` calls it, flag on. */
+    requestWake: () => void;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -1643,6 +1704,31 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * it. Counts toward `restartPending`, so the status reads "Starting" from
    * the moment the message lands rather than once the lock frees up. */
   let messageStartQueued = false;
+  /**
+   * A start pass is queued on the op lock or running, whoever queued it
+   * (#2358 PR 3b-2a). Raised by `startForMessage`, lowered in its `finally`.
+   * Flag off only the standby watch queues a pass, and it raises
+   * `messageStartQueued` with it, so the two are always equal there; flag on
+   * a pass that only start-or-wake owes raises this alone, so it does not
+   * read as a pending restart (`restartPending` counts `messageStartQueued`,
+   * the 3b-2a brief's drafter's ruling 3). A chat that finds this raised joins
+   * the queued pass rather than queuing a second.
+   */
+  let passQueued = false;
+  /**
+   * Start-or-wake owes the queued pass (#2358 PR 3b-2a). Written only by
+   * `startOrWake`, which does nothing flag off, so it is never raised there.
+   * The pass reads and clears it at its start; raised again while the pass
+   * runs, the pass's `finally` queues exactly one more (R2.7). Never cleared
+   * by anything else, and never read but by the pass: only `startOrWake`
+   * raises it, and only after its own licence, Off and shutdown checks.
+   */
+  let startOrWakeOwed = false;
+  /** The cause of the latest `startOrWake` that joined a pass, for the pass's
+   *  log line only (R2.1). */
+  let startOrWakeCause: StartOrWakeCause | "other" | undefined;
+  /** Start passes that reached the lock, flag on only: test diagnostics. */
+  let startPasses = 0;
 
   /** Is an AI other than Tandem's own last child live? */
   function anotherAiOn(): boolean {
@@ -1673,6 +1759,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       wakeOwedAcrossSpawns = true;
       if (messageStartQueued) return;
       messageStartQueued = true;
+      // A pass start-or-wake queued (flag on only): this chat joins it, and
+      // the raise above makes it count as a pending start at once (R2.10).
+      if (passQueued) return;
       // `startForMessage` catches what it can; this catches the rest, because
       // an unhandled rejection exits the server (#2125).
       startForMessage().catch((err: unknown) => {
@@ -1684,12 +1773,33 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   /** Start Tandem's Claude for a message that reached it in standby (#2196).
    * Never throws: it runs off the event fan-out, which has no caller to report
    * to, so a failure is left where the user can see it — `lastError`, or the
-   * licence and not-configured states `respawn` already records. */
+   * licence and not-configured states `respawn` already records.
+   *
+   * This is the one start pass (#2358 PR 3b-2a): today's arm (the standby
+   * watch, `messageStartQueued`) and start-or-wake (`startOrWakeOwed`, flag on
+   * only) both owe it. Today's arm is decided first, exactly as on master;
+   * start-or-wake's share runs only when today's arm did not start. */
   async function startForMessage(): Promise<void> {
+    passQueued = true;
     await withLock(async () => {
+      // What start-or-wake owes is consumed here, at the pass's read (R2.7).
+      // Flag off it is never raised, so the pass below is master's.
+      const owedByStartOrWake = startOrWakeOwed;
+      startOrWakeOwed = false;
+      if (ownershipEnabled()) startPasses += 1;
       // Re-checked under the lock: the user's own Start, a shutdown or another
-      // AI attaching may all have landed while this waited.
-      if (shuttingDown || standby === undefined || breakerTripped || isAlive() || anotherAiOn()) {
+      // AI attaching may all have landed while this waited. Flag off
+      // `messageStartQueued` is always raised here (the watch is the only
+      // queuer); flag on it is not when only start-or-wake owes the pass.
+      if (
+        !messageStartQueued ||
+        shuttingDown ||
+        standby === undefined ||
+        breakerTripped ||
+        isAlive() ||
+        anotherAiOn()
+      ) {
+        if (owedByStartOrWake) await startOrWakeStep();
         return;
       }
       console.error("[Launcher] A message arrived while Claude was stopped — starting it");
@@ -1709,8 +1819,123 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         recordStartThrow(err, "Could not start Claude for the message");
       }
     }).finally(() => {
+      // Anything today's arm set while the pass ran is cleared, not re-queued:
+      // its wake was owed synchronously by the watch (drafter's ruling 2).
       messageStartQueued = false;
+      passQueued = false;
+      // Start-or-wake raised again while the pass ran: exactly one more pass
+      // (R2.7). Never raised flag off.
+      if (startOrWakeOwed) queueStartPass();
     });
+  }
+
+  /** Queue the one start pass. Ends in a catch: nothing awaits it (#2125). */
+  function queueStartPass(): void {
+    startForMessage().catch((err: unknown) => {
+      console.error(`[Launcher] The start pass failed: ${errorName(err)}`);
+    });
+  }
+
+  /** The waiting decision, total: absent or throwing reads as nothing
+   *  waiting (R2.9). */
+  function workIsWaiting(): boolean {
+    try {
+      return opts.workWaiting?.() === true;
+    } catch (err) {
+      console.error(
+        `[Launcher] The waiting decision threw (read as nothing waiting): ${errorName(err)}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Start-or-wake's share of a pass (#2358 PR 3b-2a, R2.4-R2.6), under the op
+   * lock, after today's arm declined (or did not owe the pass). Flag on only:
+   * `startOrWakeOwed` is never raised flag off. Never starts past another AI
+   * while the live standby is Off or nothing is waiting.
+   */
+  async function startOrWakeStep(): Promise<void> {
+    const cause = startOrWakeCause ?? "document";
+    // Waiting first: nothing waiting, nothing is woken or started (R2.4).
+    if (!workIsWaiting()) return;
+    // A live child is woken, never started (R1 applies its own refusals) —
+    // unless shutdown has begun since the call: its stop is queued behind
+    // this pass and would kill the child the wake was written to.
+    if (isAlive()) {
+      if (!shuttingDown) requestWake();
+      return;
+    }
+    // No standby: a restart is pending or under way, or nothing is (R2.5).
+    // Only a pending restart timer (breaker not tripped) is owed the wake;
+    // its spawn writes it. `launching > 0` and a delivery-killed child whose
+    // exit has not landed owe nothing: the next bind's take-back covers them.
+    if (standby === undefined) {
+      if (restartTimer !== null && !breakerTripped) wakeOwedAcrossSpawns = true;
+      return;
+    }
+    // The live standby, read here (design §8.1): Off is Off, whoever else is
+    // attached. Another AI being on does not stop this start (R2.4).
+    if (standby === "off" || shuttingDown || breakerTripped) return;
+    console.error(`[Launcher] Work is waiting for Tandem's Claude (${cause}) — trying to start it`);
+    // Owed after the guard, as `startForMessage` does: a start refused in
+    // `respawn` keeps it, and licence activation writes it (R2.6).
+    wakeOwedAcrossSpawns = true;
+    try {
+      const result = await respawn(undefined, undefined, {
+        clearSession: false,
+        byMessage: true,
+      });
+      if (!result.spawned) {
+        console.error(`[Launcher] Could not start Claude for waiting work: ${result.why}`);
+      }
+    } catch (err) {
+      recordStartThrow(err, "Could not start Claude for waiting work");
+    }
+  }
+
+  /**
+   * See `Supervisor.startOrWake` (#2358 PR 3b-2a, R2.1, R2.2, R2.12). Dropped
+   * at the call — nothing recorded, no pass — flag off, during shutdown, when
+   * the live standby is Off, or when the licence refuses (a licence activated
+   * later therefore starts nothing for it). Otherwise it joins the one queued
+   * pass, queuing it unless one is queued: a burst is one pass.
+   */
+  function startOrWake(cause: StartOrWakeCause): void {
+    try {
+      if (!ownershipEnabled()) return;
+      if (shuttingDown || standby === "off") return;
+      if (decideRefusal() !== null) return;
+      startOrWakeOwed = true;
+      startOrWakeCause = START_OR_WAKE_CAUSES.has(cause) ? cause : "other";
+      if (passQueued) return;
+      console.error(`[Launcher] Start-or-wake queued (${startOrWakeCause})`);
+      queueStartPass();
+    } catch (err) {
+      console.error(`[Launcher] Start-or-wake failed (dropped): ${errorName(err)}`);
+    }
+  }
+
+  /**
+   * See `Supervisor.requestWake` (#2358 PR 3b-2a, R1). A live child only
+   * (R1.4); the spawn's writer then checks the licence (R1.2) and its own
+   * local-period guard (R1.3: this does not go through the event queue, which
+   * is what withholds an event's wake there). The wake itself is the spawn's:
+   * one now when idle, one follow-up after the running turn's `result`
+   * otherwise, owed on that spawn when the write cannot be attempted (R1.1).
+   *
+   * It does NOT ask the waiting decision and is not Solo-gated: every caller
+   * owes that screen first (design §8.5, where Solo protection lives). The
+   * start pass asks it before calling here; 3b-2b's take-back must too.
+   */
+  function requestWake(): void {
+    try {
+      if (!ownershipEnabled()) return;
+      if (!isAlive()) return;
+      activeTurnDelivery?.requestWake();
+    } catch (err) {
+      console.error(`[Launcher] Wake request failed (dropped): ${errorName(err)}`);
+    }
   }
 
   /**
@@ -3002,6 +3227,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (!sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = true;
     }
 
+    /** `requestWake` on this spawn (#2358 PR 3b-2a, R1.1): `onTandemEvent`'s
+     *  wake without its event filter. The licence (R1.2) and the local period
+     *  (R1.3) are checked HERE, at the writer, so any caller inside this file
+     *  inherits them: a refusal, or a licence decision that throws, writes and
+     *  owes nothing. */
+    function requestWakeOnSpawn(): void {
+      let refused: boolean;
+      try {
+        refused = decideRefusal() !== null;
+      } catch {
+        refused = true;
+      }
+      if (refused || localHeld()) return;
+      if (turnInFlight) {
+        pendingWake = true;
+        return;
+      }
+      if (!sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = true;
+    }
+
     const unsubscribeFromEvents = subscribeToEvents(onTandemEvent);
     // Synchronously after the subscribe above, so no event falls between the
     // gap watch and this spawn's own subscription (#2181).
@@ -3098,6 +3343,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         pendingWake = false;
       },
       record,
+      requestWake: requestWakeOnSpawn,
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -4661,6 +4907,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       recomputes: presenceRecomputes,
       settlePending: settleTimer !== null,
       lastRunBound,
+      startPasses,
     }),
   };
 
@@ -4678,6 +4925,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     updateSettings,
     appliedSettings: () => (lastGoodSettings ? { ...lastGoodSettings } : null),
     tandemPresence: () => presenceSeam,
+    requestWake,
+    startOrWake,
   };
 }
 
