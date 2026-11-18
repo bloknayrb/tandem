@@ -250,6 +250,8 @@ describe("FirstRunModelPickerModal — saving", () => {
     expect(addModel.mock.calls[0][0]).toMatchObject({ modelId: "qwen" });
     expect(setDefault).toHaveBeenCalledTimes(1);
     expect(setDefault).toHaveBeenCalledWith("new-id");
+    // A committed add is a success: nothing to clear (R0.4).
+    expect(clearError).not.toHaveBeenCalled();
     expect(m.onComplete).toHaveBeenCalledTimes(1);
   });
 
