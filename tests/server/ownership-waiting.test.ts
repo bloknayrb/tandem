@@ -88,6 +88,7 @@ import {
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
+  Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
@@ -1036,7 +1037,17 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
       for (const act of acts) await runAct(w, act, row);
       expect(w.candidate, "the row built its candidate").not.toBe("");
 
+      // Spies around the waiting call only (the poll's admit logs its own drops):
+      // a "not" answer must be computed, never the catch's.
+      const logs = (["error", "warn", "log", "info"] as const).map((m) => vi.spyOn(console, m));
+      const before = logs.map((spy) => spy.mock.calls.length);
       const waiting = documentWaiting(w.d.id);
+      // The one line allowed: `listAnnotations`' own legacy-migration log
+      // (row 27's flag), which every caller of the read gets (Accepted).
+      const during = logs
+        .flatMap((spy, i) => spy.mock.calls.slice(before[i]))
+        .filter((call) => !String(call[0]).startsWith("[ANNOTATION-STORE] legacy migration:"));
+      expect(during, "documentWaiting logged").toEqual([]);
       const inbox = row.rawPoll
         ? await rawFreshPoll(TANDEM, w.d.id)
         : await reader(TANDEM).poll(w.d.id);
@@ -1080,6 +1091,7 @@ function observable(w: RowWorld, counts: { d: number; ctrl: number }) {
     ownership: ownershipSnapshotForTests(),
     updates: { ...counts },
     afterTransaction: afterTransactionListeners(w.d.ydoc),
+    listeners: { d: listenerCounts(w.d.ydoc), ctrl: listenerCounts(ctrl()) },
   });
 }
 
@@ -1091,6 +1103,24 @@ function afterTransactionListeners(ydoc: Y.Doc): number {
   const observers = (ydoc as unknown as { _observers: Map<string, Set<unknown>> })._observers;
   expect(observers).toBeInstanceOf(Map);
   return observers.get("afterTransaction")?.size ?? 0;
+}
+
+/**
+ * Every listener a write could leave behind: each event's listener count on
+ * the Y.Doc, and the observe/observeDeep handlers of the maps waiting reads.
+ */
+function listenerCounts(ydoc: Y.Doc): Record<string, number> {
+  const observers = (ydoc as unknown as { _observers: Map<string, Set<unknown>> })._observers;
+  const out: Record<string, number> = {};
+  for (const [event, set] of observers) out[`doc:${event}`] = set.size;
+  for (const name of [Y_MAP_ANNOTATIONS, Y_MAP_ANNOTATION_REPLIES, Y_MAP_USER_AWARENESS]) {
+    const type = ydoc.share.get(name) as
+      | { _eH: { l: unknown[] }; _dEH: { l: unknown[] } }
+      | undefined;
+    if (type) out[`${name}:observe`] = type._eH.l.length;
+    if (type) out[`${name}:observeDeep`] = type._dEH.l.length;
+  }
+  return out;
 }
 
 /** A user comment no poll has handed, with no `relRange` and a stored range its snapshot still matches. */
