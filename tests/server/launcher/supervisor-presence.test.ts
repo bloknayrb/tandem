@@ -1529,16 +1529,16 @@ describe("3b-2a R1: requestWake", () => {
     expect(withCall).toBe(without);
   });
 
-  it("no child: nothing written", async () => {
-    // Only "nothing written" can fail here: the next spawn is fresh, and a
-    // fresh spawn's bootstrap clears any owed wake, so "the next spawn writes
-    // no wake on its account" is asserted on the Off-released sibling below,
-    // whose next spawn resumes.
+  it("no child: requestWake spawns nothing", async () => {
+    // With no child there is nothing any build could write a turn to, and the
+    // next spawn here is fresh (its bootstrap clears any owed wake), so the
+    // only thing this case can catch is a requestWake that spawns. "The next
+    // spawn writes no wake on its account" is asserted on the Off-released
+    // sibling below, whose next spawn resumes.
     const h = makeSupervisor();
     h.sup.requestWake?.();
+    await settle();
     expect(children).toHaveLength(0);
-    const c1 = await runningIdle(h);
-    expect(turnTexts(c1)).toHaveLength(1); // the bootstrap only
   });
 
   it("a child whose delivery an Off released: nothing written, and the next spawn writes no wake on its account", async () => {
