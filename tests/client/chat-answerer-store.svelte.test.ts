@@ -738,13 +738,13 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
         severity: "warning",
         dedupKey: "use-it-for-chat-not-confirmed",
         message:
-          "Tandem could not confirm that chat was set to your local model. You can set it under Who answers your chat in Settings → Models.",
+          "Tandem could not confirm that chat was set to your local model. Check Who answers your chat in Settings → Models.",
       },
       notRead: {
         severity: "warning",
         dedupKey: "use-it-for-chat-not-read",
         message:
-          "Chat was not set to your local model, because Tandem could not read the current setting. You can set it under Who answers your chat in Settings → Models.",
+          "Tandem did not change who answers your chat, because it could not read the current setting. Check Who answers your chat in Settings → Models.",
       },
     });
   });
@@ -777,6 +777,40 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
       await done;
       expect(sink.push).not.toHaveBeenCalled();
     });
+  });
+
+  it("a sink whose push throws does not spend the offer: unmarked, and the next first local model pushes it (review round 1)", async () => {
+    sink.push.mockImplementationOnce(() => {
+      throw new Error("sink gone");
+    });
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(1)).answer(200, known("claude"));
+    expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBeNull();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[chat-answerer] the first-local-model toast failed",
+      expect.any(Error),
+    );
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(2)).answer(200, known("claude"));
+    expect(sink.push).toHaveBeenCalledTimes(2);
+    expect(sink.push).toHaveBeenLastCalledWith(confirmation(), USE_IT_ACTION);
+    expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBe("1");
+    // The failed push's id was dropped: a known-local read withdraws only the shown one.
+    await readAs(200, known("local"));
+    const shown = (sink.push.mock.calls[1][0] as TandemNotification).id;
+    expect(sink.dismiss.mock.calls).toEqual([[shown]]);
+    expect(sink.dismissActivity.mock.calls).toEqual([[shown]]);
+  });
+
+  it("a push that throws leaves no id behind: a later known-local read dismisses nothing", async () => {
+    sink.push.mockImplementationOnce(() => {
+      throw new Error("sink gone");
+    });
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(1)).answer(200, known("claude"));
+    await readAs(200, known("local"));
+    expect(sink.dismiss).not.toHaveBeenCalled();
+    expect(sink.dismissActivity).not.toHaveBeenCalled();
   });
 
   describe("through the button", () => {
@@ -1049,16 +1083,6 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
         expect(notices()).toEqual([[notice(N.notSaved)]]);
         expectWithdrawn(id);
       });
-      it("R: 500 write-failed left on Claude (a new string, not Settings' line)", async () => {
-        const id = await press(
-          500,
-          { answerer: "claude", persisted: false, code: WF },
-          known("claude"),
-        );
-        expect(notices()).toEqual([[notice(N.refused)]]);
-        expect(N.refused.message).not.toBe(store.CHAT_ANSWERER_OUTCOME_LINES.localRefused);
-        await expectKept(id);
-      });
       it("nothing: 409 superseded Claude (another choice won)", async () => {
         const id = await press(
           409,
@@ -1068,22 +1092,69 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
         expect(notices()).toEqual([]);
         await expectKept(id);
       });
-      for (const [label, status, body] of [
-        ["403", 403, { code: "OWN_WINDOW_ONLY" }],
-        ["404", 404, { error: "NOT_FOUND" }],
-        ["a network failure", 0, null],
-      ] as const) {
-        it(`N: ${label}, the re-read known Claude`, async () => {
-          const id = await press(status, body, known("claude"));
+
+      // Review round 1, R1.1: any other result is reported by the store as it
+      // stands after the switch's re-read — known local S, known Claude R,
+      // not known N — for a refused or failed write and for `unconfirmed`.
+      describe("a refused or failed write (500 write-failed, Claude in effect)", () => {
+        const refused = { answerer: "claude", persisted: false, code: WF };
+        it("store known Claude: R (a new string, not Settings' line)", async () => {
+          const id = await press(500, refused, known("claude"));
+          expect(notices()).toEqual([[notice(N.refused)]]);
+          expect(N.refused.message).not.toBe(store.CHAT_ANSWERER_OUTCOME_LINES.localRefused);
+          await expectKept(id);
+        });
+        it("store known local (another window set it): S, and the confirmation withdrawn", async () => {
+          const id = await press(500, refused, known("local"));
+          expect(notices()).toEqual([[notice(N.set)]]);
+          expectWithdrawn(id);
+        });
+        it("store not known (the re-read failed): N", async () => {
+          const id = await press(500, refused, "fail");
           expect(notices()).toEqual([[notice(N.notConfirmed)]]);
           await expectKept(id);
         });
-      }
-      it("N: a POST that timed out but landed; the re-read known local withdraws the confirmation", async () => {
-        const id = await press(-1, null, known("local"));
-        expect(notices()).toEqual([[notice(N.notConfirmed)]]);
-        expectWithdrawn(id);
       });
+
+      describe("unconfirmed", () => {
+        for (const [label, status, body] of [
+          ["403", 403, { code: "OWN_WINDOW_ONLY" }],
+          ["404", 404, { error: "NOT_FOUND" }],
+          ["a network failure", 0, null],
+        ] as const) {
+          it(`${label}, store known Claude: R`, async () => {
+            const id = await press(status, body, known("claude"));
+            expect(notices()).toEqual([[notice(N.refused)]]);
+            await expectKept(id);
+          });
+        }
+        it("a POST that timed out but landed, store known local: S, and the confirmation withdrawn", async () => {
+          const id = await press(-1, null, known("local"));
+          expect(notices()).toEqual([[notice(N.set)]]);
+          expectWithdrawn(id);
+        });
+        it("a POST that timed out, store not known (the re-read failed): N", async () => {
+          const id = await press(-1, null, "fail");
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          await expectKept(id);
+        });
+      });
+    });
+
+    it("a full Settings switch to Claude during the press's read: the press sends nothing and shows nothing (review round 1)", async () => {
+      const id = await pushConfirmation();
+      click();
+      const pressRead = await held.request(2);
+      const done = store.setChatAnswerer("claude");
+      await (await held.request(3)).answer(200, { answerer: "claude", persisted: true });
+      await pressRead.answer(200, known("claude"));
+      await (await held.request(4)).answer(200, known("claude"));
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(posts()[0].body).toEqual({ answerer: "claude" });
+      expect(notices()).toEqual([]);
+      await expectKept(id);
     });
   });
 

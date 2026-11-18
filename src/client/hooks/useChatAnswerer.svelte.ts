@@ -127,6 +127,9 @@ let _toastShownInMemory = false;
 /** The id the first-local-model confirmation was pushed with, until it is
  *  withdrawn ("Use it for chat", R3.3). Plain: no template reads it. */
 let _confirmationId: string | null = null;
+/** Bumped by every switch `setChatAnswerer` sends: a press whose read
+ *  resolves after another switch began stays quiet (review round 1, R1.3). */
+let _switchCount = 0;
 /** The last chat send's own read (#2433 M1, Ruling S-a): the promise its
  *  `requestRead()` returned and the local period at the send. Replaced by every
  *  `noteChatSent`, cleared by `takeSendRead`. Plain, not `$state`: no template
@@ -292,6 +295,7 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<SwitchResult
   // Pending until its own re-read settles, so a second press cannot start
   // another POST during that re-read.
   _postPending = true;
+  _switchCount += 1;
   _postInFlight = true;
   _outcomeLine = null;
   _outcomeFor = null;
@@ -744,13 +748,13 @@ export const USE_IT_FOR_CHAT_NOTICES = {
     severity: "warning",
     dedupKey: "use-it-for-chat-not-confirmed",
     message:
-      "Tandem could not confirm that chat was set to your local model. You can set it under Who answers your chat in Settings → Models.",
+      "Tandem could not confirm that chat was set to your local model. Check Who answers your chat in Settings → Models.",
   },
   notRead: {
     severity: "warning",
     dedupKey: "use-it-for-chat-not-read",
     message:
-      "Chat was not set to your local model, because Tandem could not read the current setting. You can set it under Who answers your chat in Settings → Models.",
+      "Tandem did not change who answers your chat, because it could not read the current setting. Check Who answers your chat in Settings → Models.",
   },
 } as const satisfies Record<
   string,
@@ -792,16 +796,23 @@ function withdrawConfirmation(): void {
  * The press of "Use it for chat" (R3.2; Bryan's P5, a selection under Ruling
  * B-1). First match wins: dark, nothing; a switch pending at the click,
  * nothing (no read, Settings' line untouched; CR-3); then, after a fresh read
- * (CR-5), from the STORE: known local, nothing (re-sending would upgrade the
- * server's "told" to "chosen", #2417); still not known, X; otherwise one
- * `setChatAnswerer("local")`, reported by its POST's result (CR-2). No return
- * on a missing confirmation id: the rows run regardless. Never writes
- * `$state` itself; only from the click and the fetch continuations below it.
+ * (CR-5): another switch began meanwhile, nothing (it is the user's later
+ * choice; review round 1); from the STORE, known local, nothing (re-sending
+ * would upgrade the server's "told" to "chosen", #2417); still not known, X;
+ * otherwise one `setChatAnswerer("local")` (CR-2). Its notice: S or U for a
+ * POST that answered local; nothing for a superseded Claude; for any other
+ * result (unconfirmed, or a refused or failed write), the store as it stands
+ * after the switch's re-read decides — known local S, known Claude R, not
+ * known N (review round 1, R1.1, correcting the brief). No return on a
+ * missing confirmation id: the rows run regardless. Never writes `$state`
+ * itself; only from the click and the fetch continuations below it.
  */
 export async function pressUseItForChat(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return;
   if (_postPending) return;
+  const switchesAtClick = _switchCount;
   await requestRead();
+  if (_switchCount !== switchesAtClick) return;
   if (isKnownLocal()) return;
   if (_status !== "known") {
     pushUseItNotice("notRead");
@@ -813,10 +824,17 @@ export async function pressUseItForChat(): Promise<void> {
   // This notice carries the result; a line left behind would be announced at
   // the next Settings → Models open, against the tab's rule.
   clearChatAnswererOutcome();
-  if (result.kind === "unconfirmed") pushUseItNotice("notConfirmed");
-  else if (result.effective === "local") pushUseItNotice(result.saved ? "set" : "notSaved");
+  if (result.kind === "answered" && result.effective === "local") {
+    pushUseItNotice(result.saved ? "set" : "notSaved");
+    return;
+  }
   // A superseded Claude: another choice won, and Settings says nothing either.
-  else if (!result.superseded) pushUseItNotice("refused");
+  if (result.kind === "answered" && result.superseded) return;
+  // Otherwise the POST did not say chat is local: the store, after the
+  // switch's re-read, says what holds now.
+  if (isKnownLocal()) pushUseItNotice("set");
+  else if (isKnownClaude()) pushUseItNotice("refused");
+  else pushUseItNotice("notConfirmed");
 }
 
 function onModelsWrite(info: { firstLocal: boolean }): void {
@@ -826,39 +844,49 @@ function onModelsWrite(info: { firstLocal: boolean }): void {
     .then((outcome) => {
       if (outcome.status !== "known") return; // not known: dropped, unmarked
       if (toastAlreadyShown()) return;
-      markToastShown();
-      // Known local: it would be false, so it is dropped (and marked).
-      if (outcome.answerer !== "claude") return;
-      // The store already knows local (a switch settled while this read was in
-      // flight, so the read was not adopted): it would be false too.
-      if (isKnownLocal()) return;
       const sink = _toastSink;
-      if (sink === null) return;
+      // Known local: it would be false, so it is dropped (and marked). So when
+      // the store already knows local (a switch settled while this read was in
+      // flight, so the read was not adopted).
+      if (outcome.answerer !== "claude" || isKnownLocal() || sink === null) {
+        markToastShown();
+        return;
+      }
       const id = generateNotificationId();
-      // The withdrawal finds the toast and its tray row by this id. Nothing
-      // else pushes this dedupKey; a coalescing push would give the toast a
-      // new id.
+      // The withdrawal finds the toast and its tray row by this id. The toast
+      // takes the id of the latest push with its dedupKey and the tray row
+      // keeps the first; both are this one, because this store is the only
+      // pusher of "first-local-model-chat" and pushes it at most once per
+      // install (the mark and the tray share storage, and its info row expires
+      // after five minutes).
       _confirmationId = id;
-      sink.push(
-        {
-          id,
-          // The send-time toasts' type: a notice about who answers chat.
-          type: "launcher",
-          severity: "info",
-          message: FIRST_LOCAL_MODEL_TOAST_TEXT,
-          dedupKey: "first-local-model-chat",
-          timestamp: Date.now(),
-        },
-        {
-          label: USE_IT_FOR_CHAT_LABEL,
-          onClick: () =>
-            void pressUseItForChat().catch((err) =>
-              console.warn("[chat-answerer] Use it for chat failed", err),
-            ),
-          // W2: it holds a button the user may want, so it waits.
-          stay: true,
-        },
-      );
+      try {
+        sink.push(
+          {
+            id,
+            // The send-time toasts' type: a notice about who answers chat.
+            type: "launcher",
+            severity: "info",
+            message: FIRST_LOCAL_MODEL_TOAST_TEXT,
+            dedupKey: "first-local-model-chat",
+            timestamp: Date.now(),
+          },
+          {
+            label: USE_IT_FOR_CHAT_LABEL,
+            onClick: () =>
+              void pressUseItForChat().catch((err) =>
+                console.warn("[chat-answerer] Use it for chat failed", err),
+              ),
+            // W2: it holds a button the user may want, so it waits.
+            stay: true,
+          },
+        );
+      } catch (err) {
+        // Not shown, so not spent: the offer stays unmarked (review round 1).
+        _confirmationId = null;
+        throw err;
+      }
+      markToastShown();
     })
     .catch((err) => console.warn("[chat-answerer] the first-local-model toast failed", err));
 }
@@ -954,6 +982,7 @@ export function _resetChatAnswererForTests(): void {
   _toastSink = null;
   _toastShownInMemory = false;
   _confirmationId = null;
+  _switchCount = 0;
   _sendRead = null;
   for (const timer of _capTimers) clearTimeout(timer);
   _capTimers = new Set();
