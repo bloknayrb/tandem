@@ -298,6 +298,28 @@ export function isClaudeFacing(ann: Pick<Annotation, "type" | "audience">): bool
 }
 
 /**
+ * The privacy half of ADR-027's reply rule, shared by the push gate
+ * ({@link narrowReplyForChannel}) and every pull restatement
+ * (`channelVisibleReplies`, `file-io/docx.ts`'s export filter and
+ * `mcp/inbox-selection.ts`'s `replyWaits`) so the two sides cannot disagree
+ * again (#2460). It says nothing about the author; each caller owns that half.
+ *
+ * Fails closed on anything that is not literally `false` or absent.
+ * `private !== true` would be the natural spelling and it fails OPEN: a
+ * `private` stored as the string "true", as 1, or as `null` is not `=== true`,
+ * so the reply would carry its text to Claude. The reply is the one value on
+ * these paths that nothing sanitizes: there is no `sanitizeReply`,
+ * `makePerKeyChangeObserver` hands it over as a bare `map.get(key) as T`, and a
+ * session-file restore or a Hocuspocus client writes the replies Y.Map without
+ * validation (only the durable envelope is zod-gated). Every first-party writer
+ * stamps a real boolean (`true`) or leaves the key absent, and absent is the
+ * normal non-private case, so it must stay visible.
+ */
+export function replyPrivacyAllows(reply: Pick<AnnotationReply, "private">): boolean {
+  return reply.private === false || reply.private === undefined;
+}
+
+/**
  * Reply-side narrow. The parent being `ChannelEligible` says nothing about the
  * reply: `AnnotationReply.private` is stamped at creation from the parent's type
  * *at that instant* and is permanent, so a reply written while the parent was a
@@ -323,19 +345,9 @@ export function narrowReplyForChannel(
     return null;
   }
 
-  // Fails closed on anything that is not literally `false`.
-  //
-  // `private === true` would be the natural spelling and it fails OPEN: a
-  // `private` stored as the string "true", or as 1, is not `=== true`, so the
-  // reply would project and carry its text. The reply is the one value on this
-  // path that nothing sanitizes — there is no `sanitizeReply`, and
-  // `makePerKeyChangeObserver` hands it over as a bare `map.get(key) as T`.
-  // Every writer stamps a real boolean today (`mcp/annotations.ts`,
-  // `file-io/docx-comments.ts`, and the zod-gated durable restore), so this is
-  // defence against the same stale-tab-merge and legacy-envelope cases the
-  // parent narrow exists for. Leaving the reply outside that model while
-  // sanitizing the parent was an asymmetry, not a decision.
-  if (reply.private !== false && reply.private !== undefined) {
+  // The privacy half, after the author check on purpose: an import reply with
+  // `private: true` must keep answering `reply-author`.
+  if (!replyPrivacyAllows(reply)) {
     onRefused?.({ reason: "reply-private", value: typeof reply.private });
     return null;
   }

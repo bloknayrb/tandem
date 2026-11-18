@@ -172,16 +172,19 @@ describe("narrowReplyForChannel, reached directly", () => {
     expect(refusals).toEqual(["reply-parent-mismatch"]);
   });
 
-  it.each([["true"], [1], ["yes"], [{}]])("refuses the non-boolean private flag %p", (value) => {
-    const refusals: string[] = [];
-    const out = narrowReplyForChannel(
-      replyOn("a1", { private: value as unknown as boolean }),
-      parentFor("a1"),
-      (r) => refusals.push(r.reason),
-    );
-    expect(out).toBeNull();
-    expect(refusals).toEqual(["reply-private"]);
-  });
+  it.each([["true"], [1], ["yes"], [{}], [null], [0], [""]])(
+    "refuses the non-boolean private flag %p",
+    (value) => {
+      const refusals: string[] = [];
+      const out = narrowReplyForChannel(
+        replyOn("a1", { private: value as unknown as boolean }),
+        parentFor("a1"),
+        (r) => refusals.push(r.reason),
+      );
+      expect(out).toBeNull();
+      expect(refusals).toEqual(["reply-private"]);
+    },
+  );
 
   it("admits the ordinary case, so the refusals above are not vacuous", () => {
     expect(narrowReplyForChannel(replyOn("a1"), parentFor("a1"))).not.toBeNull();

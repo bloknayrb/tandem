@@ -1320,6 +1320,45 @@ describe("isDocumentWaiting, the module alone", () => {
   });
 });
 
+describe("#2460: replyWaits refuses a non-boolean private flag on its own", () => {
+  // `repliesOf` hands the replies straight in, bypassing the adapter's
+  // `channelVisibleReplies`, so only `replyWaits`' own restatement can refuse.
+  // Conditions: mode "tandem"; the parent is CLAUDE's outbound comment, so
+  // `commentWaits` cannot answer "waiting" on its own account; nothing handed;
+  // no local-model record.
+  const parent = {
+    id: "p",
+    author: "claude",
+    type: "comment",
+    audience: "outbound",
+    range: { from: 0, to: 5 },
+    content: "c",
+    status: "pending",
+    timestamp: 1,
+  };
+  const ask = (extra: Record<string, unknown>) =>
+    isDocumentWaiting(
+      deepFreeze({
+        documentId: "doc",
+        annotations: [parent],
+        repliesOf: () => [
+          { id: "r", annotationId: "p", author: "user", text: "t", timestamp: 2, ...extra },
+        ],
+        mode: "tandem",
+        handedAtOrAbove: () => false,
+        isLocalModelRecord: () => false,
+      } as unknown as DocumentWaitingInput),
+    );
+
+  it("the absent-private reply alone answers waiting (the positive anchor)", () => {
+    expect(ask({})).toBe(true);
+  });
+
+  it('the private: "true" reply alone answers not waiting', () => {
+    expect(ask({ private: "true" })).toBe(false);
+  });
+});
+
 describe("documentWaiting is total", () => {
   it("a read that throws answers false, with one fixed log line naming no id", async () => {
     const w = await rowWorld();
