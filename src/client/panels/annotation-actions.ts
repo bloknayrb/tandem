@@ -5,6 +5,7 @@ import { withBrowser } from "../../shared/origins";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { API_BASE } from "../utils/fileUpload";
+import { raiseCardSend } from "./card-send-raise";
 
 const warn = (event: unknown): void => {
   console.warn("[sanitize]", event);
@@ -109,6 +110,9 @@ export function sendNoteToClaude(
   withBrowser(ydoc, () => {
     map.set(annotationId, promotedAnnotation(ann, tandemMode));
   });
+  // The send notice (#1123): once, after the transact has returned, never
+  // inside it. The raise carries nothing about the annotation.
+  raiseCardSend();
 }
 
 /**
@@ -135,6 +139,9 @@ export function promoteNotesToComments(
       promoted++;
     }
   });
+  // The send notice (#1123): once per call that promoted at least one note,
+  // after the transact has returned.
+  if (promoted > 0) raiseCardSend();
   return promoted;
 }
 
