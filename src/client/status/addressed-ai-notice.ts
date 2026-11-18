@@ -57,17 +57,25 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *      count includes an attached-but-inert shim — so `true` and `null` (field
  *      absent, redacted, or not yet read) must both stay silent. Guessing here
  *      would tell a working user their comment went nowhere.
- *   7. The local period (#1123 part B, R8): chat set to the local model.
- *      Applied AFTER rules 1–6 have decided, so Solo, `offline` and `ai-off`
- *      are untouched. A CHAT then raises no `no-agent` and no `no-push`: the
- *      local model has it, and "nothing will answer" or "it'll see this when
- *      it checks in" would be false. A COMMENT, whenever rules 1–6 return
- *      anything but `offline`, `ai-off` or Solo's null — including a null
- *      from a live, notified session or an unanswered probe — says T
- *      (`LOCAL_COMMENT_TEXT`): the local model is not sent comments, and
- *      Tandem is not sending it to Claude now. T promises nothing about
- *      later. Where rules 1–6 return `no-agent`, its kind, severity and CTA
- *      are kept and only the message becomes T.
+ *   7. The local period (#1123 part B, R8; the send notice, ADR-039's
+ *      amendment of 2026-11-18): chat set to the local model. Applied AFTER
+ *      rules 1–6 have decided, so Solo, `offline` and `ai-off` are untouched.
+ *      A CHAT then raises no `no-agent` and no `no-push`: the local model has
+ *      it, and "nothing will answer" or "it'll see this when it checks in"
+ *      would be false. A COMMENT is not the local model's and waits for Claude
+ *      (Bryan's pick SN-P1, "Yes, they wait for Claude (Recommended)"): whenever
+ *      rules 1–6 return anything but `offline`, `ai-off` or Solo's null —
+ *      including a null from a live, notified session or an unanswered probe —
+ *      it gets the `local-comment` info toast, `LOCAL_COMMENT_INFO_TEXT` (W).
+ *      Where rules 1–6 return `no-agent`, its kind, severity and CTA are kept
+ *      and only the message becomes `LOCAL_COMMENT_KEPT_TEXT` (W-past: past
+ *      tense, because a warning persists in the tray). Neither says when or
+ *      how the comment is delivered (Ruling B-7: true in every state).
+ *      A CARD send (a note promoted to a comment from its card, the margin,
+ *      the batch bar or the desktop context menu) never comes through here: it
+ *      reaches the same `local-comment` toast through `createCardSendNotice`
+ *      (`hooks/useChatAnswerer.svelte.ts`), never the `no-agent` warning,
+ *      because the card makes no probe.
  */
 export type AddressedAiNotice =
   | { kind: "offline" }
@@ -75,16 +83,30 @@ export type AddressedAiNotice =
   | {
       kind: "no-agent";
       chip: Exclude<AiChip, null | "ai-off">;
-      /** Rule 7: a comment in the local period; the message becomes T. */
+      /** Rule 7: a comment in the local period; the message becomes W-past. */
       localComment?: true;
     }
   | { kind: "no-push" }
   /** Rule 7: a comment in the local period, everywhere else. */
   | { kind: "local-comment" };
 
-/** T (#1123 part B, R8.2). */
-export const LOCAL_COMMENT_TEXT =
-  "Comment saved. Chat is set to your local model, which is not sent comments, and Tandem is not sending this comment to Claude now.";
+/**
+ * W, info: the `local-comment` toast, for the composer's comment and for a card
+ * send (the send notice, #1123; the reviewing session's ruling R2.1 on Bryan's
+ * pick SN-P2, "Say it waits for Claude (Recommended)"). Says what is SET and
+ * that the comment waits; never when or how it is delivered.
+ */
+export const LOCAL_COMMENT_INFO_TEXT =
+  "Saved. Chat is set to your local model, so this comment waits for Claude.";
+
+/**
+ * W-past, warning: the composer's `no-agent` variant in the local period
+ * (R2.1). Past tense because a warning persists in the tray (the tense rule on
+ * `TandemNotification.severity`); "kept", not "held", because "held" means Solo
+ * elsewhere in Tandem.
+ */
+export const LOCAL_COMMENT_KEPT_TEXT =
+  "Saved while chat was set to your local model, so this comment was kept for Claude.";
 
 export function addressedAiNotice(input: {
   /** Must be re-read after any await — see the caller. */
@@ -239,11 +261,11 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
       };
     case "no-agent":
       if (notice.localComment) {
-        // Rule 7: the same toast and CTA, with T as its message.
+        // Rule 7: the same toast and CTA, with W-past as its message.
         return {
           idPrefix: "ai-not-ready",
           severity: "warning",
-          message: LOCAL_COMMENT_TEXT,
+          message: LOCAL_COMMENT_KEPT_TEXT,
           cta: notice.chip,
         };
       }
@@ -281,7 +303,7 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
       return {
         idPrefix: "ai-local-comment",
         severity: "info",
-        message: LOCAL_COMMENT_TEXT,
+        message: LOCAL_COMMENT_INFO_TEXT,
         cta: null,
       };
     default: {

@@ -79,6 +79,7 @@ import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
 import {
+  createCardSendNotice,
   createChatAnswerer,
   localChatSettingFor,
   noteChatSent,
@@ -159,6 +160,7 @@ import {
   replyToAnnotation as marginReplyToAnnotation,
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
+import { setCardSendRaise } from "./panels/card-send-raise";
 import { motionOff } from "./panels/cardMotion";
 import { claudeCodeOfferEligible } from "./panels/chat-claude-code-offer";
 import { exportChatMarkdown } from "./panels/chat-export";
@@ -326,6 +328,20 @@ const notifications = createNotifications({
 });
 // R3: the first local model's toast goes where every client toast goes.
 if (BYO_MODELS_ENABLED) setChatAnswererToastSink((n) => notifications.push(n));
+// The send notice (#1123): a card send in the local period raises the
+// composer's `local-comment` toast. Its own `if`, never merged with the line
+// above; the getters are read only when a raise runs (after mount), so
+// `aiReadiness`, declared below, is safe here.
+if (BYO_MODELS_ENABLED) {
+  setCardSendRaise(
+    createCardSendNotice({
+      getHeld: () => aiReadiness.launcherHeldForLocalModel,
+      getMode: () => modeState.tandemMode,
+      getServerUnreachable: () => aiReadiness.serverUnreachable,
+      push: (n) => notifications.push(n),
+    }),
+  );
+}
 
 // #1722/#1792: a settings blob written by a NEWER Tandem makes every
 // `updateSettings` call a silent no-op — the theme picker, rail toggles,

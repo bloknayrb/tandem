@@ -98,6 +98,15 @@ describe("App wires who answers chat (R1.2, R5.5, R7, R8)", () => {
     );
   });
 
+  it("the send notice: App fills the card-send seam once, under its own flag check, whole", () => {
+    // The brief "the send notice", R4: its own `if (BYO_MODELS_ENABLED)` block,
+    // the getters and the push exactly as written; nothing reshaped.
+    expect(count(app, "setCardSendRaise(")).toBe(1);
+    expect(app).toMatch(
+      /if \(BYO_MODELS_ENABLED\)\s*\{?\s*setCardSendRaise\(\s*createCardSendNotice\(\{\s*getHeld: \(\) => aiReadiness\.launcherHeldForLocalModel,\s*getMode: \(\) => modeState\.tandemMode,\s*getServerUnreachable: \(\) => aiReadiness\.serverUnreachable,\s*push: \(n\) => notifications\.push\(n\),?\s*\}\),?\s*\)/,
+    );
+  });
+
   it("each trigger is passed the live value, anchored to its own call (#2433 M2)", () => {
     // The `onSent` call's whole argument.
     const onSent = sliceFrom(app, "onSent: (message) =>", "}),");

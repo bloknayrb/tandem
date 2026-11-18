@@ -3,7 +3,10 @@
  * 2026-11-13). While Tandem chat is answered by a local model, Claude is
  * handed nothing at all (Bryan's decision 1, "Nothing goes to Claude"), and
  * what the user typed meanwhile is never handed to it afterwards (decision 3,
- * "Never hand them over").
+ * "Never hand them over"). Decision 3 reads as chat only: comments written,
+ * and notes sent to Claude, in the local period wait for Claude and reach it
+ * after the switch back (Bryan's pick SN-P1, ADR-039's amendment of 2026-11-18
+ * on the send notice).
  *
  * **The local period** runs from the moment `chatAnswerer()`, once primed,
  * reads the local model until it reads Claude again. A restart in the middle
