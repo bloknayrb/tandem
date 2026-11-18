@@ -19,6 +19,7 @@ import {
 } from "../../src/client/panels/annotation-actions.js";
 import { setCardSendRaise } from "../../src/client/panels/card-send-raise.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { stripComments } from "../helpers/src-tree";
 import { getAnnotationsMap, makeImportNote } from "../helpers/ydoc-factory.js";
 
 function seeded(seed: Record<string, unknown>): { doc: Y.Doc; map: Y.Map<unknown> } {
@@ -174,9 +175,11 @@ describe("the seam's imports (R1.1, source pin)", () => {
     expect(src).not.toMatch(/^export\s*(\{[^}]*\}|\*)\s*from/m);
     // Nor a local re-export (`export { raiseCardSend }`, `export const x =
     // raiseCardSend`): the binding appears in its import and its two calls only.
+    // Counted on comment-stripped source, so a comment naming it cannot fail this.
     expect(src).not.toMatch(/^export\s*\{[^}]*\braiseCardSend\b/m);
-    expect(src.match(/\braiseCardSend\b/g)?.length).toBe(3);
-    expect(src.match(/\braiseCardSend\(\)/g)?.length).toBe(2);
+    const code = stripComments(src);
+    expect(code.match(/\braiseCardSend\b/g)?.length).toBe(3);
+    expect(code.match(/\braiseCardSend\(\)/g)?.length).toBe(2);
     expect(src).not.toMatch(/setCardSendRaise/);
     expect(src).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });
