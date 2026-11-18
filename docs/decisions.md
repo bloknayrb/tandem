@@ -3452,8 +3452,8 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 - **R0.5, rows 10 and 20.** The terminal's first poll is asserted to have handed the candidate (row 20's in `userReplies`).
 - **R0.6, row 9** is renamed "(cannot discriminate: an undone poll leaves what no poll leaves)".
 - **R0.7, #2465's companion.** Beside row 33, the same world polled through the SDK client's checked `callTool` is asserted to reject with the output-schema error; when #2465 is fixed it inverts to a resolving call that hands the candidate, and row 33's raw poll goes.
-- **R0.8, `setWaitingProbe`'s docblock** adds "and the cause is not `take-back`" to the conditions under which step 5 asks the probe.
-- **R0.9, `documentWaiting`'s docblock** says it makes no Y.Doc write, rather than that it writes nothing: like every caller of `store.listAnnotations()`, it can log a legacy migration and add to the migration log's in-memory dedup set.
+- **R0.8, `setWaitingProbe`'s docblock** adds "and the cause is not `take-back`" to the conditions under which step 5 asks the probe. The 3b-2b1b amendment's opening sentence ("only when the new owner is Tandem's Claude and the caller is not") is read with the same condition added.
+- **R0.9, `documentWaiting`'s docblock** says it makes no Y.Doc write, rather than that it writes nothing: like every caller of `store.listAnnotations()`, it can log a legacy migration and add to the migration log's in-memory dedup set, and log a malformed key.
 - **R0.10, the handover over-count, recorded here only.** At every handover the previous holder's entries are retired on purpose (design §6.3; `handOverDocumentInbox`, `awareness.ts` ~535-538), so every user item on the document reads as waiting to the new holder, and the fresh poll agrees; the answered-item half of that belongs to the existing handled-filter row (closed by #2360). The flip-blocker row "After a server restart the delivery registry is empty..." is unchanged.
 - **Flip-blocker rows.** None added, none closed.
 
