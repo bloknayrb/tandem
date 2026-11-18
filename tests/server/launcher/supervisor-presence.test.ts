@@ -2483,7 +2483,7 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
   // The two "queued between" cases cannot fail on a single guard term's
   // removal (#2458's table): the chat's pass declines on `standby ===
   // undefined`. The case for the pass's `isAlive()` term is "3b-2b1b-R0,
-  // R0.5" in this describe.
+  // R0.5" in the enclosing "3b-2b1a R3" describe.
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
     it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);

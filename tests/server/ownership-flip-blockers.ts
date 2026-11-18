@@ -431,13 +431,15 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "A crash restart can hold itself beside a live child: planAndSpawn " +
-      "(src/server/launcher/supervisor.ts) checks `child` only before its awaits, so its first " +
-      "local-period hold (after buildPlan) and its Off hold (holdInStandby) can run after a " +
-      "spawn that did not move the stop epoch (for example a licence resume). The local hold " +
-      "leaves an awaiting-start standby and an armed standby watch beside the running Claude; " +
-      "the Off hold would also clear the wake owed across spawns, disarm the gap watch and read " +
-      "as Off to presence. Found by 3b-2b1b-R0 (ADR-054's amendment); reproduced there with an " +
-      "armed licence.",
+      "(src/server/launcher/supervisor.ts) does not re-check `child` between buildPlan's await " +
+      "and two holds, so its first local-period hold can run, and its Off hold (holdInStandby) " +
+      "may run, after a spawn that did not move the stop epoch (for example a licence resume). " +
+      "The local hold leaves an awaiting-start standby and an armed standby watch beside the " +
+      "running Claude (reproduced by 3b-2b1b-R0's case, with an armed licence). The Off hold is " +
+      "asserted, not shown: Off through the settings stops the child first, so it needs a " +
+      "settings read that disagrees with updateSettings (an external write of the file); if " +
+      "reached it would also clear the wake owed across spawns, disarm the gap watch and read " +
+      "as Off to presence. ADR-054's 3b-2b1b-R0 amendment.",
     closedBy:
       "A launcher PR that re-checks `child` before those two holds (or otherwise keeps a hold " +
       "from running beside a live child), with a test driving the 3b-2b1b-R0 sequence that " +
