@@ -392,8 +392,9 @@ async function rowWorld(): Promise<RowWorld> {
   const f = mkDoc("f");
   expect(getDocOwner(f.id)).toBeUndefined();
   const closedId = `${prefix}-closed`;
-  // A valid chat document id (`chatDocumentOf`'s pattern), or row 22 would be doc-less.
-  expect(closedId).toMatch(/^[A-Za-z0-9-]{1,256}$/);
+  // Valid as a chat document id: row 22's premise test reads it back through
+  // the chat side, so a drift of `chatDocumentOf`'s pattern cannot make row
+  // 22 a doc-less row.
   expect(getOpenDocs().has(closedId)).toBe(false);
   return {
     d: { id, ydoc },
@@ -829,6 +830,15 @@ describe("the agreement table: the decision answers as a fresh poll of Tandem's 
       resetOwnershipForTests();
       await buildWorld();
     }
+  });
+
+  it("row 22's premise: the message names the closed id, as the chat side reads it", async () => {
+    const w = await buildRow(rowNamed(22));
+    expect(ownershipChatSide.message(w.candidate)).toEqual({
+      documentId: w.closedId,
+      documentOpen: false,
+      localPeriod: false,
+    });
   });
 
   it("row 32's premise: the acknowledgement is superseded and the message unread", async () => {
