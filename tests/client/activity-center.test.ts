@@ -322,6 +322,10 @@ describe("toasts — an action with `stay` keeps its toast until pressed or clos
     vi.advanceTimersByTime(5_000);
     await tick();
     expect(toastIds(api)).toEqual(["a2"]);
+    // Past the longest pop duration too, so no re-armed timer of any length hides.
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.error);
+    await tick();
+    expect(toastIds(api)).toEqual(["a2"]);
   });
 
   it("a coalescing re-push with no action stops staying: gone 4 s after the re-push", async () => {
