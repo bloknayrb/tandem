@@ -102,6 +102,22 @@ describe("reconcileModelsToServerOnce", () => {
     expect(localStorage.getItem(MODELS_RECONCILED_FLAG_KEY)).toBe("1");
   });
 
+  // #1123 R1.5, the automatic default: the dark write is unchanged. A browser
+  // registry with one enabled local model and no default is posted with no
+  // default and no marker; the rule lives in the Models store's writes only.
+  it("one enabled local model with no default: POSTs defaultModelId null and no autoDefaultId", async () => {
+    seedSettings({ defaultModelId: null });
+    const fetchMock = stubFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await reconcileModelsToServerOnce()).toBe("reconciled");
+    const body = postBody(fetchMock);
+    expect((body.file as { models: unknown[] }).models).toEqual([localModel]);
+    expect((body.file as { defaultModelId: string | null }).defaultModelId).toBeNull();
+    expect("autoDefaultId" in body).toBe(false);
+    expect(Object.keys(body).sort()).toEqual(["file", "ifMatch", "reconcile"]);
+  });
+
   it("initializeStore settles the CRUD gate on reconcile success (a later write does not hang)", async () => {
     seedSettings();
     vi.stubGlobal("fetch", stubFetch());
