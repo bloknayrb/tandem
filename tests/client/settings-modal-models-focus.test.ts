@@ -172,24 +172,33 @@ describe("one frame later, focus is still where the Models tab put it", () => {
     expect(document.activeElement).toBe(v.must("model-add-btn"));
   });
 
-  it("Confirm on the only row with an earlier write queued: the empty state's button after settle, never a detached one", async () => {
+  it("Confirm on the only row with an earlier write queued: Settings may first take focus to the nav button; the empty state's button after settle, never a detached one", async () => {
     modelsPose.models = [local("a")];
     const v = await mountOnModels();
     await fireEvent.click(v.must("model-toggle-a")); // an earlier write, held
     await drain();
     await fireEvent.click(v.must("model-delete-btn-a"));
+    v.must("model-delete-confirm-a").focus();
     await fireEvent.click(v.must("model-delete-confirm-a"));
     await drain();
     expect(v.queryByTestId("model-row-a")).not.toBeNull();
-    harness.writes.release("commit"); // the toggle
+    // The toggle settles; the delete's turn comes and removes the row with its
+    // focused Confirm, while the delete's POST is still pending.
+    harness.writes.release("commit");
     await drain();
-    harness.writes.release("commit"); // the delete: the row (and focused Confirm) go
+    expect(v.queryByTestId("model-row-a")).toBeNull();
+    expect(harness.writes.pendingCount).toBe(1);
     focusDropped();
+    await afterNextFrame();
+    // Accepted: Settings' recovery got there first.
+    expect(document.activeElement).toBe(v.must("settings-modal-tab-models"));
+    harness.writes.release("commit"); // the delete
     await drain();
     await afterNextFrame();
     const focused = document.activeElement as HTMLElement;
     expect(focused.isConnected).toBe(true);
     expect(focused).toBe(v.must("model-add-btn"));
+    expect(focused.textContent?.trim()).toBe("Add your first model");
   });
 
   it("a rollback after Cancel during a pending Add from the empty state: the empty state's button", async () => {

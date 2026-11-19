@@ -380,6 +380,20 @@ function focusLost(): boolean {
   return active === null || active === document.body || !active.isConnected;
 }
 
+/** Focus is where Settings' stranded-focus recovery puts it when a focused
+ *  control here is removed (`rehomeStrandedFocus`, `SettingsModal.svelte`): the
+ *  current section's nav button, or the narrow layout's menu button. Read as
+ *  "dropped by us", so the delete below can still finish its hand-off. */
+function focusRehomedBySettings(): boolean {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLElement &&
+    active.matches(
+      '.settings-modal-nav-btn[aria-current="page"], [data-testid="settings-modal-narrow-hamburger"]',
+    )
+  );
+}
+
 function openAdd() {
   if (access.blocked) return;
   openGen++;
@@ -453,6 +467,8 @@ async function handleSave(data: {
  *  focus put back in the list. Never while another window is open. */
 async function afterStaleSave() {
   await tick();
+  // By the window that closed LAST: the focused button a rollback can detach
+  // is the one that close put focus on, not necessarily this save's own.
   if (!editorOpen && focusLost()) focusListAfterWindow(lastReturnId);
 }
 
@@ -496,11 +512,18 @@ async function confirmDelete(id: string) {
     el?.focus();
     if (el) placed = el;
   };
-  const mayMove = () => !editorOpen && (focusLost() || document.activeElement === placed);
+  // Nothing placed yet (the only row, with an earlier write queued): the row
+  // went while Confirm had focus, so Settings may have re-homed it already.
+  const mayMove = () =>
+    !editorOpen &&
+    (focusLost() ||
+      document.activeElement === placed ||
+      (placed === null && focusRehomedBySettings()));
   let call: Promise<void>;
   if (successor !== undefined) {
-    // Another row stays: its Delete takes focus before this row can go.
-    place(byTestId(`model-delete-btn-${successor}`));
+    // Another row stays: its Delete takes focus before this row can go (else,
+    // should it be missing, whichever Add button there is).
+    place(byTestId(`model-delete-btn-${successor}`) ?? byTestId("model-add-btn"));
     call = models.deleteModel(id);
   } else {
     // The only row. The store applies its removal when the write's turn comes
