@@ -116,6 +116,14 @@ const NEW_COPY = [
   "This provider can't be used in Tandem.",
   "Model unavailable",
   "(API key)",
+  // #1123, the add-model window's fields: Save's four reasons and the label
+  // (only the first-run window renders that label today, and it never mounts
+  // dark). Literals, never built from the product's strings.
+  "Enter a Model ID to save.",
+  "Enter an Endpoint to save.",
+  "The Endpoint must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.",
+  "The Endpoint is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).",
+  "Display name (optional)",
 ];
 
 function expectNoNewCopy(text: string) {

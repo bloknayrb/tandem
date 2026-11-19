@@ -15,7 +15,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8").repl
 const CASES: Array<[string, string[]]> = [
   [
     "src/client/components/ModelEditModal.svelte",
-    ["mem-local-intro", "mem-hint", "mem-unavailable"],
+    ["mem-local-intro", "mem-hint", "mem-unavailable", "mem-save-reason"],
   ],
   ["src/client/components/FirstRunModelPickerModal.svelte", ["frm-hint"]],
 ];

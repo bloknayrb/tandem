@@ -27,7 +27,8 @@ afterEach(() => cleanup());
 
 /**
  * `withEndpoint: false` mounts an entry of `provider` with no saved address,
- * which shows what a new entry of that provider shows. The select is a
+ * which shows an empty field with the provider's usual address as placeholder
+ * (a new entry instead starts with the address filled in, V2). The select is a
  * `value` plus an `onchange` that reads the select's own value (#1123, the
  * test-hardening PR, R3.1), so a change event switches the provider here too:
  * see "the provider switch, driven" below.
@@ -56,6 +57,13 @@ const PLACEHOLDER: Readonly<Record<string, string>> = {
   "local-llamacpp": "",
   "local-lmstudio": "http://127.0.0.1:1234",
   "local-other": "",
+};
+/** The Display name placeholder on Add, per provider (R5's existing names). */
+const NAME_PLACEHOLDER: Readonly<Record<string, string>> = {
+  "local-ollama": "Ollama (local)",
+  "local-llamacpp": "llama.cpp (local)",
+  "local-lmstudio": "LM Studio (local)",
+  "local-other": "Local server",
 };
 const HINT_WITH_PORT = (address: string) =>
   `The server's address on this computer, for example ${address}. Leave off /chat/completions; a trailing /v1 is ignored.`;
@@ -103,16 +111,16 @@ describe("ModelEditModal — every local provider", () => {
       );
     });
 
-    it(`${p}: the Display name and Model ID placeholders are blank`, async () => {
+    it(`${p}: an existing entry's Display name and Model ID placeholders are blank`, async () => {
       const m = mountWith(p, false);
       expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe("");
       expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe("");
     });
   }
 
-  it("a new entry's address starts empty (Ruling L-f)", () => {
+  it("A1: a new entry starts at Ollama's usual address (V2)", () => {
     const field = mountWith().getByTestId("model-edit-endpoint") as HTMLInputElement;
-    expect(field.value).toBe("");
+    expect(field.value).toBe("http://127.0.0.1:11434");
     expect(field.placeholder).toBe("http://127.0.0.1:11434");
   });
 
@@ -166,29 +174,30 @@ describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () =
     );
     expect(lines).toEqual([S1, S2]);
     expect(m.queryByTestId("model-edit-provider-note")).toBeNull();
-    expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe("");
     expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe("");
   }
+  const name = (m: Mounted) => m.getByTestId("model-edit-displayname") as HTMLInputElement;
 
   for (const from of LOCAL_MODEL_PROVIDERS) {
     for (const to of LOCAL_MODEL_PROVIDERS) {
       if (from === to) continue;
-      it(`a new entry, default → ${from} → ${to}: empty field, ${to}'s placeholder, hint and copy`, async () => {
+      it(`a new entry, default → ${from} → ${to}: ${to}'s usual address, placeholder, hint and copy (A2, A3)`, async () => {
         const m = mountWith();
         await switchTo(m, from);
         await switchTo(m, to);
-        // Ruling L-f: no prefill is ever written into the field.
-        expect(endpoint(m).value).toBe("");
+        // V2: the field still held the previous provider's usual address.
+        expect(endpoint(m).value).toBe(PLACEHOLDER[to]);
         expectLocalCopy(m, to);
+        expect(name(m).placeholder).toBe(NAME_PLACEHOLDER[to]);
       });
     }
   }
 
   for (const p of LOCAL_MODEL_PROVIDERS) {
-    it(`a new entry switched from the default to ${p}: the field stays empty`, async () => {
+    it(`a new entry switched from the default to ${p}: ${p}'s usual address`, async () => {
       const m = mountWith();
       await switchTo(m, p);
-      expect(endpoint(m).value).toBe("");
+      expect(endpoint(m).value).toBe(PLACEHOLDER[p]);
       expectLocalCopy(m, p);
     });
 
@@ -198,7 +207,110 @@ describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () =
         await switchTo(m, to);
         expect(endpoint(m).value).toBe("http://127.0.0.1:9");
         expectLocalCopy(m, to);
+        // On Edit the Display name has no placeholder, whatever the provider.
+        expect(name(m).placeholder).toBe("");
       }
+    });
+  }
+
+  // R1.2's rows, one case each (A2 and A3 are also the every-pair loop above).
+  async function typeEndpoint(m: Mounted, value: string) {
+    await fireEvent.input(endpoint(m), { target: { value } });
+    expect(endpoint(m).value).toBe(value);
+  }
+  it("A2: Ollama's address, Ollama to LM Studio / llama.cpp / Other", async () => {
+    for (const [to, after] of [
+      ["local-lmstudio", "http://127.0.0.1:1234"],
+      ["local-llamacpp", ""],
+      ["local-other", ""],
+    ] as const) {
+      const m = mountWith();
+      await switchTo(m, to);
+      expect(endpoint(m).value).toBe(after);
+      cleanup();
+    }
+  });
+  it("A3: empty, llama.cpp to Ollama; Other to LM Studio", async () => {
+    let m = mountWith();
+    await switchTo(m, "local-llamacpp");
+    expect(endpoint(m).value).toBe("");
+    await switchTo(m, "local-ollama");
+    expect(endpoint(m).value).toBe("http://127.0.0.1:11434");
+    cleanup();
+    m = mountWith();
+    await switchTo(m, "local-other");
+    await switchTo(m, "local-lmstudio");
+    expect(endpoint(m).value).toBe("http://127.0.0.1:1234");
+  });
+  it("A4: a typed address is kept through a switch to every other local provider", async () => {
+    const m = mountWith();
+    await typeEndpoint(m, "http://127.0.0.1:5555");
+    for (const to of ["local-lmstudio", "local-llamacpp", "local-other", "local-ollama"] as const) {
+      await switchTo(m, to);
+      expect(endpoint(m).value).toBe("http://127.0.0.1:5555");
+    }
+  });
+  it("A5: Ollama's address with a trailing space is kept (strict, untrimmed)", async () => {
+    const m = mountWith();
+    await typeEndpoint(m, "http://127.0.0.1:11434 ");
+    await switchTo(m, "local-lmstudio");
+    expect(endpoint(m).value).toBe("http://127.0.0.1:11434 ");
+  });
+  it("A6: Ollama's address with a trailing slash is kept", async () => {
+    const m = mountWith();
+    await typeEndpoint(m, "http://127.0.0.1:11434/");
+    await switchTo(m, "local-lmstudio");
+    expect(endpoint(m).value).toBe("http://127.0.0.1:11434/");
+  });
+  it("A7: an emptied field on Ollama stays empty through a switch to LM Studio", async () => {
+    const m = mountWith();
+    await typeEndpoint(m, "");
+    await switchTo(m, "local-lmstudio");
+    expect(endpoint(m).value).toBe("");
+  });
+  it("A8: Edit, an Ollama entry at Ollama's address, to LM Studio: kept", async () => {
+    const m = render(ModelEditModal, {
+      props: {
+        entry: {
+          id: "e1",
+          provider: "local-ollama",
+          displayName: "x",
+          modelId: "m",
+          endpoint: "http://127.0.0.1:11434",
+          enabled: true,
+        },
+        onCancel: vi.fn(),
+        onSave: vi.fn(),
+      },
+    });
+    await switchTo(m, "local-lmstudio");
+    expect(endpoint(m).value).toBe("http://127.0.0.1:11434");
+  });
+  it("A9: Edit, an entry with no address, to Ollama: stays empty", async () => {
+    const m = mountWith("local-llamacpp", false);
+    await switchTo(m, "local-ollama");
+    expect(endpoint(m).value).toBe("");
+  });
+
+  it("Add: the Display name placeholder is the selected provider's fallback, and follows a switch", async () => {
+    const m = mountWith();
+    expect(name(m).value).toBe("");
+    expect(name(m).placeholder).toBe("Ollama (local)");
+    for (const p of LOCAL_MODEL_PROVIDERS) {
+      await switchTo(m, p);
+      expect(name(m).placeholder).toBe(NAME_PLACEHOLDER[p]);
+      expect(name(m).value).toBe("");
+    }
+  });
+
+  // R4 / P2: the window carries no model-size advice (the docs do).
+  for (const p of LOCAL_MODEL_PROVIDERS) {
+    it(`Add, ${p}: no "smaller models", "recommend" or "14B" in the window`, async () => {
+      const m = mountWith();
+      await switchTo(m, p);
+      expect(m.getByTestId("model-edit-modal").textContent ?? "").not.toMatch(
+        /smaller models|recommend|14B/i,
+      );
     });
   }
 });

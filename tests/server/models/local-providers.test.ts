@@ -21,11 +21,14 @@ import {
   isLocalProvider,
   LOCAL_MODEL_PROVIDERS,
   MODELS_SCHEMA_VERSION,
+  type ModelProvider,
   VALID_MODEL_PROVIDERS,
 } from "../../../src/shared/models/contract.js";
 import {
+  endpointAfterProviderChange,
   LOCAL_ENDPOINT_PREFILL,
   MODELS_TAB_ORDER,
+  nameFallback,
   PROVIDER_LABEL,
   PROVIDER_OPTION_ORDER,
 } from "../../../src/shared/models/provider-ui.js";
@@ -172,4 +175,34 @@ describe("address prefills (R2.1, R2.4)", () => {
       expect(new URL(v).hostname).toBe("127.0.0.1");
     });
   }
+});
+
+// #1123, the add-model window's fields (R1.2): the address follows a provider
+// change only while it holds the previous provider's usual address, strictly.
+describe("endpointAfterProviderChange (R1.2, rows A2 to A7)", () => {
+  const rows: ReadonlyArray<readonly [string, string, ModelProvider, ModelProvider, string]> = [
+    ["A2", "http://127.0.0.1:11434", "local-ollama", "local-lmstudio", "http://127.0.0.1:1234"],
+    ["A2", "http://127.0.0.1:11434", "local-ollama", "local-llamacpp", ""],
+    ["A2", "http://127.0.0.1:11434", "local-ollama", "local-other", ""],
+    ["A3", "", "local-llamacpp", "local-ollama", "http://127.0.0.1:11434"],
+    ["A3", "", "local-other", "local-lmstudio", "http://127.0.0.1:1234"],
+    ["A4", "http://127.0.0.1:5555", "local-ollama", "local-lmstudio", "http://127.0.0.1:5555"],
+    ["A4", "http://127.0.0.1:5555", "local-lmstudio", "local-llamacpp", "http://127.0.0.1:5555"],
+    ["A4", "http://127.0.0.1:5555", "local-llamacpp", "local-other", "http://127.0.0.1:5555"],
+    ["A5", "http://127.0.0.1:11434 ", "local-ollama", "local-lmstudio", "http://127.0.0.1:11434 "],
+    ["A6", "http://127.0.0.1:11434/", "local-ollama", "local-lmstudio", "http://127.0.0.1:11434/"],
+    ["A7", "", "local-ollama", "local-lmstudio", ""],
+  ];
+  it.each(rows)("%s: %j, %s to %s gives %j", (_row, current, from, to, after) => {
+    expect(endpointAfterProviderChange(current, from, to)).toBe(after);
+  });
+});
+
+describe("nameFallback (R2.1, Ruling L-h)", () => {
+  it("is each local provider's label, and Other's is 'Local server'", () => {
+    expect(nameFallback("local-ollama")).toBe("Ollama (local)");
+    expect(nameFallback("local-llamacpp")).toBe("llama.cpp (local)");
+    expect(nameFallback("local-lmstudio")).toBe("LM Studio (local)");
+    expect(nameFallback("local-other")).toBe("Local server");
+  });
 });
