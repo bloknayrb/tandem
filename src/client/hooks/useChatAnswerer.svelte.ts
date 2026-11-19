@@ -805,9 +805,9 @@ function withdrawConfirmation(): void {
  * only that chat was set); the POST's own answer naming Claude in effect, R;
  * anything else, N — a store that merely still says Claude may be stale, so
  * R rests only on the server's word to this press (review rounds 1 and 2,
- * correcting the brief). No return on a
- * missing confirmation id: the rows run regardless. Never writes `$state`
- * itself; only from the click and the fetch continuations below it.
+ * correcting the brief). No return on a missing confirmation id: the rows
+ * run regardless. Never writes `$state` itself; only from the click and the
+ * fetch continuations below it.
  */
 export async function pressUseItForChat(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return;
@@ -837,7 +837,7 @@ export async function pressUseItForChat(): Promise<void> {
   // store to know local; "left set to Claude" needs the server's own answer
   // to this press (an `answered` Claude), never a store that may be stale.
   if (isKnownLocal()) pushUseItNotice("set");
-  else if (result.kind === "answered") pushUseItNotice("refused");
+  else if (result.kind === "answered" && result.effective === "claude") pushUseItNotice("refused");
   else pushUseItNotice("notConfirmed");
 }
 

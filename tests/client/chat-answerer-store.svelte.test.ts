@@ -1134,7 +1134,7 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
           expect(notices()).toEqual([[notice(N.set)]]);
           expectWithdrawn(id);
         });
-        it("a server restart during the switch: the POST timed out and the re-read is dropped (new process), the store still says Claude: N, not R", async () => {
+        it("a server restart during the switch: the POST timed out but landed, its re-read (answering local) is dropped as a new process's, the stale store still says Claude: N, not R", async () => {
           const id = await pushConfirmation();
           store.noteCtrlSynced({});
           await (await held.request(2)).answer(200, known("claude"));
@@ -1144,12 +1144,14 @@ describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
           await post.timeout();
           const reread = await held.request(5);
           store.noteCtrlSynced({}); // a new server process: this re-read is not adopted
-          await reread.answer(200, known("claude"));
+          await reread.answer(200, known("local")); // the POST landed
+          // The press has decided: the store is the stale Claude it held.
+          expect(state.known).toBe(true);
+          expect(state.answerer).toBe("claude");
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
           await (await held.request(6)).answer(200, known("claude"));
           await drain();
           expect(posts()).toHaveLength(1);
-          expect(state.known).toBe(true);
-          expect(state.answerer).toBe("claude");
           expect(notices()).toEqual([[notice(N.notConfirmed)]]);
           await expectKept(id);
         });
