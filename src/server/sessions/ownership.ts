@@ -2775,6 +2775,9 @@ const STEP5_CHAT_FAILED =
  */
 function waitingAtDocumentChange(documentId: string, ownerId: string): boolean {
   if (waitingProbe(documentId, ownerId)) return true;
+  // The chat half answers for Tandem's Claude only (`tandemChatWaiting`'s
+  // owner filter); step 5 asks only for it, and any other owner reads false.
+  if (ownerId !== TANDEM_OWNER_ID) return false;
   try {
     return tandemChatWaiting(
       (_key, facts, standing) => facts.documentId === documentId && standing.perMessage === false,

@@ -1138,6 +1138,7 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     expect(start).toBeGreaterThanOrEqual(0);
     const body = text.slice(start, text.indexOf("\n}\n", start));
     expect(body).toContain("if (waitingProbe(documentId, ownerId)) return true;");
+    expect(body).toContain("if (ownerId !== TANDEM_OWNER_ID) return false;");
     expect(body).toContain("facts.documentId === documentId");
     expect(body).toContain("standing.perMessage === false");
     expect(body).toContain('logLimited("waiting-step5-chat", STEP5_CHAT_FAILED)');

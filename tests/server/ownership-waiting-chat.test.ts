@@ -1145,8 +1145,8 @@ describe("dark", () => {
 // moves only D. Wakes are watched with `setWakeObserverForTests`, and only a
 // document's causes are counted (`messageOwnerChanged` reports
 // "message-owner" too). The probe is the wired one, wrapped, so every case
-// that expects a wake also proves the probe answered false: the wake is the
-// chat half's.
+// that expects a wake from the chat half also proves the probe answered
+// false (S5's twin and the Solo anchor expect the probe's own wake).
 
 const STEP5_CHAT_FAILED =
   "[ownership] the chat that follows a document could not be read at its change of owner; it is read as nothing waiting.";
@@ -1232,8 +1232,11 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(await userOpen(w.file)).toBe(w.id);
     setActiveDocId(frontId);
     expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    // Premise: still owed to a fresh reader, so only the owner filter stops it.
+    expect(ownershipChatSide.owedToFreshReader()).toContain(m);
     probeAskedOnceFalse(w);
     expect(w.wakes).toEqual([]);
+    expect(handed(await reader(TANDEM).poll()), "A's, not Tandem's Claude's").toEqual([]);
   });
 
   it("S2b, the per-message exclusion: Tandem's Claude owns the message per message; the reopen does not count it, tandemWorkWaiting does", async () => {
@@ -1265,6 +1268,7 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
     probeAskedOnceFalse(w);
     expect(w.wakes).toEqual([]);
+    expect(handed(await reader(TANDEM).poll())).toEqual([]);
   });
 
   it("S4: S1 with the message as local-period chat: no wake", async () => {
@@ -1278,6 +1282,7 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
     probeAskedOnceFalse(w);
     expect(w.wakes).toEqual([]);
+    expect(handed(await reader(TANDEM).poll())).toEqual([]);
   });
 
   it("S5: S1 with the chat side throwing: no wake, D is still Tandem's Claude's, one fixed line", async () => {
