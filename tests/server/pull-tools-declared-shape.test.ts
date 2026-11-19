@@ -62,6 +62,7 @@ vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
 }));
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { addUserReply } from "../../src/server/annotations/lifecycle.js";
 import { closeStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -89,7 +90,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
 } from "../../src/shared/constants.js";
-import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { withBrowser, withInternal, withMcp } from "../../src/shared/origins.js";
 import { sanitizeAnnotation } from "../../src/shared/sanitize.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
@@ -840,6 +841,86 @@ describe("A3: inbox items carry only declared keys, at every depth", () => {
     expect(text.chatMessages).toEqual([clean]);
     const after = ctrl().getMap(Y_MAP_CHAT).get(clean.id) as { anchor: Record<string, unknown> };
     expect(after.anchor, "the stored anchor is untouched").toEqual(before.anchor);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tandem_getAnnotations (#2465 part 2): the same, for the read tool
+// ---------------------------------------------------------------------------
+
+interface RawResult {
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+  content: Array<{ type: string; text?: string }>;
+}
+
+/** The call as the validating client returns it, success or not. */
+async function rawGetAnnotations(documentId: string): Promise<RawResult> {
+  return (await client.callTool({
+    name: "tandem_getAnnotations",
+    arguments: { documentId },
+  })) as RawResult;
+}
+
+/** A Claude comment, written as `tandem_comment` writes it. */
+function claudeComment(doc: Y.Doc, id: string, extra: Record<string, unknown> = {}) {
+  const record = { ...userComment(doc, id), author: "claude", ...extra };
+  withMcp(doc, () => doc.getMap(Y_MAP_ANNOTATIONS).set(id, record));
+  return record;
+}
+
+/**
+ * G1's sequence: in Solo the user writes a comment (the client's stamp) and
+ * replies on a Claude comment through the reply seam (the seam's stamp); the
+ * tab is closed, the mode switched to Tandem and released (`released: 0`, the
+ * release sweeps open documents only), and the document reopened. Returns the
+ * reopened document with both markers still stored.
+ */
+async function closedTabWithMarkers(): Promise<{ o: Opened; replyId: string }> {
+  const first = await openDoc();
+  // Written with the mode at "tandem" (the header's rule); only the two user
+  // writes below are deliberately Solo.
+  claudeComment(first.doc, "claude-parent");
+  setCtrlMode("solo");
+  browserWrite(
+    first.doc,
+    Y_MAP_ANNOTATIONS,
+    "solo-user",
+    userComment(first.doc, "solo-user", { heldInSolo: true }),
+  );
+  const replied = addUserReply(first.doc, "claude-parent", "my Solo reply", () => {});
+  if (replied.kind !== "ok") throw new Error(`reply refused: ${replied.kind}`);
+  const storedReply = first.doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replied.replyId) as {
+    heldInSolo?: unknown;
+  };
+  expect(storedReply.heldInSolo, "the reply seam stamped the Solo reply").toBe(true);
+  await closeDoc(first);
+
+  setCtrlMode("tandem");
+  const released = release();
+  expect(released.status).toBe(200);
+  expect(released.body).toEqual({ data: { released: 0 } });
+
+  const o = await reopen(first.filePath, first.resolved);
+  const comment = o.doc.getMap(Y_MAP_ANNOTATIONS).get("solo-user") as { heldInSolo?: unknown };
+  const reply = o.doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replied.replyId) as {
+    heldInSolo?: unknown;
+  };
+  expect(comment?.heldInSolo, "the comment's marker survived the reopen").toBe(true);
+  expect(reply?.heldInSolo, "the reply's marker survived the reopen").toBe(true);
+  return { o, replyId: replied.replyId };
+}
+
+describe("G1: getAnnotations on a reopened tab with stale Solo markers", () => {
+  it("master: the validating client rejects the whole call", async () => {
+    const { o } = await closedTabWithMarkers();
+    // What master does (#2465 part 2, commit 1): the SDK client checks the
+    // structured output against the advertised schema and THROWS, naming the
+    // reply's and the comment's undeclared `heldInSolo`. Replaced by G1 in the
+    // fix commit.
+    await expect(rawGetAnnotations(o.documentId)).rejects.toThrow(
+      /Structured content does not match the tool's output schema: .*replies\/0 must NOT have additional properties/,
+    );
   });
 });
 
