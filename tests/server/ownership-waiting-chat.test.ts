@@ -83,6 +83,7 @@ import {
   setTandemPresenceSource,
   setTransportView,
   setWaitingProbe,
+  setWakeObserverForTests,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
   tandemWorkWaiting,
@@ -1132,6 +1133,393 @@ describe("dark", () => {
         expect(tandemWorkWaiting()).toBe(true);
         expect(probe).toHaveBeenCalled();
         expect(owedToFreshReader).toHaveBeenCalledTimes(1);
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Step 5 asks the chat that follows the document (#2358 PR
+// 3b-2b1b-chat-step5). The world is #2464's row world without E and F:
+// Tandem's Claude present and holding D by its own comment, so A's lapse
+// moves only D. Wakes are watched with `setWakeObserverForTests`, and only a
+// document's causes are counted (`messageOwnerChanged` reports
+// "message-owner" too). The probe is the wired one, wrapped, so every case
+// that expects a wake also proves the probe answered false: the wake is the
+// chat half's.
+
+const STEP5_CHAT_FAILED =
+  "[ownership] the chat that follows a document could not be read at its change of owner; it is read as nothing waiting.";
+
+interface StepWorld {
+  id: string;
+  file: string;
+  ydoc: Y.Doc;
+  probe: ReturnType<typeof vi.fn<(documentId: string, ownerId: string) => boolean>>;
+  /** Document causes only. */
+  wakes: string[];
+  /** Every cause, "message-owner" included. */
+  all: string[];
+}
+
+async function stepWorld(presence = true): Promise<StepWorld> {
+  clock = 1_000;
+  const file = realFile("d.md");
+  const id = await userOpen(file);
+  setActiveDocId(frontId);
+  if (presence) {
+    setTandemPresenceSource(() => true);
+    await writeAs(TANDEM, id);
+    expect(getDocOwner(id)?.ownerId).toBe(TANDEM);
+  } else {
+    expect(getDocOwner(id)).toBeUndefined();
+  }
+  const probe = vi.fn((documentId: string, _ownerId: string) => documentWaiting(documentId));
+  setWaitingProbe(probe);
+  const wakes: string[] = [];
+  const all: string[] = [];
+  setWakeObserverForTests((cause) => {
+    all.push(cause);
+    if (cause !== "message-owner") wakes.push(cause);
+  });
+  return { id, file, ydoc: getDocument(id) as Y.Doc, probe, wakes, all };
+}
+
+async function aTakesD(w: StepWorld): Promise<void> {
+  expect(await openAs(A, w.file)).toBe(w.id);
+  setActiveDocId(frontId);
+  expect(getDocOwner(w.id)?.ownerId).toBe(A);
+}
+
+/** The probe was asked exactly once, with D and Tandem's Claude, and answered false. */
+function probeAskedOnceFalse(w: StepWorld): void {
+  expect(w.probe.mock.calls).toEqual([[w.id, TANDEM]]);
+  expect(w.probe.mock.results.map((r) => r.value)).toEqual([false]);
+}
+
+/** The `[ownership]` lines `console.error` got. */
+const ownershipLines = (error: { mock: { calls: unknown[][] } }): unknown[][] =>
+  error.mock.calls.filter((c) => String(c[0]).startsWith("[ownership]"));
+
+describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", () => {
+  it("S1: A takes D, a user message on D, A lapses with presence: one lapse wake, and a fresh poll hands the message", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual(["lapse"]);
+    expect(decide()).toBe(true);
+    expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+  });
+
+  it("S1's control: the same lapse with no message on D wakes nothing", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+  });
+
+  it("S2: A owns the message per message (D closed while A held it); the user reopens D: the probe is asked once, no wake", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    await closeByRoute(w.id);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    expect(await userOpen(w.file)).toBe(w.id);
+    setActiveDocId(frontId);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+  });
+
+  it("S2b, the per-message exclusion: Tandem's Claude owns the message per message; the reopen does not count it, tandemWorkWaiting does", async () => {
+    const w = await stepWorld();
+    const m = userChat(key("m"), w.id);
+    await closeByRoute(w.id);
+    expect(messageOwner(m)?.ownerId).toBe(TANDEM);
+    expect(await userOpen(w.file)).toBe(w.id);
+    setActiveDocId(frontId);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+    // Not D's work, but Tandem's Claude's: the decision and a fresh poll have it.
+    expect(decide()).toBe(true);
+    expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+  });
+
+  it("S3: S1 with a server-origin Claude final row naming the message (handled, unread): no wake", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    const k = key("raw");
+    withInternal(ctrl(), () =>
+      chatMap().set(k, { id: k, author: "claude", text: "done", timestamp: clock++, replyTo: m }),
+    );
+    expect(ownershipChatSide.handledKeys().has(m)).toBe(true);
+    expect(row(m)?.read).toBe(false);
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+  });
+
+  it("S4: S1 with the message as local-period chat: no wake", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    __setHonourLocalPeriodRecordsForTests(true);
+    loadLocalPeriodRecord({ v: 1, open: false, owed: [], local: [m] });
+    expect(ownershipChatSide.message(m)?.localPeriod).toBe(true);
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+  });
+
+  it("S5: S1 with the chat side throwing: no wake, D is still Tandem's Claude's, one fixed line", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    const owedToFreshReader = vi.fn((): readonly string[] => {
+      throw new Error("x");
+    });
+    setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(owedToFreshReader).toHaveBeenCalledTimes(1);
+    expect(w.wakes).toEqual([]);
+    // Exactly the fixed line: not `total`'s, which carries the error text.
+    expect(ownershipLines(error)).toEqual([[STEP5_CHAT_FAILED]]);
+    expect(STEP5_CHAT_FAILED).not.toContain(w.id);
+    expect(STEP5_CHAT_FAILED).not.toContain(m);
+  });
+
+  it("S5's twin: a probe answering true wakes, and the chat side is not asked", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    userChat(key("m"), w.id);
+    const owedToFreshReader = vi.fn((): readonly string[] => {
+      throw new Error("x");
+    });
+    setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
+    const probe = vi.fn((_documentId: string, _ownerId: string) => true);
+    setWaitingProbe(probe);
+    lapseByGrace(A);
+    expect(probe.mock.calls).toEqual([[w.id, TANDEM]]);
+    expect(owedToFreshReader).not.toHaveBeenCalled();
+    expect(w.wakes).toEqual(["lapse"]);
+  });
+
+  it("a probe that throws at step 5 behaves as before: total's line, the chat side not asked, no wake, D still Tandem's Claude's", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    userChat(key("m"), w.id);
+    const owedToFreshReader = vi.fn(() => ownershipChatSide.owedToFreshReader());
+    setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
+    setWaitingProbe(() => {
+      throw new Error(`boom ${w.id}`);
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    expect(owedToFreshReader).not.toHaveBeenCalled();
+    expect(w.wakes).toEqual([]);
+    const lines = ownershipLines(error);
+    expect(lines).toHaveLength(1);
+    expect(String(lines[0]?.[0])).toMatch(/^\[ownership\] setDocOwner failed: /);
+  });
+
+  it("S6, the order case: a message on D handed to A and acknowledged (read), then A lapses: one lapse wake (the re-owe runs first)", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    const a = reader(A);
+    expect(chatIds(await a.poll())).toEqual([m]);
+    await a.poll(); // acknowledges
+    expect(row(m)?.read).toBe(true);
+    expect(messageOwner(m)).toBeUndefined();
+    lapseByGrace(A);
+    expect(row(m)?.read).toBe(false);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual(["lapse"]);
+    expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+  });
+
+  describe("S7, the gates: A holds D with a waiting message on D", () => {
+    async function gateWorld(): Promise<StepWorld> {
+      const w = await stepWorld();
+      await aTakesD(w);
+      userChat(key("m"), w.id);
+      return w;
+    }
+
+    it("take-back: no wake, and nothing is asked", async () => {
+      const w = await gateWorld();
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "take-back");
+      expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+      expect(w.probe).not.toHaveBeenCalled();
+      expect(w.wakes).toEqual([]);
+    });
+
+    it("poll-claim with Tandem's Claude as caller: no wake, and nothing is asked", async () => {
+      const w = await gateWorld();
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "poll-claim", TANDEM);
+      expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+      expect(w.probe).not.toHaveBeenCalled();
+      expect(w.wakes).toEqual([]);
+    });
+
+    it("the twin: the same change with cause user-open and no caller wakes once", async () => {
+      const w = await gateWorld();
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "user-open");
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual(["user-open"]);
+    });
+  });
+
+  describe("the selector: only chat that names this document counts at its change", () => {
+    it("a doc-less message (Tandem's Claude's by presence): no wake at D's change, while tandemWorkWaiting answers true", async () => {
+      const w = await stepWorld();
+      await aTakesD(w);
+      const m = userChat(key("m"));
+      lapseByGrace(A);
+      expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual([]);
+      expect(decide()).toBe(true);
+      expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+    });
+
+    it("a message on another open document G that Tandem's Claude holds: no wake at D's change, while tandemWorkWaiting answers true", async () => {
+      const w = await stepWorld();
+      const g = mkDoc("g");
+      setDocOwner(g.id, { ownerId: TANDEM, kind: "opened" }, "take", TANDEM);
+      expect(getDocOwner(g.id)?.ownerId).toBe(TANDEM);
+      await aTakesD(w);
+      const m = userChat(key("m"), g.id);
+      lapseByGrace(A);
+      expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual([]);
+      expect(decide()).toBe(true);
+      expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+    });
+
+    it("a message on D: one wake (S1's shape)", async () => {
+      const w = await stepWorld();
+      await aTakesD(w);
+      userChat(key("m"), w.id);
+      lapseByGrace(A);
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual(["lapse"]);
+    });
+  });
+
+  describe("before the first bind: Tandem's Claude is not present and holds nothing", () => {
+    it("a user open of D gives it no owner, so step 5 is not reached: nothing is asked, no wake", async () => {
+      const w = await stepWorld(false);
+      const owedToFreshReader = vi.fn(() => ownershipChatSide.owedToFreshReader());
+      setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
+      userChat(key("docless"));
+      userChat(key("m"), w.id);
+      expect(await userOpen(w.file)).toBe(w.id);
+      expect(getDocOwner(w.id)).toBeUndefined();
+      expect(w.probe).not.toHaveBeenCalled();
+      expect(owedToFreshReader).not.toHaveBeenCalled();
+      expect(w.all).toEqual([]);
+    });
+
+    it("constructed: D given to Tandem's Claude with no caller and no presence; a doc-less message alone does not wake", async () => {
+      const w = await stepWorld(false);
+      userChat(key("docless"));
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "user-open");
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual([]);
+    });
+
+    it("constructed twin: with a message on D, one wake", async () => {
+      const w = await stepWorld(false);
+      userChat(key("docless"));
+      userChat(key("m"), w.id);
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "user-open");
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual(["user-open"]);
+    });
+  });
+
+  describe("Solo: the probe keeps its hold, chat is not held", () => {
+    it("a user comment on D, no chat: no wake", async () => {
+      const w = await stepWorld();
+      setCtrlMode("solo");
+      await aTakesD(w);
+      userComment(w.ydoc, key("c"));
+      lapseByGrace(A);
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual([]);
+    });
+
+    it("a chat message on D, no comment: one wake", async () => {
+      const w = await stepWorld();
+      setCtrlMode("solo");
+      await aTakesD(w);
+      userChat(key("m"), w.id);
+      lapseByGrace(A);
+      probeAskedOnceFalse(w);
+      expect(w.wakes).toEqual(["lapse"]);
+    });
+
+    it("anchor: the same comment in Tandem mode wakes, through the probe", async () => {
+      const w = await stepWorld();
+      await aTakesD(w);
+      userComment(w.ydoc, key("c"));
+      lapseByGrace(A);
+      expect(w.probe.mock.results.map((r) => r.value)).toEqual([true]);
+      expect(w.wakes).toEqual(["lapse"]);
+    });
+  });
+
+  it("the lapse's order: A owns a message on D per message and holds D again; A lapses: no lapse wake, one message-owner wake, and a fresh poll hands it", async () => {
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    await closeByRoute(w.id);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    await aTakesD(w);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    w.all.length = 0;
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
+    expect(w.all).toEqual(["message-owner"]);
+    expect(handed(await reader(TANDEM).poll())).toEqual([m]);
+  });
+
+  for (const flag of ["", "1"] as const) {
+    it(`dark${flag === "" ? "" : ", the flag-on twin"}: a change to Tandem's Claude with a message on D, flag ${flag === "" ? "off: nothing is asked, no wake, the entry unmoved" : "on: one wake"}`, async () => {
+      const w = await stepWorld();
+      await aTakesD(w);
+      userChat(key("m"), w.id);
+      const owedToFreshReader = vi.fn(() => ownershipChatSide.owedToFreshReader());
+      setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
+      vi.stubEnv("TANDEM_OWNERSHIP", flag);
+      setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "user-open");
+      vi.stubEnv("TANDEM_OWNERSHIP", "1");
+      if (flag === "") {
+        expect(w.probe).not.toHaveBeenCalled();
+        expect(owedToFreshReader).not.toHaveBeenCalled();
+        expect(w.all).toEqual([]);
+        expect(getDocOwner(w.id)?.ownerId).toBe(A);
+      } else {
+        probeAskedOnceFalse(w);
+        expect(owedToFreshReader).toHaveBeenCalledTimes(1);
+        expect(w.wakes).toEqual(["user-open"]);
       }
     });
   }

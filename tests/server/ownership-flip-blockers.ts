@@ -459,14 +459,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
       "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
-      "each ownership change that reaches step 5's probe.",
+      "each ownership change that reaches step 5's probe; and when the probe answers false, step 5 " +
+      "(3b-2b1b-chat-step5) also reads every user chat row, cloning each and parsing it against the " +
+      "chat schema, inside setDocOwner.",
     closedBy: "3b-2b4's measurement.",
-  },
-  {
-    gap:
-      "Step 5 asks the document half of waiting only (3b-2b1b), so chat that follows a document " +
-      "is not seen when the document goes to Tandem's Claude.",
-    closedBy: "3b-2b1b-chat-step5.",
   },
   {
     gap:
