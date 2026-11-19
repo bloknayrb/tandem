@@ -242,7 +242,8 @@ describe("local agent tokens are readable (ADR-039 item 20)", () => {
     const bg = grounds.get(groundName)!.rgb(theme, fg);
     const ratio = contrast(fg, bg);
     expect(
-      Number(ratio.toFixed(2)),
+      // Unrounded: WCAG's thresholds are exact, so 4.497 does not pass 4.5.
+      ratio,
       `${tokenName} on ${groundName} (${theme}) is ${ratio.toFixed(2)}:1`,
     ).toBeGreaterThanOrEqual(min);
   });

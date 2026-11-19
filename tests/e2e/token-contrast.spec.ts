@@ -232,7 +232,7 @@ for (const theme of THEMES) {
 
     // Guard against the silent-success mode: if resolution broke, `results`
     // would be empty and every assertion below would vacuously pass. Expected
-    // count is 59: 11 family rows (6 families × 2, minus `suggestion: fg on
+    // count: 11 family rows (6 families × 2, minus `suggestion: fg on
     // solid fill` — `--tandem-suggestion-fg` is intentionally not defined, and
     // `add` skips undefined tokens) + 52 ladder rows (4 tiers × 13 surfaces)
     // + 12 agent rows (2 local tokens × 6 surfaces) = 75.
