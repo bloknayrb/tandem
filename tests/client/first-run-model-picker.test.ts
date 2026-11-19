@@ -166,6 +166,15 @@ describe("FirstRunModelPickerModal — copy (R2.1)", () => {
     expect(PICKER_TITLE).toBe("Add a local model (optional)");
   });
 
+  it("the subtitle describes the dialog (ADR-039 item 27, A7)", () => {
+    const m = mount();
+    const dialog = m.getByRole("dialog", {
+      name: PICKER_TITLE,
+      description: PICKER_LOCAL_SUBTITLE,
+    });
+    expect(dialog.getAttribute("aria-describedby")).toBe("first-run-subtitle-text");
+  });
+
   it("the subtitle is the two sentences, with no step count", () => {
     const m = mount();
     const subtitle = m.getByTestId("first-run-subtitle").textContent?.trim();
