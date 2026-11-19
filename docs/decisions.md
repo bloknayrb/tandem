@@ -1744,12 +1744,14 @@ His picks, each picked from options (label, then the option's description exactl
   - **CP-7:** the key block is kept, with no store or server change.
 - **Accepted.**
   - The × and "Close" share the name "Close".
-  - A cloud entry's key stays in the keychain until the entry is deleted, and Delete drops it with no warning.
+  - A cloud entry's key stays in the keychain until the entry is deleted.
   - Until the PR for ADR-039's owed item 25 (clearer failure messages) merges: with chat set to the local model, a cloud Default and an enabled local model, a chat message gets the `no-local-model` notice, whose first instruction ("Add or enable a local model") does not help. Settings' Default line says what does.
   - A switched-off cloud Default: Settings' line says the Default "is switched off" while the row's On/Off now refuses. CP-6's option would also settle this.
   - A non-UI caller can still save, enable or mark a cloud entry: a script with Tandem's own origin, the development allowance, a hand-edited file, or the older version's reconcile. The tab shows such an entry as unavailable, and the resolver answers `none`.
-  - In the Default radio group an arrow key commits where it lands. Moving off a checked cloud Default therefore makes a local model the Default, and the cloud entry cannot be marked again from the UI.
-  - With a cloud Default, "Use it for chat" (the 2026-11-18 amendment) sets chat to the local model although the new model will not answer.
+- **Left to Bryan** (built as above; each option is his).
+  - Delete on a cloud entry drops its stored key with no warning. Option: say so in the confirm step.
+  - In the Default radio group an arrow key commits where it lands. Moving off a checked cloud Default therefore makes a local model the Default, and the cloud entry cannot be marked again from the UI. Option: take the cloud radios out of the group.
+  - With a cloud Default, "Use it for chat" (the 2026-11-18 amendment "Use it for chat") sets chat to the local model although the new model will not answer.
 - **What it closes, and pointers** (no claim of their own).
   - Closes item 23 of the owed list in the amendment on switching local models on, for the add-model window. P4 is in the same amendment.
   - Ruling H-1 (the 2026-11-17 test-hardening amendment) is retired: there is no cloud option left to drive the modal back to.
