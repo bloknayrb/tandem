@@ -121,7 +121,13 @@ const mixSrgb = (a: Rgb, p: number, b: Rgb): Rgb => a.map((v, i) => v * p + b[i]
 // Resolver — throws on anything it does not understand
 // ---------------------------------------------------------------------------
 
+/** The user's accent hue (Settings → Appearance, a 0–360 slider written to
+ *  `--tandem-accent-h` on `<html>`), when a check sweeps it; null reads the
+ *  stylesheet's own default. */
+let accentHueOverride: number | null = null;
+
 function lookup(theme: Theme, name: string): string {
+  if (name === "--tandem-accent-h" && accentHueOverride !== null) return `${accentHueOverride}deg`;
   for (const block of THEMES[theme]) {
     const v = block.get(name);
     if (v !== undefined) return v;
@@ -175,11 +181,60 @@ const LOCAL_TOKENS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Where they are painted. Kept in step with the consumer inventory below.
+// Where they are painted. Kept in step with the consumer inventory below; the
+// two grounds that are defined in component source (the bubble's mix and the
+// card tints) are READ from that source, never copied here, so a change there
+// is measured rather than missed.
 // ---------------------------------------------------------------------------
 
 type Ground = { name: string; rgb: (theme: Theme, fg: Rgb) => Rgb };
 const plain = (t: string): Ground => ({ name: t, rgb: (theme) => token(theme, t) });
+
+const readSrc = (rel: string) => readFileSync(join(ROOT, rel), "utf-8").replace(/\r\n/g, "\n");
+
+/** The identified chat bubble's ground: `color-mix(in srgb, <agent> p%, <var>)`
+ *  in `ChatPanel.svelte`'s `.chat-bubble.claude.identified` rule. */
+function bubbleMix(): { percent: number; over: string } {
+  const src = stripCssComments(readSrc("src/client/panels/ChatPanel.svelte"));
+  const rule = /\.chat-bubble\.claude\.identified\s*\{([^}]*)\}/.exec(src)?.[1];
+  if (!rule) throw new Error("ChatPanel.svelte: no .chat-bubble.claude.identified rule");
+  const m =
+    /(?:^|;|\s)background:\s*color-mix\(\s*in srgb\s*,\s*var\(--chat-agent-color\)\s+([\d.]+)%\s*,\s*var\((--tandem-[a-z0-9-]+)\)\s*\)\s*;/.exec(
+      rule,
+    );
+  if (!m)
+    throw new Error(
+      `ChatPanel.svelte: the identified bubble's background is not a form this test reads: ${rule.trim()}`,
+    );
+  return { percent: Number(m[1]), over: m[2] };
+}
+
+/** Every ground an annotation card can have: each `getCardTint` return, and the
+ *  review-target override `AnnotationCard.svelte` puts in its place. */
+function cardGrounds(): string[] {
+  const helpers = readSrc("src/client/panels/annotation-card-helpers.ts");
+  const body = /export function getCardTint\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(helpers)?.[1];
+  if (!body) throw new Error("annotation-card-helpers.ts: getCardTint not found");
+  const returns = [...body.matchAll(/return\s+([^;]+);/g)].map((r) => r[1].trim());
+  const tints = returns.map((r) => {
+    const v = /^"var\((--tandem-[a-z0-9-]+)\)"$/.exec(r);
+    if (!v) throw new Error(`getCardTint returns a form this test cannot read: ${r}`);
+    return v[1];
+  });
+  const card = readSrc("src/client/panels/AnnotationCard.svelte");
+  const bg =
+    /const cardBg = \$derived\(isReviewTarget \? "var\((--tandem-[a-z0-9-]+)\)" : cardTint\);/.exec(
+      card,
+    );
+  if (!bg)
+    throw new Error("AnnotationCard.svelte: cardBg is not `isReviewTarget ? var(--x) : cardTint`");
+  if (tints.length < 3)
+    throw new Error(`getCardTint: expected its three author tints, read ${tints.length}`);
+  return [...new Set([...tints, bg[1]])];
+}
+
+const BUBBLE = bubbleMix();
+const CARD_GROUNDS = cardGrounds();
 
 /**
  * TEXT, 4.5:1.
@@ -195,15 +250,11 @@ const plain = (t: string): Ground => ({ name: t, rgb: (theme) => token(theme, t)
  */
 const TEXT_GROUNDS: Ground[] = [
   {
-    name: "chat bubble (agent 10% over surface)",
-    rgb: (theme, fg) => mixSrgb(fg, 0.1, token(theme, "--tandem-surface")),
+    name: `chat bubble (agent ${BUBBLE.percent}% over ${BUBBLE.over})`,
+    rgb: (theme, fg) => mixSrgb(fg, BUBBLE.percent / 100, token(theme, BUBBLE.over)),
   },
-  plain("--tandem-author-claude-bg"),
-  plain("--tandem-author-user-bg"),
-  plain("--tandem-author-import-bg"),
-  plain("--tandem-accent-bg"),
-  plain("--tandem-surface"),
-  plain("--tandem-bg"),
+  ...CARD_GROUNDS.map(plain),
+  ...["--tandem-surface", "--tandem-bg"].filter((t) => !CARD_GROUNDS.includes(t)).map(plain),
 ];
 
 /**
@@ -237,15 +288,34 @@ describe("local agent tokens are readable (ADR-039 item 20)", () => {
 
   const grounds = new Map([...TEXT_GROUNDS, ...NON_TEXT_GROUNDS].map((g) => [g.name, g]));
 
-  it.each(rows)("%s in %s on %s reaches %s:1", (tokenName, theme, groundName, min) => {
-    const fg = token(theme, tokenName);
-    const bg = grounds.get(groundName)!.rgb(theme, fg);
-    const ratio = contrast(fg, bg);
-    expect(
-      // Unrounded: WCAG's thresholds are exact, so 4.497 does not pass 4.5.
-      ratio,
-      `${tokenName} on ${groundName} (${theme}) is ${ratio.toFixed(2)}:1`,
-    ).toBeGreaterThanOrEqual(min);
+  // Every pair at every accent hue the Settings slider can set (0–360, step 1):
+  // `--tandem-accent-bg` follows it, and the worst hue is the one asserted.
+  it.each(rows)(
+    "%s in %s on %s reaches %s:1 at every accent hue",
+    (tokenName, theme, groundName, min) => {
+      let worst = { ratio: Number.POSITIVE_INFINITY, hue: -1 };
+      try {
+        for (let hue = 0; hue <= 360; hue++) {
+          accentHueOverride = hue;
+          const fg = token(theme, tokenName);
+          const ratio = contrast(fg, grounds.get(groundName)!.rgb(theme, fg));
+          if (ratio < worst.ratio) worst = { ratio, hue };
+        }
+      } finally {
+        accentHueOverride = null;
+      }
+      expect(
+        // Unrounded: WCAG's thresholds are exact, so 4.497 does not pass 4.5.
+        worst.ratio,
+        `${tokenName} on ${groundName} (${theme}) is ${worst.ratio.toFixed(2)}:1 at accent hue ${worst.hue}`,
+      ).toBeGreaterThanOrEqual(min);
+    },
+  );
+
+  it("reads its source-defined grounds: the bubble's mix and every card ground", () => {
+    expect(BUBBLE.percent).toBeGreaterThan(0);
+    expect(CARD_GROUNDS).toContain("--tandem-accent-bg");
+    expect(CARD_GROUNDS.length).toBeGreaterThanOrEqual(4);
   });
 
   it("the resolver refuses a value it cannot read", () => {
