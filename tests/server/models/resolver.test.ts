@@ -302,6 +302,15 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
       expect(resolveAll()).toEqual({ kind: "none" });
     });
 
+    it.each(["anthropic", "openai", "gemini"] as const)(
+      "a %s Default with an enabled local model beside it → none",
+      async (provider) => {
+        const kind: ModelsEntry = { ...cloud, id: `m-${provider}`, provider };
+        await persistModelsFile(fileWith([kind, local], kind.id));
+        expect(resolveAll()).toEqual({ kind: "none" });
+      },
+    );
+
     it("disabled default, even when another enabled local model exists", async () => {
       await persistModelsFile(fileWith([disabledLocal], "m-off"));
       expect(resolveAll()).toEqual({ kind: "none" });

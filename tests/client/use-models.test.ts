@@ -1650,3 +1650,68 @@ describe("models store — the automatic default (rows as data)", () => {
     );
   });
 });
+
+// #1123 (cloud providers hidden): a cloud entry of ANY kind never counts as an
+// enabled local model, for the automatic default and for the first-local signal.
+// The fixtures elsewhere in this file are `anthropic` only.
+describe("models store — openai and gemini entries are not local", () => {
+  type Body = { autoDefaultId?: string };
+  let bodies: Body[] = [];
+
+  beforeEach(() => {
+    bodies = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+        const u = String(url);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (u.includes("/secrets/")) return new Response(null, { status: 204 });
+        if (method === "POST" && u.endsWith(API_MODELS)) {
+          bodies.push(JSON.parse(init?.body as string) as Body);
+          return new Response(JSON.stringify({ etag: `etag-${++etagSeq}` }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ file: serverFile, etag: "srv-cur" }), {
+          status: 200,
+        });
+      }),
+    );
+  });
+
+  it("enabled openai then gemini with no default: no autoDefaultId, firstLocal false twice; then a local is marked", async () => {
+    const { onModelsWriteCommitted } = await import(
+      "../../src/client/models/models-write-signal.js"
+    );
+    const seen: boolean[] = [];
+    const off = onModelsWriteCommitted((info) => seen.push(info.firstLocal));
+    try {
+      const m = createModels();
+      for (const provider of ["openai", "gemini"] as const) {
+        const id = await m.addModel({
+          provider,
+          displayName: provider,
+          modelId: "x",
+          enabled: true,
+        });
+        expect(id).not.toBeNull();
+      }
+      expect(bodies).toHaveLength(2);
+      for (const b of bodies) expect("autoDefaultId" in b).toBe(false);
+      expect(seen).toEqual([false, false]);
+      expect(m.defaultModelId).toBeNull();
+
+      const localId = await m.addModel({
+        provider: "local-ollama",
+        displayName: "L",
+        modelId: "q",
+        endpoint: "http://127.0.0.1:11434",
+        enabled: true,
+      });
+      expect(localId).not.toBeNull();
+      expect(bodies).toHaveLength(3);
+      expect(bodies[2].autoDefaultId).toBe(localId);
+      expect(seen).toEqual([false, false, true]);
+    } finally {
+      off();
+    }
+  });
+});
