@@ -149,9 +149,9 @@ function expectIntro(view: ReturnType<typeof mount>) {
 
 /** Each provider's group heading, as literals (never `PROVIDER_LABEL`). */
 const HEADING: Readonly<Record<string, string>> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Gemini",
+  anthropic: "Anthropic (API key)",
+  openai: "OpenAI (API key)",
+  gemini: "Gemini (API key)",
   "local-ollama": "Ollama (local)",
   "local-llamacpp": "llama.cpp (local)",
   "local-lmstudio": "LM Studio (local)",
@@ -182,9 +182,9 @@ describe("R1.2: every provider's entry is listed under its own heading", () => {
       .map((row) => row.parentElement?.parentElement?.querySelector(".settings-section-label"))
       .map((h) => h?.textContent?.trim());
     expect([...new Set(headings)]).toEqual([
-      "Anthropic",
-      "OpenAI",
-      "Gemini",
+      "Anthropic (API key)",
+      "OpenAI (API key)",
+      "Gemini (API key)",
       "Ollama (local)",
       "llama.cpp (local)",
       "LM Studio (local)",

@@ -420,10 +420,15 @@ of these selectors renders in a release build.
   to name no longer ship.
 - `model-{row,default,toggle,edit-btn,delete-confirm,delete-btn}-{*}`,
   `model-add-btn`
+- An old cloud entry's row (#1123, cloud providers hidden): `model-unavailable-{*}`
+  (its "This provider can't be used in Tandem." line)
 - Local-model editing opt-in (#1123): `local-model-editing-{section,toggle,loading,load-error,retry,force-off,force-off-pending,error}`
 - Who answers your chat (#1123 part B): `chat-answerer-{section,claude,local,status,loading,load-error,retry,use-claude,set-claude-done,refused,unavailable,error}` (`chat-answerer-{claude,local}` are the two radios)
 - Not Tandem's own window (#2404): `models-own-window-notice` (the one visible message at the top of the tab) and `models-own-window-live` (its always-mounted screen-reader announcer)
 - Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
+  (`apikey` and `apikey-replace-btn` are kept but unreachable while cloud providers
+  are hidden; `provider-note` is now the unavailable window's sentence). An old
+  cloud entry's window: `model-edit-unavailable-{provider,close}`
 - First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,modelid-hint,apikey,endpoint,endpoint-hint,error,save,save-reason,skip,skip-secondary}`
 
 ### Integration wizard (unified onboarding wizard)
