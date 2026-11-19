@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings.svelte.js";
 import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../src/client/utils/local-model-copy.js";
-import { LOCAL_MODEL_PROVIDERS } from "../../src/shared/models/contract.js";
+import { LOCAL_MODEL_PROVIDERS, type ModelProvider } from "../../src/shared/models/contract.js";
 
 afterEach(() => {
   cleanup();
@@ -41,6 +41,9 @@ function mountAdd() {
     props: { onCancel: vi.fn(), onSave: vi.fn() },
   });
 }
+
+/** A mounted window, with every query `render` gives it. */
+type View = ReturnType<typeof mountAdd>;
 
 function mountEntry(entry: ModelRegistryEntry) {
   const onCancel = vi.fn();
@@ -114,15 +117,331 @@ describe("ModelEditModal — only local providers are offered", () => {
   it("requires an endpoint before a new local model can be saved", async () => {
     const { getByTestId } = mountAdd();
     const save = () => getByTestId("model-edit-save") as HTMLButtonElement;
-    // Default provider is local-ollama → endpoint field is present and empty.
-    await fireEvent.input(getByTestId("model-edit-displayname"), { target: { value: "My local" } });
+    // llama.cpp has no usual address, so its field starts empty (V2).
+    const select = getByTestId("model-edit-provider") as HTMLSelectElement;
+    select.value = "local-llamacpp";
+    await fireEvent.change(select);
     await fireEvent.input(getByTestId("model-edit-modelid"), { target: { value: "qwen2.5:14b" } });
-    // displayName + modelId filled but endpoint still blank → save stays disabled.
-    expect(save().disabled).toBe(true);
+    // Model ID filled but endpoint still blank → Save stays inert, never disabled.
+    expect(save().disabled).toBe(false);
+    expect(save().getAttribute("aria-disabled")).toBe("true");
     await fireEvent.input(getByTestId("model-edit-endpoint"), {
       target: { value: "http://127.0.0.1:11434" },
     });
     expect(save().disabled).toBe(false);
+    expect(save().getAttribute("aria-disabled")).toBe("false");
+  });
+});
+
+// #1123, the add-model window's fields (R3): one line under Save says why it is
+// greyed out. Strings are literals, never built from the product's.
+describe("ModelEditModal — Save's reason (P10(5), V2, V9)", () => {
+  const U1 = "Enter a Model ID to save.";
+  const U2 = "Enter an Endpoint to save.";
+  const U3 =
+    "The Endpoint must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.";
+  const U4 =
+    "The Endpoint is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).";
+
+  type Mode = "Add" | "Edit";
+  const EDIT_ENTRY: ModelRegistryEntry = {
+    id: "e1",
+    provider: "local-ollama",
+    displayName: "Mine",
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+  function mountMode(mode: Mode, provider: ModelProvider = "local-ollama") {
+    return mode === "Add"
+      ? (() => {
+          const onSave = vi.fn();
+          const v = render(ModelEditModal, { props: { onCancel: vi.fn(), onSave } });
+          return { ...v, onSave };
+        })()
+      : mountEntry({ ...EDIT_ENTRY, provider });
+  }
+  async function choose(v: View, p: ModelProvider) {
+    const select = v.getByTestId("model-edit-provider") as HTMLSelectElement;
+    select.value = p;
+    await fireEvent.change(select);
+  }
+  async function fill(v: View, modelId: string, endpoint: string) {
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: modelId } });
+    await fireEvent.input(v.getByTestId("model-edit-endpoint"), { target: { value: endpoint } });
+  }
+  const saveName = (mode: Mode) => (mode === "Add" ? "Add model" : "Save changes");
+
+  /** R3.1: the line, Save's state and its description, and the invariant. */
+  function expectRow(v: View, mode: Mode, reason: string | null) {
+    const save = v.getByTestId("model-edit-save") as HTMLButtonElement;
+    const line = v.queryByTestId("model-edit-save-reason");
+    expect(save.disabled).toBe(false);
+    if (reason === null) {
+      expect(line).toBeNull();
+      expect(save.getAttribute("aria-disabled")).toBe("false");
+      expect(save.hasAttribute("aria-describedby")).toBe(false);
+      expect(v.getByRole("button", { name: saveName(mode) })).toBe(save);
+      return;
+    }
+    expect(norm(line?.textContent)).toBe(reason);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("aria-describedby")).toBe("model-edit-save-reason");
+    for (const id of (save.getAttribute("aria-describedby") ?? "").split(/\s+/)) {
+      expect(document.getElementById(id), id).not.toBeNull();
+    }
+    expect(v.getByRole("button", { name: saveName(mode), description: reason })).toBe(save);
+  }
+
+  /** Rows 2 to 5: neither a form submit nor a click saves. */
+  async function expectNoSave(v: View, onSave: ReturnType<typeof vi.fn>) {
+    const save = v.getByTestId("model-edit-save");
+    await fireEvent.submit(save.closest("form") as HTMLFormElement);
+    await fireEvent.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+  }
+
+  const MODEL_ID_CASES: Array<[string, string]> = [
+    ["", "http://127.0.0.1:1234"],
+    ["   ", "http://127.0.0.1:1234"],
+  ];
+  const ENDPOINT_CASES: Array<[string, string | null]> = [
+    ["http://127.0.0.1:99999", U4],
+    ["http://127.0.0.1:12a", U4],
+    ["http://", U4],
+    [" http://127.0.0.1:99999", U4],
+    ["HTTP://127.0.0.1:99999", U4],
+    ["127.0.0.1:1234", U3],
+    ["localhost:11434", U3],
+    ["https://127.0.0.1:1234", U3],
+    ["http://u:p@127.0.0.1:1234", U3],
+    ["http://192.168.1.5:11434", U3],
+    ["http://localhost.example:1", U3],
+    ["http://0.0.0.0:1", U3],
+    ["", U2],
+    ["   ", U2],
+    ["http://127.0.0.1:1234", null],
+    ["http://localhost:1234", null],
+    ["http://[::1]:1234", null],
+    ["  http://127.0.0.1:1  ", null],
+  ];
+
+  for (const mode of ["Add", "Edit"] as const) {
+    for (const [modelId, ep] of MODEL_ID_CASES) {
+      it(`${mode}, row 2: Model ID ${JSON.stringify(modelId)} reads U1, and fixing it saves once`, async () => {
+        const v = mountMode(mode);
+        await fill(v, modelId, ep);
+        expectRow(v, mode, U1);
+        await expectNoSave(v, v.onSave);
+        await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+        expectRow(v, mode, null);
+        await fireEvent.submit(v.getByTestId("model-edit-save").closest("form") as HTMLFormElement);
+        expect(v.onSave).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    for (const [ep, reason] of ENDPOINT_CASES) {
+      it(`${mode}: Endpoint ${JSON.stringify(ep)} reads ${reason === null ? "nothing" : reason.slice(0, 24)}`, async () => {
+        const v = mountMode(mode);
+        await fill(v, "m", ep);
+        expectRow(v, mode, reason);
+        if (reason !== null) {
+          await expectNoSave(v, v.onSave);
+          await fireEvent.input(v.getByTestId("model-edit-endpoint"), {
+            target: { value: "http://127.0.0.1:1234" },
+          });
+          expectRow(v, mode, null);
+        }
+        await fireEvent.submit(v.getByTestId("model-edit-save").closest("form") as HTMLFormElement);
+        expect(v.onSave).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
+
+  for (const p of ["local-llamacpp", "local-other"] as const) {
+    it(`Add, row 3 on ${p}: no usual address, so U2 with a Model ID typed`, async () => {
+      const v = mountMode("Add");
+      await choose(v, p);
+      await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+      expectRow(v, "Add", U2);
+      await expectNoSave(v, v.onSave);
+    });
+  }
+
+  it("first match: Model ID blank and the address refused gives U1", async () => {
+    const v = mountMode("Add");
+    await fill(v, "", "http://192.168.1.5:11434");
+    expectRow(v, "Add", U1);
+  });
+
+  it("row 1: a refused page shows no line, and Save is described by the refusal alone", async () => {
+    const v = render(ModelEditModal, {
+      props: { saveUnavailable: true, error: "x", onCancel: vi.fn(), onSave: vi.fn() },
+    });
+    const save = v.getByTestId("model-edit-save") as HTMLButtonElement;
+    expect(v.queryByTestId("model-edit-save-reason")).toBeNull();
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.getAttribute("aria-describedby")).toBe("model-edit-error-text");
+    expect(document.getElementById("model-edit-error-text")).not.toBeNull();
+  });
+
+  it("P10(4): a provider change announces nothing (no live region in the dialog)", async () => {
+    const v = mountMode("Add");
+    const dialog = v.getByTestId("model-edit-modal");
+    const noLive = () =>
+      expect(dialog.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+    expect(v.queryByTestId("model-edit-save-reason")).toBeNull();
+    noLive();
+    await choose(v, "local-llamacpp");
+    expect(norm(v.getByTestId("model-edit-save-reason").textContent)).toBe(U2);
+    noLive();
+  });
+});
+
+// #1123 V18 as cut down by the final review: on Add a blank name saves as the
+// selected provider's fallback; on Edit the field's text is saved, "" too.
+describe("ModelEditModal — the Display name (V18)", () => {
+  const nameField = (v: View) =>
+    v.getByTestId("model-edit-displayname") as HTMLInputElement;
+  async function choose(v: View, p: ModelProvider) {
+    const select = v.getByTestId("model-edit-provider") as HTMLSelectElement;
+    select.value = p;
+    await fireEvent.change(select);
+  }
+  const submit = (v: View) =>
+    fireEvent.submit(v.getByTestId("model-edit-save").closest("form") as HTMLFormElement);
+  function mountAddWithSave() {
+    const onSave = vi.fn();
+    const v = render(ModelEditModal, { props: { onCancel: vi.fn(), onSave } });
+    return { ...v, onSave };
+  }
+  const editEntry = (displayName: string): ModelRegistryEntry => ({
+    id: "e1",
+    provider: "local-ollama",
+    displayName,
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  });
+
+  it('the field is labelled "Display name (optional)"', () => {
+    const v = mountAdd();
+    expect(v.getByRole("textbox", { name: "Display name (optional)" })).toBe(nameField(v));
+  });
+
+  it('Add Ollama, name blank: saves "Ollama (local)" (the placeholder)', async () => {
+    const v = mountAddWithSave();
+    expect(nameField(v).placeholder).toBe("Ollama (local)");
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-ollama",
+      displayName: "Ollama (local)",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:11434",
+      enabled: true,
+    });
+  });
+
+  it('Add, name "   ": saves the fallback', async () => {
+    const v = mountAddWithSave();
+    await fireEvent.input(nameField(v), { target: { value: "   " } });
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-ollama",
+      displayName: "Ollama (local)",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:11434",
+      enabled: true,
+    });
+  });
+
+  it('Add, switched to Other with a typed address, name blank: saves "Local server"', async () => {
+    const v = mountAddWithSave();
+    await choose(v, "local-other");
+    expect(nameField(v).placeholder).toBe("Local server");
+    await fireEvent.input(v.getByTestId("model-edit-endpoint"), {
+      target: { value: "http://127.0.0.1:8000" },
+    });
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-other",
+      displayName: "Local server",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:8000",
+      enabled: true,
+    });
+  });
+
+  it('Add, typed "Mine", provider switched: saves "Mine"', async () => {
+    const v = mountAddWithSave();
+    await fireEvent.input(nameField(v), { target: { value: "Mine" } });
+    await choose(v, "local-lmstudio");
+    expect(nameField(v).value).toBe("Mine");
+    await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "m" } });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-lmstudio",
+      displayName: "Mine",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:1234",
+      enabled: true,
+    });
+  });
+
+  it('Edit, stored "", address edited: saves "" (placeholder "")', async () => {
+    const v = mountEntry(editEntry(""));
+    expect(nameField(v).placeholder).toBe("");
+    await fireEvent.input(v.getByTestId("model-edit-endpoint"), {
+      target: { value: "http://127.0.0.1:9" },
+    });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-ollama",
+      displayName: "",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:9",
+      enabled: true,
+    });
+  });
+
+  it('Edit, stored "Old", cleared: saves ""', async () => {
+    const v = mountEntry(editEntry("Old"));
+    await fireEvent.input(nameField(v), { target: { value: "" } });
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-ollama",
+      displayName: "",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:11434",
+      enabled: true,
+    });
+  });
+
+  it('Edit, stored "Ollama (local)", switched to LM Studio: the name is kept', async () => {
+    const v = mountEntry(editEntry("Ollama (local)"));
+    await choose(v, "local-lmstudio");
+    expect(nameField(v).value).toBe("Ollama (local)");
+    expect(nameField(v).placeholder).toBe("");
+    await submit(v);
+    expect(v.onSave).toHaveBeenCalledTimes(1);
+    expect(v.onSave).toHaveBeenCalledWith({
+      provider: "local-lmstudio",
+      displayName: "Ollama (local)",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:11434",
+      enabled: true,
+    });
   });
 });
 

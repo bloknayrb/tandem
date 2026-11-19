@@ -22,7 +22,9 @@
 import { onDestroy, tick, untrack } from "svelte";
 import { isLocalProvider, type ModelProvider } from "../../shared/models/contract.js";
 import {
+  endpointAfterProviderChange,
   endpointPrefill,
+  nameFallback,
   PROVIDER_LABEL,
   PROVIDER_OPTION_ORDER,
 } from "../../shared/models/provider-ui.js";
@@ -76,11 +78,6 @@ const PICKER_LABEL: Record<ModelProvider, string> = {
   anthropic: "Anthropic (Claude)",
   gemini: "Gemini (Google)",
 };
-// #1123 Ruling L-h: Other's long label is not a name; it saves as "Local server".
-const NAME_FALLBACK: Record<ModelProvider, string> = {
-  ...PICKER_LABEL,
-  "local-other": "Local server",
-};
 
 // Option data for every provider, in the contract's order. Only the local ones
 // are listed (`LISTED_OPTIONS`, P4: no cloud row until cloud keys work); the
@@ -89,7 +86,9 @@ const NAME_FALLBACK: Record<ModelProvider, string> = {
 const PROVIDER_OPTIONS: ProviderOption[] = PROVIDER_OPTION_ORDER.map((value) => ({
   value,
   label: PICKER_LABEL[value],
-  nameFallback: NAME_FALLBACK[value],
+  // The add-model window's fallback (#1123 Ruling L-h: Other's is "Local
+  // server"), shared through `nameFallback`.
+  nameFallback: nameFallback(value),
 }));
 const LISTED_OPTIONS = PROVIDER_OPTIONS.filter((o) => isLocalProvider(o.value));
 
@@ -174,10 +173,9 @@ function selectProvider(next: ModelProvider) {
   // is kept.
   // #1123 R2.3: the same rule for the address, by string equality only — the
   // field is replaced only while it still holds the previous provider's
-  // prefill ("" for a provider with none). Read before `provider` changes.
-  if (endpoint === endpointPrefill(provider)) {
-    endpoint = endpointPrefill(next);
-  }
+  // prefill ("" for a provider with none). Shared with the add-model window
+  // through `endpointAfterProviderChange`. Read before `provider` changes.
+  endpoint = endpointAfterProviderChange(endpoint, provider, next);
   provider = next;
 }
 

@@ -28,6 +28,7 @@ const addModel = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]): Promise<string | null> => "id"),
 );
 const setDefault = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+const updateModel = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 
 interface StoreState {
   models?: ModelRegistryEntry[];
@@ -60,7 +61,7 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
     reload,
     clearError: vi.fn(),
     addModel,
-    updateModel: vi.fn(async () => true),
+    updateModel,
     deleteModel: vi.fn(async () => {}),
     toggleEnabled: vi.fn(async () => {}),
     setDefault,
@@ -100,6 +101,7 @@ afterEach(() => {
   reload.mockClear();
   addModel.mockClear();
   setDefault.mockClear();
+  updateModel.mockClear();
   cleanup();
 });
 
@@ -186,5 +188,60 @@ describe("SettingsModelsTab — the add window's save", () => {
     });
     expect(setDefault).not.toHaveBeenCalled();
     expect(queryByTestId("model-edit-modal")).toBeNull(); // closed as saved
+  });
+});
+
+// #1123, the add-model window's fields (V2, V18): Add starts at Ollama's usual
+// address and a blank name saves as its fallback; Edit saves the field's text.
+describe("SettingsModelsTab — the add-model window's fields", () => {
+  it("Add with no name saves the provider's fallback at Ollama's usual address", async () => {
+    storeState = { models: [] };
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("model-add-btn"));
+    await fireEvent.input(getByTestId("model-edit-modelid"), { target: { value: "qwen2.5:14b" } });
+    await fireEvent.click(getByTestId("model-edit-save"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(addModel).toHaveBeenCalledWith(
+      {
+        provider: "local-ollama",
+        displayName: "Ollama (local)",
+        modelId: "qwen2.5:14b",
+        endpoint: "http://127.0.0.1:11434",
+        enabled: true,
+      },
+      undefined,
+    );
+  });
+
+  it("Edit of a blank-named entry with its address changed keeps the name blank", async () => {
+    const entry: ModelRegistryEntry = {
+      id: "e1",
+      provider: "local-ollama",
+      displayName: "",
+      modelId: "m",
+      endpoint: "http://127.0.0.1:11434",
+      enabled: true,
+    };
+    storeState = { models: [entry] };
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("model-edit-btn-e1"));
+    await fireEvent.input(getByTestId("model-edit-endpoint"), {
+      target: { value: "http://127.0.0.1:9" },
+    });
+    await fireEvent.click(getByTestId("model-edit-save"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(updateModel).toHaveBeenCalledTimes(1);
+    expect(updateModel).toHaveBeenCalledWith(
+      "e1",
+      {
+        provider: "local-ollama",
+        displayName: "",
+        modelId: "m",
+        endpoint: "http://127.0.0.1:9",
+        enabled: true,
+      },
+      undefined,
+    );
   });
 });
