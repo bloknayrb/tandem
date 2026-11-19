@@ -1,7 +1,10 @@
 /**
- * Waiting on a document (ownership design §8.5, as #2358 PR 3b-2b1b's brief
- * rules it; ADR-054's 3b-2b1b amendment): does document D hold work waiting
- * for Tandem's Claude?
+ * Waiting for Tandem's Claude (ownership design §8.5 as #2358 PR 3b-2b1b's
+ * and 3b-2b1b-chat's briefs rule it; ADR-054's 3b-2b1b and 3b-2b1b-chat
+ * amendments). Two pure rules, one per half: does document D hold work
+ * waiting ({@link isDocumentWaiting}), and which user chat rows would a fresh
+ * reader be handed if it may have them ({@link chatRowsOwedToFreshReader};
+ * the chat half, below the document half).
  *
  * **The rule (Ruling K).** D has waiting work when it holds a user comment or
  * a user thread reply that a FRESH cursor reader for Tandem's Claude (cursor
@@ -45,12 +48,30 @@
  * `-Infinity` to mean "any acknowledged version". And it is asked only about
  * user comments and user replies, whose registry key is the bare
  * `documentId:id` (a Claude record's key also carries its status).
+ *
+ * **The chat half (Ruling K applied to chat).** A user chat message is
+ * waiting when a fresh cursor reader for Tandem's Claude would be handed it.
+ * The cursor collector (`collectCursorChat` in `awareness.ts`) tests, in
+ * order: the author, the handled set (`settledChatIds`), local-period chat,
+ * the ownership scope, "owed" (for a null mark and an empty `held`, that is
+ * `!msg.read`: no registry entry is consulted) and the item schema
+ * (`admitChatItem`). {@link chatRowsOwedToFreshReader} restates every test
+ * but the scope, which only the ownership module can answer: it decides from
+ * the rows the chat side's `owedToFreshReader` member (on `ownershipChatSide`)
+ * passes as copies, and the ownership module applies the scope to its
+ * answer. No Solo or mode term: the poll hands chat in Solo too. The schema
+ * check is a bare `safeParse` of the item built as `admitChatItem` builds
+ * it, because `admitChatItem` logs a drop and this must not.
  */
 
-import type { Annotation, AnnotationReply } from "../../shared/types.js";
+import type { Annotation, AnnotationReply, ChatMessage } from "../../shared/types.js";
 import { isClaudeFacing, replyPrivacyAllows } from "../annotations/projection.js";
 import type { ModeState } from "../mode.js";
-import { inboxUserReplySchema, userActionSchema } from "./output-schemas.js";
+import {
+  inboxChatMessageSchema,
+  inboxUserReplySchema,
+  userActionSchema,
+} from "./output-schemas.js";
 
 /** Everything {@link isDocumentWaiting} reads. No field is a live object. */
 export interface DocumentWaitingInput {
@@ -139,4 +160,50 @@ export function isDocumentWaiting(input: DocumentWaitingInput): boolean {
     }
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// The chat half (#2358 PR 3b-2b1b-chat).
+
+/** Everything {@link chatRowsOwedToFreshReader} reads. No field is a live object. */
+export interface ChatRowsInput {
+  /** The chat map's rows in map order, each `row` a copy of the stored value. */
+  readonly rows: ReadonlyArray<{ readonly key: string; readonly row: unknown }>;
+  /** The handled keys (`settledChatIds` over the same map). */
+  readonly handled: ReadonlySet<string>;
+  /** `models/local-period.ts`'s local-period chat predicate, by map key. */
+  readonly isLocalPeriodChat: (key: string) => boolean;
+}
+
+/** Whether the chat row `msg` passes the item schema, built as `admitChatItem` builds it. Logs nothing. */
+function chatItemAdmitted(msg: Partial<ChatMessage>): boolean {
+  return inboxChatMessageSchema.safeParse({
+    id: msg.id,
+    text: msg.text,
+    timestamp: msg.timestamp,
+    ...(msg.documentId ? { documentId: msg.documentId } : {}),
+    ...(msg.anchor ? { anchor: msg.anchor } : {}),
+    ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+  }).success;
+}
+
+/**
+ * The keys of the user chat rows a fresh cursor reader would be handed if
+ * the ownership scope lets it have them, in input order (see the module
+ * docblock): an object row with `author === "user"`, not handled, not
+ * local-period chat, not read (`!msg.read`), and admitted by the chat item
+ * schema. Pure: it reads its input and writes nothing.
+ */
+export function chatRowsOwedToFreshReader(input: ChatRowsInput): string[] {
+  const keys: string[] = [];
+  for (const { key, row } of input.rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const msg = row as Partial<ChatMessage>;
+    if (msg.author !== "user" || input.handled.has(key)) continue;
+    if (input.isLocalPeriodChat(key)) continue;
+    if (msg.read) continue;
+    if (!chatItemAdmitted(msg)) continue;
+    keys.push(key);
+  }
+  return keys;
 }

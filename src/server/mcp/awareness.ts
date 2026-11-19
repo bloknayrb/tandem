@@ -70,7 +70,7 @@ import {
   seenBy,
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
-import { isDocumentWaiting } from "./inbox-selection.js";
+import { chatRowsOwedToFreshReader, isDocumentWaiting } from "./inbox-selection.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -578,15 +578,14 @@ const DOCUMENT_WAITING_FAILED =
  * **It makes no Y.Doc write.** (It does not write nothing at all: like every
  * caller of `store.listAnnotations()`, it can log a legacy migration and add
  * to the migration log's in-memory dedup set, `migration-log.ts`, and log a
- * malformed key.) The Y.Doc
- * comes from the non-creating getter, the store is built as
- * {@link currentNoticeKeys} builds one, and the rule
- * receives copies: `sanitizeAnnotation` copies shallowly (its `range`,
- * `relRange` and `textSnapshotBreaks` are the stored objects) and the reply
- * map returns its stored objects, so both are `structuredClone`d. The
- * registry is read through a closure that builds the item's key itself, so
- * the rule never restates the key format. Nothing is refreshed, registered,
- * stamped or pushed. (Reading the mode goes through `readModeState`, which
+ * malformed key.) The Y.Doc comes from the non-creating getter, the store is
+ * built as {@link currentNoticeKeys} builds one, and the rule receives
+ * copies: `sanitizeAnnotation` copies shallowly (its `range`, `relRange` and
+ * `textSnapshotBreaks` are the stored objects) and the reply map returns its
+ * stored objects, so both are `structuredClone`d. The registry is read
+ * through a closure that builds the item's key itself, so the rule never
+ * restates the key format. Nothing is refreshed, registered, stamped or
+ * pushed. (Reading the mode goes through `readModeState`, which
  * resolves the control room with the creating getter; it exists from boot in
  * a running server, and an empty Y.Doc emits no update.)
  *
@@ -594,6 +593,10 @@ const DOCUMENT_WAITING_FAILED =
  * Not rate-limited: it is asked once per change of owner that reaches step 5,
  * never in a loop, and a limiter's clock would be state outside this
  * function (Ruling J: nothing existing changes, `resetInbox` included).
+ * *Corrected by #2358 PR 3b-2b1b-chat:* `tandemWorkWaiting` (ownership) now
+ * asks it once per document Tandem's Claude holds, so once 3b-2b1c consumes
+ * that decision a document whose read keeps failing logs this line at every
+ * ask, unlimited; the flip-blocker row on the decision's cost names it.
  */
 export function documentWaiting(documentId: string): boolean {
   try {
@@ -2482,6 +2485,32 @@ export const ownershipChatSide = Object.freeze({
       keys.push(key);
     });
     return keys;
+  },
+  /**
+   * The keys of the user chat rows a fresh cursor reader would be handed if
+   * it may have them (#2358 PR 3b-2b1b-chat; `inbox-selection.ts`'
+   * `chatRowsOwedToFreshReader`): user rows, not handled, not local-period
+   * chat, not read, admitted by the chat item schema. Only user rows are
+   * cloned, each in its own `try`, so a row `structuredClone` rejects is
+   * skipped and hides nothing else. Writes nothing, logs nothing.
+   */
+  owedToFreshReader(): readonly string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const rows: { key: string; row: unknown }[] = [];
+    chatMap.forEach((value, key) => {
+      if (typeof value !== "object" || value === null) return;
+      if ((value as Partial<ChatMessage>).author !== "user") return;
+      try {
+        rows.push({ key, row: structuredClone(value) });
+      } catch {
+        // Skipped: read as not waiting (fails closed for this row only).
+      }
+    });
+    return chatRowsOwedToFreshReader({
+      rows,
+      handled: settledChatIds(chatMap),
+      isLocalPeriodChat,
+    });
   },
   /** The facts of the user row under `key`, or undefined. */
   message(key: string) {
