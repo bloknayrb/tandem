@@ -30,10 +30,13 @@
  * **The development allowance.** The Vite dev client (`:5173`), the
  * `dev:tauri` window and the E2E client are not Tandem's own page by that
  * rule. `TANDEM_MODELS_DEV_ORIGIN` names exactly ONE extra origin, read from
- * the server's environment at start — which a web page cannot set. A write it
- * admits is NOT an own-window write: it still raises the notices, because any
- * page served on that port gets it, and the desktop app's server inherits the
- * environment of whatever started the app.
+ * the server's environment at start — which a web page cannot set. It is
+ * honoured only by a server run from source, or by a release build that the
+ * E2E harness's launcher started (`dev-allowance-build.ts`); any other run of
+ * a release build ignores it and logs one line, so a variable inherited from
+ * an exported shell or a profile no longer opens it (#2410, ADR-039 P9, V15).
+ * A write it admits is NOT an own-window write: it still raises the notices,
+ * because any page served on that port gets it.
  *
  * What this does not stop is in docs/security.md (#2410): a process running as
  * the user, content on port 80 or 443 presenting `tauri.localhost`, script in
@@ -53,6 +56,7 @@ import {
   OWN_WINDOW_ONLY_MESSAGE,
 } from "../../shared/models/contract.js";
 import type { Handler } from "../mcp/routes/_shared.js";
+import type { DevAllowanceBuild } from "./dev-allowance-build.js";
 
 /** How an accepted write got in. Only `own-window` is the user's own change. */
 export type ModelsWriteSource = "own-window" | "allowance";
@@ -182,15 +186,26 @@ export interface ModelsDevOrigin {
   log: string | null;
 }
 
+/** The one line a release build logs when the variable is set (R2.3). Never carries the value. */
+const MODELS_DEV_ORIGIN_IGNORED_LOG = `[Tandem] ${MODELS_DEV_ORIGIN_ENV} is set but ignored: a release build of Tandem accepts local-model settings from Tandem's own window only. The variable works with a server run from source (npm run dev:server or npm run dev:standalone).`;
+
 /**
  * Read `TANDEM_MODELS_DEV_ORIGIN`. Exactly one origin: a loopback page
  * (`http://127.0.0.1:<port>`, an explicit port from 1 to 65535 other than 80,
  * which a browser never writes) or one of the WebView forms. `*`, `null`, a
  * list, a port range, a prefix, a path, `localhost`, another host: refused,
  * and the allowance is not active. A refused value never stops the server.
+ *
+ * `build` is required, with no default (the `desktop` option's convention): a
+ * release build ignores any set value, without validating or echoing it, and
+ * says so in one line. Production passes `devAllowanceBuild(process.argv)`.
  */
-export function resolveModelsDevOrigin(raw: string | undefined): ModelsDevOrigin {
+export function resolveModelsDevOrigin(
+  raw: string | undefined,
+  build: DevAllowanceBuild,
+): ModelsDevOrigin {
   if (raw === undefined) return { origin: null, log: null };
+  if (build === "release") return { origin: null, log: MODELS_DEV_ORIGIN_IGNORED_LOG };
   const shown = JSON.stringify(raw.length > 80 ? `${raw.slice(0, 80)}…` : raw);
   const refused = (why: string): ModelsDevOrigin => ({
     origin: null,

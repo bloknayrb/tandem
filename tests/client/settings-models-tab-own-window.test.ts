@@ -345,7 +345,7 @@ describe("Tandem's own window", () => {
 
 describe("a development page on another 127.0.0.1 port, refused by the server", () => {
   const DEV = "http://127.0.0.1:5173";
-  const DEV_NOTICE = `These settings can only be changed in Tandem's own window. This page is served from ${DEV}. In a development setup, start Tandem's server with TANDEM_MODELS_DEV_ORIGIN=${DEV}, then reload this page.`;
+  const DEV_NOTICE = `These settings can only be changed in Tandem's own window. This page is served from ${DEV}. In a development setup, start Tandem's server from source with TANDEM_MODELS_DEV_ORIGIN=${DEV}, then reload this page.`;
   beforeEach(() => _setPageOriginForTests(DEV));
 
   it("is live until a write is refused; the refusal then shows and announces the message at once", async () => {
