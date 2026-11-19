@@ -72,9 +72,26 @@ export class RunFileError extends Error {
   }
 }
 
-/** The ACL steps, injectable so a spawn test on Windows does not shell out to
+/**
+ * The ACL steps, injectable so a spawn test on Windows does not shell out to
  * PowerShell on every spawn. The real ones are covered by the run-files spec
- * in the `windows-acl-proof` job. Every one is a no-op off Windows. */
+ * in the `windows-acl-proof` job. Every one is a no-op off Windows.
+ *
+ * The contract (#2440):
+ * - `assertOwned` refuses a directory the current user's SID does not own.
+ * - `lockDir` locks the directory AND re-reads its ACL, and throws when an
+ *   entry the check refuses (Everyone, Authenticated Users, `BUILTIN\Users`)
+ *   remains after the lock. That re-read is the folder's ONLY ACL read:
+ *   `ensureLauncherDir` does no folder read of its own.
+ * - `verifyNoBroadAce` is the per-file check, run by `writeRunFile` on each
+ *   new run file while it is still empty.
+ *
+ * A test double for a lock that passes may be a no-op; a test whose subject
+ * is the folder's verification must call the real `lockDir` with the real
+ * acl-win module. #2440's later, faster reader replaces how these read, not
+ * what they refuse: it must keep the proof spec's case "an explicit Everyone
+ * entry on launcher/ is refused by the lock's own read" passing unchanged.
+ */
 export interface RunFileAcl {
   assertOwned: (p: string) => Promise<void>;
   lockDir: (p: string) => Promise<void>;
@@ -363,8 +380,8 @@ export async function ensureLauncherDir(
         throw new RunFileError("launcher-dir-not-owned");
       }
       try {
+        // `lockDir` carries the folder's only ACL read (see `RunFileAcl`).
         await acl.lockDir(dir);
-        await acl.verifyNoBroadAce(dir);
       } catch {
         throw new RunFileError("launcher-dir-acl");
       }

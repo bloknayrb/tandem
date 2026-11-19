@@ -2740,22 +2740,34 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         cwd: plan.cwd,
         ...(opts.claudeSettingsHome !== undefined ? { home: opts.claudeSettingsHome } : {}),
       });
-      mcpConfigPath = await writeRunFile(
-        dir,
-        "mcp",
-        buildRunMcpConfig({ nodePath: process.execPath, bridgeScript, baseUrl, handle }),
-        runFileAcl,
-        opts.runFileNameSuffix?.("mcp"),
-      );
-      written.push(mcpConfigPath);
-      const settingsPath = await writeRunFile(
-        dir,
-        "settings",
-        buildRunSettings(keys),
-        runFileAcl,
-        opts.runFileNameSuffix?.("settings"),
-      );
-      written.push(settingsPath);
+      // #2440: the two files' per-file checks (on Windows each a PowerShell
+      // `Get-Acl` read) run at the same time. Everything that could throw is
+      // evaluated first, so no write starts unless both start. `allSettled`,
+      // never `Promise.all`: both writes have settled before anything is
+      // decided, so a file created by the one still in flight is always in
+      // `written` for `discard`, and a second rejection is never unhandled.
+      const mcpValue = buildRunMcpConfig({
+        nodePath: process.execPath,
+        bridgeScript,
+        baseUrl,
+        handle,
+      });
+      const settingsValue = buildRunSettings(keys);
+      const mcpSuffix = opts.runFileNameSuffix?.("mcp");
+      const settingsSuffix = opts.runFileNameSuffix?.("settings");
+      const [mcpResult, settingsResult] = await Promise.allSettled([
+        writeRunFile(dir, "mcp", mcpValue, runFileAcl, mcpSuffix),
+        writeRunFile(dir, "settings", settingsValue, runFileAcl, settingsSuffix),
+      ]);
+      if (mcpResult.status === "fulfilled") {
+        mcpConfigPath = mcpResult.value;
+        written.push(mcpConfigPath);
+      }
+      if (settingsResult.status === "fulfilled") written.push(settingsResult.value);
+      // Both failed: mcp's step is the one logged, whichever rejected first.
+      if (mcpResult.status === "rejected") throw mcpResult.reason;
+      if (settingsResult.status === "rejected") throw settingsResult.reason;
+      const settingsPath = settingsResult.value;
       if (opts.runFileWriteHold) await opts.runFileWriteHold();
       const run: SpawnRun = {
         bind,
