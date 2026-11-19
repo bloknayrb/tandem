@@ -609,7 +609,6 @@ HIGHLIGHT — always stamped `private` per ADR-027 — no longer appears on any
 Claude-facing read, which is why `tandem_getAnnotations`'s own description now
 says `type: "highlight"` returns nothing.
 
-
 **The write half took the widening one step further, and the asymmetry it closed
 is worth recording.** `isPrivateForClaude` (edit, reply) deliberately exempts
 highlights so they answer their own arm — `not-repliable`,

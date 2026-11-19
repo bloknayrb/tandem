@@ -1491,6 +1491,12 @@ describe("#2460: replyWaits refuses a non-boolean private flag on its own", () =
   it('the private: "true" reply alone answers not waiting', () => {
     expect(ask({ private: "true" })).toBe(false);
   });
+
+  it("the private: null reply alone answers not waiting", () => {
+    // A private spelling of the predicate (`private !== true`, or a truthiness
+    // test) would answer waiting here; `replyPrivacyAllows` does not.
+    expect(ask({ private: null })).toBe(false);
+  });
 });
 
 describe("documentWaiting is total", () => {

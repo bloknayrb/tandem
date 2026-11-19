@@ -62,6 +62,7 @@ vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
 }));
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { addUserReply } from "../../src/server/annotations/lifecycle.js";
 import { closeStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -89,7 +90,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
 } from "../../src/shared/constants.js";
-import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { withBrowser, withInternal, withMcp } from "../../src/shared/origins.js";
 import { sanitizeAnnotation } from "../../src/shared/sanitize.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
@@ -840,6 +841,266 @@ describe("A3: inbox items carry only declared keys, at every depth", () => {
     expect(text.chatMessages).toEqual([clean]);
     const after = ctrl().getMap(Y_MAP_CHAT).get(clean.id) as { anchor: Record<string, unknown> };
     expect(after.anchor, "the stored anchor is untouched").toEqual(before.anchor);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tandem_getAnnotations (#2465 part 2): the same, for the read tool
+// ---------------------------------------------------------------------------
+
+interface RawResult {
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+  content: Array<{ type: string; text?: string }>;
+}
+
+/** The call as the validating client returns it, success or not. */
+async function rawGetAnnotations(documentId: string): Promise<RawResult> {
+  return (await client.callTool({
+    name: "tandem_getAnnotations",
+    arguments: { documentId },
+  })) as RawResult;
+}
+
+/** A Claude comment, written as `tandem_comment` writes it. */
+function claudeComment(doc: Y.Doc, id: string, extra: Record<string, unknown> = {}) {
+  const record = { ...userComment(doc, id), author: "claude", ...extra };
+  withMcp(doc, () => doc.getMap(Y_MAP_ANNOTATIONS).set(id, record));
+  return record;
+}
+
+/**
+ * G1's sequence: in Solo the user writes a comment (the client's stamp) and
+ * replies on a Claude comment through the reply seam (the seam's stamp); the
+ * tab is closed, the mode switched to Tandem and released (`released: 0`, the
+ * release sweeps open documents only), and the document reopened. Returns the
+ * reopened document with both markers still stored.
+ */
+async function closedTabWithMarkers(): Promise<{ o: Opened; replyId: string }> {
+  const first = await openDoc();
+  // Written with the mode at "tandem" (the header's rule); only the two user
+  // writes below are deliberately Solo.
+  claudeComment(first.doc, "claude-parent");
+  setCtrlMode("solo");
+  browserWrite(
+    first.doc,
+    Y_MAP_ANNOTATIONS,
+    "solo-user",
+    userComment(first.doc, "solo-user", { heldInSolo: true }),
+  );
+  const replied = addUserReply(first.doc, "claude-parent", "my Solo reply", () => {});
+  if (replied.kind !== "ok") throw new Error(`reply refused: ${replied.kind}`);
+  const storedReply = first.doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replied.replyId) as {
+    heldInSolo?: unknown;
+  };
+  expect(storedReply.heldInSolo, "the reply seam stamped the Solo reply").toBe(true);
+  await closeDoc(first);
+
+  setCtrlMode("tandem");
+  const released = release();
+  expect(released.status).toBe(200);
+  expect(released.body).toEqual({ data: { released: 0 } });
+
+  const o = await reopen(first.filePath, first.resolved);
+  const comment = o.doc.getMap(Y_MAP_ANNOTATIONS).get("solo-user") as { heldInSolo?: unknown };
+  const reply = o.doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replied.replyId) as {
+    heldInSolo?: unknown;
+  };
+  expect(comment?.heldInSolo, "the comment's marker survived the reopen").toBe(true);
+  expect(reply?.heldInSolo, "the reply's marker survived the reopen").toBe(true);
+  return { o, replyId: replied.replyId };
+}
+
+/**
+ * A successful call through the validating client, with the text part read
+ * from `content[0]` (a trailing wake-advisory block can follow it).
+ */
+async function getAnnotations(documentId: string) {
+  const result = await rawGetAnnotations(documentId);
+  expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+  expect(result.structuredContent).toBeDefined();
+  const envelope = JSON.parse(result.content[0]?.text ?? "null") as {
+    error: boolean;
+    data: Record<string, unknown>;
+  };
+  expect(envelope.error).toBe(false);
+  const structured = result.structuredContent as { annotations: Item[]; count: number };
+  expect(envelope.data, "the text part agrees with structuredContent").toEqual(structured);
+  return structured;
+}
+
+/** The annotation-item and reply-item properties the advertised schema declares. */
+async function getAnnotationsDeclared() {
+  const { tools } = await client.listTools();
+  const tool = tools.find((t) => t.name === "tandem_getAnnotations");
+  type Obj = { properties: Record<string, unknown> };
+  const schema = tool?.outputSchema as unknown as {
+    properties: { annotations: { items: Obj & { properties: { replies: { items: Obj } } } } };
+  };
+  const item = schema.properties.annotations.items;
+  return {
+    annotation: new Set(Object.keys(item.properties)),
+    reply: new Set(Object.keys(item.properties.replies.items.properties)),
+  };
+}
+
+const ANNOTATION_STRIPPED = ["heldInSolo", "agentIdentity"] as const;
+const REPLY_STRIPPED = ["heldInSolo", "agentIdentity", "private", "importAuthor"] as const;
+
+describe("G1: getAnnotations on a reopened tab with stale Solo markers", () => {
+  it("succeeds, returning both comments and the reply, none carrying heldInSolo", async () => {
+    const { o, replyId } = await closedTabWithMarkers();
+
+    const { annotations } = await getAnnotations(o.documentId);
+
+    expect(annotations.map((a) => a.id).sort()).toEqual(["claude-parent", "solo-user"]);
+    const parent = annotations.find((a) => a.id === "claude-parent") as Item;
+    const replies = parent.replies as Item[];
+    expect(replies.map((r) => r.id)).toEqual([replyId]);
+    expect(replies[0].text).toBe("my Solo reply");
+    for (const item of [...annotations, ...replies]) {
+      expect("heldInSolo" in item, String(item.id)).toBe(false);
+    }
+    // `getAnnotations` compared the text part with structuredContent whole,
+    // so the text part carries no marker either.
+  });
+});
+
+describe("G2: strays are removed at every depth, and nothing stored changes", () => {
+  it("range, the live relRange, importSource, textSnapshotBreaks and a Claude reply's agentIdentity", async () => {
+    const o = await openDoc();
+    const { clean, withStrays } = fixtureValues(o.doc);
+    browserWrite(o.doc, Y_MAP_ANNOTATIONS, "walk", withStrays);
+    const claudeReply = {
+      id: "reply-agent",
+      annotationId: "walk",
+      author: "claude",
+      text: "from the helper",
+      timestamp: 1_700_000_005_000,
+      rev: 1,
+      agentIdentity: AGENT_IDENTITY,
+    };
+    withMcp(o.doc, () => o.doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("reply-agent", claudeReply));
+    const before = {
+      record: stored(o.doc, "walk"),
+      reply: stored(o.doc, "reply-agent", Y_MAP_ANNOTATION_REPLIES),
+    };
+    const declared = await getAnnotationsDeclared();
+
+    const { annotations } = await getAnnotations(o.documentId);
+
+    expect(annotations.map((a) => a.id)).toEqual(["walk"]);
+    const item = annotations[0];
+    const expected = wire(clean);
+    for (const [k, v] of Object.entries(expected)) {
+      if ((ANNOTATION_STRIPPED as readonly string[]).includes(k)) {
+        expect(k in item, `${k} is not sent`).toBe(false);
+        continue;
+      }
+      expect(declared.annotation.has(k), `${k} is declared`).toBe(true);
+      // Equal, not merely containing: a stray left in a nested object fails.
+      expect(item[k], `${k} arrives equal, strays removed`).toEqual(v);
+    }
+    for (const k of Object.keys(item)) expect(declared.annotation.has(k), k).toBe(true);
+    expect(item.replies).toEqual([
+      {
+        id: "reply-agent",
+        annotationId: "walk",
+        author: "claude",
+        text: "from the helper",
+        timestamp: 1_700_000_005_000,
+        rev: 1,
+      },
+    ]);
+
+    const after = {
+      record: stored(o.doc, "walk"),
+      reply: stored(o.doc, "reply-agent", Y_MAP_ANNOTATION_REPLIES),
+    };
+    expect(after, "the stored record and reply are unchanged").toEqual(before);
+    const record = after.record as Record<string, Record<string, unknown>>;
+    expect(record.range.strayKey).toBe(STRAY.strayKey);
+    expect(record.relRange.strayKey).toBe(STRAY.strayKey);
+    expect(record.importSource.strayKey).toBe(STRAY.strayKey);
+    expect((record.textSnapshotBreaks as unknown as Item[])[0].strayKey).toBe(STRAY.strayKey);
+    expect((after.reply as Item).agentIdentity).toEqual(AGENT_IDENTITY);
+  });
+});
+
+describe("G3: a reply stored with private: false round-trips", () => {
+  it("is returned, without the private key", async () => {
+    const o = await openDoc();
+    claudeComment(o.doc, "claude-parent");
+    const reply = {
+      id: "reply-public",
+      annotationId: "claude-parent",
+      author: "user",
+      text: "shared on purpose",
+      timestamp: 1_700_000_006_000,
+      private: false,
+    };
+    browserWrite(o.doc, Y_MAP_ANNOTATION_REPLIES, "reply-public", reply);
+
+    const { annotations } = await getAnnotations(o.documentId);
+
+    const { private: _private, ...declaredOnly } = reply;
+    expect(annotations.map((a) => a.id)).toEqual(["claude-parent"]);
+    expect(annotations[0].replies).toEqual([declaredOnly]);
+  });
+});
+
+describe("G4: an invalid declared value still fails as it does today", () => {
+  it("content: 42 gives an error result with no structuredContent, naming the output check", async () => {
+    const o = await openDoc();
+    claudeComment(o.doc, "bad-content", { content: 42 });
+
+    const result = await rawGetAnnotations(o.documentId);
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content[0]?.text).toMatch(
+      /^MCP error -32602: Output validation error: Invalid structured content for tool tandem_getAnnotations/,
+    );
+  });
+});
+
+describe("G5: the stripped keys stay undeclared and unsent", () => {
+  it("neither the advertised schema nor the response carries them", async () => {
+    const o = await openDoc();
+    browserWrite(
+      o.doc,
+      Y_MAP_ANNOTATIONS,
+      "carrier",
+      userComment(o.doc, "carrier", { heldInSolo: false, agentIdentity: AGENT_IDENTITY }),
+    );
+    const reply = {
+      id: "reply-carrier",
+      annotationId: "carrier",
+      author: "user",
+      text: "a reply with extras",
+      timestamp: 1_700_000_007_000,
+      heldInSolo: false,
+      agentIdentity: AGENT_IDENTITY,
+      private: false,
+      importAuthor: "Someone",
+    };
+    browserWrite(o.doc, Y_MAP_ANNOTATION_REPLIES, "reply-carrier", reply);
+    const declared = await getAnnotationsDeclared();
+
+    const { annotations } = await getAnnotations(o.documentId);
+
+    for (const k of ANNOTATION_STRIPPED) {
+      expect(declared.annotation.has(k), `annotation ${k} is not declared`).toBe(false);
+    }
+    for (const k of REPLY_STRIPPED) {
+      expect(declared.reply.has(k), `reply ${k} is not declared`).toBe(false);
+    }
+    expect(annotations.map((a) => a.id)).toEqual(["carrier"]);
+    const item = annotations[0];
+    for (const k of ANNOTATION_STRIPPED) expect(k in item, `annotation ${k} sent`).toBe(false);
+    const replies = item.replies as Item[];
+    expect(replies.map((r) => r.id)).toEqual(["reply-carrier"]);
+    for (const k of REPLY_STRIPPED) expect(k in replies[0], `reply ${k} sent`).toBe(false);
   });
 });
 
