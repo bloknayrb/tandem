@@ -204,12 +204,13 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     const dir = await ownLauncherDir();
     await ensureLauncherDir(dir, { create: true, acl: counting });
     await ensureLauncherDir(dir, { create: true, acl: counting });
-    expect(calls).toEqual(["owner", "lock", "verify"]);
+    // #2440: the lock carries the folder's only read; no separate verify.
+    expect(calls).toEqual(["owner", "lock"]);
     // Replaced: a new directory at the same path is checked again.
     fs.rmSync(dir, { recursive: true, force: true });
     await ownLauncherDir();
     await ensureLauncherDir(dir, { create: true, acl: counting });
-    expect(calls).toEqual(["owner", "lock", "verify", "owner", "lock", "verify"]);
+    expect(calls).toEqual(["owner", "lock", "owner", "lock"]);
   }, 120_000);
 
   it("a file whose ACL check refuses forgets the directory's verification, so the next spawn re-locks it (round 2)", async () => {
@@ -237,7 +238,55 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     expect(fs.readdirSync(dir)).toEqual([]);
     refuseFiles = false;
     await ensureLauncherDir(dir, { create: true, acl });
-    expect(calls).toEqual(["owner", "lock", "verify", "owner", "lock", "verify"]);
+    expect(calls).toEqual(["owner", "lock", "owner", "lock"]);
+  }, 120_000);
+
+  it("an explicit Everyone entry on launcher/ is refused by the lock's own read (#2440)", async () => {
+    resetVerifiedLauncherDirsForTests();
+    const calls: string[] = [];
+    const counting: RunFileAcl = {
+      assertOwned: async (p) => {
+        calls.push("owner");
+        await realRunFileAcl.assertOwned(p);
+      },
+      lockDir: async (p) => {
+        calls.push("lock");
+        await realRunFileAcl.lockDir(p);
+      },
+      verifyNoBroadAce: async (p) => {
+        calls.push("verify");
+        await realRunFileAcl.verifyNoBroadAce(p);
+      },
+    };
+    const lockErrors: string[] = [];
+    counting.lockDir = async (p) => {
+      calls.push("lock");
+      try {
+        await realRunFileAcl.lockDir(p);
+      } catch (err) {
+        lockErrors.push((err as Error).message);
+        throw err;
+      }
+    };
+    const dir = await ownLauncherDir();
+    // An EXPLICIT grant to Everyone (S-1-1-0): `/inheritance:r` does not
+    // remove it and `/grant:r` replaces only the current user's own entry, so
+    // it survives the lock, and only the lock's re-read can refuse it.
+    await execFileAsync(system32("icacls.exe"), [dir, "/grant", "*S-1-1-0:(OI)(CI)R"]);
+    await expect(ensureLauncherDir(dir, { create: true, acl: counting })).rejects.toMatchObject({
+      step: "launcher-dir-acl",
+    });
+    expect(calls).toEqual(["owner", "lock"]);
+    // Refused by the lock's re-read, not by some other lock failure.
+    expect(lockErrors).toHaveLength(1);
+    expect(lockErrors[0]).toMatch(
+      /assertNoBroadAce: .* has a broad-principal ACE \(SDDL fragment ;WD\)\)/,
+    );
+    // Refused, so not cached: the next call checks again.
+    await expect(ensureLauncherDir(dir, { create: true, acl: counting })).rejects.toMatchObject({
+      step: "launcher-dir-acl",
+    });
+    expect(calls).toEqual(["owner", "lock", "owner", "lock"]);
   }, 120_000);
 
   it("a launcher/ that is a junction is refused", async () => {
