@@ -608,7 +608,13 @@ function worldA(withComment = true): { d: Doc; c: string } {
 const passes = (h: ReturnType<typeof makeSupervisor>) => h.seam.diagnosticsForTests().startPasses;
 /** The documents whose step 5 ran (the composite's "wake" step), in order. */
 let stepFive: string[] = [];
-/** A "nothing" row's own witness that its world reached step 5 for D. */
+/**
+ * That D's change reached the composite's step 5 (its "wake" step fires on
+ * every `setDocOwner`, before step 5's own checks). Not proof that the
+ * forward was reached: A4 to A7 are regression rows, with A9 as their
+ * reachability witness; the other "nothing" rows show the forward was reached
+ * by the observer told "lapse", "user-open" or "message-owner", or the sink called.
+ */
 function reachedStepFive(documentId: string): void {
   expect(stepFive, "step 5 ran for D").toContain(documentId);
 }
@@ -810,7 +816,7 @@ describe("the decision table: A lapses", () => {
   });
 
   for (const how of ["poll-claim", "take-back"] as const) {
-    it(`A4 (anchor A9): ${how === "poll-claim" ? "the caller is Tandem's Claude" : "take-back"}: nothing`, async () => {
+    it(`A4 (regression row; A9 is the reachability witness): ${how === "poll-claim" ? "the caller is Tandem's Claude" : "take-back"}: nothing`, async () => {
       const h = makeSupervisor();
       const c1 = await runningIdle(h);
       const { d } = worldA();
@@ -830,7 +836,7 @@ describe("the decision table: A lapses", () => {
     });
   }
 
-  it("A5 (anchor A9): presence false at the lapse: D goes unowned, nothing; tandemWorkWaiting() is true afterwards (claimable)", async () => {
+  it("A5 (regression row; A9 is the reachability witness): presence false at the lapse: D goes unowned, nothing; tandemWorkWaiting() is true afterwards (claimable)", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d } = worldA();
@@ -852,7 +858,7 @@ describe("the decision table: A lapses", () => {
     "only Claude's own comment",
     "only a user highlight",
   ] as const) {
-    it(`A6 (anchor A9): nothing waiting on D (${what}): nothing`, async () => {
+    it(`A6 (regression row; A9 is the reachability witness): nothing waiting on D (${what}): nothing`, async () => {
       const h = makeSupervisor();
       const c1 = await runningIdle(h);
       const { d } = worldA(false);
@@ -894,7 +900,7 @@ describe("the decision table: A lapses", () => {
   }
 
   for (const mode of ["solo", null] as const) {
-    it(`A7 (anchor A9): ${mode === "solo" ? "Solo" : "mode unknown"}: nothing`, async () => {
+    it(`A7 (regression row; A9 is the reachability witness): ${mode === "solo" ? "Solo" : "mode unknown"}: nothing`, async () => {
       const h = makeSupervisor();
       const c1 = await runningIdle(h);
       const { d } = worldA();

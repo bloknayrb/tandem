@@ -637,8 +637,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Answered work starts Tandem's Claude (3b-2b1c). A handover retires the document's " +
-      "delivery entries and nothing yet tells answered from unanswered, so after a holder " +
-      "lapses with no other session connected every pending user comment, every settled one " +
+      "delivery entries and nothing yet tells answered from unanswered, so after any handover, " +
+      "at the next forward, every pending user comment, every settled one " +
       "ever edited, and every user reply on a Claude-facing thread reads as waiting, and the " +
       "forward starts or wakes Tandem's Claude for work the user did not ask for again; " +
       "likewise after a restart once anything forwards. See the handled-filter and restart rows.",

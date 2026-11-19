@@ -1454,7 +1454,7 @@ export function startOrWake(cause: WakeCause): void {
   if (!ownershipEnabled()) return;
   wakeObserverForTests?.(cause);
   // An open is never a reason on its own (Bryan's pick 1, "No, never by
-  // itself"); this also covers the boot, whose restored and startup documents
+  // itself (Recommended)", picked from options); this also covers the boot, whose restored and startup documents
   // get the default rule with this cause. A later Off-to-On default rule
   // (3b-2b4; design flip-change 13) must not reuse "user-open", or this drop
   // loses its start.
@@ -1462,7 +1462,8 @@ export function startOrWake(cause: WakeCause): void {
   // The message forward is 3b-2b1c-b's: nothing is forwarded for it here.
   if (cause === "message-owner") return;
   try {
-    // One gate toward Bryan's pick 2 ("Only if no other session is open"): a
+    // One gate toward Bryan's pick 2 ("Only if no other session is open
+    // (Recommended)", picked from options): a
     // holder going away forwards nothing while another session is connected.
     // The departing record never counts (`lapse` marks it lapsed before any
     // move). Only `lapse` is a holder going away: no other cause reaches here
