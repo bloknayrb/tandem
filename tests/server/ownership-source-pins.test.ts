@@ -1222,8 +1222,10 @@ describe("claimable work (#2358 PR 3b-2b1b-claimable)", () => {
     expect(stdio).toBeGreaterThan(-1);
     expect(wired).toBeLessThan(http);
     expect(wired).toBeLessThan(stdio);
-    // Inside the module: the declaration, the setter and the reset are its
-    // only writes, and nothing in it calls the setter.
+    // Inside the module: the declaration (pinned by its text; the
+    // assignment regex below does not match it, a type annotation sits
+    // between the name and its `=`) and two assignments, the setter's and the
+    // reset's; nothing in it calls the setter.
     const ownership = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(ownership).toContain("let openDocumentIds: () => Iterable<string> = () => [];");
     expect(ownership.match(/\bopenDocumentIds\s*=(?!=)/g)).toHaveLength(2);

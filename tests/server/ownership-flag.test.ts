@@ -148,6 +148,7 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
     const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
     expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
       "Acknowledged but unanswered chat is never started for",
+      "Acknowledged but unanswered chat by the channel route",
     ]);
     expect(acceptedRows).toEqual([
       {
@@ -163,6 +164,23 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
         acceptedFor:
           "Bryan picked 'Known limit for 0.32; design it after (Recommended)', picked from " +
           "options, 2026-11-19; tracked as #2484.",
+      },
+      {
+        gap:
+          "Acknowledged but unanswered chat by the channel route is never started for " +
+          "(3b-2b1b-chat): a POST /api/channel-reply with replyTo and inProgress ('I'm on it') " +
+          "from the session that owns the message stamps it read, so it leaves waiting; if no " +
+          "final answer follows (the run dies or gives up), nothing starts or wakes Claude for " +
+          "it, and after a server restart it is carried over and never re-owed. The user " +
+          "notices and sends the message again. (The same route's acknowledgement from a " +
+          "non-owner is PR 4's channel-reply row.)",
+        closedBy:
+          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change " +
+          "with a test.",
+        acceptedFor:
+          "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so " +
+          "'Known limit for 0.32; design it after (Recommended)' covers the channel route too; " +
+          "tracked as #2484.",
       },
     ]);
   });

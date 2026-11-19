@@ -30,7 +30,7 @@
  * present and holds D by its own comment (D opened through the user's route
  * before presence), a terminal A holds E, F is open and unowned, and a closed
  * id names no open document. A is registered with no stream ever, so it is
- * connected: rows 33 to 51 lapse it first. The open-documents seam is wired
+ * connected: rows 33 to 51, 54 and 55 lapse it first. The open-documents seam is wired
  * as `index.ts` wires it. The helpers are copied from
  * `ownership-waiting.test.ts` and `ownership-chat.test.ts`, whose worlds stay
  * put.
@@ -493,6 +493,7 @@ type Act =
   | "mode-unknown"
   | "b-desktop"
   | "b-desktop-http"
+  | "b-desktop-claude"
   | "b-bridge"
   | "b-http"
   | "b-detached"
@@ -673,6 +674,11 @@ async function runAct(w: RowWorld, act: Act, r: Row): Promise<void> {
       return;
     case "b-desktop-http":
       registerAs(B("http"), { recordKind: "http", clientName: CLAUDE_DESKTOP_CLIENT_NAME });
+      return;
+    case "b-desktop-claude":
+      // Desktop's name on a `claude` record, whose display kind is "terminal":
+      // told apart by the name, never by the display kind.
+      registerAs(B("claude"), { recordKind: "claude", clientName: CLAUDE_DESKTOP_CLIENT_NAME });
       return;
     case "b-bridge":
       registerAs(B("bridge"), { recordKind: "bridge", clientName: "claude-code" });
@@ -1000,6 +1006,19 @@ const ROWS: readonly Row[] = [
     expected: "not",
     asA: true,
   },
+  // Review round 1 (#2486).
+  {
+    name: "54 on F, carried over (constructed), A gone: the claimable chat skips it too",
+    candidate: "on-F",
+    acts: ["a-lapse", "candidate", "carry"],
+    expected: "not",
+  },
+  {
+    name: "55 a comment on F, b-desktop-claude (Claude Desktop's name on a claude record)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-desktop-claude"],
+    expected: "waiting",
+  },
 ];
 
 const ON_F: readonly Candidate[] = ["on-F", "comment-on-F", "note-reply-on-F"];
@@ -1028,10 +1047,10 @@ function decide(): boolean {
 
 const rowNamed = (n: number): Row => ROWS.find((r) => Number.parseInt(r.name, 10) === n) as Row;
 
-describe("the agreement table: the decision answers as a fresh poll of Tandem's Claude would hand (rows 1 to 53)", () => {
-  it("has all 53 rows, numbered in order", () => {
+describe("the agreement table: the decision answers as a fresh poll of Tandem's Claude would hand (rows 1 to 55)", () => {
+  it("has all 55 rows, numbered in order", () => {
     expect(ROWS.map((r) => Number.parseInt(r.name, 10))).toEqual(
-      Array.from({ length: 53 }, (_, i) => i + 1),
+      Array.from({ length: 55 }, (_, i) => i + 1),
     );
     expect(ROWS.filter((r) => r.difference).map((r) => Number.parseInt(r.name, 10))).toEqual([
       26, 30, 38, 39, 40, 41, 42, 49, 50,
@@ -1518,6 +1537,20 @@ describe("claimable work: the open-documents seam", () => {
     releaseF = undefined;
     await new Promise((r) => setTimeout(r, 0));
     expect(handed(await reader(TANDEM).poll())).toEqual([c]);
+  });
+
+  it("not present, a loss is not read either (Accepted 5): a comment on F that Tandem's Claude lost counts, and a present poll hands nothing", async () => {
+    const w = await rowWorld();
+    setTandemPresenceSource(() => false);
+    lapseByGrace(A);
+    userComment(w.f.ydoc, key("c"));
+    // Constructed: today no loss stands on an unowned document (`refusalFor`).
+    setLossForTests(w.f.id, TANDEM, "taken");
+    expect(decide()).toBe(true);
+    expect(getDocOwner(w.f.id)).toBeUndefined();
+    setTandemPresenceSource(() => true);
+    expect(handed(await reader(TANDEM).poll())).toEqual([]);
+    expect(getDocOwner(w.f.id)).toBeUndefined();
   });
 
   it("dark: the seam is never called", async () => {

@@ -2889,8 +2889,9 @@ function claimableChatWaiting(claimable: (documentId: string) => boolean): boole
  * in their own catch (unwired, or a throw: none, with one fixed line), so a
  * throw in either half cannot hide claimable chat; then both halves are always
  * asked, each in its own catch, so a throw in one cannot hide a waiting answer
- * from the other: a failed half reads as false and logs one fixed,
- * rate-limited line with no id and no error text.
+ * from the other (inside the document half, a throw from the held probe also
+ * hides its claimable arm, which shares the catch): a failed half reads as
+ * false and logs one fixed, rate-limited line with no id and no error text.
  */
 export function tandemWorkWaiting(): boolean {
   if (!ownershipEnabled()) return false;
@@ -2903,6 +2904,9 @@ export function tandemWorkWaiting(): boolean {
   const now = performance.now();
   const claimable = (documentId: string) =>
     open.has(documentId) && claimableByTandem(documentId, now);
+  // The held arm and the claimable document arm share this one catch: a
+  // throw from the held probe also hides the claimable document arm (the
+  // same probe answers both), never the chat half's.
   let documents = false;
   try {
     documents =

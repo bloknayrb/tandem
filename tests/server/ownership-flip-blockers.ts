@@ -525,13 +525,25 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
+      "Acknowledged but unanswered chat by the channel route is never started for (3b-2b1b-chat): " +
+      "a POST /api/channel-reply with replyTo and inProgress ('I'm on it') from the session that " +
+      "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
+      "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
+      "carried over and never re-owed. The user notices and sends the message again. (The same " +
+      "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
+    closedBy:
+      "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
+    acceptedFor:
+      "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so 'Known " +
+      "limit for 0.32; design it after (Recommended)' covers the channel route too; tracked as " +
+      "#2484.",
+  },
+  {
+    gap:
       "Read but unacknowledged chat is never started for (3b-2b1b-chat): a cursor acknowledgement, " +
       "or a cursor-less poll's commit at hand-out, stamps a user message read with no 'I'm on it'; " +
       "if Claude never answers, the message leaves waiting for good, and after a server restart it " +
-      "is carried over and never re-owed. The pick on acknowledged chat does not cover this. Nor " +
-      "does it name an 'I'm on it' the owning session sends through POST /api/channel-reply " +
-      "(replyTo and inProgress), which stamps read the same way; that case stays here, blocking, " +
-      "until Bryan says whether his pick covers it (3b-2b1b-claimable's plan review).",
+      "is carried over and never re-owed. The pick on acknowledged chat does not cover this.",
     closedBy: "Bryan's answer, then its change with a test.",
   },
   {
@@ -565,10 +577,24 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Claude Desktop is left out of 'another session' by its self-reported client name " +
-      "('claude-ai', transport-registry.ts), which is unverified.",
+      "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
+      "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
+      "the name is open.",
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
+  },
+  {
+    gap:
+      "After a server restart every ownership record is gone, so a Claude Code session that is " +
+      "still open is not seen as connected until it next initializes (after a 404 on its next " +
+      "request). Until then the decision (3b-2b1b-claimable) counts every open, unowned document " +
+      "as claimable, and with the restart row every old pending comment reads as waiting: once a " +
+      "later piece consumes the decision, Tandem's Claude could start at boot for old comments " +
+      "while the user's terminal is open.",
+    closedBy:
+      "The piece that first consumes the claimable decision for a start (3b-2b2), with a boot " +
+      "quiet period or a 'written since boot' condition, and a test.",
   },
 ];
 
