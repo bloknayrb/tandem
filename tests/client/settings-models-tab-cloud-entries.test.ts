@@ -363,6 +363,25 @@ describe("focus after the unavailable window closes", () => {
     });
   }
 
+  it("the row is gone while the window is open: Close does not throw, and focus is not left on a detached element", async () => {
+    const cloud = cloudEntry("gemini");
+    const local = localEntry();
+    pose([cloud, local], null);
+    const v = mount();
+    const view = v.open(cloud.id);
+    view.focus();
+    await fireEvent.click(view);
+    // Deleted elsewhere (another window, a reload): the row and its View go.
+    pose([local], null);
+    await tick();
+    expect(view.isConnected).toBe(false);
+    await fireEvent.click(v.getByTestId("model-edit-unavailable-close"));
+    await tick();
+    expect(v.queryByTestId("model-edit-modal")).toBeNull();
+    expect(document.activeElement).not.toBe(view);
+    expect(document.activeElement?.isConnected).toBe(true);
+  });
+
   it("a later Add window's close does not send focus to an earlier View button", async () => {
     const cloud = cloudEntry("anthropic");
     pose([cloud, localEntry()], null);

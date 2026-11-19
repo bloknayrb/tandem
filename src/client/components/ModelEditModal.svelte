@@ -115,8 +115,9 @@ const unavailableName =
   [initialEntry?.displayName, initialEntry?.modelId, initialEntry?.id].find(
     (v) => v !== undefined && v.trim() !== "",
   ) ?? "";
-// Derive both off the contract helper so the key/endpoint field gating and the
-// picker's disabled split can never disagree about what "cloud" means.
+// Derived from the contract helper, the same predicate that filters the
+// provider options above and decides the unavailable view, so the key/endpoint
+// field gating can never disagree with them about what "cloud" means.
 const isLocal = $derived(isLocalProvider(provider));
 const isCloud = $derived(!isLocal);
 // #1123 Ruling L-f: a new entry's address stays empty; the selected provider's
