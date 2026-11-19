@@ -517,7 +517,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "key, and, while no other session is connected, one claim read and one waiting probe per " +
       "open, unowned document. Since 3b-2b1c-a wires it as the supervisor's workWaiting, that " +
       "happens at every start-or-wake pass, and a " +
-      "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each.",
+      "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each. " +
+      "And (3b-2b1c-b) the message forward's admit runs one tandemChatWaiting scan (every owed " +
+      "key's message read and standing) per changed key at the release loop and at " +
+      "dropChatOwners, none at setMessageOwner.",
     closedBy: "3b-2b4's measurement.",
   },
   {
@@ -563,8 +566,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "session is open (Recommended)' and 'Yes, even before my first Start', picked from options, " +
       "2026-11-19). By the review session's reading, chat that follows such a document and user " +
       "replies on its Claude-facing threads count the same way. Nothing asks the decision when " +
-      "such work appears or when the other session goes: it changes no owner, so neither step 5 " +
-      "nor the message forward runs. A gone session also counts for its grace when a holder " +
+      "such work appears or when the other session goes: it changes no owner, so step 5 does " +
+      "not run; and where a change does make such chat claimable (a lapse releasing a message " +
+      "on an open document nobody holds), the message forward runs and refuses it (3b-2b1c-b: " +
+      "claimable chat is not admitted). A gone session also counts for its grace when a holder " +
       "departs (3b-2b1c): with two sessions gone together the first one's waiting work is " +
       "skipped and nothing asks again unless the second held waiting work; it reaches Claude at " +
       "its next look or start. Bryan picked 'Yes, fine until the later piece (Recommended)', " +
@@ -668,6 +673,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
       "ADR; if it does not, 3b-2b2's re-ask, with a test.",
+  },
+  {
+    gap:
+      "A lapsed holder whose deferred move has not run leaves a closed document's chat with no " +
+      "owner (`assignClosedDocumentChat`: `to` is undefined, the chat is re-owed). Once the " +
+      "document is closed and Tandem's Claude is present the message is its by standing, with " +
+      "no `messageOwnerChanged`, so nothing forwards for it.",
+    closedBy:
+      "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
+      "line.",
   },
 ];
 

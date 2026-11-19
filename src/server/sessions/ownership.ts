@@ -1001,7 +1001,7 @@ function releaseMessageOwners(
   if (record !== undefined) clearReOweRetry(ownerId);
   for (const [key] of dropped) {
     ownerByMessage.delete(key);
-    messageOwnerChanged();
+    messageOwnerChanged({ key });
   }
 }
 
@@ -1057,12 +1057,23 @@ function reOweChat(keys: readonly string[]): boolean {
 
 /**
  * The step 5 seam for a change of a message's owner (R6.4, Ruling 13): the
- * same `startOrWake` a document's change reaches. `startOrWake` tells the
- * test observer and forwards nothing for this cause (3b-2b1c-a); the message
- * forward is 3b-2b1c-b's.
+ * same `startOrWake` a document's change reaches, with the message forward's
+ * admit (#2358 PR 3b-2b1c-b, R5). With no `change` there is no admit: the
+ * observer is told, nothing is forwarded (`setMessageOwner`, for every
+ * origin, the close included: Bryan's pick 1). With a `change`, the forward is
+ * admitted only when the caller is not Tandem's Claude, a departure (no
+ * caller: the release loop's lapse, deleted record and re-owe retry) finds no
+ * other session connected (R1.7's gate, before the scan), and the changed
+ * message is waiting for Tandem's Claude, owned by it and not claimable
+ * (`tandemChatWaiting` on that key alone).
  */
-function messageOwnerChanged(): void {
-  startOrWake("message-owner");
+function messageOwnerChanged(change?: { key: string; caller?: string }): void {
+  const admit = (): boolean =>
+    change !== undefined &&
+    change.caller !== TANDEM_OWNER_ID &&
+    (change.caller !== undefined || !anotherSessionConnected()) &&
+    tandemChatWaiting((k) => k === change.key);
+  startOrWake("message-owner", change === undefined ? undefined : admit);
 }
 
 /**
@@ -1442,15 +1453,17 @@ const FORWARD_FAILED =
  * licence refusal is the supervisor's (Critical Rule 9), not this function's.
  *
  * In order: nothing while ownership is off; the test observer is told every
- * cause (`setWakeObserverForTests`); `user-open` and `message-owner` are
- * dropped; a `lapse` is dropped while another session is connected
+ * cause (`setWakeObserverForTests`); `user-open` is dropped; a
+ * `message-owner` reaches the sink as `"message"` only when its `admit`
+ * answers true (3b-2b1c-b; `messageOwnerChanged`'s), and a document cause
+ * carries none; a `lapse` is dropped while another session is connected
  * ({@link anotherSessionConnected}); every other cause reaches the sink as
  * `"document"`. The sink runs outside any MCP request context (a forward can
  * run inside another client's request: an eviction in its `initialize`,
  * `closeEntry`), in its own catch: a throw logs one fixed line and is never
  * rethrown, so the caller's change stands.
  */
-export function startOrWake(cause: WakeCause): void {
+export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
   if (!ownershipEnabled()) return;
   wakeObserverForTests?.(cause);
   // An open is never a reason on its own (Bryan's pick 1, "No, never by
@@ -1459,9 +1472,14 @@ export function startOrWake(cause: WakeCause): void {
   // (3b-2b4; design flip-change 13) must not reuse "user-open", or this drop
   // loses its start.
   if (cause === "user-open") return;
-  // The message forward is 3b-2b1c-b's: nothing is forwarded for it here.
-  if (cause === "message-owner") return;
   try {
+    // The message forward (3b-2b1c-b, R5): only an admitted change, and the
+    // admit runs here, inside this catch (its scan may throw).
+    if (cause === "message-owner") {
+      if (admit?.() !== true) return;
+      runOutsideMcpContext(() => startOrWakeSink("message"));
+      return;
+    }
     // One gate toward Bryan's pick 2 ("Only if no other session is open
     // (Recommended)", picked from options): a
     // holder going away forwards nothing while another session is connected.
@@ -2247,7 +2265,7 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           const owner = ownerByMessage.get(key);
           if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
           ownerByMessage.delete(key);
-          messageOwnerChanged();
+          messageOwnerChanged({ key, caller: callerId });
         }
       });
     },
@@ -2803,8 +2821,8 @@ const CHAT_HALF_FAILED =
  * {@link claimableChatWaiting}'s (#2358 PR 3b-2b1b-claimable), asked only
  * while no other session is connected. `select` receives the facts because an
  * `owned` standing carries no document id. Unexported: `tandemWorkWaiting`
- * and the step-5 composite (`waitingAtDocumentChange`) call it, and
- * 3b-2b1c-b's message forward will. Synchronous; no Y.Doc, registry, read-stamp or
+ * the step-5 composite (`waitingAtDocumentChange`) and the message forward's
+ * admit (`messageOwnerChanged`, 3b-2b1c-b) call it. Synchronous; no Y.Doc, registry, read-stamp or
  * ownership write (the chat member resolves the control room with the
  * creating getter, which exists from boot). May throw: its callers
  * catch.

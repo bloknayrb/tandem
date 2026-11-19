@@ -1,9 +1,11 @@
 /**
  * The document forward from ownership's step 5 to the supervisor's
  * start-or-wake (#2358 PR 3b-2b1c-a, ships dark; ADR-054's amendment of that
- * name). Ownership's `startOrWake` tells the test observer, drops `user-open`
- * and (in this PR) `message-owner`, drops a `lapse` while another session is
- * connected, and forwards every other cause to the sink as `"document"`. The
+ * name), and the message forward (3b-2b1c-b, the last describe). Ownership's
+ * `startOrWake` tells the test observer, drops `user-open`, forwards a
+ * `message-owner` as `"message"` only when its admit answers true, drops a
+ * `lapse` while another session is connected, and forwards every other cause
+ * to the sink as `"document"`. The
  * sink here is what `src/server/index.ts` sets, through a `let` reference to
  * the supervisor (`supRef`), and the supervisor gets `workWaiting:
  * tandemWorkWaiting`, never a double: so a pass asks the real decision.
@@ -76,6 +78,7 @@ import { CLAUDE_DESKTOP_CLIENT_NAME } from "../../../src/server/mcp/transport-re
 import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
+  loadLocalPeriodRecord,
 } from "../../../src/server/models/local-period.js";
 import { resolveToolCaller } from "../../../src/server/sessions/caller.js";
 import { getMcpContext, runWithMcpContext } from "../../../src/server/sessions/context.js";
@@ -680,7 +683,7 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink.mock.calls).toEqual([["document"]]);
   });
 
-  it("R1.4: every cause, with no other session registered: 'document' for each but user-open and message-owner", () => {
+  it("R1.4: every cause, with no other session registered and no admit: 'document' for each but user-open and message-owner", () => {
     // A Record over WakeCause: a new member of the union fails to compile here.
     const expected: Record<WakeCause, "document" | null> = {
       "user-open": null,
@@ -917,7 +920,7 @@ describe("the decision table: A lapses", () => {
     });
   }
 
-  it("A8 (PR a only; anchor A9): nothing waiting on D; A owns a closed F's message per message and its lapse releases it: nothing, the observer told message-owner", async () => {
+  it("A8 (since 3b-2b1c-b, M1's shape with D also held): nothing waiting on D; A owns a closed F's message per message and its lapse releases it: the message forward wakes", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d } = worldA(false);
@@ -927,16 +930,15 @@ describe("the decision table: A lapses", () => {
     await closeByRoute(f.id);
     expect(messageOwner(m)?.ownerId).toBe(A);
     causes = [];
-    const writes = c1.stdin.writes.length;
     lapse(A);
     expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
     expect(messageOwner(m)).toBeUndefined();
     reachedStepFive(d.id);
+    // D's own change forwards nothing (nothing waiting on D); the message does.
     expect(causes).toEqual(["message-owner"]);
-    expect(sink).not.toHaveBeenCalled();
+    expect(sink.mock.calls).toEqual([["message"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(wakes(c1)).toBe(1);
   });
 
   it("A16 (positive): D holds no comment, only an unread user message on D: a wake (step 5's chat half)", async () => {
@@ -1317,5 +1319,269 @@ describe("other cases (PR a)", () => {
       await settle();
       expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
     });
+  });
+});
+
+// --- PR b: the message forward (#2358 PR 3b-2b1c-b) -------------------------------
+
+function removeTransport(owner: string): void {
+  view = view.filter((e) => e.ownerId !== owner);
+  noteTransportChanged(owner);
+}
+
+/** A raw Claude final row naming `m` in `replyTo` (server-side, `withInternal`): `m` is handled. */
+function claudeAnswers(m: string): void {
+  const k = key("answer");
+  withInternal(ctrl(), () =>
+    chatMap().set(k, { id: k, author: "claude", text: "done", timestamp: clock++, replyTo: m }),
+  );
+  expect(ownershipChatSide.handledKeys().has(m)).toBe(true);
+}
+
+/**
+ * PR b's world: PR a's, without D's comment, plus a message A owns per
+ * message, made by closing D while A holds it and an unread user message is
+ * on it. The act is A's lapse.
+ */
+async function worldB(): Promise<{ d: Doc; m: string }> {
+  const { d } = worldA(false);
+  const m = userChat(key("m"), d.id);
+  await closeByRoute(d.id);
+  expect(getOpenDocs().has(d.id)).toBe(false);
+  expect(messageOwner(m)?.ownerId).toBe(A);
+  causes = [];
+  sink.mockClear();
+  return { d, m };
+}
+
+describe("the message forward (PR b)", () => {
+  it("M1 (positive): the message unhandled, D closed, Claude running and idle: a wake, logged (message)", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    lapse(A);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    expect(wakes(c1)).toBe(1);
+    expect(children).toHaveLength(1);
+    expect(logText()).toContain("Start-or-wake queued (message)");
+  });
+
+  it("M1, transport removed (M2's anchor): the record is deleted, its message released: a wake", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    removeTransport(A);
+    advance(GRACE + 1);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("M2 (anchor: M1, transport removed): the message handled, A's transport removed: nothing; the observer told message-owner", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    claudeAnswers(m);
+    const writes = c1.stdin.writes.length;
+    removeTransport(A);
+    advance(GRACE + 1);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(causes).toContain("message-owner");
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("M3 (anchor M1): the message classed local-period after the close: nothing; the observer told message-owner", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    __setHonourLocalPeriodRecordsForTests(true);
+    loadLocalPeriodRecord({ v: 1, open: false, owed: [], local: [m] });
+    expect(ownershipChatSide.message(m)?.localPeriod).toBe(true);
+    const writes = c1.stdin.writes.length;
+    lapse(A);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("M10 (anchor M1): D re-added open and unowned before the lapse, so the message follows D and nobody holds D: nothing; tandemWorkWaiting() is true (claimable)", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { d, m } = await worldB();
+    mkDoc("d");
+    expect(getOpenDocs().has(d.id)).toBe(true);
+    expect(getDocOwner(d.id)).toBeUndefined();
+    const writes = c1.stdin.writes.length;
+    lapse(A);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+    expect(tandemWorkWaiting()).toBe(true);
+  });
+
+  it("M11 (anchor M1): M10 plus a doc-less unread user message Tandem's Claude owns by presence: nothing (the admit asks only the changed message)", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    mkDoc("d");
+    userChat(key("docless"));
+    const writes = c1.stdin.writes.length;
+    lapse(A);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  describe("M4 to M6: a close forwards nothing (pick 1)", () => {
+    async function closeWorld(
+      holder: "nobody" | "tandem" | "B",
+      withB: boolean,
+    ): Promise<{ h: ReturnType<typeof makeSupervisor>; c1: FakeChild; m: string }> {
+      const h = makeSupervisor();
+      const c1 = await runningIdle(h);
+      if (withB || holder === "B") register(B);
+      const d = mkDoc("d");
+      if (holder === "tandem") setDocOwner(d.id, { ownerId: TANDEM, kind: "default" }, "take-back");
+      if (holder === "B") setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+      const m = userChat(key("m"), d.id);
+      causes = [];
+      sink.mockClear();
+      await closeByRoute(d.id);
+      return { h, c1, m };
+    }
+
+    for (const [row, holder, withB, owner] of [
+      ["M4", "nobody", false, TANDEM],
+      ["M4b", "nobody", true, TANDEM],
+      ["M5", "tandem", false, TANDEM],
+      ["M6", "B", false, B],
+    ] as const) {
+      it(`${row} (anchor M1): D ${holder === "nobody" ? "open and unowned" : `held by ${holder === "tandem" ? "Tandem's Claude" : "terminal B"}`}${withB ? ", terminal B connected" : ""}, an unread message on D; the close: nothing`, async () => {
+        const { h, c1, m } = await closeWorld(holder, withB);
+        const writes = c1.stdin.writes.length;
+        expect(messageOwner(m)?.ownerId).toBe(owner);
+        expect(causes).toEqual(["message-owner"]);
+        expect(sink).not.toHaveBeenCalled();
+        await lockBarrier(h);
+        expect(c1.stdin.writes).toHaveLength(writes);
+        expect(passes(h)).toBe(0);
+        if (owner === TANDEM) expect(tandemWorkWaiting()).toBe(true);
+      });
+    }
+  });
+
+  it("M7 (positive): M1 in Solo: a wake (chat is never Solo-held)", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    await worldB();
+    setCtrlMode("solo");
+    lapse(A);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("M8 (positive): M1 with Claude idle-stopped: a start whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    await worldB();
+    lapse(A);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("M9 (positive): A owns two such messages and holds E with a waiting comment; one lapse: exactly one pass", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { d } = worldA(false);
+    const m1 = userChat(key("m1"), d.id);
+    const m2 = userChat(key("m2"), d.id);
+    await closeByRoute(d.id);
+    expect(messageOwner(m1)?.ownerId).toBe(A);
+    expect(messageOwner(m2)?.ownerId).toBe(A);
+    const e = mkDoc("e");
+    setDocOwner(e.id, { ownerId: A, kind: "opened" }, "take", A);
+    comment(e.ydoc, key("c2"));
+    sink.mockClear();
+    const before = passes(h);
+    lapse(A);
+    expect(sink.mock.calls).toHaveLength(3);
+    await lockBarrier(h);
+    expect(passes(h)).toBe(before + 1);
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("M12 (anchor M1): M1 plus terminal B connected, holding nothing: nothing; the observer told message-owner", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    await worldB();
+    register(B);
+    const writes = c1.stdin.writes.length;
+    lapse(A);
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("M13 (anchor M8): M8 plus terminal B connected, holding nothing: nothing; the message is Tandem's Claude's (the review session's reading of pick 3)", async () => {
+    const { h } = await idleStopped();
+    const { m } = await worldB();
+    register(B);
+    lapse(A);
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(tandemWorkWaiting()).toBe(true);
+  });
+
+  it("a throwing owedToFreshReader: every owner is still dropped and re-owed, one fixed line, the supervisor not called", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { d } = worldA(false);
+    const m1 = userChat(key("m1"), d.id);
+    const m2 = userChat(key("m2"), d.id);
+    await closeByRoute(d.id);
+    const reOwe = vi.fn((keys: readonly string[]) => ownershipChatSide.reOwe(keys));
+    setOwnershipChatSide({
+      ...ownershipChatSide,
+      reOwe,
+      owedToFreshReader: () => {
+        throw new Error(`boom ${m1}`);
+      },
+    });
+    sink.mockClear();
+    const writes = c1.stdin.writes.length;
+    lapse(A);
+    expect(messageOwner(m1)).toBeUndefined();
+    expect(messageOwner(m2)).toBeUndefined();
+    expect(reOwe.mock.calls.flat(2).sort()).toEqual([m1, m2].sort());
+    expect(ownershipLines()).toEqual([FORWARD_FAILED]);
+    expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
   });
 });
