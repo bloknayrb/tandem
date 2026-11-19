@@ -375,8 +375,11 @@ model-edit-modelid
 model-edit-provider
 model-edit-provider-note
 model-edit-save
+model-edit-unavailable-close
+model-edit-unavailable-provider
 model-row-{*}
 model-toggle-{*}
+model-unavailable-{*}
 models-empty-state
 models-load-error
 models-loading

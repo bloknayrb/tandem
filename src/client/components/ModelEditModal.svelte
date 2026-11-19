@@ -1,10 +1,11 @@
 <script lang="ts">
-import { untrack } from "svelte";
+import { onMount, untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
 import {
   endpointPrefill,
   PROVIDER_LABEL,
   PROVIDER_OPTION_ORDER,
+  providerHeading,
 } from "../../shared/models/provider-ui.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
@@ -57,17 +58,23 @@ interface Props {
 
 const { entry, error, saveUnavailable = false, onCancel, onSave }: Props = $props();
 
-// v1.0 ships LOCAL providers only; cloud BYO keys are v1.1. `disabled` is
-// derived from the contract's `isLocalProvider` (single source of truth for the
-// local/cloud split) so the picker can never drift from what the collaborator
-// loop will actually resolve. Cloud options render disabled + a "coming soon"
-// note rather than being hidden, so the roadmap stays visible. Local-first order,
-// derived from the contract's lists so no provider can be left out (#1123).
-const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string; disabled: boolean }> =
-  PROVIDER_OPTION_ORDER.map((value) => ({
+// Only LOCAL providers are offered (#1123, ADR-039 P4 "Hide until they work"):
+// a cloud provider is neither listed nor selectable, so no option can promise a
+// cloud key. The split is the contract's `isLocalProvider`, the same predicate
+// the collaborator loop resolves by; the order is the contract-derived
+// `PROVIDER_OPTION_ORDER`, so no local provider can be left out.
+//
+// An OLD cloud entry (saved by an earlier version, or by a non-UI caller) never
+// reaches the form below: it opens the unavailable view instead (ADR-039's
+// "Shown as unavailable" pick). The form's cloud half — the API-key block, its
+// `replacingKey` / `apiKey` state and the cloud arms of `canSave` and
+// `handleSubmit` — is therefore unreachable, and kept on purpose: its test ids
+// (`model-edit-apikey`, `model-edit-apikey-replace-btn`) are in the test-id
+// contract (`testid-coverage.test.ts`), and cloud keys may return.
+const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string }> =
+  PROVIDER_OPTION_ORDER.filter((p) => isLocalProvider(p)).map((value) => ({
     value,
     label: PROVIDER_LABEL[value],
-    disabled: !isLocalProvider(value),
   }));
 
 // Discrete $state per field, hydrated ONCE from the `entry` prop snapshot.
@@ -78,8 +85,8 @@ const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string; disabled: b
 // in the per-field $state below.
 const initialEntry = untrack(() => entry);
 
-// Default a NEW entry to the first local provider (cloud is disabled below); an
-// existing entry keeps its stored provider even if it's a now-disabled cloud one.
+// A NEW entry defaults to the first local provider. An existing entry keeps its
+// stored provider; a cloud one is shown by the unavailable view, never the form.
 let provider = $state<ModelProvider>(initialEntry?.provider ?? "local-ollama");
 let displayName = $state(initialEntry?.displayName ?? "");
 let modelId = $state(initialEntry?.modelId ?? "");
@@ -96,6 +103,18 @@ const hasExistingKey = initialEntry !== undefined && Boolean(initialEntry.apiKey
 let replacingKey = $state(initialEntry === undefined || !hasExistingKey);
 
 const isEditing = initialEntry !== undefined;
+// An old cloud entry: the window shows it as unavailable — its name, its
+// provider and why — with Close as the only action, and no form. Plain, from
+// the snapshot: the parent remounts this component per entry.
+const providerUnavailable = initialEntry !== undefined && !isLocalProvider(initialEntry.provider);
+const UNAVAILABLE_TITLE = "Model unavailable";
+const UNAVAILABLE_TEXT = "This provider can't be used in Tandem.";
+// The entry as the user named it, or its model ID when it has no name (and its
+// id when a hand-edited file left both empty), so the user can tell which it is.
+const unavailableName =
+  [initialEntry?.displayName, initialEntry?.modelId, initialEntry?.id].find(
+    (v) => v !== undefined && v.trim() !== "",
+  ) ?? "";
 // Derive both off the contract helper so the key/endpoint field gating and the
 // picker's disabled split can never disagree about what "cloud" means.
 const isLocal = $derived(isLocalProvider(provider));
@@ -148,6 +167,19 @@ function handleSubmit(e: SubmitEvent) {
 
 let dialogEl: HTMLDivElement | undefined = $state();
 
+// The unavailable view only: move focus to Close, so its name and the sentence
+// describing the dialog are read on open. The local edit and Add windows move
+// no focus on mount (that is ADR-039 item 27's, the accessibility PR).
+onMount(() => {
+  // Found through the dialog's existing binding: a `bind:this` of its own would
+  // need a new `$state` for nothing reactive.
+  if (providerUnavailable) {
+    dialogEl
+      ?.querySelector<HTMLButtonElement>('[data-testid="model-edit-unavailable-close"]')
+      ?.focus();
+  }
+});
+
 // Tab focus trap (#1778). `aria-modal="true"` promises assistive tech that
 // everything outside is inert, and without this real focus walked the app
 // behind the scrim on the first Tab.
@@ -183,7 +215,8 @@ function startReplacingKey() {
   bind:this={dialogEl}
   role="dialog"
   aria-modal="true"
-  aria-label={isEditing ? "Edit model" : "Add model"}
+  aria-label={providerUnavailable ? UNAVAILABLE_TITLE : isEditing ? "Edit model" : "Add model"}
+  aria-describedby={providerUnavailable ? "model-edit-unavailable-text" : undefined}
   tabindex={-1}
   data-testid="model-edit-modal"
   class="mem-scrim"
@@ -202,6 +235,47 @@ function startReplacingKey() {
     }
   }}
 >
+  {#if providerUnavailable}
+  <div class="mem-dialog">
+    <div class="mem-header">
+      <h3 class="mem-title">{UNAVAILABLE_TITLE}</h3>
+      <button
+        type="button"
+        class="mem-close"
+        data-testid="model-edit-cancel"
+        onclick={onCancel}
+        aria-label="Close"
+      >
+        ×
+      </button>
+    </div>
+
+    <div class="mem-unavailable-name">{unavailableName}</div>
+
+    <!-- Not a <label>: there is no control to label (svelte-check refuses one). -->
+    <div class="mem-field">
+      <span class="mem-label">Provider</span>
+      <span class="mem-unavailable-provider" data-testid="model-edit-unavailable-provider">
+        {providerHeading(provider)}
+      </span>
+    </div>
+
+    <p id="model-edit-unavailable-text" data-testid="model-edit-provider-note" class="mem-unavailable">
+      {UNAVAILABLE_TEXT}
+    </p>
+
+    <div class="mem-actions">
+      <button
+        type="button"
+        class="mem-btn mem-btn--ghost"
+        data-testid="model-edit-unavailable-close"
+        onclick={onCancel}
+      >
+        Close
+      </button>
+    </div>
+  </div>
+  {:else}
   <form class="mem-dialog" onsubmit={handleSubmit}>
     <div class="mem-header">
       <h3 class="mem-title">
@@ -227,17 +301,9 @@ function startReplacingKey() {
         onchange={(e) => (provider = e.currentTarget.value as ModelProvider)}
       >
         {#each PROVIDER_OPTIONS as opt (opt.value)}
-          <option value={opt.value} disabled={opt.disabled}>
-            {opt.label}{opt.disabled ? " — coming soon" : ""}
-          </option>
+          <option value={opt.value}>{opt.label}</option>
         {/each}
       </select>
-      {#if isCloud}
-        <span class="mem-provider-note" data-testid="model-edit-provider-note">
-          Cloud providers are coming in a future release. For now, choose a local
-          provider.
-        </span>
-      {/if}
     </label>
 
     {#if isLocal}
@@ -255,7 +321,6 @@ function startReplacingKey() {
         type="text"
         autocomplete="off"
         bind:value={displayName}
-        placeholder={isLocal ? "" : "My Anthropic key"}
       />
     </label>
 
@@ -267,7 +332,6 @@ function startReplacingKey() {
         type="text"
         autocomplete="off"
         bind:value={modelId}
-        placeholder={isLocal ? "" : "e.g. claude-opus-4-7"}
       />
     </label>
 
@@ -359,6 +423,7 @@ function startReplacingKey() {
       </button>
     </div>
   </form>
+  {/if}
 </div>
 
 <style>
@@ -499,12 +564,23 @@ function startReplacingKey() {
     margin: 0;
   }
 
-  /* Shown when a now-disabled cloud provider is selected (an existing entry can
-     still carry one). Points the user back at the local providers. */
-  .mem-provider-note {
-    font-size: 11px;
-    color: var(--tandem-fg-subtle);
-    margin-top: 2px;
+  /* An old cloud entry's window (#1123): the entry's name, its provider and why
+     it can't be used. Muted, never `--tandem-fg-subtle`, which forced colours
+     turn into GrayText. */
+  .mem-unavailable-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--tandem-fg);
+    overflow-wrap: anywhere;
+  }
+  .mem-unavailable-provider {
+    font-size: 13px;
+    color: var(--tandem-fg);
+  }
+  .mem-unavailable {
+    margin: 0;
+    font-size: 12px;
+    color: var(--tandem-fg-muted);
   }
 
   .mem-local-intro {

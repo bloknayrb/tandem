@@ -127,6 +127,24 @@ describe("ModelEditModal traps Tab (#1778, dark)", () => {
     });
     assertTrapped(byTestId(container, "model-edit-modal"));
   });
+
+  it("an old cloud entry's window (#1123, unavailable): the trap holds", () => {
+    const { container } = render(ModelEditModal, {
+      props: {
+        entry: {
+          id: "c-1",
+          provider: "openai",
+          displayName: "Mine",
+          modelId: "m",
+          apiKeyRef: "ref-abcd",
+          enabled: true,
+        },
+        onCancel: vi.fn(),
+        onSave: vi.fn(),
+      },
+    });
+    assertTrapped(byTestId(container, "model-edit-modal"));
+  });
 });
 
 describe("FirstRunModelPickerModal traps Tab (#1778, dark)", () => {
