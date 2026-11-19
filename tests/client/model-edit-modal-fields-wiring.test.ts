@@ -11,12 +11,23 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
+/** HTML comments cut by position, not a regex replace: this is a test reading
+ *  its own repo's source, never sanitising HTML. An unclosed one cuts to the end. */
+function withoutHtmlComments(source: string): string {
+  let out = "";
+  let at = 0;
+  for (let open = source.indexOf("<!--", at); open !== -1; open = source.indexOf("<!--", at)) {
+    out += source.slice(at, open);
+    const close = source.indexOf("-->", open + 4);
+    if (close === -1) return out;
+    at = close + 3;
+  }
+  return out + source.slice(at);
+}
+
 /** The source with `\r\n` normalised and block, line and HTML comments cut. */
 function read(rel: string): string {
-  return fs
-    .readFileSync(path.join(ROOT, rel), "utf8")
-    .replace(/\r\n/g, "\n")
-    .replace(/<!--[\s\S]*?-->/g, "")
+  return withoutHtmlComments(fs.readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n"))
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
