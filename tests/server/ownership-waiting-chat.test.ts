@@ -1,28 +1,37 @@
 /**
  * Waiting for Tandem's Claude, the chat half and the decision (#2358 PR
  * 3b-2b1b-chat; ownership design §8.5 as that PR's brief rules it, ADR-054's
- * 3b-2b1b-chat amendment). Ships dark: flag on for the whole file except the
+ * 3b-2b1b-chat amendment), and claimable work (3b-2b1b-claimable, ADR-054's
+ * amendment of that name). Ships dark: flag on for the whole file except the
  * dark case.
  *
  * `tandemWorkWaiting()` answers whether anything is waiting for Tandem's
  * Claude: a user comment or user thread reply on a document it holds (the
  * document half, #2464's `documentWaiting` through the waiting probe), or a
  * user chat message a FRESH cursor reader for Tandem's Claude would be handed
- * and own (Ruling K applied to chat). **The agreement table is the judge**:
- * each row builds one world with exactly one candidate (a message, or in rows
- * 27 to 30 an annotation), asks `tandemWorkWaiting()`, then polls through the
+ * and own (Ruling K applied to chat); and, while no other session is
+ * connected, the same on an open document nobody holds that it could claim,
+ * and chat that follows one. **The agreement table is the judge**:
+ * each row builds one world with exactly one candidate (a message, or an
+ * annotation or reply), asks `tandemWorkWaiting()`, then polls through the
  * real `tandem_checkInbox` as a fresh reader for Tandem's Claude with no
  * `documentId`, and asserts that the poll hands exactly the candidate when
  * the decision is true and nothing when it is false, and that the decision is
- * the row's expected answer. Rows 26 and 30 are the recorded differences (the
- * poll's claim arm) and assert both sides. Every agreeing "not" row ends with
- * a positive anchor: a message on D, which must read as waiting and be
- * handed alone to a new fresh reader.
+ * the row's expected answer. The recorded differences assert both sides:
+ * `poll-claims-F` and `another-session` (decision false while another session
+ * is connected; the poll hands the candidate and claims F) and `not-present`
+ * (decision true; a poll of a Tandem's Claude that is not present hands
+ * nothing, and once present a new fresh poll hands it and claims F). Rows
+ * marked `asA` poll as A instead (decision false; A is handed it and claims
+ * F). Every agreeing "not" row ends with a positive anchor: a message on D,
+ * which must read as waiting and be handed alone to a new fresh reader.
  *
  * The world is `ownership-waiting.test.ts`'s, with chat: Tandem's Claude is
  * present and holds D by its own comment (D opened through the user's route
  * before presence), a terminal A holds E, F is open and unowned, and a closed
- * id names no open document. The helpers are copied from
+ * id names no open document. A is registered with no stream ever, so it is
+ * connected: rows 33 to 51 lapse it first. The open-documents seam is wired
+ * as `index.ts` wires it. The helpers are copied from
  * `ownership-waiting.test.ts` and `ownership-chat.test.ts`, whose worlds stay
  * put.
  *
@@ -62,21 +71,27 @@ import {
 } from "../../src/server/mcp/output-schemas.js";
 import { handleClose } from "../../src/server/mcp/routes/close.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
+import { CLAUDE_DESKTOP_CLIENT_NAME } from "../../src/server/mcp/transport-registry.js";
 import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
   loadLocalPeriodRecord,
 } from "../../src/server/models/local-period.js";
+import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
   captureCarriedOverChat,
   DEFAULT_GRACE_MS,
   forgetChatMessageOwners,
   getDocOwner,
+  LOCAL_OWNER_ID,
   noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
+  type RecordKind,
   resetOwnershipForTests,
   setDocOwner,
+  setLossForTests,
+  setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
@@ -103,6 +118,8 @@ import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
 const A = "claude:waiting-chat-a";
+/** The second session's owner id for a record kind. */
+const B = (kind: RecordKind) => `${kind}:waiting-chat-b`;
 const TANDEM = TANDEM_OWNER_ID;
 
 const inboxSchema = z.object({ ...checkInboxOutputShape, ...checkInboxOwnershipShape });
@@ -116,6 +133,10 @@ let run = 0;
 let prefix = "";
 let tmpDir = "";
 let frontId = "";
+/** Whether presence is on, as the row's acts last set it. */
+let present = false;
+/** Releases F's held queue (`f-busy`); called by `afterEach`. */
+let releaseF: (() => void) | undefined;
 
 // ---------------------------------------------------------------------------
 // Helpers copied from `ownership-waiting.test.ts`.
@@ -123,6 +144,22 @@ let frontId = "";
 function register(ownerId: string): void {
   view.push({ ownerId, openStreams: 0 });
   noteTransportRegistered(ownerId, { recordKind: "claude" });
+}
+
+/** `register` with a kind, a client name and stream counters. */
+function registerAs(
+  ownerId: string,
+  opts: { recordKind: RecordKind; clientName?: string; openStreams?: number; streamEver?: boolean },
+): void {
+  view.push({
+    ownerId,
+    openStreams: opts.openStreams ?? 0,
+    ...(opts.streamEver !== undefined ? { streamEver: opts.streamEver } : {}),
+  });
+  noteTransportRegistered(ownerId, {
+    recordKind: opts.recordKind,
+    ...(opts.clientName !== undefined ? { clientName: opts.clientName } : {}),
+  });
 }
 
 interface Doc {
@@ -323,6 +360,7 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
   setWaitingProbe(documentWaiting);
+  setOpenDocumentIdsSource(() => getOpenDocs().keys());
   setCtrlMode("tandem");
   frontId = mkDoc("front").id;
   setActiveDocId(frontId);
@@ -339,6 +377,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  releaseF?.();
+  releaseF = undefined;
   await close?.();
   close = undefined;
   vi.useRealTimers();
@@ -384,6 +424,7 @@ async function rowWorld(): Promise<RowWorld> {
   const id = await userOpen(file);
   setActiveDocId(frontId);
   setTandemPresenceSource(() => true);
+  present = true;
   const ydoc = getDocument(id) as Y.Doc;
   await writeAs(TANDEM, id);
   expect(getDocOwner(id)?.ownerId).toBe(TANDEM);
@@ -424,7 +465,8 @@ type Candidate =
   | "comment-on-D"
   | "comment-on-E"
   | "comment-on-F"
-  | "note-reply-on-D";
+  | "note-reply-on-D"
+  | "note-reply-on-F";
 
 type Act =
   | "candidate"
@@ -447,7 +489,17 @@ type Act =
   | "presence-off"
   | "presence-on"
   | "solo"
-  | "mode-unknown";
+  | "mode-unknown"
+  | "b-desktop"
+  | "b-desktop-http"
+  | "b-bridge"
+  | "b-http"
+  | "b-detached"
+  | "b-lapsed"
+  | "local-record"
+  | "a-stream"
+  | "f-busy"
+  | "f-loss";
 
 interface Row {
   name: string;
@@ -455,8 +507,17 @@ interface Row {
   /** In order; `"candidate"` places the candidate's creation (first, if absent). */
   acts: readonly Act[];
   expected: "waiting" | "not";
-  /** A recorded difference: the decision is false; the poll hands it and claims F. */
-  difference?: "poll-claims-F";
+  /**
+   * A recorded difference. `"poll-claims-F"` (rows 26 and 30, their value
+   * kept) and `"another-session"`: the decision is false because another
+   * session is connected; Tandem's Claude's poll hands it and claims F.
+   * `"not-present"`: the decision is true; the poll of a Tandem's Claude that
+   * is not present hands nothing; then `presence-on`, and a new fresh poll
+   * hands exactly it and claims F.
+   */
+  difference?: "poll-claims-F" | "another-session" | "not-present";
+  /** Poll as A, not Tandem's Claude: the decision is false; A is handed exactly it and holds F. */
+  asA?: boolean;
 }
 
 async function makeCandidate(w: RowWorld, c: Candidate): Promise<void> {
@@ -489,10 +550,12 @@ async function makeCandidate(w: RowWorld, c: Candidate): Promise<void> {
     case "comment-on-F":
       w.candidate = userComment(w.f.ydoc, key("c"));
       return;
-    case "note-reply-on-D": {
+    case "note-reply-on-D":
+    case "note-reply-on-F": {
+      const ydoc = c === "note-reply-on-D" ? w.d.ydoc : w.f.ydoc;
       const note = key("note");
-      withBrowser(w.d.ydoc, () =>
-        annotations(w.d.ydoc).set(note, {
+      withBrowser(ydoc, () =>
+        annotations(ydoc).set(note, {
           id: note,
           author: "user",
           type: "note",
@@ -503,7 +566,7 @@ async function makeCandidate(w: RowWorld, c: Candidate): Promise<void> {
           timestamp: clock++,
         }),
       );
-      w.candidate = userReply(w.d.ydoc, note);
+      w.candidate = userReply(ydoc, note);
       return;
     }
   }
@@ -573,6 +636,9 @@ async function runAct(w: RowWorld, act: Act, r: Row): Promise<void> {
       return;
     case "a-lapse":
       lapseByGrace(A);
+      // E, A's, goes by the default rule: to Tandem's Claude while present,
+      // otherwise unowned (and then claimable, with nothing on it).
+      expect(getDocOwner(w.e.id)?.ownerId).toBe(present ? TANDEM : undefined);
       return;
     case "take-a":
       expect(await openAs(A, w.file)).toBe(w.d.id);
@@ -589,15 +655,62 @@ async function runAct(w: RowWorld, act: Act, r: Row): Promise<void> {
       return;
     case "presence-off":
       setTandemPresenceSource(() => false);
+      present = false;
       return;
     case "presence-on":
       setTandemPresenceSource(() => true);
+      present = true;
       return;
     case "solo":
       setCtrlMode("solo");
       return;
     case "mode-unknown":
       setCtrlMode(null);
+      return;
+    case "b-desktop":
+      registerAs(B("bridge"), { recordKind: "bridge", clientName: CLAUDE_DESKTOP_CLIENT_NAME });
+      return;
+    case "b-desktop-http":
+      registerAs(B("http"), { recordKind: "http", clientName: CLAUDE_DESKTOP_CLIENT_NAME });
+      return;
+    case "b-bridge":
+      registerAs(B("bridge"), { recordKind: "bridge", clientName: "claude-code" });
+      return;
+    case "b-http":
+      // A header-less terminal: an `http` record with no client name.
+      registerAs(B("http"), { recordKind: "http" });
+      return;
+    case "b-detached":
+      register(B("claude"));
+      view = view.filter((e) => e.ownerId !== B("claude"));
+      noteTransportChanged(B("claude"));
+      return;
+    case "b-lapsed":
+      // As `lapseByGrace`, but the entry stays: lapsed and still registered.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      registerAs(B("claude"), { recordKind: "claude", openStreams: 0, streamEver: true });
+      noteTransportChanged(B("claude"));
+      vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+      vi.useRealTimers();
+      expect(
+        ownershipSnapshotForTests().records.find((r) => r.ownerId === B("claude"))?.lapsed,
+      ).toBe(true);
+      return;
+    case "local-record":
+      noteTransportRegistered(LOCAL_OWNER_ID, { recordKind: "local" });
+      return;
+    case "a-stream": {
+      const entry = view.find((e) => e.ownerId === A) as TransportViewEntry;
+      entry.openStreams = 1;
+      entry.streamEver = true;
+      noteTransportChanged(A);
+      return;
+    }
+    case "f-busy":
+      void runDocOp(w.f.id, () => new Promise<void>((r) => (releaseF = r)));
+      return;
+    case "f-loss":
+      setLossForTests(w.f.id, TANDEM, "taken");
       return;
   }
 }
@@ -716,7 +829,7 @@ const ROWS: readonly Row[] = [
     expected: "not",
   },
   {
-    name: "26 on F: difference, decision false; the poll hands it and claims F",
+    name: "26 on F, another session (A) is connected: difference, decision false; the poll hands it and claims F",
     candidate: "on-F",
     acts: [],
     expected: "not",
@@ -732,7 +845,7 @@ const ROWS: readonly Row[] = [
     expected: "not",
   },
   {
-    name: "30 a user comment on F: difference, decision false; the poll hands it and claims F",
+    name: "30 a user comment on F, another session (A) is connected: difference, decision false; the poll hands it and claims F",
     candidate: "comment-on-F",
     acts: [],
     expected: "not",
@@ -751,7 +864,140 @@ const ROWS: readonly Row[] = [
     acts: ["candidate", "t-ack", "take-a", "a-lapse"],
     expected: "waiting",
   },
+  // Claimable work (3b-2b1b-claimable): rows 33 to 51 lapse A first.
+  { name: "33 on F", candidate: "on-F", acts: ["a-lapse", "candidate"], expected: "waiting" },
+  {
+    name: "34 a comment on F",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate"],
+    expected: "waiting",
+  },
+  {
+    name: "35 a private note on F with a user reply (ADR-027)",
+    candidate: "note-reply-on-F",
+    acts: ["a-lapse", "candidate"],
+    expected: "not",
+  },
+  {
+    name: "36 a comment on F, b-desktop (Claude Desktop's name on a bridge)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-desktop"],
+    expected: "waiting",
+  },
+  {
+    name: "37 a comment on F, b-desktop-http (Claude Desktop's name on an http record)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-desktop-http"],
+    expected: "waiting",
+  },
+  {
+    name: "38 a comment on F, b-bridge: difference, another session",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-bridge"],
+    expected: "not",
+    difference: "another-session",
+  },
+  {
+    name: "39 on F, b-bridge: difference, another session",
+    candidate: "on-F",
+    acts: ["a-lapse", "candidate", "b-bridge"],
+    expected: "not",
+    difference: "another-session",
+  },
+  {
+    name: "40 a comment on F, b-http (a header-less terminal): difference, another session",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-http"],
+    expected: "not",
+    difference: "another-session",
+  },
+  {
+    name: "41 a comment on F, b-detached (in its grace): difference, another session",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-detached"],
+    expected: "not",
+    difference: "another-session",
+  },
+  {
+    name: "42 on F, b-detached (in its grace): difference, another session",
+    candidate: "on-F",
+    acts: ["a-lapse", "candidate", "b-detached"],
+    expected: "not",
+    difference: "another-session",
+  },
+  {
+    name: "43 a comment on F, b-lapsed (lapsed, still registered)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "b-lapsed"],
+    expected: "waiting",
+  },
+  {
+    name: "44 a comment on F, local-record (constructed: a stdio-mode record in an HTTP world; pins that local is built in)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "local-record"],
+    expected: "waiting",
+  },
+  {
+    name: "45 a comment on F, f-busy (F's queue busy within the bound)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "f-busy"],
+    expected: "not",
+  },
+  {
+    name: "46 a comment on F, f-loss (Tandem's Claude lost F)",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "f-loss"],
+    expected: "not",
+  },
+  {
+    name: "47 a comment on F, solo",
+    candidate: "comment-on-F",
+    acts: ["a-lapse", "candidate", "solo"],
+    expected: "not",
+  },
+  {
+    name: "48 on F, solo (chat is never Solo-held)",
+    candidate: "on-F",
+    acts: ["a-lapse", "candidate", "solo"],
+    expected: "waiting",
+  },
+  {
+    name: "49 presence-off, a comment on F: difference, not present",
+    candidate: "comment-on-F",
+    acts: ["presence-off", "a-lapse", "candidate"],
+    expected: "waiting",
+    difference: "not-present",
+  },
+  {
+    name: "50 presence-off, on F: difference, not present",
+    candidate: "on-F",
+    acts: ["presence-off", "a-lapse", "candidate"],
+    expected: "waiting",
+    difference: "not-present",
+  },
+  {
+    name: "51 presence-off, a doc-less message (per message, not counted)",
+    candidate: "doc-less",
+    acts: ["presence-off", "a-lapse", "candidate"],
+    expected: "not",
+  },
+  {
+    name: "52 a comment on F, A connected (no stream ever): A is handed it and claims F",
+    candidate: "comment-on-F",
+    acts: ["candidate"],
+    expected: "not",
+    asA: true,
+  },
+  {
+    name: "53 a-stream, a comment on F: A is handed it and claims F",
+    candidate: "comment-on-F",
+    acts: ["a-stream", "candidate"],
+    expected: "not",
+    asA: true,
+  },
 ];
+
+const ON_F: readonly Candidate[] = ["on-F", "comment-on-F", "note-reply-on-F"];
 
 async function buildRow(r: Row): Promise<RowWorld> {
   clock = 1_000;
@@ -777,14 +1023,15 @@ function decide(): boolean {
 
 const rowNamed = (n: number): Row => ROWS.find((r) => Number.parseInt(r.name, 10) === n) as Row;
 
-describe("the agreement table: the decision answers as a fresh poll of Tandem's Claude would hand (rows 1 to 32)", () => {
-  it("has all 32 rows, numbered in order", () => {
+describe("the agreement table: the decision answers as a fresh poll of Tandem's Claude would hand (rows 1 to 53)", () => {
+  it("has all 53 rows, numbered in order", () => {
     expect(ROWS.map((r) => Number.parseInt(r.name, 10))).toEqual(
-      Array.from({ length: 32 }, (_, i) => i + 1),
+      Array.from({ length: 53 }, (_, i) => i + 1),
     );
     expect(ROWS.filter((r) => r.difference).map((r) => Number.parseInt(r.name, 10))).toEqual([
-      26, 30,
+      26, 30, 38, 39, 40, 41, 42, 49, 50,
     ]);
+    expect(ROWS.filter((r) => r.asA).map((r) => Number.parseInt(r.name, 10))).toEqual([52, 53]);
   });
 
   for (const r of ROWS) {
@@ -798,12 +1045,29 @@ describe("the agreement table: the decision answers as a fresh poll of Tandem's 
       }
 
       const decision = decide();
-      const inbox = await reader(TANDEM).poll();
+      // The decision claims nothing.
+      if (ON_F.includes(r.candidate)) {
+        expect(getDocOwner(w.f.id), "F unowned after the decision").toBeUndefined();
+      }
       expect(decision, "the decision").toBe(r.expected === "waiting");
+      if (r.asA) {
+        const inbox = await reader(A).poll();
+        expect(handed(inbox), "A's fresh poll hands the candidate").toEqual([w.candidate]);
+        expect(getDocOwner(w.f.id)?.ownerId, "and A claims F").toBe(A);
+        return;
+      }
+      const inbox = await reader(TANDEM).poll();
       if (r.difference === undefined) {
         expect(handed(inbox), "the fresh poll hands the candidate iff waiting").toEqual(
           decision ? [w.candidate] : [],
         );
+      } else if (r.difference === "not-present") {
+        expect(handed(inbox), "not present: the fresh poll hands nothing").toEqual([]);
+        setTandemPresenceSource(() => true);
+        expect(handed(await reader(TANDEM).poll()), "present: a new fresh poll").toEqual([
+          w.candidate,
+        ]);
+        expect(getDocOwner(w.f.id)?.ownerId, "and claims F").toBe(TANDEM);
       } else {
         expect(handed(inbox), "the fresh poll hands the candidate").toEqual([w.candidate]);
         expect(getDocOwner(w.f.id)?.ownerId, "and claims F").toBe(TANDEM);
@@ -1135,4 +1399,117 @@ describe("dark", () => {
       }
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Claimable work, beyond the table (#2358 PR 3b-2b1b-claimable).
+
+const OPEN_DOCUMENTS_FAILED =
+  "[ownership] the open documents could not be read for waiting; no unheld document is counted.";
+
+describe("claimable work: the open-documents seam", () => {
+  it("unwired (and after a reset that forgets a wired source), a comment and chat on F do not count; wired, they do", async () => {
+    const w = await rowWorld();
+    lapseByGrace(A);
+    userComment(w.f.ydoc, key("c"));
+    userChat(key("m"), w.f.id);
+    // The anchor: wired as index.ts wires it, the claimable work counts.
+    expect(decide()).toBe(true);
+    // A reset forgets the source; everything else is wired again, the seam not.
+    resetOwnershipForTests();
+    setTransportView(() => view);
+    setOwnershipSeqSource(() => deliveryRegistry.counter);
+    setOwnershipInboxHandover(handOverDocumentInbox);
+    setOwnershipChatSide(ownershipChatSide);
+    setWaitingProbe(documentWaiting);
+    setTandemPresenceSource(() => true);
+    expect(getDocOwner(w.f.id)).toBeUndefined();
+    expect(decide()).toBe(false);
+    setOpenDocumentIdsSource(() => getOpenDocs().keys());
+    expect(decide()).toBe(true);
+  });
+
+  for (const twin of ["a waiting comment on D", "owned doc-less chat"] as const) {
+    it(`a throwing seam: ${twin} still answers true, with exactly one fixed line`, async () => {
+      const w = await rowWorld();
+      if (twin === "a waiting comment on D") userComment(w.d.ydoc, key("c"));
+      else userChat(key("m"));
+      setOpenDocumentIdsSource(() => {
+        throw new Error(`boom ${w.f.id}`);
+      });
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(tandemWorkWaiting()).toBe(true);
+      expectOneLine(error, OPEN_DOCUMENTS_FAILED, [w.d.id, w.f.id]);
+    });
+  }
+
+  it("a probe that throws hides no claimable chat: chat on F, A gone, answers true with the document half's one line", async () => {
+    const w = await rowWorld();
+    lapseByGrace(A);
+    userChat(key("m"), w.f.id);
+    setWaitingProbe(() => {
+      throw new Error(`boom ${w.f.id}`);
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(tandemWorkWaiting()).toBe(true);
+    expectOneLine(error, DOCUMENT_HALF_FAILED, [w.d.id, w.f.id]);
+  });
+
+  it("a lapsed record that holds a document (its grace re-armed) is still not connected", async () => {
+    const w = await rowWorld();
+    lapseByGrace(A);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    registerAs(B("claude"), { recordKind: "claude", openStreams: 0, streamEver: true });
+    noteTransportChanged(B("claude"));
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    setDocOwner(frontId, { ownerId: B("claude"), kind: "opened" }, "take", B("claude"));
+    noteTransportChanged(B("claude"));
+    vi.useRealTimers();
+    const b = ownershipSnapshotForTests().records.find((r) => r.ownerId === B("claude"));
+    expect(b?.lapsed).toBe(true);
+    // The premise: a grace is armed again, so "has a grace timer" would count it.
+    expect(b?.graceTimer).toBeDefined();
+    expect(getDocOwner(frontId)?.ownerId).toBe(B("claude"));
+    userComment(w.f.ydoc, key("c"));
+    expect(decide()).toBe(true);
+  });
+
+  it("writes nothing: after a-lapse, with a comment on F, two calls leave everything equal and F unowned", async () => {
+    const w = await rowWorld();
+    lapseByGrace(A);
+    userComment(w.f.ydoc, key("c"));
+    const counts = { d: 0, ctrl: 0 };
+    w.d.ydoc.on("update", () => counts.d++);
+    ctrl().on("update", () => counts.ctrl++);
+    let fUpdates = 0;
+    w.f.ydoc.on("update", () => fUpdates++);
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m),
+    );
+    const before = observable(w, counts);
+    expect(tandemWorkWaiting()).toBe(true);
+    const between = observable(w, counts);
+    expect(tandemWorkWaiting()).toBe(true);
+    expect(between).toBe(before);
+    expect(observable(w, counts)).toBe(before);
+    expect(counts).toEqual({ d: 0, ctrl: 0 });
+    expect(fUpdates).toBe(0);
+    expect(getDocOwner(w.f.id)).toBeUndefined();
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("dark: the seam is never called", async () => {
+    const w = await rowWorld();
+    lapseByGrace(A);
+    userComment(w.f.ydoc, key("c"));
+    const seam = vi.fn(() => getOpenDocs().keys());
+    setOpenDocumentIdsSource(seam);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(tandemWorkWaiting()).toBe(false);
+    expect(seam).not.toHaveBeenCalled();
+    // The twin: flag on, it is read and the comment counts.
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    expect(tandemWorkWaiting()).toBe(true);
+    expect(seam).toHaveBeenCalledTimes(1);
+  });
 });

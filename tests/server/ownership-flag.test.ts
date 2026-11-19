@@ -114,21 +114,75 @@ describe("the default test run is flag-off", () => {
   });
 });
 
-describe("the flip cannot land with a blocker open (tests/server/ownership-flip-blockers.ts)", () => {
+describe("the flip cannot land with an unaccepted blocker open (tests/server/ownership-flip-blockers.ts)", () => {
   const open: FlipBlocker[] = [
     { gap: "a gap", closedBy: "a PR" },
     { gap: "another", closedBy: "a decision" },
   ];
 
   it("the check is a pure function of the literal and the list", () => {
-    // On with a non-empty list fails, one message per open row.
+    // On with an unaccepted row fails, one message per unaccepted row.
     expect(flipBlockerViolations(true, open)).toHaveLength(2);
     expect(flipBlockerViolations(true, open)[0]).toContain("a gap");
-    // On with an empty list passes.
+    // On with an empty list, or only accepted rows, passes.
     expect(flipBlockerViolations(true, [])).toEqual([]);
     // Off passes either way.
     expect(flipBlockerViolations(false, open)).toEqual([]);
     expect(flipBlockerViolations(false, [])).toEqual([]);
+  });
+
+  it("an accepted row does not stop the flip; the same row without the field, or with a blank one, does", () => {
+    const accepted: FlipBlocker = { gap: "a gap", closedBy: "a PR", acceptedFor: "a pick, #1" };
+    expect(flipBlockerViolations(true, [accepted])).toEqual([]);
+    const { acceptedFor: _dropped, ...unaccepted } = accepted;
+    expect(flipBlockerViolations(true, [unaccepted])).toHaveLength(1);
+    expect(flipBlockerViolations(true, [{ ...accepted, acceptedFor: "" }])).toHaveLength(1);
+    expect(flipBlockerViolations(true, [{ ...accepted, acceptedFor: "  " }])).toHaveLength(1);
+    // Mixed: only the unaccepted row is reported.
+    expect(flipBlockerViolations(true, [accepted, open[1] as FlipBlocker])).toEqual([
+      "OWNERSHIP_ENABLED is true while this is open: another",
+    ]);
+  });
+
+  it("the accepted rows are exactly these, word for word (a new acceptance, or an edit to one, edits this pin)", () => {
+    const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
+    expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
+      "Acknowledged but unanswered chat is never started for",
+    ]);
+    expect(acceptedRows).toEqual([
+      {
+        gap:
+          "Acknowledged but unanswered chat is never started for (3b-2b1b-chat): a tandem_reply " +
+          "with replyTo and inProgress ('I'm on it') stamps the user message read, so it leaves " +
+          "waiting; if no final answer follows (the run dies or gives up), nothing starts or " +
+          "wakes Claude for it, and after a server restart it is carried over and never " +
+          "re-owed. The user notices and sends the message again.",
+        closedBy:
+          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change " +
+          "with a test.",
+        acceptedFor:
+          "Bryan picked 'Known limit for 0.32; design it after (Recommended)', picked from " +
+          "options, 2026-11-19; tracked as #2484.",
+      },
+    ]);
+  });
+
+  it("every accepted row names an issue, and ADR-054 names every issue it names", () => {
+    const decisions = read("docs/decisions.md");
+    const start = decisions.indexOf("## ADR-054");
+    const end = decisions.indexOf("## ADR-055");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const adr = decisions.slice(start, end);
+    const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
+    expect(acceptedRows.length).toBeGreaterThan(0);
+    for (const row of acceptedRows) {
+      const issues = (row.acceptedFor as string).match(/#\d+/g) ?? [];
+      expect(issues.length, row.gap).toBeGreaterThan(0);
+      for (const issue of issues) {
+        expect(adr, `${issue} (${row.gap.slice(0, 40)})`).toMatch(new RegExp(`${issue}(?!\\d)`));
+      }
+    }
   });
 
   it("the source literal and the real list pass it", () => {
@@ -144,6 +198,9 @@ describe("the flip cannot land with a blocker open (tests/server/ownership-flip-
     for (const row of OWNERSHIP_FLIP_BLOCKERS) {
       expect(row.gap.trim().length, row.gap).toBeGreaterThan(20);
       expect(row.closedBy.trim().length, row.gap).toBeGreaterThan(5);
+      if (row.acceptedFor !== undefined) {
+        expect(row.acceptedFor.trim().length, row.gap).toBeGreaterThan(20);
+      }
     }
     expect(new Set(OWNERSHIP_FLIP_BLOCKERS.map((row) => row.gap)).size).toBe(
       OWNERSHIP_FLIP_BLOCKERS.length,
