@@ -222,7 +222,6 @@ describe("ModelEditModal — source pins (a placeholder is an attribute, so text
       "utf8",
     )
       .replace(/\r\n/g, "\n")
-      .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
     for (const gone of ["coming soon", "future release", "My Anthropic key", "claude-opus"]) {

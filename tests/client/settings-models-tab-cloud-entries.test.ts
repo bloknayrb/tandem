@@ -384,7 +384,6 @@ describe("source pins (comment-stripped)", () => {
   const strip = (src: string) =>
     src
       .replace(/\r\n/g, "\n")
-      .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
   const read = async (rel: string) => {
