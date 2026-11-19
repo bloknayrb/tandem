@@ -303,8 +303,7 @@ describe("ModelEditModal — Save's reason (P10(5), V2, V9)", () => {
 // #1123 V18 as cut down by the final review: on Add a blank name saves as the
 // selected provider's fallback; on Edit the field's text is saved, "" too.
 describe("ModelEditModal — the Display name (V18)", () => {
-  const nameField = (v: View) =>
-    v.getByTestId("model-edit-displayname") as HTMLInputElement;
+  const nameField = (v: View) => v.getByTestId("model-edit-displayname") as HTMLInputElement;
   async function choose(v: View, p: ModelProvider) {
     const select = v.getByTestId("model-edit-provider") as HTMLSelectElement;
     select.value = p;
