@@ -111,6 +111,11 @@ const NEW_COPY = [
   "Set up a local AI model, such as Ollama, LM Studio or llama.cpp",
   "LM Studio",
   "Other local server",
+  // #1123, cloud providers hidden: an old cloud entry's sentence, its window's
+  // title and the cloud headings' suffix.
+  "This provider can't be used in Tandem.",
+  "Model unavailable",
+  "(API key)",
 ];
 
 function expectNoNewCopy(text: string) {

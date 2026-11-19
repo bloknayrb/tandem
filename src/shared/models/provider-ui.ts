@@ -72,3 +72,12 @@ export const MODELS_TAB_ORDER: readonly ModelProvider[] = [
   "anthropic",
   ...VALID_MODEL_PROVIDERS.filter((p) => p !== "anthropic"),
 ];
+
+/** The heading a provider's entries are listed under in the Models tab, and
+ *  the Provider line of an old cloud entry's window (#1123, cloud providers
+ *  hidden): a cloud provider reads "<name> (API key)", parallel to the local
+ *  labels' "(local)", so "This provider can't be used in Tandem." under
+ *  "Anthropic" never reads as Claude being unusable. */
+export function providerHeading(p: ModelProvider): string {
+  return isLocalProvider(p) ? PROVIDER_LABEL[p] : `${PROVIDER_LABEL[p]} (API key)`;
+}

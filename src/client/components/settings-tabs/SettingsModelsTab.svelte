@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onDestroy, onMount } from "svelte";
 import { type ChatAnswerer, isLocalProvider } from "../../../shared/models/contract";
-import { MODELS_TAB_ORDER, PROVIDER_LABEL } from "../../../shared/models/provider-ui";
+import { MODELS_TAB_ORDER, providerHeading } from "../../../shared/models/provider-ui";
 import { createChatAnswerer } from "../../hooks/useChatAnswerer.svelte";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import { createLocalModelSettings } from "../../hooks/useLocalModelSettings.svelte";
@@ -62,17 +62,19 @@ onMount(() => {
 });
 const ownWindowAnnouncement = $derived(announceReady && access.blocked ? access.notice : "");
 
-/** For a radio or checkbox: cancel the activation, so the DOM never toggles
- *  and no `change` fires (covers the label, Space and the pointer). */
-function refuseWhenBlocked(event: Event) {
-  if (access.blocked) event.preventDefault();
+/** For a radio or checkbox: when `refused`, cancel the activation, so the DOM
+ *  never toggles and no `change` fires (covers the label, Space and the
+ *  pointer). `refused` is "not Tandem's own window", or, on an old cloud
+ *  entry's row, that its provider can't be used (#1123). */
+function refuseWhen(event: Event, refused: boolean) {
+  if (refused) event.preventDefault();
 }
 
 /** The Default radios. A cancelled activation should put the previously
  *  checked radio back by itself; this does not rely on it, and re-states the
  *  whole group from the store once the event has finished. */
-function refuseDefaultWhenBlocked(event: Event) {
-  if (!access.blocked) return;
+function refuseDefaultWhen(event: Event, refused: boolean) {
+  if (!refused) return;
   event.preventDefault();
   const group = (event.currentTarget as HTMLInputElement).name;
   queueMicrotask(() => {
@@ -326,6 +328,12 @@ const grouped = $derived.by(() => {
 });
 
 let editingEntry = $state<ModelRegistryEntry | undefined>(undefined);
+// The "View" button that opened an old cloud entry's window (#1123). That
+// window's Close unmounts with it, and Settings' stranded-focus recovery would
+// then put focus on the Models nav button, losing the user's place in the list,
+// so closing it hands focus back here first. Plain, never rendered. The local
+// edit and Add windows are left as they are (ADR-039 item 27).
+let unavailableOpener: HTMLElement | null = null;
 let editorOpen = $state(false);
 let pendingDeleteId = $state<string | null>(null);
 // Modal-scoped error: a save failure (pre-write keychain throw OR a write that
@@ -337,14 +345,16 @@ let modalError = $state<string | null>(null);
 
 function openAdd() {
   if (access.blocked) return;
+  unavailableOpener = null;
   editingEntry = undefined;
   modalError = null;
   models.clearError(); // drop a stale list banner so it can't co-show with a modal error
   editorOpen = true;
 }
 
-function openEdit(entry: ModelRegistryEntry) {
+function openEdit(entry: ModelRegistryEntry, opener: HTMLElement) {
   if (access.blocked) return;
+  unavailableOpener = isLocalProvider(entry.provider) ? null : opener;
   editingEntry = entry;
   modalError = null;
   models.clearError();
@@ -386,6 +396,11 @@ async function handleSave(data: {
 }
 
 function closeModal() {
+  // Before the window unmounts, so focus moves to a real element and nothing
+  // is left stranded on the page.
+  const opener = unavailableOpener;
+  unavailableOpener = null;
+  if (opener?.isConnected) opener.focus();
   editorOpen = false;
   editingEntry = undefined;
   modalError = null;
@@ -623,10 +638,21 @@ function askDelete(id: string) {
         {#if bucket.length > 0}
           <div>
             <div class="settings-section-label">
-              {PROVIDER_LABEL[provider]}
+              {providerHeading(provider)}
             </div>
             <div style="display: flex; flex-direction: column; gap: 4px;">
-              {#each bucket as entry (entry.id)}
+              {#each bucket as entry, i (entry.id)}
+                {@const unusableProvider = !isLocalProvider(entry.provider)}
+                {@const reasonId = `model-unavailable-${provider}-${i}`}
+                {@const rowDescribedBy = unusableProvider
+                  ? `${reasonId} models-own-window-msg`
+                  : "models-own-window-msg"}
+                <!-- An old cloud entry (#1123, ADR-039's "Shown as unavailable"):
+                     listed, with why it can't be used; its Default and On/Off
+                     keep their checked state but are unavailable and say why;
+                     its window is a view; Delete works. The reason's HTML id is
+                     built from the provider and index, never `entry.id`, which a
+                     hand-edited file can fill with spaces. -->
                 <div
                   data-testid={`model-row-${entry.id}`}
                   style="display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface);"
@@ -642,6 +668,18 @@ function askDelete(id: string) {
                     >
                       {entry.modelId}
                     </div>
+                    {#if unusableProvider}
+                      <!-- Its colour is pinned by a source test on THIS tag (the one
+                           carrying the sentence's data-testid); moving the style to
+                           a class means moving that pin with it. -->
+                      <div
+                        id={reasonId}
+                        data-testid={`model-unavailable-${entry.id}`}
+                        style="font-size: 11px; color: var(--tandem-fg-muted);"
+                      >
+                        This provider can't be used in Tandem.
+                      </div>
+                    {/if}
                   </div>
                   <label
                     style="display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--tandem-fg-muted);"
@@ -654,13 +692,13 @@ function askDelete(id: string) {
                       value={entry.id}
                       checked={models.defaultModelId === entry.id}
                       disabled={readOnly}
-                      aria-disabled={access.blocked}
-                      aria-describedby="models-own-window-msg"
-                      onclick={refuseDefaultWhenBlocked}
+                      aria-disabled={access.blocked || unusableProvider}
+                      aria-describedby={rowDescribedBy}
+                      onclick={(e) => refuseDefaultWhen(e, access.blocked || unusableProvider)}
                       onchange={() => {
-                        if (!access.blocked) void models.setDefault(entry.id);
+                        if (!access.blocked && !unusableProvider) void models.setDefault(entry.id);
                       }}
-                      style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable)}"
+                      style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable || unusableProvider)}"
                     />
                     <span>Default</span>
                   </label>
@@ -672,13 +710,13 @@ function askDelete(id: string) {
                       data-testid={`model-toggle-${entry.id}`}
                       checked={entry.enabled}
                       disabled={readOnly}
-                      aria-disabled={access.blocked}
-                      aria-describedby="models-own-window-msg"
-                      onclick={refuseWhenBlocked}
+                      aria-disabled={access.blocked || unusableProvider}
+                      aria-describedby={rowDescribedBy}
+                      onclick={(e) => refuseWhen(e, access.blocked || unusableProvider)}
                       onchange={() => {
-                        if (!access.blocked) void models.toggleEnabled(entry.id);
+                        if (!access.blocked && !unusableProvider) void models.toggleEnabled(entry.id);
                       }}
-                      style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable)}"
+                      style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable || unusableProvider)}"
                     />
                     <span>{entry.enabled ? "On" : "Off"}</span>
                   </label>
@@ -688,10 +726,10 @@ function askDelete(id: string) {
                     disabled={readOnly}
                     aria-disabled={access.blocked}
                     aria-describedby="models-own-window-msg"
-                    onclick={() => openEdit(entry)}
+                    onclick={(e) => openEdit(entry, e.currentTarget)}
                     style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(unavailable)}"
                   >
-                    Edit
+                    {unusableProvider ? "View" : "Edit"}
                   </button>
                   {#if pendingDeleteId === entry.id}
                     <button

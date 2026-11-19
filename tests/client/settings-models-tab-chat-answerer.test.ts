@@ -692,6 +692,15 @@ describe("a cloud or switched-off default beside an enabled local model (R1.6)",
     );
   });
 
+  it.each(["openai", "gemini"] as const)(
+    "a %s default, chat on Claude: the cloud sentence and the longer instruction",
+    async (provider) => {
+      pose([{ ...CLOUD, provider }, LOCAL], CLOUD.id);
+      const v = await mounted(known("claude"));
+      expect(line(v)?.textContent?.trim()).toBe(CLOUD_LINE + LONG);
+    },
+  );
+
   it("cloud default, the read not known: the longer instruction", async () => {
     pose([CLOUD, LOCAL], CLOUD.id);
     const v = mount();
