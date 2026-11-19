@@ -921,8 +921,10 @@ describe("the remaining R4.4 exit paths", () => {
       process.env.TANDEM_REAPER_PATH = unrunnable;
       const sup = makeSupervisor();
       await expect(sup.startFresh(spawnDir)).rejects.toThrow();
-      await sleep(200);
-      expect(runFilesOnDisk()).toEqual([]);
+      // The child's async 'error' discards the run files; poll for that end
+      // state rather than a fixed sleep, which a loaded CI runner outran
+      // (ownership-flag-on on #2486: the run file still on disk after 200 ms).
+      await vi.waitFor(() => expect(runFilesOnDisk()).toEqual([]), { timeout: 5_000 });
       expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
     },
   );

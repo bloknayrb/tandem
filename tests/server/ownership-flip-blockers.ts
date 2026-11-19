@@ -2,15 +2,24 @@
  * What the ownership flip must not land without (#2358, ADR-054).
  *
  * **The one list.** The PRs of the dark series leave gaps open on purpose,
- * each to be closed by a later PR or by a decision of Bryan's. They used to be
- * held in prose (the plan's flip row, ADR amendments) and in memory. Each is a
- * row here, and `tests/server/ownership-flag.test.ts` fails when the release
- * literal `OWNERSHIP_ENABLED` is `true` while this list is not empty. The
- * plan's flip row (`docs/plans/2358-ownership.md`, PR 6) points here.
+ * each to be closed by a later PR or by a decision of Bryan's, or accepted by
+ * him for the flip (below). They used to be held in prose (the plan's flip
+ * row, ADR amendments) and in memory. Each is a row here, and
+ * `tests/server/ownership-flag.test.ts` fails when the release literal
+ * `OWNERSHIP_ENABLED` is `true` while a row without `acceptedFor` remains.
+ * The plan's flip row (`docs/plans/2358-ownership.md`, PR 6) points here.
  *
  * **To close a row:** land what `closedBy` names, then delete the row in that
- * same PR. A row is never closed by editing its text. The flip PR may set the
- * literal only once the list is empty.
+ * same PR. A row is never closed by editing its text; the one sanctioned edit
+ * to a standing row is adding `acceptedFor`, which records a pick of Bryan's
+ * and does not close it. The flip PR may set the literal only once every
+ * remaining row carries `acceptedFor`.
+ *
+ * **An accepted row** stays in the list, still open, and does not stop the
+ * flip. Adding `acceptedFor` records a pick of Bryan's, cited in ADR-054;
+ * removing it re-blocks the flip. Accepting is not closing: what `closedBy`
+ * names is still owed. `ownership-flag.test.ts` pins the accepted rows' full
+ * text, so a new acceptance, or any edit to an accepted row, edits a named pin.
  *
  * Closed, kept for the record: *the setup-entry change shipped in an earlier
  * release than the flip* (the plan's flip row waited for it). It shipped in
@@ -25,6 +34,12 @@ export interface FlipBlocker {
   readonly gap: string;
   /** The test, PR or decision that closes it. */
   readonly closedBy: string;
+  /**
+   * Set only when Bryan accepted the gap for the flip: his pick, quoted as
+   * option text, with the issue tracking it. The row stays open and does not
+   * stop the flip (header). Must name an issue (`#n`) that ADR-054 names.
+   */
+  readonly acceptedFor?: string;
 }
 
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
@@ -197,7 +212,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "acknowledgement handles nothing and sets no owner, but it still stamps `read`, so on a " +
       "message a re-owe made unread it hides the message from its owner's polls (cursor and " +
       "cursor-less) until the next re-owe (the posts PR, R0.5). A message is handled only by a " +
-      "final reply or `settles` (Ruling 11).",
+      "final reply or `settles` (Ruling 11). With no re-owe after it, such an acknowledgement " +
+      "takes the message out of waiting for good.",
     closedBy: "PR 4 (the shim's permit, design §9.2).",
   },
   {
@@ -467,7 +483,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
-      "holds every pending user comment reads as waiting, answered or not, as does a resolved " +
+      "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
+      "session is connected (after a restart every restored document is unowned), every pending " +
+      "user comment reads as waiting, answered or not, as does a resolved " +
       "comment ever edited, and every user thread reply on any Claude-facing comment (replies " +
       "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
       "that filter would not close it: a comment answered only in chat is never handled by it.",
@@ -486,44 +504,112 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The waiting decision's cost is unmeasured (3b-2b1b-chat): each tandemWorkWaiting ask runs " +
       "one waiting probe per document Tandem's Claude holds, settledChatIds over every chat row, " +
       "one structuredClone and one schema parse per user chat row, and one message read per owed " +
-      "key. Once 3b-2b1c wires it, that happens at every forward and every start pass, and a " +
+      "key, and, while no other session is connected, one claim read and one waiting probe per " +
+      "open, unowned document. Once 3b-2b1c wires it, that happens at every forward and every " +
+      "start pass, and a " +
       "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each.",
     closedBy: "3b-2b4's measurement.",
   },
   {
     gap:
-      "Read but unanswered chat is never started for (3b-2b1b-chat): every way a user message is " +
-      "stamped read takes it out of waiting: a cursor acknowledgement, a cursor-less poll's commit " +
-      "(read at hand-out), a tandem_reply with replyTo (in-progress included), and " +
-      "POST /api/channel-reply, which stamps it for any session's reply, in-progress included, " +
-      "with no ownership gate, so a session that never owned the message can strand it. If no " +
-      "final answer follows (the run dies, or the replier was not its owner), the message stops " +
-      "counting as waiting and nothing starts Claude for it. A re-owe at the next " +
-      "run start (3b-2b4) fixes only what that run sees; after a server restart the message is " +
-      "carried over, and carried-over rows are never re-owed, so under today's rules that form is " +
-      "permanent.",
-    closedBy: "A decision on a rule for read-but-unanswered chat, then its change with a test.",
+      "Acknowledged but unanswered chat is never started for (3b-2b1b-chat): a tandem_reply with " +
+      "replyTo and inProgress ('I'm on it') stamps the user message read, so it leaves waiting; if " +
+      "no final answer follows (the run dies or gives up), nothing starts or wakes Claude for it, " +
+      "and after a server restart it is carried over and never re-owed. The user notices and " +
+      "sends the message again.",
+    closedBy:
+      "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
+    acceptedFor:
+      "Bryan picked 'Known limit for 0.32; design it after (Recommended)', picked from options, " +
+      "2026-11-19; tracked as #2484.",
   },
   {
     gap:
-      "Claimable work does not count (3b-2b1b-chat): an open document nobody holds whose queue is " +
-      "idle would be handed, with its chat, comments and replies, to a present Tandem's Claude's " +
-      "poll (which claims it), but tandemWorkWaiting does not count that work, so such work does " +
-      "not start a stopped Claude once 3b-2b1c wires it.",
+      "Acknowledged but unanswered chat by the channel route is never started for (3b-2b1b-chat): " +
+      "a POST /api/channel-reply with replyTo and inProgress ('I'm on it') from the session that " +
+      "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
+      "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
+      "carried over and never re-owed. The user notices and sends the message again. (The same " +
+      "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
     closedBy:
-      "Bryan's answer (3b-2b1b-chat's 'Flag for Bryan') and, if he answers B, the change with a test.",
+      "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
+    acceptedFor:
+      "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so 'Known " +
+      "limit for 0.32; design it after (Recommended)' covers the channel route too; tracked as " +
+      "#2484.",
+  },
+  {
+    gap:
+      "Read but unacknowledged chat is never started for (3b-2b1b-chat): a cursor acknowledgement, " +
+      "or a cursor-less poll's commit at hand-out, stamps a user message read with no 'I'm on it'; " +
+      "if Claude never answers, the message leaves waiting for good, and after a server restart it " +
+      "is carried over and never re-owed. The pick on acknowledged chat does not cover this.",
+    closedBy: "Bryan's answer, then its change with a test.",
+  },
+  {
+    gap:
+      "A user's comment on an open document nobody holds counts as waiting for Tandem's Claude " +
+      "while no other session is connected (3b-2b1b-claimable; Bryan picked 'Yes, unless another " +
+      "session is open (Recommended)' and 'Yes, even before my first Start', picked from options, " +
+      "2026-11-19). By the review session's reading, chat that follows such a document and user " +
+      "replies on its Claude-facing threads count the same way. Nothing asks the decision when " +
+      "such work appears or when the other session goes: it changes no owner, so neither step 5 " +
+      "nor the message forward runs.",
+    closedBy:
+      "3b-2b2's widened start arm asking the decision, with a test where such a comment starts a " +
+      "stopped Tandem's Claude with no other session connected and does not with one connected; " +
+      "and when the last other session stops counting (its grace ends, or its transport is " +
+      "reaped) the decision is asked again, with a test.",
+  },
+  {
+    gap:
+      "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
+      "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
+      "for a while after it stops claimable work does not count (about two minutes if its " +
+      "transport held a stream, up to about 37 minutes if it never did; which applies is " +
+      "unmeasured); and it differs from the supervisor's otherAiAttached (#2196), which excludes " +
+      "Tandem's own children by session id.",
+    closedBy:
+      "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
+      "transport does not count, and one 'another session' rule named for the decision and the " +
+      "start arm.",
+  },
+  {
+    gap:
+      "Claude Desktop is left out of 'another session' by its self-reported client name " +
+      "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
+      "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
+      "the name is open.",
+    closedBy:
+      "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
+      "comment on an unheld document makes tandemWorkWaiting true.",
+  },
+  {
+    gap:
+      "After a server restart every ownership record is gone, so a Claude Code session that is " +
+      "still open is not seen as connected until it next initializes (after a 404 on its next " +
+      "request). Until then the decision (3b-2b1b-claimable) counts every open, unowned document " +
+      "as claimable, and with the restart row every old pending comment reads as waiting: once a " +
+      "later piece consumes the decision, Tandem's Claude could start at boot for old comments " +
+      "while the user's terminal is open.",
+    closedBy:
+      "The piece that first consumes the claimable decision for a start (3b-2b2), with a boot " +
+      "quiet period or a 'written since boot' condition, and a test.",
   },
 ];
 
 /**
- * What stops the flip, as messages; empty when nothing does. **A pure function
- * of the release literal and the list**: off passes whatever the list holds,
- * on passes only with an empty list.
+ * What stops the flip, as messages; empty when nothing does (no row, or only
+ * accepted rows). **A pure function of the release literal and the list**:
+ * off passes whatever the list holds, on passes only when every row carries
+ * `acceptedFor` (a blank one does not count).
  */
 export function flipBlockerViolations(
   literal: boolean,
   blockers: readonly FlipBlocker[],
 ): string[] {
   if (!literal) return [];
-  return blockers.map((b) => `OWNERSHIP_ENABLED is true while this is open: ${b.gap}`);
+  return blockers
+    .filter((b) => !b.acceptedFor?.trim())
+    .map((b) => `OWNERSHIP_ENABLED is true while this is open: ${b.gap}`);
 }

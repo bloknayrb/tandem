@@ -1188,9 +1188,57 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     const specifiers = [
       ...text.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+["']([^"']+)["']/gm),
       ...text.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g),
+      // A bare side-effect import (3b-2b1b-claimable).
+      ...text.matchAll(/^\s*import\s+["']([^"']+)["']/gm),
     ].map((m) => m[1] as string);
     // The positive anchor: the scan finds the module's real imports.
     expect(specifiers).toContain("../ownership-flag.js");
     expect(specifiers.filter((spec) => /awareness/.test(spec))).toEqual([]);
+    // 3b-2b1b-claimable: the open documents come through a seam, never the
+    // registry or the document service (either import would close a cycle).
+    expect(
+      specifiers.filter((spec) => /documents\//.test(spec) || /document-service/.test(spec)),
+    ).toEqual([]);
+  });
+});
+
+describe("claimable work (#2358 PR 3b-2b1b-claimable)", () => {
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("only index.ts installs the open-documents source, once, as a statement of main() before either transport branch", () => {
+    expect(filesMentioning("setOpenDocumentIdsSource", [OWNERSHIP])).toEqual([
+      "src/server/index.ts",
+    ]);
+    // The import and the one call.
+    expect(stripComments(index).match(/\bsetOpenDocumentIdsSource\b/g)).toHaveLength(2);
+    const line = "  setOpenDocumentIdsSource(() => getOpenDocs().keys());";
+    const wired = index.indexOf(line);
+    expect(wired).toBeGreaterThan(-1);
+    expect(index.indexOf(line, wired + 1)).toBe(-1);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+    // Inside the module: the declaration (pinned by its text; the
+    // assignment regex below does not match it, a type annotation sits
+    // between the name and its `=`) and two assignments, the setter's and the
+    // reset's; nothing in it calls the setter.
+    const ownership = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    expect(ownership).toContain("let openDocumentIds: () => Iterable<string> = () => [];");
+    expect(ownership.match(/\bopenDocumentIds\s*=(?!=)/g)).toHaveLength(2);
+    expect(ownership.match(/\bsetOpenDocumentIdsSource\b/g)).toHaveLength(1);
+  });
+
+  it("the decision's helpers are unexported and named by no other src file", () => {
+    const ownership = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    for (const helper of ["anotherSessionConnected", "claimableByTandem", "claimableChatWaiting"]) {
+      // The positive anchor: the definition is there.
+      expect(ownership, helper).toContain(`function ${helper}(`);
+      expect(ownership, helper).not.toMatch(new RegExp(`export\\s+function\\s+${helper}\\b`));
+      expect(filesMentioning(helper), helper).toEqual([OWNERSHIP]);
+    }
   });
 });
