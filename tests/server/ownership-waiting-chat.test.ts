@@ -684,6 +684,10 @@ async function runAct(w: RowWorld, act: Act, r: Row): Promise<void> {
       register(B("claude"));
       view = view.filter((e) => e.ownerId !== B("claude"));
       noteTransportChanged(B("claude"));
+      // The premise: detached, in its grace, not lapsed.
+      expect(
+        ownershipSnapshotForTests().records.find((r) => r.ownerId === B("claude")),
+      ).toMatchObject({ lapsed: undefined, graceTimer: expect.anything() });
       return;
     case "b-lapsed":
       // As `lapseByGrace`, but the entry stays: lapsed and still registered.
@@ -1496,6 +1500,23 @@ describe("claimable work: the open-documents seam", () => {
     expect(fUpdates).toBe(0);
     expect(getDocOwner(w.f.id)).toBeUndefined();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("not present, a busy queue is not read (Accepted 5): a comment on F counts, and a present poll while F is busy hands nothing", async () => {
+    const w = await rowWorld();
+    setTandemPresenceSource(() => false);
+    lapseByGrace(A);
+    const c = userComment(w.f.ydoc, key("c"));
+    void runDocOp(w.f.id, () => new Promise<void>((r) => (releaseF = r)));
+    expect(decide()).toBe(true);
+    expect(getDocOwner(w.f.id)).toBeUndefined();
+    setTandemPresenceSource(() => true);
+    expect(handed(await reader(TANDEM).poll())).toEqual([]);
+    // The anchor: once F's queue is idle, a new fresh poll hands it.
+    releaseF?.();
+    releaseF = undefined;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(handed(await reader(TANDEM).poll())).toEqual([c]);
   });
 
   it("dark: the seam is never called", async () => {
