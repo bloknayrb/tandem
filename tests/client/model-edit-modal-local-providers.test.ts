@@ -14,6 +14,7 @@ import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSetting
 import {
   endpointHint,
   LOCAL_REQUEST_LINE,
+  LOCAL_SENT_TO_LINE,
   LOCAL_SERVERS_LINE,
 } from "../../src/client/utils/local-model-copy.js";
 import {
@@ -65,6 +66,9 @@ const NAME_PLACEHOLDER: Readonly<Record<string, string>> = {
   "local-lmstudio": "LM Studio (local)",
   "local-other": "Local server",
 };
+/** S7 as a literal: two sentences, one paragraph (26c). */
+const S7 =
+  "For this model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.";
 const HINT_WITH_PORT = (address: string) =>
   `The server's address on this computer, for example ${address}. Leave off /chat/completions; a trailing /v1 is ignored.`;
 const HINT_NO_PORT =
@@ -98,11 +102,12 @@ describe("ModelEditModal — every local provider", () => {
       expect(field.placeholder).toBe(PLACEHOLDER[p]);
     });
 
-    it(`${p}: S1, S2 and S3 are shown, and the hint describes the Endpoint field`, async () => {
+    it(`${p}: S1, S2, S7 and S3 are shown, and the hint describes the Endpoint field`, async () => {
       const m = mountWith(p, false);
       const intro = m.getByTestId("model-edit-local-intro").textContent ?? "";
       expect(intro).toContain(LOCAL_SERVERS_LINE);
       expect(intro).toContain(LOCAL_REQUEST_LINE);
+      expect(intro).toContain(S7);
       const field = m.getByRole("textbox", { name: "Endpoint", description: HINT[p] });
       expect(field).toBe(m.getByTestId("model-edit-endpoint"));
       // The select's own name is untouched by the copy placed after it.
@@ -147,7 +152,13 @@ describe("ModelEditModal — the hint's two shapes (S3)", () => {
   });
 
   it("no new string says a model 'answers', promises quality or names a model", () => {
-    for (const s of [LOCAL_SERVERS_LINE, LOCAL_REQUEST_LINE, endpointHint(""), endpointHint("x")]) {
+    for (const s of [
+      LOCAL_SERVERS_LINE,
+      LOCAL_REQUEST_LINE,
+      LOCAL_SENT_TO_LINE,
+      endpointHint(""),
+      endpointHint("x"),
+    ]) {
       expect(s).not.toMatch(/answers/i);
     }
     expect(LOCAL_SERVERS_LINE).toBe(
@@ -172,7 +183,7 @@ describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () =
     const lines = Array.from(m.getByTestId("model-edit-local-intro").querySelectorAll("p")).map(
       (el) => el.textContent,
     );
-    expect(lines).toEqual([S1, S2]);
+    expect(lines).toEqual([S1, S2, S7]);
     expect(m.queryByTestId("model-edit-provider-note")).toBeNull();
     expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe("");
   }
@@ -312,5 +323,39 @@ describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () =
         /smaller models|recommend|14B/i,
       );
     });
+  }
+});
+
+describe("ModelEditModal — the document-text sentences (26c)", () => {
+  it("LOCAL_SENT_TO_LINE is the two sentences, verbatim", () => {
+    expect(LOCAL_SENT_TO_LINE).toBe(S7);
+  });
+  for (const p of LOCAL_MODEL_PROVIDERS) {
+    it(`${p}: Add and Edit show S7 as the third paragraph`, () => {
+      for (const mount of [() => mountWith(), () => mountWith(p)]) {
+        const m = mount();
+        const lines = Array.from(m.getByTestId("model-edit-local-intro").querySelectorAll("p")).map(
+          (el) => el.textContent,
+        );
+        expect(lines[2]).toBe(S7);
+        cleanup();
+      }
+    });
+  }
+});
+
+// 26b: the whole "Advanced parameters" disclosure is gone, in both modes.
+describe("ModelEditModal — no 'Advanced parameters' (26b)", () => {
+  for (const p of LOCAL_MODEL_PROVIDERS) {
+    for (const mode of ["Add", "Edit"] as const) {
+      it(`${p}, ${mode}: no such text and no disclosure`, () => {
+        const m = mode === "Add" ? mountWith() : mountWith(p);
+        const dialog = m.getByRole("dialog");
+        expect(dialog.textContent).not.toMatch(
+          /Advanced parameters|not editable in this preview|Wave 6|forward-compat/,
+        );
+        expect(dialog.querySelector("details")).toBeNull();
+      });
+    }
   }
 });

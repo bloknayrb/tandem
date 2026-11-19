@@ -240,6 +240,36 @@ describe("FirstRunModelPickerModal — Save says why (V14)", () => {
     expect(addModel).not.toHaveBeenCalled();
     expect(m.onComplete).not.toHaveBeenCalled();
   });
+
+  it("an address the server would refuse is named, and Save stays inert (26a, V13, V14)", async () => {
+    const P3 =
+      "The Endpoint URL must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.";
+    const P4 =
+      "The Endpoint URL is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).";
+    const m = mount();
+    await typeModelId(m, "qwen");
+    const endpoint = m.getByTestId("first-run-endpoint");
+    await fireEvent.input(endpoint, { target: { value: "http://192.168.1.5:11434" } });
+    const dialog = m.getByTestId("first-run-model-modal");
+    expect(dialog.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    expectInertWith(m, P3);
+    await fireEvent.click(saveButton(m));
+    await fireEvent.submit(saveButton(m).closest("form") as HTMLFormElement);
+    expect(addModel).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
+
+    await fireEvent.input(endpoint, { target: { value: "http://127.0.0.1:99999" } });
+    expectInertWith(m, P4);
+
+    await fireEvent.input(endpoint, { target: { value: "http://127.0.0.1:11434" } });
+    expect(m.queryByTestId("first-run-save-reason")).toBeNull();
+    expect(saveButton(m).getAttribute("aria-describedby")).toBeNull();
+    addModel.mockResolvedValue("new-id");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(addModel.mock.calls[0]?.[0]).toMatchObject({ endpoint: "http://127.0.0.1:11434" });
+  });
 });
 
 describe("FirstRunModelPickerModal — saving", () => {

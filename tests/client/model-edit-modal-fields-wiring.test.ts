@@ -171,6 +171,19 @@ describe("one address rule (R3.5)", () => {
     expect(indexes(picker, /endpointAfterProviderChange\(/g)).toHaveLength(1);
   });
 
+  it("validateEndpoint( occurs once in the copy; the first-run window names neither it nor local-endpoint (26a)", () => {
+    const copy = read("src/client/utils/local-model-copy.ts");
+    expect(indexes(copy, /validateEndpoint\(/g)).toHaveLength(1);
+    const picker = read("src/client/components/FirstRunModelPickerModal.svelte");
+    expect(picker).not.toContain("validateEndpoint");
+    expect(picker).not.toContain("local-endpoint");
+  });
+
+  it("the add-model window has no CollapsibleSection and no 'Advanced parameters' (26b)", () => {
+    expect(WINDOW).not.toContain("CollapsibleSection");
+    expect(WINDOW).not.toContain("Advanced parameters");
+  });
+
   it("config.ts defines no LOOPBACK_HOSTS and re-exports the shared rule", () => {
     const config = read("src/server/local-model/config.ts");
     expect(config).not.toMatch(/\bLOOPBACK_HOSTS\b/);

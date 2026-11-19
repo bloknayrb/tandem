@@ -19,7 +19,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings.svelte.js";
-import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../src/client/utils/local-model-copy.js";
+import {
+  LOCAL_REQUEST_LINE,
+  LOCAL_SENT_TO_LINE,
+  LOCAL_SERVERS_LINE,
+} from "../../src/client/utils/local-model-copy.js";
 import { LOCAL_MODEL_PROVIDERS, type ModelProvider } from "../../src/shared/models/contract.js";
 
 afterEach(() => {
@@ -487,6 +491,7 @@ describe("ModelEditModal — an old cloud entry is shown as unavailable", () => 
         expect(v.queryByTestId("model-edit-endpoint-hint")).toBeNull();
         expect(dialog.textContent).not.toContain(LOCAL_SERVERS_LINE);
         expect(dialog.textContent).not.toContain(LOCAL_REQUEST_LINE);
+        expect(dialog.textContent).not.toContain(LOCAL_SENT_TO_LINE);
         expect(v.queryByTestId("model-edit-apikey")).toBeNull();
         expect(v.queryByTestId("model-edit-apikey-replace-btn")).toBeNull();
         expect(document.activeElement).toBe(close);

@@ -16,7 +16,11 @@ import { cleanup, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
-import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../src/client/utils/local-model-copy";
+import {
+  LOCAL_REQUEST_LINE,
+  LOCAL_SENT_TO_LINE,
+  LOCAL_SERVERS_LINE,
+} from "../../src/client/utils/local-model-copy";
 import { isLocalProvider, VALID_MODEL_PROVIDERS } from "../../src/shared/models/contract";
 import { installHeldFetch } from "../helpers/held-fetch";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
@@ -141,6 +145,7 @@ function expectIntro(view: ReturnType<typeof mount>) {
   const text = intro.textContent ?? "";
   expect(text).toContain(LOCAL_SERVERS_LINE);
   expect(text).toContain(LOCAL_REQUEST_LINE);
+  expect(text).not.toContain(LOCAL_SENT_TO_LINE);
   expect(text).not.toMatch(/answers/i);
   // Between the chat-answerer section and the list.
   const section = view.getByTestId("chat-answerer-section");
