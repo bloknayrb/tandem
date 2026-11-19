@@ -178,7 +178,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "start-or-wake forwards only a document that goes to Tandem's Claude), so under " +
       "inbox scope a user's next comment on that document waits until some session polls for " +
       "an unrelated reason.",
-    closedBy: "PR 3b (presence, the ownership frames and the start rules of 3b-2b2).",
+    closedBy:
+      "PR 3b (presence and the ownership frames; 3b-2b1c-a's start-or-wake does not cover a " +
+      "document that goes unowned).",
   },
   {
     gap:

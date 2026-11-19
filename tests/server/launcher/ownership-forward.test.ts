@@ -776,6 +776,8 @@ describe("the decision table: A lapses", () => {
     const { d } = worldA();
     lapse(A);
     expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+    reachedStepFive(d.id);
+    expect(causes).toEqual(["lapse"]);
     expect(sink.mock.calls).toEqual([["document"]]);
     const h = makeSupervisor();
     await h.sup.startFresh(cwdDir);
@@ -984,9 +986,12 @@ describe("the decision table: A lapses", () => {
   it("A10 (anchor A12): the licence refuses at the call, idle-stopped: nothing; after admitting again and resumeAfterLicence(), still no spawn", async () => {
     const lic = licenceDouble();
     const { h } = await idleStopped({ aiRefusal: lic.fn });
-    worldA();
+    const { d } = worldA();
     lic.refusing = true;
     lapse(A);
+    reachedStepFive(d.id);
+    expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+    expect(causes).toEqual(["lapse"]);
     expect(sink.mock.calls).toEqual([["document"]]);
     lic.refusing = false;
     await lockBarrier(h);
@@ -1022,6 +1027,7 @@ describe("the decision table: A lapses", () => {
     register(B);
     const writes = c1.stdin.writes.length;
     lapse(A);
+    reachedStepFive(d.id);
     expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
     expect(causes).toEqual(["lapse"]);
     expect(sink).not.toHaveBeenCalled();
@@ -1035,6 +1041,8 @@ describe("the decision table: A lapses", () => {
     const { d } = worldA();
     register(B);
     lapse(A);
+    reachedStepFive(d.id);
+    expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
     expect(causes).toEqual(["lapse"]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
@@ -1047,12 +1055,14 @@ describe("the decision table: A lapses", () => {
   it("A19 (anchor A9; the own-Claude row, as built): an attached claude: record standing for Tandem's own child's transport: nothing", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
-    worldA();
+    const { d } = worldA();
     // Constructed: production has it (the child's transport on a claude:
     // record until 3b-2b3), the harness does not.
     registerAs("claude:fwd-own-child", { recordKind: "claude", openStreams: 1, streamEver: true });
     const writes = c1.stdin.writes.length;
     lapse(A);
+    reachedStepFive(d.id);
+    expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
     expect(causes).toEqual(["lapse"]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
@@ -1076,6 +1086,7 @@ describe("the decision table: A lapses", () => {
     expect(records.find((r) => r.ownerId === A)?.lapsed).toBe(true);
     expect(records.find((r) => r.ownerId === B)?.lapsed).toBeFalsy();
     expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+    reachedStepFive(d.id);
     expect(causes).toEqual(["lapse"]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
@@ -1117,6 +1128,8 @@ describe("the decision table: A lapses", () => {
     register(C);
     expect(takeDocument(d.id, C)).toEqual({ ok: true, took: true });
     expect(getDocOwner(d.id)).toMatchObject({ ownerId: C, kind: "opened" });
+    // Nothing yet: the user open's own forward is dropped (A3).
+    expect(children).toHaveLength(1);
     causes = [];
     lapse(C);
     expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
