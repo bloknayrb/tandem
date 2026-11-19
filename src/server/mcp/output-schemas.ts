@@ -148,10 +148,11 @@ const VisibleReplySchema = z.object({
   timestamp: z.number(),
   editedAt: z.number().optional(),
   rev: z.number().optional(),
-  // #1626. `collectRepliesForAnnotation` pushes the RAW Y.Map record and
-  // `mcpStructured` ships it, so an undeclared key is stripped by
-  // `mcp-output-schemas.test.ts`' strip-mode parse and turns `check` red —
-  // Claude would be able to write a proposal it could not read back. Privacy is
+  // #1626. Declared so Claude can read back the proposal it wrote. Since #2465
+  // `tandem_getAnnotations` strips every undeclared key from the reply before
+  // sending it, so an undeclared field is silently dropped rather than turning
+  // `mcp-output-schemas.test.ts` red; `pull-tools-declared-shape.test.ts`
+  // (G2, G5) is the guard on what this tool sends. Privacy is
   // unchanged: this is Claude's own text on a Claude-authored reply, and
   // `channelVisibleReplies` does the filtering as before.
   suggestedText: z
