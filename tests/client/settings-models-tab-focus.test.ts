@@ -567,3 +567,109 @@ describe("A2: a stale save leaves the last close's focus alone", () => {
     expect(focused).toBe(v.must("model-edit-btn-b"));
   });
 });
+
+describe("review round 1: catch, display order, the Confirm latch, settled sequences", () => {
+  it("a save that THROWS after its window closed changes nothing in the next window (the generation check in catch)", async () => {
+    modelsPose.models = [local("a")];
+    const v = mount();
+    await openAddFrom(v, v.must("model-add-btn"));
+    await fillAndSave(v, "first");
+    await settle();
+    await fireEvent.click(v.getByRole("button", { name: "Cancel" }));
+    await tick();
+    await openAddFrom(v, v.must("model-add-btn"));
+    await fillAndSave(v, "second");
+    const save = v.must("model-edit-save");
+
+    harness.writes.release("throw"); // the first
+    await settle();
+    expect(v.el("model-edit-modal")).not.toBeNull();
+    expect((v.must("model-edit-modelid") as HTMLInputElement).value).toBe("second");
+    expect(v.el("model-edit-error")).toBeNull();
+    expect(active()).toBe(save);
+  });
+
+  it("a save that throws in its own window keeps it open and shows the error", async () => {
+    modelsPose.models = [local("a")];
+    const v = mount();
+    await fireEvent.click(v.must("model-edit-btn-a"));
+    await fillAndSave(v, "x");
+    const save = v.must("model-edit-save");
+    await settle();
+    harness.writes.release("throw");
+    await settle();
+    expect(v.el("model-edit-modal")).not.toBeNull();
+    expect(v.must("model-edit-error").textContent?.trim()).toBe("Keychain unavailable");
+    expect(active()).toBe(save);
+  });
+
+  it("the successor is the next row in DISPLAY order, not store order (two providers)", async () => {
+    // Store order: x (LM Studio), a, b (Ollama). Shown: a, b under Ollama, then x.
+    modelsPose.models = [local("x", "local-lmstudio"), local("a"), local("b")];
+    const v = mount();
+    await fireEvent.click(v.must("model-delete-btn-b"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-b"));
+    expect(active()).toBe(v.must("model-delete-btn-x"));
+    harness.writes.release("commit");
+    await settle();
+    expect(active()).toBe(v.must("model-delete-btn-x"));
+  });
+
+  it("the previous row in display order, when the deleted row is shown last", async () => {
+    modelsPose.models = [local("x", "local-lmstudio"), local("a"), local("b")];
+    const v = mount();
+    await fireEvent.click(v.must("model-delete-btn-x"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-x"));
+    expect(active()).toBe(v.must("model-delete-btn-b"));
+  });
+
+  it("a doubled Confirm while its delete waits behind another write sends one delete", async () => {
+    modelsPose.models = [local("a"), local("b")];
+    const v = mount();
+    await fireEvent.click(v.must("model-toggle-b")); // an earlier write, held
+    await settle();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await tick();
+    const confirm = v.must("model-delete-confirm-a");
+    await fireEvent.click(confirm);
+    await fireEvent.click(confirm);
+    await settle();
+    expect(harness.calls.deleteModel).toBe(1);
+    harness.writes.release("commit"); // the toggle
+    await settle();
+    harness.writes.release("commit"); // the delete
+    await settle();
+    expect(v.el("model-row-a")).toBeNull();
+    // Once settled, the latch is clear: the row is gone, nothing more to send.
+    expect(harness.writes.pendingCount).toBe(0);
+  });
+
+  it("Confirm row a, then Confirm row b (now the only row) before a settles, then a rolls back: focus ends on a's restored Delete", async () => {
+    modelsPose.models = [local("a"), local("b")];
+    const v = mount();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-a"));
+    await settle();
+    expect(v.el("model-row-a")).toBeNull();
+    await fireEvent.click(v.must("model-delete-btn-b"));
+    await tick();
+    v.must("model-delete-confirm-b").focus();
+    await fireEvent.click(v.must("model-delete-confirm-b"));
+    await settle();
+    // a rolls back; b's turn then removes b with its focused Confirm, so focus
+    // is lost when a's flow looks, and a's restored Delete takes it.
+    harness.writes.release("rollback");
+    await settle();
+    expect(v.el("model-row-a")).not.toBeNull();
+    expect(v.el("model-row-b")).toBeNull();
+    const deleteA = v.must("model-delete-btn-a");
+    expect(active()).toBe(deleteA);
+    // b's settle finds focus somewhere real that its flow did not put there.
+    harness.writes.release("commit");
+    await settle();
+    expect(active()).toBe(deleteA);
+  });
+});

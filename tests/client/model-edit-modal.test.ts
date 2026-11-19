@@ -701,3 +701,29 @@ describe("ModelEditModal — one save per press (#1123 A3, Ruling R-b)", () => {
     });
   }
 });
+
+describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (source pin)", () => {
+  // An $effect that reads nothing reactive also runs once on mount, so the
+  // behaviour cases above cannot tell it from onMount; the brief asks for
+  // onMount, which can never re-run.
+  it("the select and Close are focused inside onMount, and no $effect moves focus", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(import.meta.dirname, "../../src/client/components/ModelEditModal.svelte"),
+      "utf8",
+    )
+      .replace(/\r\n/g, "\n")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    // Top-level calls: each starts at column 0 and ends at the next "\n});".
+    const block = (start: number) => src.slice(start, src.indexOf("\n});", start));
+    const mounts = [...src.matchAll(/^onMount\(/gm)].map((m) => block(m.index ?? 0));
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0]).toContain('[data-testid="model-edit-provider"]');
+    expect(mounts[0]).toContain('[data-testid="model-edit-unavailable-close"]');
+    expect(mounts[0]).toMatch(/\.focus\(\)/);
+    const effects = [...src.matchAll(/^\$effect(?:\.pre)?\(/gm)].map((m) => block(m.index ?? 0));
+    for (const e of effects) expect(e).not.toMatch(/\.focus\(/);
+  });
+});

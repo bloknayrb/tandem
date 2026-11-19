@@ -16,7 +16,9 @@
  */
 import { modelsPose } from "./models-pose.svelte";
 
-type Outcome = "commit" | "rollback";
+/** "throw": the list is restored and the caller's promise rejects (as a
+ *  pre-write keychain failure does in the real store). */
+type Outcome = "commit" | "rollback" | "throw";
 type Entry = Record<string, unknown> & { id: string };
 
 interface PendingWrite {
@@ -32,14 +34,19 @@ export function createStoreWrites() {
   /** Release every write as it starts, with this outcome (null: hold them). */
   let autoOutcome: Outcome | null = null;
 
-  function write<T>(label: string, apply: () => void, results: Record<Outcome, T>): Promise<T> {
+  function write<T>(
+    label: string,
+    apply: () => void,
+    results: Record<"commit" | "rollback", T>,
+  ): Promise<T> {
     const run = async (): Promise<T> => {
       const snapshot = modelsPose.models;
       apply();
       const outcome =
         autoOutcome ??
         (await new Promise<Outcome>((resolve) => inFlight.push({ label, release: resolve })));
-      if (outcome === "rollback") modelsPose.models = snapshot;
+      if (outcome !== "commit") modelsPose.models = snapshot;
+      if (outcome === "throw") throw new Error("Keychain unavailable");
       return results[outcome];
     };
     const turn = queue.then(run);

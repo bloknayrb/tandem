@@ -380,20 +380,6 @@ function focusLost(): boolean {
   return active === null || active === document.body || !active.isConnected;
 }
 
-/** Focus is where Settings' stranded-focus recovery puts it when a focused
- *  control here is removed (`rehomeStrandedFocus`, `SettingsModal.svelte`): the
- *  current section's nav button, or the narrow layout's menu button. Read as
- *  "dropped by us", so the delete below can still finish its hand-off. */
-function focusRehomedBySettings(): boolean {
-  const active = document.activeElement;
-  return (
-    active instanceof HTMLElement &&
-    active.matches(
-      '.settings-modal-nav-btn[aria-current="page"], [data-testid="settings-modal-narrow-hamburger"]',
-    )
-  );
-}
-
 function openAdd() {
   if (access.blocked) return;
   openGen++;
@@ -499,26 +485,37 @@ function rowIds(): string[] {
 // Focus through Delete (#1123, ADR-039 item 27; Rulings R-c, R-d). Each swap of
 // Delete for Confirm and Cancel, and back, unmounts the focused button, so each
 // hands focus on itself.
+// A Confirm whose delete is still in flight (queued behind another write,
+// say). Its button stays mounted meanwhile, so a doubled Enter would otherwise
+// send the delete twice. Plain, never rendered.
+const deleting = new Set<string>();
+
 async function confirmDelete(id: string) {
   if (access.blocked) return;
+  if (deleting.has(id)) return;
+  deleting.add(id);
+  try {
+    await runDelete(id);
+  } finally {
+    deleting.delete(id);
+  }
+}
+
+async function runDelete(id: string) {
   const ids = rowIds();
   const at = ids.indexOf(id);
   const successor = at === -1 ? undefined : (ids[at + 1] ?? ids[at - 1]);
-  // The element this call last put focus on. After the call settles, focus is
-  // moved again only if it is still there or was lost: never out of a window
-  // opened meanwhile, nor off a control the user has since moved to.
+  // The element this flow last focused. After the call settles or rolls back,
+  // focus is moved only when it is truly lost (on <body> or a detached
+  // element) or still on that element: anywhere else, including where
+  // Settings' own recovery put it, it is left alone (the review session's
+  // ruling on A5). Never while the add-model window is open.
   let placed: HTMLElement | null = null;
   const place = (el: HTMLElement | null) => {
     el?.focus();
     if (el) placed = el;
   };
-  // Nothing placed yet (the only row, with an earlier write queued): the row
-  // went while Confirm had focus, so Settings may have re-homed it already.
-  const mayMove = () =>
-    !editorOpen &&
-    (focusLost() ||
-      document.activeElement === placed ||
-      (placed === null && focusRehomedBySettings()));
+  const mayMove = () => !editorOpen && (focusLost() || document.activeElement === placed);
   let call: Promise<void>;
   if (successor !== undefined) {
     // Another row stays: its Delete takes focus before this row can go (else,
@@ -529,8 +526,8 @@ async function confirmDelete(id: string) {
     // The only row. The store applies its removal when the write's turn comes
     // (at once when nothing is queued ahead of it), so the empty state's Add
     // button is focused only once the row is really gone; with an earlier
-    // write queued, nothing yet (Accepted: Settings may first put focus on the
-    // Models nav button).
+    // write queued, nothing yet (Accepted: Settings' recovery may put focus on
+    // the Models nav button, and it then stays there).
     call = models.deleteModel(id);
     await tick();
     if (!hasModel(id)) place(byTestId("model-add-btn"));
@@ -542,8 +539,8 @@ async function confirmDelete(id: string) {
   // another row meanwhile keeps its own.
   if (!access.blocked && pendingDeleteId === id) pendingDeleteId = null;
   if (hasModel(id)) {
-    // Rolled back: the row is back (as new DOM), and focus goes to it, even
-    // when an Add button exists.
+    // Rolled back: the row is back (as new DOM). When focus is moved, the
+    // restored row is the target, even when an Add button exists.
     await tick();
     if (!mayMove()) return;
     byTestId(

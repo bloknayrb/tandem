@@ -172,7 +172,7 @@ describe("one frame later, focus is still where the Models tab put it", () => {
     expect(document.activeElement).toBe(v.must("model-add-btn"));
   });
 
-  it("Confirm on the only row with an earlier write queued: Settings may first take focus to the nav button; the empty state's button after settle, never a detached one", async () => {
+  it("Accepted: Confirm on the only row with an earlier write queued: Settings' recovery takes focus to the Models nav button, and it stays there after the delete settles", async () => {
     modelsPose.models = [local("a")];
     const v = await mountOnModels();
     await fireEvent.click(v.must("model-toggle-a")); // an earlier write, held
@@ -190,15 +190,60 @@ describe("one frame later, focus is still where the Models tab put it", () => {
     expect(harness.writes.pendingCount).toBe(1);
     focusDropped();
     await afterNextFrame();
-    // Accepted: Settings' recovery got there first.
-    expect(document.activeElement).toBe(v.must("settings-modal-tab-models"));
+    const nav = v.must("settings-modal-tab-models");
+    expect(document.activeElement).toBe(nav);
     harness.writes.release("commit"); // the delete
     await drain();
     await afterNextFrame();
-    const focused = document.activeElement as HTMLElement;
-    expect(focused.isConnected).toBe(true);
-    expect(focused).toBe(v.must("model-add-btn"));
-    expect(focused.textContent?.trim()).toBe("Add your first model");
+    // Not truly lost, and not where this delete put it: left alone (the review
+    // session's ruling on A5), the same as a user who moved there themselves.
+    expect(document.activeElement).toBe(nav);
+  });
+
+  it("the same delete, with the user having moved to the Models nav button themselves: left there", async () => {
+    modelsPose.models = [local("a")];
+    const v = await mountOnModels();
+    await fireEvent.click(v.must("model-toggle-a"));
+    await drain();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await fireEvent.click(v.must("model-delete-confirm-a"));
+    const nav = v.must("settings-modal-tab-models");
+    nav.focus(); // Shift+Tab out of the list
+    harness.writes.release("commit"); // the toggle; the row goes
+    await drain();
+    harness.writes.release("commit"); // the delete
+    await drain();
+    await afterNextFrame();
+    expect(document.activeElement).toBe(nav);
+  });
+
+  it("Accepted: Edit, change provider, Save while a toggle is queued, then Cancel: the queued move detaches the Edit button focus went to, and focus ends on the Models nav button", async () => {
+    modelsPose.models = [local("a"), local("b")];
+    const v = await mountOnModels();
+    await fireEvent.click(v.must("model-toggle-b")); // an earlier write, held
+    await drain();
+    await fireEvent.click(v.must("model-edit-btn-a"));
+    const select = v.must("model-edit-provider") as HTMLSelectElement;
+    select.value = "local-lmstudio";
+    await fireEvent.change(select);
+    await fireEvent.input(v.must("model-edit-modelid"), { target: { value: "moved" } });
+    await fireEvent.submit(v.must("model-edit-save").closest("form") as HTMLFormElement);
+    await drain();
+    await fireEvent.click(v.getByRole("button", { name: "Cancel" }));
+    await tick();
+    const oldEdit = v.must("model-edit-btn-a");
+    expect(document.activeElement).toBe(oldEdit);
+    harness.writes.release("commit"); // the toggle; the update's turn moves the row
+    await drain();
+    expect(oldEdit.isConnected).toBe(false);
+    focusDropped();
+    await afterNextFrame();
+    const nav = v.must("settings-modal-tab-models");
+    expect(document.activeElement).toBe(nav);
+    harness.writes.release("commit"); // the update settles after its window closed
+    await drain();
+    await afterNextFrame();
+    expect(document.activeElement).toBe(nav);
   });
 
   it("a rollback after Cancel during a pending Add from the empty state: the empty state's button", async () => {
