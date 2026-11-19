@@ -182,7 +182,7 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     ["non-streaming", false],
     ["streaming", true],
   ])(
-    "a %s body over the 4 MiB cap is stopped with the message classifyFailure buckets",
+    "a %s body over the 4 MiB cap is stopped and gives the too-large message",
     async (_label, streaming) => {
       const { base } = await listen((_req, res) => {
         res.writeHead(200, {

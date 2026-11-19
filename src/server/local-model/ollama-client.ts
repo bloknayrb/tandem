@@ -94,8 +94,10 @@ export interface ChatOpts {
  *  - `http`: the server answered with a non-2xx status;
  *  - `unreadable`: a 200 whose body was not JSON, or a stream with no valid frame;
  *  - `too-large`: the response passed the byte cap.
- * An error with no tag (a bug in Tandem's own code, a caller's callback, an
- * abort) is none of these, and the collaborator says so generically.
+ * An error with no tag (a throw from Tandem's own code outside the fetch call
+ * and the body reads, a caller's callback, an abort) is none of these, and the
+ * collaborator says so generically. Anything the fetch call itself rejects with,
+ * other than an abort, is `unreachable`.
  */
 export type LocalModelFailure =
   | { kind: "unreachable" }
