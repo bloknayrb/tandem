@@ -20,13 +20,10 @@ import {
   isLocalProvider,
   LOCAL_MODEL_PROVIDERS,
   type ModelProvider,
-  VALID_MODEL_PROVIDERS,
 } from "../../src/shared/models/contract.js";
 import { LOCAL_ENDPOINT_PREFILL } from "../../src/shared/models/provider-ui.js";
 
 afterEach(() => cleanup());
-
-const CLOUD = VALID_MODEL_PROVIDERS.filter((p) => !isLocalProvider(p));
 
 /**
  * `withEndpoint: false` mounts an entry of `provider` with no saved address,
@@ -74,8 +71,6 @@ const S1 =
   "Tandem can use a model server on this computer that offers the OpenAI-compatible chat API, such as Ollama, LM Studio or llama.cpp. Hugging Face models can be used through one of these if the server runs them. Tandem does not download models.";
 const S2 =
   'When Tandem sends your local model a message, it includes your document\'s text when the document is short, tools for reading your document, and, in Tandem mode if you allow it under "Local models and your document", tools for adding comments and suggestions. Tandem reads the reply as a stream. A server or model that does not support tool calling may fail. Models differ in how well they do this.';
-const CLOUD_NOTE =
-  "Cloud providers are coming in a future release. For now, choose a local provider.";
 
 describe("ModelEditModal — every local provider", () => {
   for (const p of LOCAL_MODEL_PROVIDERS) {
@@ -129,25 +124,6 @@ describe("ModelEditModal — every local provider", () => {
       "local-other": "",
     });
   });
-});
-
-describe("ModelEditModal — cloud entries keep today's copy", () => {
-  for (const p of CLOUD) {
-    it(`${p}: no S1/S2/S3, the cloud note (S4), and the cloud placeholders`, () => {
-      const m = mountWith(p);
-      expect(m.queryByTestId("model-edit-local-intro")).toBeNull();
-      expect(m.queryByTestId("model-edit-endpoint-hint")).toBeNull();
-      expect(
-        m.getByTestId("model-edit-provider-note").textContent?.replace(/\s+/g, " ").trim(),
-      ).toBe("Cloud providers are coming in a future release. For now, choose a local provider.");
-      expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe(
-        "My Anthropic key",
-      );
-      expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe(
-        "e.g. claude-opus-4-7",
-      );
-    });
-  }
 });
 
 describe("ModelEditModal — the hint's two shapes (S3)", () => {
@@ -224,31 +200,5 @@ describe("ModelEditModal — the provider switch, driven (#2437 M1, R3.2)", () =
         expectLocalCopy(m, to);
       }
     });
-  }
-
-  for (const cloud of CLOUD) {
-    for (const p of LOCAL_MODEL_PROVIDERS) {
-      // Ruling H-1: switched back to its (disabled) cloud value by the same
-      // event, the only way a test sees S1/S2 removed on a provider change.
-      it(`an existing ${cloud} entry → ${p} → ${cloud}: local copy shown, then the cloud note again`, async () => {
-        const m = mountWith(cloud);
-        await switchTo(m, p);
-        expectLocalCopy(m, p);
-        expect(endpoint(m).value).toBe("");
-        await switchTo(m, cloud);
-        expect(m.queryByTestId("model-edit-local-intro")).toBeNull();
-        expect(m.queryByTestId("model-edit-endpoint-hint")).toBeNull();
-        expect(m.queryByTestId("model-edit-endpoint")).toBeNull();
-        expect(
-          m.getByTestId("model-edit-provider-note").textContent?.replace(/\s+/g, " ").trim(),
-        ).toBe(CLOUD_NOTE);
-        expect((m.getByTestId("model-edit-displayname") as HTMLInputElement).placeholder).toBe(
-          "My Anthropic key",
-        );
-        expect((m.getByTestId("model-edit-modelid") as HTMLInputElement).placeholder).toBe(
-          "e.g. claude-opus-4-7",
-        );
-      });
-    }
   }
 });

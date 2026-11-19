@@ -13,7 +13,10 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
 
 const CASES: Array<[string, string[]]> = [
-  ["src/client/components/ModelEditModal.svelte", ["mem-local-intro", "mem-hint"]],
+  [
+    "src/client/components/ModelEditModal.svelte",
+    ["mem-local-intro", "mem-hint", "mem-unavailable"],
+  ],
   ["src/client/components/FirstRunModelPickerModal.svelte", ["frm-hint"]],
 ];
 

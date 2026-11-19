@@ -10,7 +10,12 @@ import type { ModelsEntry } from "../../src/shared/models/contract.js";
  */
 type E = Pick<ModelsEntry, "id" | "provider" | "enabled">;
 const local = (id: string, enabled = true): E => ({ id, provider: "local-ollama", enabled });
-const cloud = (id: string, enabled = true): E => ({ id, provider: "anthropic", enabled });
+const cloud = (
+  id: string,
+  enabled = true,
+  provider: "anthropic" | "openai" | "gemini" = "anthropic",
+): E => ({ id, provider, enabled });
+const CLOUD_KINDS = ["anthropic", "openai", "gemini"] as const;
 
 describe("autoDefaultFor", () => {
   describe("a default naming an entry is left alone", () => {
@@ -35,6 +40,17 @@ describe("autoDefaultFor", () => {
 
   it("an enabled cloud entry beside one enabled local gives the local id", () => {
     expect(autoDefaultFor([cloud("c"), local("a")], null)).toBe("a");
+  });
+
+  it("no default with enabled entries of all three cloud kinds gives null", () => {
+    const clouds = CLOUD_KINDS.map((p) => cloud(`c-${p}`, true, p));
+    expect(autoDefaultFor(clouds, null)).toBeNull();
+  });
+
+  it("all three cloud kinds enabled beside one enabled local gives the local id", () => {
+    const clouds = CLOUD_KINDS.map((p) => cloud(`c-${p}`, true, p));
+    expect(autoDefaultFor([...clouds, local("a")], null)).toBe("a");
+    expect(autoDefaultFor([local("a"), ...clouds], null)).toBe("a");
   });
 
   it("a switched-off local alone gives null", () => {
