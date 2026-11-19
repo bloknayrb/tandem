@@ -360,6 +360,7 @@ mode-toggle
 model-add-btn
 model-default-{*}
 model-delete-btn-{*}
+model-delete-cancel-{*}
 model-delete-confirm-{*}
 model-edit-apikey
 model-edit-apikey-replace-btn

@@ -60,7 +60,7 @@ interface Props {
     plaintextApiKey?: string;
     endpoint?: string;
     enabled: boolean;
-  }) => void;
+  }) => void | Promise<unknown>;
 }
 
 const { entry, error, saveUnavailable = false, onCancel, onSave }: Props = $props();
@@ -166,8 +166,15 @@ const canSave = $derived(
 // the page is refused (#2404), or while the form cannot save.
 const saveInert = $derived(saveUnavailable || !canSave);
 
-function handleSubmit(e: SubmitEvent) {
+// One save per press (#1123, carried item 6): set from the press until the
+// parent's save settles, so a second press (or a held Enter) sends nothing.
+// Save stays focusable and `aria-disabled` meanwhile, never natively disabled,
+// and reads "Saving…" (Ruling R-b). Each opened window has its own latch.
+let saving = $state(false);
+
+async function handleSubmit(e: SubmitEvent) {
   e.preventDefault();
+  if (saving) return;
   if (!canSave || saveUnavailable) return;
 
   // Build the payload. plaintextApiKey is set ONLY when the user typed a
@@ -188,22 +195,33 @@ function handleSubmit(e: SubmitEvent) {
   if (isLocal && endpoint.trim()) {
     payload.endpoint = endpoint.trim();
   }
-  onSave(payload);
+  saving = true;
+  try {
+    await onSave(payload);
+  } catch (err) {
+    // `onSave` is a prop: the Models tab's never rejects, but a caller's might.
+    console.warn("[models] save failed", err);
+  } finally {
+    // Harmless after unmount (a committed save closes this window).
+    saving = false;
+  }
 }
 
 let dialogEl: HTMLDivElement | undefined = $state();
 
-// The unavailable view only: move focus to Close, so its name and the sentence
-// describing the dialog are read on open. The local edit and Add windows move
-// no focus on mount (that is ADR-039 item 27's, the accessibility PR).
+// Focus moves in once, on open (#1123, ADR-039 item 27): the unavailable view
+// to Close, so its name and the sentence describing the dialog are read; Add and
+// Edit to the Provider select, the first field, so the dialog's name is read
+// and Escape works at once (the dialog's Escape is its own `onkeydown`). A
+// provider change never moves focus. `onMount`, never an `$effect`: it must run
+// once, not again on a later state change.
 onMount(() => {
   // Found through the dialog's existing binding: a `bind:this` of its own would
   // need a new `$state` for nothing reactive.
-  if (providerUnavailable) {
-    dialogEl
-      ?.querySelector<HTMLButtonElement>('[data-testid="model-edit-unavailable-close"]')
-      ?.focus();
-  }
+  const target = providerUnavailable
+    ? '[data-testid="model-edit-unavailable-close"]'
+    : '[data-testid="model-edit-provider"]';
+  dialogEl?.querySelector<HTMLElement>(target)?.focus();
 });
 
 // Tab focus trap (#1778). `aria-modal="true"` promises assistive tech that
@@ -450,14 +468,14 @@ function startReplacingKey() {
         type="submit"
         class="mem-btn mem-btn--primary"
         data-testid="model-edit-save"
-        aria-disabled={saveInert}
+        aria-disabled={saveInert || saving}
         aria-describedby={saveUnavailable
           ? "model-edit-error-text"
           : saveReason !== null
             ? "model-edit-save-reason"
             : undefined}
       >
-        {isEditing ? "Save changes" : "Add model"}
+        {saving ? "Saving…" : isEditing ? "Save changes" : "Add model"}
       </button>
     </div>
     <!-- Why Save is greyed out (P10(5)). Not a live region: nothing is

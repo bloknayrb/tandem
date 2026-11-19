@@ -1809,6 +1809,23 @@ His picks, each picked from options (label, then the option's description exactl
   - **Item 22** of the owed list in the amendment on switching local models on is closed: both windows fill in Ollama and LM Studio and not llama.cpp or Other, Save says why it cannot save, and the add-model window's Display name is optional with the first-run window's fallback, with tests.
   - **Item 26a:** the add-model window's half is done. The first-run window's half stays owed before the flip: it is the first window a new user meets, and it still saves a network address silently. Items 26b, 26c and 27 stay owed, unchanged.
 
+**Amendment 2026-11-19 (focus into and out of the add-model window, one save per press, still dark).** The review session's Rulings R-b, R-c and R-d, built in the first of two PRs for #1123 from the builder brief on #1123 ([comment 7018460733](https://github.com/bloknayrb/tandem/issues/1123#issuecomment-7018460733)); the second closes item 27. `BYO_MODELS_ENABLED` is unchanged, and nothing a dark user sees changes: the add-model window mounts only from the Models tab, which `SettingsModal.svelte` filters out while dark (pinned by `tests/client/local-providers-dark.test.ts`). No server, store or route change.
+
+- **The review session's rulings** (built as written; Bryan can change them). **R-b:** while a save is in flight, the add-model window's Save reads "Saving…", as the first-run window's does. **R-c:** Delete moves focus to Cancel, not Confirm, so a held or doubled Enter cannot delete. **R-d:** after a confirmed delete, focus goes to the next row's Delete, else the previous row's, else whichever Add button exists.
+- **What is built.**
+  - *Focus in.* On open, Add and Edit put focus on the Provider select (the unavailable view keeps Close), once, so the dialog is read and Escape works at once. A provider change never moves focus.
+  - *Focus out.* On every close (Cancel, ×, Escape, a click outside) and every committed save, focus goes back to the Edit or View button of the entry the window was opened for, looked up again by its test id (its row may have moved to another provider's group), else to whichever Add button there is, in the same task, before Settings' next-frame recovery. A save that does not commit leaves the window and focus as they are. A save that settles after its window closed changes nothing, except that when its rollback removed the focused button, focus is put back in the list the same way.
+  - *One save per press.* Save is latched from the press until the save settles; a second press or a held Enter sends nothing. Meanwhile Save reads "Saving…" and stays `aria-disabled`, never natively disabled.
+  - *Delete.* Delete focuses its row's Cancel (R-c); Cancel focuses Delete. Confirm hands focus on as R-d says, before the call when another row stays; for the only row, to the empty state's Add button once the row has gone. A delete that is rolled back puts focus on the restored row's Delete (its Cancel while the page is refused). After the call settles, focus is moved only if it is still where this delete put it or was lost, never out of a window opened meanwhile or off a control the user has moved to (the builder's narrowing of R-d, after the plan review; Bryan can change it). A Delete pressed on another row meanwhile keeps its own pair.
+- **Carried items.** 4 (the edit window moved no focus in and restored none) and 6 (a double click on Save sent two saves) are built.
+- **Accepted** (open to Bryan's change).
+  - Deleting the only row while an earlier write is still queued: the row goes while Confirm has focus, and Settings' recovery may first move focus to the Models nav button before it lands on the empty state's Add button.
+  - Any rollback of a delete moves focus twice (to the next row or the Add button, then to the restored row).
+  - A conflict that makes the store reload the list can remove the row focus was handed to, and Settings' recovery then takes it to the Models nav button.
+  - Cancel on a confirmed delete still waiting behind another write shows Delete again, and the delete still goes through, as before.
+  - Closing the window does not cancel a pending save (as before).
+- **Item 27** stays owed: the row controls' names, the first-run picker's subtitle and forced colours come in the second PR, which closes it.
+
 **Cross-references:** #1123 (engineering tracker, M0–M4), ADR-038 §3, ADR-040 §1/§2/§3, ADR-031 (origins), ADR-026/027 (the `author` model #1123 M3 extends), roadmap Wave 5M / v0.17.0.
 
 ---

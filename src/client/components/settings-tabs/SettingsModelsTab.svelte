@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, tick } from "svelte";
 import { type ChatAnswerer, isLocalProvider } from "../../../shared/models/contract";
 import { MODELS_TAB_ORDER, providerHeading } from "../../../shared/models/provider-ui";
 import { createChatAnswerer } from "../../hooks/useChatAnswerer.svelte";
@@ -328,12 +328,22 @@ const grouped = $derived.by(() => {
 });
 
 let editingEntry = $state<ModelRegistryEntry | undefined>(undefined);
-// The "View" button that opened an old cloud entry's window (#1123). That
-// window's Close unmounts with it, and Settings' stranded-focus recovery would
-// then put focus on the Models nav button, losing the user's place in the list,
-// so closing it hands focus back here first. Plain, never rendered. The local
-// edit and Add windows are left as they are (ADR-039 item 27).
-let unavailableOpener: HTMLElement | null = null;
+// Where focus goes when the window closes (#1123, ADR-039 item 27): the id of
+// the entry whose Edit or View opened it, or null for an Add. An id, never the
+// opener element: a provider change can move the row to another bucket (new
+// DOM), and a rollback can swap the list for the empty state. Plain, never
+// rendered.
+let returnToId: string | null = null;
+// Bumped by every open and every close. A save captures it before its await
+// and acts afterwards only if it still matches, so a save that settles after
+// its window was closed (and perhaps another opened) can neither close nor
+// fill the new one. Plain, never rendered.
+let openGen = 0;
+// The return target of the window that closed last, for a save that settles
+// after its window closed: its rollback can detach the button focus went to.
+let lastReturnId: string | null = null;
+// The element holding the list and both Add buttons, for the focus lookups.
+let listEl = $state<HTMLElement | undefined>(undefined);
 let editorOpen = $state(false);
 let pendingDeleteId = $state<string | null>(null);
 // Modal-scoped error: a save failure (pre-write keychain throw OR a write that
@@ -343,18 +353,47 @@ let pendingDeleteId = $state<string | null>(null);
 // delete) that have no modal.
 let modalError = $state<string | null>(null);
 
+/** The element in the list whose `data-testid` is exactly `testId`. Compared as
+ *  a string: an entry id comes from a hand-editable file and may hold quotes or
+ *  backslashes, so it is never built into a CSS selector. */
+function byTestId(testId: string): HTMLElement | null {
+  if (!listEl) return null;
+  for (const el of listEl.querySelectorAll<HTMLElement>("[data-testid]")) {
+    if (el.getAttribute("data-testid") === testId) return el;
+  }
+  return null;
+}
+
+/** Focus back in the list after the window closes: the Edit or View button of
+ *  the entry it was opened for, looked up again, else whichever "Add" button
+ *  is there. */
+function focusListAfterWindow(returnId: string | null) {
+  const target =
+    (returnId !== null ? byTestId(`model-edit-btn-${returnId}`) : null) ??
+    byTestId("model-add-btn");
+  target?.focus();
+}
+
+/** Focus was dropped: on the page, nowhere, or on an element no longer in it. */
+function focusLost(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || !active.isConnected;
+}
+
 function openAdd() {
   if (access.blocked) return;
-  unavailableOpener = null;
+  openGen++;
+  returnToId = null;
   editingEntry = undefined;
   modalError = null;
   models.clearError(); // drop a stale list banner so it can't co-show with a modal error
   editorOpen = true;
 }
 
-function openEdit(entry: ModelRegistryEntry, opener: HTMLElement) {
+function openEdit(entry: ModelRegistryEntry) {
   if (access.blocked) return;
-  unavailableOpener = isLocalProvider(entry.provider) ? null : opener;
+  openGen++;
+  returnToId = entry.id;
   editingEntry = entry;
   modalError = null;
   models.clearError();
@@ -370,13 +409,19 @@ async function handleSave(data: {
   enabled: boolean;
 }) {
   const { plaintextApiKey, ...patch } = data;
+  // Captured before the await: what follows acts only for this window.
+  const gen = openGen;
+  const returnId = returnToId;
+  const editingId = editingEntry?.id;
   modalError = null;
   try {
     // The store rolls back WITHOUT throwing, so branch on the return, not the
     // try/catch: a non-commit keeps the modal open with the error visible.
-    const committed = editingEntry
-      ? await models.updateModel(editingEntry.id, patch, plaintextApiKey)
-      : (await models.addModel(patch, plaintextApiKey)) !== null;
+    const committed =
+      editingId !== undefined
+        ? await models.updateModel(editingId, patch, plaintextApiKey)
+        : (await models.addModel(patch, plaintextApiKey)) !== null;
+    if (gen !== openGen) return await afterStaleSave();
     if (!committed) {
       // Refused because this is not Tandem's own window: the dialog stays
       // open with what was typed, Save goes unavailable, and it says why.
@@ -385,9 +430,16 @@ async function handleSave(data: {
         : (models.saveError ?? "Failed to save model changes.");
       return;
     }
+    openGen++;
+    lastReturnId = returnId;
     editorOpen = false;
     editingEntry = undefined;
+    // Same task as the close (microtasks only), so focus is back in the list
+    // before Settings' next-frame recovery looks for stranded focus.
+    await tick();
+    focusListAfterWindow(returnId);
   } catch (err) {
+    if (gen !== openGen) return await afterStaleSave();
     // Pre-write throw (keychain unavailable / store failed). Hygiene: never echo
     // the plaintext or raw server output — `useModels` already shapes the message
     // (`KEYCHAIN_UNAVAILABLE` / `STORE_FAILED`); surface it as-is.
@@ -395,31 +447,103 @@ async function handleSave(data: {
   }
 }
 
+/** A save that settled after its window closed changes nothing, except that a
+ *  rollback which removed the focused button (the list's "+ Add model" going
+ *  back to the empty state, or a row moving back to its old bucket) has its
+ *  focus put back in the list. Never while another window is open. */
+async function afterStaleSave() {
+  await tick();
+  if (!editorOpen && focusLost()) focusListAfterWindow(lastReturnId);
+}
+
 function closeModal() {
-  // Before the window unmounts, so focus moves to a real element and nothing
-  // is left stranded on the page.
-  const opener = unavailableOpener;
-  unavailableOpener = null;
-  if (opener?.isConnected) opener.focus();
+  const returnId = returnToId;
+  lastReturnId = returnId;
+  openGen++;
+  const gen = openGen;
   editorOpen = false;
   editingEntry = undefined;
   modalError = null;
   models.clearError();
+  // After the window unmounts, in the same task (microtasks only), so focus is
+  // back in the list before Settings' next-frame recovery would put it on the
+  // Models nav button.
+  void tick().then(() => {
+    if (gen === openGen && !editorOpen) focusListAfterWindow(returnId);
+  });
 }
 
+const hasModel = (id: string) => models.models.some((m) => m.id === id);
+
+/** Every row's entry id, in the order the list shows them. */
+function rowIds(): string[] {
+  return PROVIDER_ORDER.flatMap((p) => grouped.get(p) ?? []).map((m) => m.id);
+}
+
+// Focus through Delete (#1123, ADR-039 item 27; Rulings R-c, R-d). Each swap of
+// Delete for Confirm and Cancel, and back, unmounts the focused button, so each
+// hands focus on itself.
 async function confirmDelete(id: string) {
   if (access.blocked) return;
-  await models.deleteModel(id);
+  const ids = rowIds();
+  const at = ids.indexOf(id);
+  const successor = at === -1 ? undefined : (ids[at + 1] ?? ids[at - 1]);
+  // The element this call last put focus on. After the call settles, focus is
+  // moved again only if it is still there or was lost: never out of a window
+  // opened meanwhile, nor off a control the user has since moved to.
+  let placed: HTMLElement | null = null;
+  const place = (el: HTMLElement | null) => {
+    el?.focus();
+    if (el) placed = el;
+  };
+  const mayMove = () => !editorOpen && (focusLost() || document.activeElement === placed);
+  let call: Promise<void>;
+  if (successor !== undefined) {
+    // Another row stays: its Delete takes focus before this row can go.
+    place(byTestId(`model-delete-btn-${successor}`));
+    call = models.deleteModel(id);
+  } else {
+    // The only row. The store applies its removal when the write's turn comes
+    // (at once when nothing is queued ahead of it), so the empty state's Add
+    // button is focused only once the row is really gone; with an earlier
+    // write queued, nothing yet (Accepted: Settings may first put focus on the
+    // Models nav button).
+    call = models.deleteModel(id);
+    await tick();
+    if (!hasModel(id)) place(byTestId("model-add-btn"));
+  }
+  await call;
   // Refused because this is not Tandem's own window: keep the pair on screen
   // (Confirm now unavailable, Cancel live) so the focused button does not
-  // unmount under the keyboard.
-  if (access.blocked) return;
-  pendingDeleteId = null;
+  // unmount under the keyboard. Only this row's pair: a Delete pressed on
+  // another row meanwhile keeps its own.
+  if (!access.blocked && pendingDeleteId === id) pendingDeleteId = null;
+  if (hasModel(id)) {
+    // Rolled back: the row is back (as new DOM), and focus goes to it, even
+    // when an Add button exists.
+    await tick();
+    if (!mayMove()) return;
+    byTestId(
+      pendingDeleteId === id ? `model-delete-cancel-${id}` : `model-delete-btn-${id}`,
+    )?.focus();
+  } else if (successor === undefined) {
+    await tick();
+    if (mayMove()) byTestId("model-add-btn")?.focus();
+  }
 }
 
-function askDelete(id: string) {
+async function askDelete(id: string) {
   if (access.blocked) return;
   pendingDeleteId = id;
+  // Cancel, not Confirm (Ruling R-c): a held or doubled Enter cannot delete.
+  await tick();
+  byTestId(`model-delete-cancel-${id}`)?.focus();
+}
+
+async function cancelDelete(id: string) {
+  if (pendingDeleteId === id) pendingDeleteId = null;
+  await tick();
+  byTestId(`model-delete-btn-${id}`)?.focus();
 }
 </script>
 
@@ -565,7 +689,7 @@ function askDelete(id: string) {
   <p style="margin: 0;">{LOCAL_REQUEST_LINE}</p>
 </div>
 
-<div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
+<div bind:this={listEl} style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
   {#if defaultBlocksLocalLine !== null}
     <!-- DD1 (#1123): a cloud or switched-off default keeps local models from
          answering. Above the first model row; static, no role, no live region. -->
@@ -726,7 +850,7 @@ function askDelete(id: string) {
                     disabled={readOnly}
                     aria-disabled={access.blocked}
                     aria-describedby="models-own-window-msg"
-                    onclick={(e) => openEdit(entry, e.currentTarget)}
+                    onclick={() => openEdit(entry)}
                     style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(unavailable)}"
                   >
                     {unusableProvider ? "View" : "Edit"}
@@ -745,7 +869,8 @@ function askDelete(id: string) {
                     </button>
                     <button
                       type="button"
-                      onclick={() => (pendingDeleteId = null)}
+                      data-testid={`model-delete-cancel-${entry.id}`}
+                      onclick={() => cancelDelete(entry.id)}
                       style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
                     >
                       Cancel

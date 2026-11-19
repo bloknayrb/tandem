@@ -14,6 +14,7 @@
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
@@ -103,8 +104,8 @@ describe("ModelEditModal — only local providers are offered", () => {
       expect(ids).not.toContain("model-edit-unavailable-text");
       expect(view.queryByTestId("model-edit-unavailable-close")).toBeNull();
       expect(view.queryByTestId("model-edit-provider-note")).toBeNull();
-      // Moves no focus on mount (the edit window's focus is ADR-039 item 27's).
-      expect(dialog.contains(document.activeElement)).toBe(false);
+      // Focus moves in on mount, to the Provider select (ADR-039 item 27, A1).
+      expect(document.activeElement).toBe(view.getByTestId("model-edit-provider"));
     });
   }
 
@@ -576,4 +577,127 @@ describe("ModelEditModal — Escape", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(reachedDocument).not.toHaveBeenCalled();
   });
+});
+
+describe("ModelEditModal — focus moves in once, on open (#1123 A1)", () => {
+  const LOCAL_ENTRY: ModelRegistryEntry = {
+    id: "e-1",
+    provider: "local-ollama",
+    displayName: "Mine",
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+
+  for (const [mode, entry] of [
+    ["Add", undefined],
+    ["Edit", LOCAL_ENTRY],
+  ] as const) {
+    it(`${mode}: the Provider select has focus after mount`, () => {
+      const v = entry ? mountEntry(entry) : mountAdd();
+      expect(document.activeElement).toBe(v.getByTestId("model-edit-provider"));
+    });
+
+    it(`${mode}: a provider change leaves focus where it is (on Model ID)`, async () => {
+      const v = entry ? mountEntry(entry) : mountAdd();
+      const modelId = v.getByTestId("model-edit-modelid") as HTMLInputElement;
+      modelId.focus();
+      const select = v.getByTestId("model-edit-provider") as HTMLSelectElement;
+      select.value = "local-lmstudio";
+      await fireEvent.change(select);
+      expect(select.value).toBe("local-lmstudio");
+      expect(document.activeElement).toBe(modelId);
+    });
+
+    it(`${mode}: Escape on the select calls onCancel once`, async () => {
+      const onCancel = vi.fn();
+      const v = render(ModelEditModal, {
+        props: { ...(entry ? { entry } : {}), onCancel, onSave: vi.fn() },
+      });
+      const select = v.getByTestId("model-edit-provider");
+      expect(document.activeElement).toBe(select);
+      await fireEvent.keyDown(select, { key: "Escape" });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+  }
+});
+
+describe("ModelEditModal — one save per press (#1123 A3, Ruling R-b)", () => {
+  function deferred() {
+    let resolve!: () => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  const LOCAL_ENTRY: ModelRegistryEntry = {
+    id: "e-1",
+    provider: "local-ollama",
+    displayName: "Mine",
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+
+  async function mountReady(mode: "Add" | "Edit", onSave: () => Promise<void>) {
+    const v = render(ModelEditModal, {
+      props: { ...(mode === "Edit" ? { entry: LOCAL_ENTRY } : {}), onCancel: vi.fn(), onSave },
+    });
+    if (mode === "Add") {
+      await fireEvent.input(v.getByTestId("model-edit-modelid"), { target: { value: "qwen" } });
+    }
+    const save = v.getByTestId("model-edit-save") as HTMLButtonElement;
+    const form = save.closest("form") as HTMLFormElement;
+    return { v, save, form };
+  }
+
+  for (const mode of ["Add", "Edit"] as const) {
+    const idle = mode === "Add" ? "Add model" : "Save changes";
+
+    it(`${mode}: two submits while the save is pending call onSave once; Save reads "Saving…", aria-disabled, never disabled`, async () => {
+      const d = deferred();
+      const onSave = vi.fn(() => d.promise);
+      const { v, save, form } = await mountReady(mode, onSave);
+      expect(norm(save.textContent)).toBe(idle);
+      await fireEvent.submit(form);
+      await fireEvent.submit(form);
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(v.getByRole("button", { name: "Saving…" })).toBe(save);
+      expect(save.getAttribute("aria-disabled")).toBe("true");
+      expect(save.disabled).toBe(false);
+      d.resolve();
+      await d.promise;
+      await tick();
+      expect(norm(save.textContent)).toBe(idle);
+      expect(save.getAttribute("aria-disabled")).toBe("false");
+      await fireEvent.submit(form);
+      expect(onSave).toHaveBeenCalledTimes(2);
+    });
+
+    it(`${mode}: a rejecting onSave logs a warning, leaves no unhandled rejection, and the next submit calls it again`, async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        const d = deferred();
+        const onSave = vi.fn(() => d.promise);
+        const { save, form } = await mountReady(mode, onSave);
+        await fireEvent.submit(form);
+        d.reject(new Error("boom"));
+        await d.promise.catch(() => {});
+        await tick();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(warn).toHaveBeenCalledWith("[models] save failed", expect.any(Error));
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(norm(save.textContent)).toBe(idle);
+        await fireEvent.submit(form);
+        expect(onSave).toHaveBeenCalledTimes(2);
+      } finally {
+        process.off("unhandledRejection", unhandled);
+        warn.mockRestore();
+      }
+    });
+  }
 });
