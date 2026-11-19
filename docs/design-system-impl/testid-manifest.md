@@ -418,7 +418,7 @@ of these selectors renders in a release build.
 - `models-{empty-state,loading,load-error,reload-btn,save-error}`. The three
   `models-legacy-migration-*` / `models-legacy-migrate-btn` ids this list used
   to name no longer ship.
-- `model-{row,default,toggle,edit-btn,delete-confirm,delete-btn}-{*}`,
+- `model-{row,default,toggle,edit-btn,delete-confirm,delete-cancel,delete-btn}-{*}`,
   `model-add-btn`
 - An old cloud entry's row (#1123, cloud providers hidden): `model-unavailable-{*}`
   (its "This provider can't be used in Tandem." line)
