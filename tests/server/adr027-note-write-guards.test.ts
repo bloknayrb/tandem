@@ -234,7 +234,7 @@ describe("checkInbox does not choke on a legacy note", () => {
         modeState: "tandem",
         documentId: "doc-guards",
         wasChannelEmitted: () => false,
-        admit: () => true,
+        admit: (_bucket, item) => item,
       },
     );
 

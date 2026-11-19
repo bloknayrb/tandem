@@ -153,7 +153,7 @@ describe("surfacedIds deduplication", () => {
         modeState: "tandem",
         documentId: "doc1",
         wasChannelEmitted: () => false,
-        admit: () => true,
+        admit: (_bucket, item) => item,
       });
 
     expect(run().userActions.map((a) => a.id)).toEqual([ann.id]);
