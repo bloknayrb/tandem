@@ -78,17 +78,17 @@ describe("ModelEditModal — where the fields are written (R1.2, R2, R7)", () =>
   const select = fnBody(SCRIPT, "selectProvider");
 
   it("`endpoint` is assigned only at its $state declaration and inside selectProvider", () => {
-    const hits = indexes(SCRIPT, /(?<![.\w])endpoint\s*=(?!=)/g);
+    const hits = indexes(SCRIPT, /(?<![.\w])endpoint\s*(?:\|\||&&|\?\?|[-+*/%|&])?=(?!=)/g);
     expect(hits.length).toBeGreaterThanOrEqual(2);
     for (const i of hits) {
       const decl = /^endpoint\s*=\s*\$state\(/.test(SCRIPT.slice(i));
       expect(decl || inside(i, select), SCRIPT.slice(i, i + 60)).toBe(true);
     }
-    expect(MARKUP).not.toMatch(/(?<![.\w:-])endpoint\s*=(?!=)/);
+    expect(MARKUP).not.toMatch(/(?<![.\w:-])endpoint\s*(?:\|\||&&|\?\?|[-+*/%|&])?=(?!=)/);
   });
 
   it("`displayName` is assigned only at its $state declaration", () => {
-    const hits = indexes(WINDOW, /(?<![.\w])displayName\s*=(?!=)/g);
+    const hits = indexes(WINDOW, /(?<![.\w])displayName\s*(?:\|\||&&|\?\?|[-+*/%|&])?=(?!=)/g);
     expect(hits).toHaveLength(1);
     expect(WINDOW.slice(hits[0])).toMatch(/^displayName\s*=\s*\$state\(/);
   });
