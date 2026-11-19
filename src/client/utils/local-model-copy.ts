@@ -1,3 +1,5 @@
+import { validateEndpoint } from "../../shared/models/local-endpoint.js";
+
 /**
  * The copy that says what a local model can be and what Tandem sends it
  * (#1123, LM Studio and "another local server", R4: S1, S2, S3, S6).
@@ -56,4 +58,39 @@ export function pickerSaveReason(fields: { endpoint: string; modelId: string }):
   if (noEndpoint) return "Enter an Endpoint URL to save.";
   if (noModelId) return "Enter a Model ID to save.";
   return null;
+}
+
+/** The add-model window's Save reasons (#1123, ADR-039 P10(5), V2, V9). Each
+ *  is true in every state it shows in, and none says the server will accept
+ *  the entry. */
+export const MODEL_SAVE_REASON = {
+  /** U1: no Model ID (the first-run window's sentence for that state). */
+  noModelId: "Enter a Model ID to save.",
+  /** U2: no Endpoint. */
+  noEndpoint: "Enter an Endpoint to save.",
+  /** U3: any refusal U4 does not cover; each fails a part it names. */
+  notThisComputer:
+    "The Endpoint must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.",
+  /** U4: starts with http:// but is not a complete address. */
+  incomplete:
+    "The Endpoint is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).",
+} as const;
+
+/**
+ * Why the add-model window's Save cannot save (a local provider), or null when
+ * it can. First match wins, one reason at a time, Model ID first. Trims both
+ * fields itself. The address check is the server's own `validateEndpoint`,
+ * called here for the Save reason only; the server checks again at resolve and
+ * at fetch and never sees this answer.
+ */
+export function modelSaveReason(fields: { modelId: string; endpoint: string }): string | null {
+  if (fields.modelId.trim() === "") return MODEL_SAVE_REASON.noModelId;
+  const endpoint = fields.endpoint.trim();
+  if (endpoint === "") return MODEL_SAVE_REASON.noEndpoint;
+  const check = validateEndpoint(endpoint);
+  if (check.ok) return null;
+  if (check.code === "MALFORMED_URL" && /^http:\/\//i.test(endpoint)) {
+    return MODEL_SAVE_REASON.incomplete;
+  }
+  return MODEL_SAVE_REASON.notThisComputer;
 }

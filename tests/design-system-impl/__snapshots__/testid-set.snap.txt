@@ -375,6 +375,7 @@ model-edit-modelid
 model-edit-provider
 model-edit-provider-note
 model-edit-save
+model-edit-save-reason
 model-edit-unavailable-close
 model-edit-unavailable-provider
 model-row-{*}
