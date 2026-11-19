@@ -735,6 +735,8 @@ describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (s
       "contains",
       "trapTab",
       "preventDefault",
+      // Closing moves focus (the parent's A2), and must; an $effect calling it
+      // would still be caught by the behaviour cases, which never close.
       "onCancel",
       // The stranded-focus Escape branch: is another modal open above?
       "querySelectorAll",
@@ -816,5 +818,62 @@ describe("ModelEditModal — Escape with focus stranded on the page (carried ite
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, isComposing: true }),
     );
     expect(onCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("ModelEditModal — the stranded-Escape branch inside Settings' own dialog", () => {
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+  it("an aria-modal ANCESTOR (Settings) is not a modal above: Escape on <body> cancels once", () => {
+    const outer = document.createElement("div");
+    outer.setAttribute("role", "dialog");
+    outer.setAttribute("aria-modal", "true");
+    document.body.appendChild(outer);
+    try {
+      const onCancel = vi.fn();
+      render(ModelEditModal, { target: outer, props: { onCancel, onSave: vi.fn() } });
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+      document.body.dispatchEvent(escape());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      outer.remove();
+    }
+  });
+
+  it("an inert modal elsewhere does not block it", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const wrap = document.createElement("div");
+    wrap.setAttribute("inert", "");
+    const dead = document.createElement("div");
+    dead.setAttribute("role", "dialog");
+    dead.setAttribute("aria-modal", "true");
+    wrap.appendChild(dead);
+    document.body.appendChild(wrap);
+    try {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.dispatchEvent(escape());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    } finally {
+      wrap.remove();
+    }
+  });
+
+  it("with focus on a control outside every modal, the branch leaves Escape alone", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      outside.focus();
+      expect(document.activeElement).toBe(outside);
+      outside.dispatchEvent(escape());
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      outside.remove();
+    }
   });
 });

@@ -11,12 +11,6 @@ import { validateEndpoint } from "../../shared/models/local-endpoint.js";
  * "answers"). None promises quality or names a model.
  */
 
-/**
- * The name a model's row is known by (#1123, ADR-039 item 27): the first
- * non-blank of its display name, model ID and id, so an entry saved with a
- * blank name is still told apart by its model ID. "" only when all three are
- * blank (a hand-edited file). Trimmed.
- */
 /** A row control's accessible name: its visible word, then the row's name
  *  (WCAG 2.5.3: the name starts with the visible text). With no row name, the
  *  visible word alone, never a dangling separator. */
@@ -24,6 +18,12 @@ export function rowControlName(visible: string, rowName: string, joiner = " "): 
   return rowName === "" ? visible : `${visible}${joiner}${rowName}`;
 }
 
+/**
+ * The name a model's row is known by (#1123, ADR-039 item 27): the first
+ * non-blank of its display name, model ID and id, so an entry saved with a
+ * blank name is still told apart by its model ID. "" only when all three are
+ * blank (a hand-edited file). Trimmed.
+ */
 export function modelRowName(entry: {
   displayName?: string;
   modelId?: string;

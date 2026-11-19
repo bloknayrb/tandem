@@ -885,7 +885,7 @@ async function cancelDelete(id: string) {
                     <button
                       type="button"
                       data-testid={`model-delete-confirm-${entry.id}`}
-                      aria-label={rowName === "" ? "Confirm" : `Confirm deleting ${rowName}`}
+                      aria-label={rowControlName("Confirm", rowName === "" ? "" : `deleting ${rowName}`)}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
                       aria-describedby="models-own-window-msg"
@@ -897,7 +897,7 @@ async function cancelDelete(id: string) {
                     <button
                       type="button"
                       data-testid={`model-delete-cancel-${entry.id}`}
-                      aria-label={rowName === "" ? "Cancel" : `Cancel deleting ${rowName}`}
+                      aria-label={rowControlName("Cancel", rowName === "" ? "" : `deleting ${rowName}`)}
                       onclick={() => cancelDelete(entry.id)}
                       style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
                     >

@@ -13,6 +13,7 @@
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
@@ -300,5 +301,9 @@ describe("A4: each row control is named with its model (ADR-039 item 27)", () =>
     expect(byId("model-default- ")?.getAttribute("aria-label")).toBe("Default");
     expect(byId("model-toggle- ")?.getAttribute("aria-label")).toBe("On");
     expect(byId("model-delete-btn- ")?.getAttribute("aria-label")).toBe("Delete");
+    byId("model-delete-btn- ")?.click();
+    await tick();
+    expect(byId("model-delete-confirm- ")?.getAttribute("aria-label")).toBe("Confirm");
+    expect(byId("model-delete-cancel- ")?.getAttribute("aria-label")).toBe("Cancel");
   });
 });

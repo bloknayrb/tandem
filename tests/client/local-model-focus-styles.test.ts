@@ -54,7 +54,7 @@ const KILLS_OUTLINE = (d: Map<string, string>) =>
 
 describe("no focus rule removes the outline (A6, A8)", () => {
   for (const file of [WINDOW, PICKER, TAB]) {
-    it(file.split("/").pop() as string, () => {
+    it(file.replace(/\\/g, "/").split("/").pop() as string, () => {
       const focusRules = rulesOf(file).filter((r) => r.selectors.some((s) => /:focus/.test(s)));
       expect(focusRules.length).toBeGreaterThan(0);
       for (const r of focusRules) {
