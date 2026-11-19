@@ -2634,6 +2634,8 @@ are the figures #2398 uses.
   nineteen to twenty-four for `check`. It starts with `check`, so it adds no wall clock to a PR.
 - **Intermittent failures:** one in eleven runs, the two-caller race in
   `tests/server/integrations/apply-malformed.test.ts`. Not quarantined.
+  (2026-11-19, #2436: the case now accepts the one refusal the product makes on Windows, a refused
+  rename, and `apply-concurrent-refusal.test.ts` pins that contract deterministically.)
 - **What the bare hosted runner does** (measured earlier in the same PR, at `master` 311a5a3's
   code): 19 tests in 6 files fail, the same 19 on a second attempt, from two properties of the
   runner. Its `TEMP` is an 8.3 short name on a different drive from the checkout, and it has no
