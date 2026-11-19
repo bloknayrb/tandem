@@ -326,10 +326,17 @@ const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileN
 const notifications = createNotifications({
   onStreamNotice: (n) => noteNotifyNotice(n.dedupKey),
 });
-// R3: the first local model's toast goes where every client toast goes.
-if (BYO_MODELS_ENABLED) setChatAnswererToastSink((n) => notifications.push(n));
+// R3: the first local model's toast goes where every client toast goes, with
+// its "Use it for chat" action; the store withdraws it once chat is local.
+if (BYO_MODELS_ENABLED) {
+  setChatAnswererToastSink({
+    push: (n, action) => notifications.push(n, action),
+    dismiss: (id) => notifications.dismiss(id),
+    dismissActivity: (id) => notifications.dismissActivity(id),
+  });
+}
 // The send notice (#1123): a card send in the local period raises the
-// composer's `local-comment` toast. Its own `if`, never merged with the line
+// composer's `local-comment` toast. Its own `if`, never merged with the block
 // above; the getters are read only when a raise runs (after mount), so
 // `aiReadiness`, declared below, is safe here.
 if (BYO_MODELS_ENABLED) {

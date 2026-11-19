@@ -332,7 +332,7 @@ describe("the Claude-facing reads honour audience (#1619, #1710)", () => {
         modeState: "tandem",
         documentId: DOC_ID,
         wasChannelEmitted: () => false,
-        admit: () => true,
+        admit: (_bucket, item) => item,
       },
     );
 
