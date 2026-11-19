@@ -934,7 +934,7 @@ async function getAnnotationsDeclared() {
   const { tools } = await client.listTools();
   const tool = tools.find((t) => t.name === "tandem_getAnnotations");
   type Obj = { properties: Record<string, unknown> };
-  const schema = tool?.outputSchema as {
+  const schema = tool?.outputSchema as unknown as {
     properties: { annotations: { items: Obj & { properties: { replies: { items: Obj } } } } };
   };
   const item = schema.properties.annotations.items;
