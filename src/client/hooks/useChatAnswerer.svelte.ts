@@ -16,6 +16,7 @@ import { noteModelsWriteRefused } from "../models/write-refusal.js";
 import { LOCAL_COMMENT_INFO_TEXT } from "../status/addressed-ai-notice.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { modelsPageAccess } from "./useModelsWriteAccess.svelte.js";
+import type { ToastAction } from "./useNotifications.svelte.js";
 
 /**
  * The editor's read of who answers chat (#1123 part B, R1): Claude, or the
@@ -120,9 +121,15 @@ let _lastCtrlDoc: object | null = null;
 /** Per CTRL doc: each user row's last observed `localRun` and stamps. */
 let _observedDoc: object | null = null;
 let _userRows = new Map<string, { run: string | null; stamped: boolean }>();
-/** R3: where the first-local-model toast goes (App's `notifications.push`). */
-let _toastSink: ((n: TandemNotification) => void) | null = null;
+/** R3: where the first-local-model toast goes (App's `notifications`). */
+let _toastSink: ChatAnswererToastSink | null = null;
 let _toastShownInMemory = false;
+/** The id the first-local-model confirmation was pushed with, until it is
+ *  withdrawn ("Use it for chat", R3.3). Plain: no template reads it. */
+let _confirmationId: string | null = null;
+/** Bumped by every switch `setChatAnswerer` sends: a press whose read
+ *  resolves after another switch began stays quiet (review round 1, R1.3). */
+let _switchCount = 0;
 /** The last chat send's own read (#2433 M1, Ruling S-a): the promise its
  *  `requestRead()` returned and the local period at the send. Replaced by every
  *  `noteChatSent`, cleared by `takeSendRead`. Plain, not `$state`: no template
@@ -188,6 +195,8 @@ function adopt(outcome: ReadOutcome): void {
     _runGeneration = outcome.runGeneration;
   }
   _status = outcome.status;
+  // The confirmation says chat is set to Claude: no longer true (CR-4).
+  if (outcome.status === "known" && outcome.answerer === "local") withdrawConfirmation();
 }
 
 function startRead(): Promise<ReadOutcome> {
@@ -260,20 +269,33 @@ export const CHAT_ANSWERER_OUTCOME_LINES = {
 } as const;
 
 /**
- * Send the switch (R2.2). Only ever called from the user's own selection — a
- * click, Space or Enter on a radio, or "Set chat to Claude" — never on mount,
- * a read, a models save or a retry. Never throws. No-op while dark, and while
- * a switch is already pending.
+ * What one switch's POST answered ("Use it for chat", R3.1), decided by the
+ * POST alone, never by the re-read after it.
  */
-export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
-  if (!BYO_MODELS_ENABLED) return;
-  if (_postPending) return;
+export type SwitchResult =
+  | { kind: "not-sent" }
+  | { kind: "answered"; effective: ChatAnswerer; saved: boolean; superseded: boolean }
+  | { kind: "unconfirmed" };
+
+/**
+ * Send the switch (R2.2). Only ever called from the user's own selection — a
+ * click, Space or Enter on a radio, "Set chat to Claude", or a press of the
+ * first-local-model confirmation's "Use it for chat" (Bryan's P5) — never on
+ * mount, a read, a models save or a retry. Never throws. No-op (`not-sent`)
+ * while dark, while a switch is already pending, and for the local model while
+ * the read is not known. Otherwise it returns what the POST answered, on every
+ * path, including when the outcome line is no longer wanted.
+ */
+export async function setChatAnswerer(value: ChatAnswerer): Promise<SwitchResult> {
+  if (!BYO_MODELS_ENABLED) return { kind: "not-sent" };
+  if (_postPending) return { kind: "not-sent" };
   // A page that cannot see the switch never sends it to the local model
   // (R2.2, R2.6); "Set chat to Claude" is the one send allowed then.
-  if (value === "local" && _status !== "known") return;
+  if (value === "local" && _status !== "known") return { kind: "not-sent" };
   // Pending until its own re-read settles, so a second press cannot start
   // another POST during that re-read.
   _postPending = true;
+  _switchCount += 1;
   _postInFlight = true;
   _outcomeLine = null;
   _outcomeFor = null;
@@ -283,6 +305,7 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
   let unconfirmed = false;
   /** The server answered that chat is set to Claude, as asked (R2.6). */
   let setToClaude = false;
+  let result: SwitchResult = { kind: "unconfirmed" };
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -303,13 +326,20 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
     ) {
       // The server's body always carries the value in effect: adopt it.
       if (readBefore === "known") _answerer = effective;
+      if (effective === "local") withdrawConfirmation();
       setToClaude = effective === "claude" && value === "claude";
+      result =
+        res.status === 200
+          ? { kind: "answered", effective, saved: true, superseded: false }
+          : { kind: "answered", effective, saved: body?.persisted === true, superseded: true };
     } else if (
       effective !== null &&
       res.status === 500 &&
       body?.code === ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED
     ) {
       if (readBefore === "known") _answerer = effective;
+      if (effective === "local") withdrawConfirmation();
+      result = { kind: "answered", effective, saved: false, superseded: false };
       line =
         effective !== value
           ? LINE_LOCAL_REFUSED
@@ -323,6 +353,7 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
     // The request may or may not have landed (a timeout may still land). Ask.
     console.warn("[chat-answerer] switch failed", err);
     unconfirmed = true;
+    result = { kind: "unconfirmed" };
   } finally {
     _postInFlight = false;
     _postEpoch += 1;
@@ -341,10 +372,11 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
   }
   // The tab closed, or the user pressed again, while this was in flight: the
   // line belongs to a press nobody is looking at any more.
-  if (token !== _outcomeToken) return;
+  if (token !== _outcomeToken) return result;
   // Shown beside the answer this re-read gave, and only while it holds.
   _outcomeFor = outcome.status === "known" ? outcome.answerer : null;
   _outcomeLine = line;
+  return result;
 }
 
 /** The tab body unmounted, or the user is selecting again: an outcome line
@@ -647,7 +679,16 @@ export function createCardSendNotice(deps: {
   };
 }
 
-// --- R3: the first local model's toast -------------------------------------------
+// --- R3: the first local model's toast, and "Use it for chat" -------------------
+//
+// Decision B4's confirmation, pushed by `onModelsWrite` (the brief "Use it for
+// chat", R2, first match wins): dark, nothing (no listener, no sink); a read
+// that is not known or is known local, or a store that already knows local
+// when the read settles, dropped; a known-Claude read in ANY local-model state
+// (CR-1), the confirmation with the "Use it for chat" action, which stays
+// until pressed or closed (W2). Its press (`pressUseItForChat`, R3.2) re-reads
+// and sends the switch; the confirmation is withdrawn, toast and tray row,
+// whenever the store's answerer becomes local (R3.3).
 
 export const FIRST_LOCAL_MODEL_TOAST_KEY = "tandem:first-local-model-chat-toast";
 export const FIRST_LOCAL_MODEL_TOAST_TEXT =
@@ -671,30 +712,190 @@ function markToastShown(): void {
   }
 }
 
-/** App hands over `notifications.push`, under the flag. */
-export function setChatAnswererToastSink(sink: ((n: TandemNotification) => void) | null): void {
+/** Where this store's toasts go: App's `notifications`, under the flag. */
+export interface ChatAnswererToastSink {
+  push: (n: TandemNotification, action?: ToastAction) => void;
+  dismiss: (id: string) => void;
+  dismissActivity: (id: string) => void;
+}
+
+/** App hands over its notifications, under the flag. */
+export function setChatAnswererToastSink(sink: ChatAnswererToastSink | null): void {
   _toastSink = sink;
+}
+
+export const USE_IT_FOR_CHAT_LABEL = "Use it for chat";
+
+/** The press's notices (R4), by the result they report. */
+export const USE_IT_FOR_CHAT_NOTICES = {
+  set: {
+    severity: "info",
+    dedupKey: "use-it-for-chat-set",
+    message: "Chat was set to your local model.",
+  },
+  notSaved: {
+    severity: "warning",
+    dedupKey: "use-it-for-chat-not-saved",
+    message:
+      "Chat was set to your local model, but Tandem could not save that choice, so chat may be set back to Claude when Tandem restarts.",
+  },
+  refused: {
+    severity: "warning",
+    dedupKey: "use-it-for-chat-refused",
+    message: "Chat could not be set to your local model. It was left set to Claude.",
+  },
+  notConfirmed: {
+    severity: "warning",
+    dedupKey: "use-it-for-chat-not-confirmed",
+    message:
+      "Tandem could not confirm that chat was set to your local model. Check Who answers your chat in Settings → Models.",
+  },
+  notRead: {
+    severity: "warning",
+    dedupKey: "use-it-for-chat-not-read",
+    message:
+      "Tandem did not change who answers your chat, because it could not read the current setting. Check Who answers your chat in Settings → Models.",
+  },
+} as const satisfies Record<
+  string,
+  { severity: TandemNotification["severity"]; dedupKey: string; message: string }
+>;
+
+function pushUseItNotice(notice: keyof typeof USE_IT_FOR_CHAT_NOTICES): void {
+  _toastSink?.push({
+    id: generateNotificationId(),
+    type: "launcher",
+    ...USE_IT_FOR_CHAT_NOTICES[notice],
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Take the confirmation down, toast and tray row (R3.3): chat is now set to
+ * the local model, so "Chat is still set to Claude" and its button would be
+ * false. Each sink call is guarded on its own, so a throwing sink never
+ * rejects a read or breaks `setChatAnswerer`'s "never throws".
+ */
+function withdrawConfirmation(): void {
+  const id = _confirmationId;
+  if (id === null) return;
+  _confirmationId = null;
+  try {
+    _toastSink?.dismiss(id);
+  } catch (err) {
+    console.warn("[chat-answerer] could not dismiss the confirmation", err);
+  }
+  try {
+    _toastSink?.dismissActivity(id);
+  } catch (err) {
+    console.warn("[chat-answerer] could not remove the confirmation's tray row", err);
+  }
+}
+
+/**
+ * The press of "Use it for chat" (R3.2; Bryan's P5, a selection under Ruling
+ * B-1). First match wins: dark, nothing; a switch pending at the click,
+ * nothing (no read, Settings' line untouched; CR-3); then, after a fresh read
+ * (CR-5): another switch began meanwhile, nothing (it is the user's later
+ * choice; review round 1); from the STORE, known local, nothing (re-sending
+ * would upgrade the server's "told" to "chosen", #2417); still not known, X;
+ * otherwise one `setChatAnswerer("local")` (CR-2). Its notice: S or U for a
+ * POST that answered local; nothing for a superseded Claude; otherwise,
+ * first match: the store known local after the switch's re-read, S (it claims
+ * only that chat was set); the POST's own answer naming Claude in effect, R;
+ * anything else, N — a store that merely still says Claude may be stale, so
+ * R rests only on the server's word to this press (review rounds 1 and 2,
+ * correcting the brief). No return on a missing confirmation id: the rows
+ * run regardless. Never writes `$state` itself; only from the click and the
+ * fetch continuations below it.
+ */
+export async function pressUseItForChat(): Promise<void> {
+  if (!BYO_MODELS_ENABLED) return;
+  if (_postPending) return;
+  const switchesAtClick = _switchCount;
+  await requestRead();
+  if (_switchCount !== switchesAtClick) return;
+  if (isKnownLocal()) return;
+  if (_status !== "known") {
+    pushUseItNotice("notRead");
+    return;
+  }
+  const result = await setChatAnswerer("local");
+  // Not reached after the checks above (no switch pending, the read known);
+  // kept so a switch that was never sent is never reported.
+  if (result.kind === "not-sent") return;
+  // This notice carries the result; a line left behind would be announced at
+  // the next Settings → Models open, against the tab's rule.
+  clearChatAnswererOutcome();
+  if (result.kind === "answered" && result.effective === "local") {
+    pushUseItNotice(result.saved ? "set" : "notSaved");
+    return;
+  }
+  // A superseded Claude: another choice won, and Settings says nothing either.
+  if (result.kind === "answered" && result.superseded) return;
+  // Otherwise the POST did not say chat is local. "Was set" needs only the
+  // store to know local; "left set to Claude" needs the server's own answer
+  // to this press (an `answered` Claude), never a store that may be stale.
+  if (isKnownLocal()) pushUseItNotice("set");
+  else if (result.kind === "answered" && result.effective === "claude") pushUseItNotice("refused");
+  else pushUseItNotice("notConfirmed");
 }
 
 function onModelsWrite(info: { firstLocal: boolean }): void {
   const read = requestRead();
   if (!info.firstLocal || toastAlreadyShown()) return;
-  void read.then((outcome) => {
-    if (outcome.status !== "known") return; // not known: dropped, unmarked
-    if (toastAlreadyShown()) return;
-    markToastShown();
-    // Known local: it would be false, so it is dropped (and marked).
-    if (outcome.answerer !== "claude") return;
-    _toastSink?.({
-      id: generateNotificationId(),
-      // The send-time toasts' type: a notice about who answers chat.
-      type: "launcher",
-      severity: "info",
-      message: FIRST_LOCAL_MODEL_TOAST_TEXT,
-      dedupKey: "first-local-model-chat",
-      timestamp: Date.now(),
-    });
-  });
+  void read
+    .then((outcome) => {
+      if (outcome.status !== "known") return; // not known: dropped, unmarked
+      if (toastAlreadyShown()) return;
+      const sink = _toastSink;
+      // Known local, or a store that already knows local (a switch settled
+      // while this read was in flight, so the read was not adopted): it would
+      // be false, so it is dropped (and marked).
+      if (outcome.answerer !== "claude" || isKnownLocal() || sink === null) {
+        markToastShown();
+        return;
+      }
+      const id = generateNotificationId();
+      // The withdrawal finds the toast and its tray row by this id: the toast
+      // takes the id of the latest push with its dedupKey, and the tray row
+      // keeps the first. This store is the only pusher of
+      // "first-local-model-chat", and marks the offer only once a push
+      // returns; a push that throws after the tray row was made leaves the
+      // offer unmarked, so a later first local model pushes again, and that
+      // earlier row keeps its own id. The sink removes tray rows by id only,
+      // so such a stale row can outlive the withdrawal for up to the info
+      // lifetime (five minutes).
+      _confirmationId = id;
+      try {
+        sink.push(
+          {
+            id,
+            // The send-time toasts' type: a notice about who answers chat.
+            type: "launcher",
+            severity: "info",
+            message: FIRST_LOCAL_MODEL_TOAST_TEXT,
+            dedupKey: "first-local-model-chat",
+            timestamp: Date.now(),
+          },
+          {
+            label: USE_IT_FOR_CHAT_LABEL,
+            onClick: () =>
+              void pressUseItForChat().catch((err) =>
+                console.warn("[chat-answerer] Use it for chat failed", err),
+              ),
+            // W2: it holds a button the user may want, so it waits.
+            stay: true,
+          },
+        );
+      } catch (err) {
+        // Not shown, so not spent: the offer stays unmarked (review round 1).
+        _confirmationId = null;
+        throw err;
+      }
+      markToastShown();
+    })
+    .catch((err) => console.warn("[chat-answerer] the first-local-model toast failed", err));
 }
 
 let _unsubscribeModelsWrite: (() => void) | null = BYO_MODELS_ENABLED
@@ -754,7 +955,10 @@ export function createChatAnswerer(): ChatAnswererState {
       return _sentLocal;
     },
     load: requestRead,
-    set: setChatAnswerer,
+    // The tab needs no result; `Promise<SwitchResult>` is not `Promise<void>`.
+    set: async (value) => {
+      await setChatAnswerer(value);
+    },
     clearOutcome: clearChatAnswererOutcome,
   };
 }
@@ -784,6 +988,8 @@ export function _resetChatAnswererForTests(): void {
   _userRows = new Map();
   _toastSink = null;
   _toastShownInMemory = false;
+  _confirmationId = null;
+  _switchCount = 0;
   _sendRead = null;
   for (const timer of _capTimers) clearTimeout(timer);
   _capTimers = new Set();

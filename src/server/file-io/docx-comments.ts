@@ -1125,10 +1125,12 @@ export function injectCommentsAsAnnotations(
             // `private: true` is required, not cosmetic: `writeImportReply`
             // stamps only the author, so `private` would otherwise be spread
             // from `clash`. `effectiveKey` names a promoted, Claude-facing
-            // record, and `channelVisibleReplies` is (parent Claude-facing) AND
-            // (`private !== true`) — a stored `{import, private: undefined}`
-            // reply would be handed to Claude. A read filter is not a write
-            // guard (#1680).
+            // record. Since #2460 `channelVisibleReplies` also withholds any
+            // non-user, non-Claude author, so Claude's pull reads would hide
+            // this reply either way — but the stamp is what every other reader
+            // of the replies map keys on (the client's display filter, the
+            // push gate's refusal reason, the `.docx` comment export), and a
+            // read filter is not a write guard (#1680). Do not drop it.
             writeImportReply(repliesMap, replyId, {
               ...clash,
               annotationId: effectiveKey,

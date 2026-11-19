@@ -31,7 +31,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
@@ -161,23 +160,6 @@ async function pollAs(owner: string, args: Record<string, unknown> = {}): Promis
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
   expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
   return inboxSchema.parse((result as { structuredContent: unknown }).structuredContent);
-}
-
-/**
- * A fresh poll whose response skips the SDK client's own output-schema check
- * (`client.request` rather than `callTool`). Row 33 only: see that row.
- */
-async function rawFreshPoll(owner: string, documentId: string): Promise<Inbox> {
-  callingAs = owner;
-  const result = await client.request(
-    {
-      method: "tools/call",
-      params: { name: "tandem_checkInbox", arguments: { cursor: "start", documentId } },
-    },
-    CallToolResultSchema,
-  );
-  expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
-  return inboxSchema.parse(result.structuredContent);
 }
 
 function reader(owner: string) {
@@ -465,8 +447,6 @@ interface Row {
   expected: "waiting" | "not";
   /** A recorded difference: what the fresh poll does instead of agreeing. */
   difference?: "poll-hands-it" | "poll-hands-notice";
-  /** The fresh poll skips the SDK client's schema check (row 33). */
-  rawPoll?: true;
   /**
    * The bucket in which the first `a-poll` handed the candidate, and only it
    * (R0.5: rows 10 and 20; row 40 since #2358 PR 3b-2b1b-chat).
@@ -977,11 +957,10 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["honour-local", "item"],
     expected: "waiting",
-    // The server hands it with its stored `agentIdentity`, a field the
-    // advertised output schema does not declare, so an SDK client that checks
-    // structured content (this harness's, and Claude Code's) rejects the whole
-    // response; reported on the PR. The row reads the server's answer.
-    rawPoll: true,
+    // Polled through the SDK client, which checks structured content against
+    // the advertised schema: since #2465 the inbox strips the stored
+    // `agentIdentity` (undeclared) instead of sending it, so the response
+    // validates and this row is a guard for that.
   },
   // Others
   {
@@ -1156,9 +1135,7 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
         .flatMap((spy, i) => spy.mock.calls.slice(before[i]))
         .filter((call) => !String(call[0]).startsWith("[ANNOTATION-STORE] legacy migration:"));
       expect(during, "documentWaiting logged").toEqual([]);
-      const inbox = row.rawPoll
-        ? await rawFreshPoll(TANDEM, w.d.id)
-        : await reader(TANDEM).poll(w.d.id);
+      const inbox = await reader(TANDEM).poll(w.d.id);
       const pollHands = handed(inbox).includes(w.candidate);
       // One candidate: nothing else answerable is handed.
       expect(handed(inbox).filter((id) => id !== w.candidate)).toEqual([]);
@@ -1191,17 +1168,24 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
     });
   }
 
-  it("33's companion: the same world polled through the SDK client's checked callTool is rejected (#2465)", async () => {
+  it("33's companion: the same world polled through the SDK client's checked callTool hands the candidate (#2465)", async () => {
     const w = await buildRow(rowNamed(33));
     callingAs = TANDEM;
-    // #2465: when fixed, invert this to a resolving call that hands the
-    // candidate, and drop the raw poll in the agentIdentity row.
-    await expect(
-      client.callTool({
-        name: "tandem_checkInbox",
-        arguments: { cursor: "start", documentId: w.d.id },
-      }),
-    ).rejects.toThrow(/Structured content does not match/);
+    // Inverted by #2465's fix: the inbox now sends each item as its bucket
+    // schema's strip-mode parse, so the stored `agentIdentity` (undeclared)
+    // is removed and the checked call resolves instead of being rejected.
+    const result = await client.callTool({
+      name: "tandem_checkInbox",
+      arguments: { cursor: "start", documentId: w.d.id },
+    });
+    expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
+    const structured = (
+      result as unknown as { structuredContent: { userActions: Array<Record<string, unknown>> } }
+    ).structuredContent;
+    expect(handed(inboxSchema.parse(structured))).toEqual([w.candidate]);
+    const item = structured.userActions.find((a) => a.id === w.candidate);
+    expect(item, "the candidate is in userActions").toBeDefined();
+    expect("agentIdentity" in (item as object), "the undeclared key is not sent").toBe(false);
   });
 });
 
@@ -1472,6 +1456,45 @@ describe("isDocumentWaiting, the module alone", () => {
         JSON.stringify([parentExtra, replyExtra]),
       ).toBe(false);
     }
+  });
+});
+
+describe("#2460: replyWaits refuses a non-boolean private flag on its own", () => {
+  // `repliesOf` hands the replies straight in, bypassing the adapter's
+  // `channelVisibleReplies`, so only `replyWaits`' own restatement can refuse.
+  // Conditions: mode "tandem"; the parent is CLAUDE's outbound comment, so
+  // `commentWaits` cannot answer "waiting" on its own account; nothing handed;
+  // no local-model record.
+  const parent = {
+    id: "p",
+    author: "claude",
+    type: "comment",
+    audience: "outbound",
+    range: { from: 0, to: 5 },
+    content: "c",
+    status: "pending",
+    timestamp: 1,
+  };
+  const ask = (extra: Record<string, unknown>) =>
+    isDocumentWaiting(
+      deepFreeze({
+        documentId: "doc",
+        annotations: [parent],
+        repliesOf: () => [
+          { id: "r", annotationId: "p", author: "user", text: "t", timestamp: 2, ...extra },
+        ],
+        mode: "tandem",
+        handedAtOrAbove: () => false,
+        isLocalModelRecord: () => false,
+      } as unknown as DocumentWaitingInput),
+    );
+
+  it("the absent-private reply alone answers waiting (the positive anchor)", () => {
+    expect(ask({})).toBe(true);
+  });
+
+  it('the private: "true" reply alone answers not waiting', () => {
+    expect(ask({ private: "true" })).toBe(false);
   });
 });
 

@@ -65,7 +65,7 @@
  */
 
 import type { Annotation, AnnotationReply, ChatMessage } from "../../shared/types.js";
-import { isClaudeFacing } from "../annotations/projection.js";
+import { isClaudeFacing, replyPrivacyAllows } from "../annotations/projection.js";
 import type { ModeState } from "../mode.js";
 import {
   inboxChatMessageSchema,
@@ -124,8 +124,12 @@ function replyWaits(
 ): boolean {
   // `channelVisibleReplies`' gate, restated so the rule holds whatever
   // `repliesOf` returns (ADR-027): only a Claude-facing comment's replies,
-  // and never a private one. The adapter applies the same gate first.
-  if (parent.type !== "comment" || !isClaudeFacing(parent) || reply.private === true) return false;
+  // and only one whose `private` is literally `false` or absent (#2460). The
+  // adapter applies the same gate first, and that gate holds the author
+  // allow-list; the user-only check below is this predicate's own rule.
+  if (parent.type !== "comment" || !isClaudeFacing(parent) || !replyPrivacyAllows(reply)) {
+    return false;
+  }
   if (reply.author !== "user") return false;
   if (input.handedAtOrAbove("r", reply.id, 0)) return false;
   return inboxUserReplySchema.safeParse({

@@ -1054,7 +1054,8 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
     );
     expect(statements).toEqual([
       'import type { Annotation, AnnotationReply, ChatMessage } from "../../shared/types.js";',
-      'import { isClaudeFacing } from "../annotations/projection.js";',
+      // #2460: `replyPrivacyAllows` joins deliberately (the shared privacy predicate).
+      'import { isClaudeFacing, replyPrivacyAllows } from "../annotations/projection.js";',
       'import type { ModeState } from "../mode.js";',
       'import { inboxChatMessageSchema, inboxUserReplySchema, userActionSchema } from "./output-schemas.js";',
     ]);
