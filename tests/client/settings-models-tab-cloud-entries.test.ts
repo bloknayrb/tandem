@@ -446,3 +446,27 @@ describe("source pins (comment-stripped)", () => {
     expect(tag).not.toContain("--tandem-fg-subtle");
   });
 });
+
+describe("A4: an old cloud entry's row controls are named with it (ADR-039 item 27)", () => {
+  it("View, Default and On/Off carry its name; Delete and its pair too", async () => {
+    const cloud = cloudEntry("openai");
+    const local = localEntry();
+    pose([cloud, local], local.id);
+    const v = mount();
+    expect(v.getByRole("button", { name: "View My openai" })).toBe(v.open(cloud.id));
+    expect(v.open(cloud.id).textContent?.trim()).toBe("View");
+    expect(v.getByRole("radio", { name: "Default: My openai" })).toBe(v.radio(cloud.id));
+    expect(v.getByRole("checkbox", { name: "On: My openai" })).toBe(v.toggle(cloud.id));
+    await fireEvent.click(v.getByRole("button", { name: "Delete My openai" }));
+    expect(v.getByRole("button", { name: "Confirm deleting My openai" })).toBe(
+      v.getByTestId(`model-delete-confirm-${cloud.id}`),
+    );
+  });
+
+  it("a blank-named one is named by its model ID", () => {
+    const cloud = { ...cloudEntry("gemini"), displayName: "" };
+    pose([cloud], null);
+    const v = mount();
+    expect(v.getByRole("button", { name: "View gemini-model" })).toBe(v.open(cloud.id));
+  });
+});

@@ -300,6 +300,7 @@ function handleSkip() {
     role="dialog"
     aria-modal="true"
     aria-labelledby="first-run-title"
+    aria-describedby="first-run-subtitle-text"
     tabindex={-1}
     bind:this={dialogEl}
     class="frm-dialog"
@@ -311,7 +312,9 @@ function handleSkip() {
     <header class="frm-header">
       <div>
         <h2 id="first-run-title" class="frm-title">{PICKER_TITLE}</h2>
-        <div class="frm-step" data-testid="first-run-subtitle">{PICKER_LOCAL_SUBTITLE}</div>
+        <div id="first-run-subtitle-text" class="frm-step" data-testid="first-run-subtitle">
+          {PICKER_LOCAL_SUBTITLE}
+        </div>
       </div>
       <button
         type="button"
@@ -512,11 +515,17 @@ function handleSkip() {
   padding: 0;
   border-radius: var(--tandem-r-2);
 }
-.frm-close:hover,
+.frm-close:hover {
+  color: var(--tandem-fg);
+  background: var(--tandem-surface-sunk);
+}
+/* A ring, not a colour alone: forced colours erase a colour change
+   (#1123, ADR-039 item 27). */
 .frm-close:focus-visible {
   color: var(--tandem-fg);
   background: var(--tandem-surface-sunk);
-  outline: none;
+  outline: 2px solid var(--tandem-accent);
+  outline-offset: 1px;
 }
 .frm-form {
   display: flex;
@@ -628,5 +637,13 @@ function handleSkip() {
 /* Save's reason sits under the buttons, aligned with Save. */
 .frm-save-reason {
   text-align: right;
+}
+/* Forced colours drop the dimmed fill, so a refused Save would look live
+   (#1123, ADR-039 item 27); say it with the system's inactive colour. */
+@media (forced-colors: active) {
+  .frm-btn-primary[aria-disabled="true"]:not(:disabled) {
+    color: GrayText;
+    border: 1px solid GrayText;
+  }
 }
 </style>
