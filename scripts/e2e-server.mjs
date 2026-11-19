@@ -15,7 +15,17 @@
 // whole suite, self-feeding on each retry.
 //
 // Usage: node scripts/e2e-server.mjs <server-entry> [args...]
-// The remaining argv is run under this same Node binary.
+// The remaining argv is run under this same Node binary, followed by
+// `--tandem-e2e-harness`.
+//
+// Why that argument (#2410, ADR-039 V15): a release build of the server ignores
+// TANDEM_MODELS_DEV_ORIGIN (the development allowance) unless its argv carries
+// it, and CI's E2E backend IS the built server, whose Models specs need the
+// allowance. No shipped launcher passes it; this one adds it only after its
+// app-data check has passed. A server run from source (tsx) honours the
+// variable either way. Must match `E2E_HARNESS_ARGV_FLAG` in
+// src/server/models/dev-allowance-build.ts; kept a literal, like the basename
+// below, and the wiring test keeps the two equal.
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
@@ -39,7 +49,10 @@ if (!resolved || path.basename(resolved) !== E2E_APP_DATA_BASENAME) {
 }
 rmSync(resolved, { recursive: true, force: true });
 
-const child = spawn(process.execPath, process.argv.slice(2), { stdio: "inherit" });
+const E2E_HARNESS_ARGV_FLAG = "--tandem-e2e-harness";
+const child = spawn(process.execPath, [...process.argv.slice(2), E2E_HARNESS_ARGV_FLAG], {
+  stdio: "inherit",
+});
 child.on("error", (err) => {
   console.error("[e2e-server] failed to spawn server:", err);
   process.exit(1);

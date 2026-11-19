@@ -41,6 +41,7 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { isWalkthroughPending, markWalkthroughConfirmed } from "../integrations/walkthrough.js";
 import { type AiRefusal, aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
+import { devAllowanceBuild } from "../models/dev-allowance-build.js";
 import {
   type BoundAddress,
   createOwnWindowPolicy,
@@ -1322,7 +1323,10 @@ export async function startMcpServerHttp(
   // listen callback below, so the policy compares against the port actually
   // bound; until then only the desktop WebView's origins can match.
   let boundAddress: BoundAddress | null = null;
-  const modelsDevOrigin = resolveModelsDevOrigin(process.env[MODELS_DEV_ORIGIN_ENV]);
+  const modelsDevOrigin = resolveModelsDevOrigin(
+    process.env[MODELS_DEV_ORIGIN_ENV],
+    devAllowanceBuild(process.argv),
+  );
   if (modelsDevOrigin.log) console.error(modelsDevOrigin.log);
   const modelsOwnWindow = createOwnWindowPolicy({
     getBound: () => boundAddress,

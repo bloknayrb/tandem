@@ -10,6 +10,7 @@ import type {
   AnnotationStatus,
   ReplyAuthor,
 } from "../../shared/types.js";
+import { replyPrivacyAllows } from "../annotations/projection.js";
 import { extractText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
@@ -304,11 +305,14 @@ export function exportAnnotations(doc: Y.Doc, annotations: readonly ExportAnnota
 
       // Defence in depth (ADR-027), mirroring `channelVisibleReplies`: only an
       // outbound comment carries a visible thread (fails closed on a missing
-      // `audience`), and a `private` reply never renders. The Solo half is the
-      // caller's, since this function has no mode state.
+      // `audience`), and a reply renders only when its `private` is literally
+      // `false` or absent (`replyPrivacyAllows`, #2460). The author rule is
+      // deliberately NOT restated: this input has already passed
+      // `channelVisibleReplies`, which holds the pull side's only copy of it.
+      // The Solo half is the caller's, since this function has no mode state.
       const replies =
         ann.type === "comment" && ann.audience === "outbound"
-          ? (ann.replies ?? []).filter((r) => r.private !== true)
+          ? (ann.replies ?? []).filter(replyPrivacyAllows)
           : [];
       if (replies.length > 0) {
         lines.push("  - Replies:");

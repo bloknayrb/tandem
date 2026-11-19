@@ -85,7 +85,7 @@ const TSUP_CONFIG_URL = pathToFileURL(join(ROOT, "tsup.config.ts")).href;
 const tsupConfig: unknown = (await import(TSUP_CONFIG_URL)).default;
 const entries = (Array.isArray(tsupConfig) ? tsupConfig : [tsupConfig]) as TsupEntry[];
 
-describe("the define reaches every bundle that imports the leaf", () => {
+describe("the define reaches every bundle that imports the leaf (and the second reader, src/server/models/dev-allowance-build.ts, #2410)", () => {
   it.each(["dist/server", "dist/cli"])("%s defines __TANDEM_VERSION__", (outDir) => {
     const entry = entries.find((e) => e.outDir === outDir);
     expect(entry, `no tsup entry writes ${outDir}`).toBeDefined();

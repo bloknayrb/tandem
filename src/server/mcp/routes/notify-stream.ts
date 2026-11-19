@@ -31,9 +31,10 @@ import { getStartupNotices, markStartupNoticeDelivered } from "../../startup-not
  * decides — whether the START-UP notice counts as told — because a page on
  * another port can no longer create the mismatch that notice reports: the two
  * settings routes accept a write only from Tandem's own window. The one
- * exception is the development allowance (`TANDEM_MODELS_DEV_ORIGIN`): a page
- * on the allowed port can make a change and then pop up Tandem's page. The
- * register entry (#2410, docs/security.md) says so.
+ * exception is the development allowance (`TANDEM_MODELS_DEV_ORIGIN`, honoured
+ * by a server run from source, or the E2E harness): a page on the allowed port
+ * can make a change and then pop up Tandem's page. The register entry (#2410,
+ * docs/security.md) says so.
  *
  * Anything else — no `Sec-Fetch-Site`, the Vite dev origin, another loopback
  * port — is not counted, which costs a repeated notice and never a missed one.

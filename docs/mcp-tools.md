@@ -689,7 +689,7 @@ tandem_comment({
 
 Read annotations, optionally filtered by author/type/status. For checking new user actions, prefer `tandem_checkInbox`.
 
-User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped).
+User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped, and so is any reply whose `private` flag is not literally `false` or absent, or whose author is not `user` or `claude` — #2460).
 
 Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://github.com/bloknayrb/tandem/issues/1710), records whose stored `audience` is not `outbound` are **excluded on every Claude-facing read**, matching the channel. That covers user highlights (ADR-027 has always said they are not sent to Claude) and any legacy or stale-tab `{type: "comment", audience: "private"}` record. The `privateExcluded` response field reports the count; it is omitted when zero.
 
@@ -879,7 +879,7 @@ tandem_annotationReply({
 
 Export the annotations Claude can see — the same records `tandem_getAnnotations` returns — as a formatted summary. Useful for review reports.
 
-The markdown lists each item's status (pending, accepted or dismissed), quotes its text in the same coordinates as `tandem_getTextContent` (heading prefixes included), and nests under each comment the replies Claude can see — the same set as the JSON `replies`. Private replies, replies on private parents and Solo-held user replies are left out.
+The markdown lists each item's status (pending, accepted or dismissed), quotes its text in the same coordinates as `tandem_getTextContent` (heading prefixes included), and nests under each comment the replies Claude can see — the same set as the JSON `replies`. Private replies (any `private` flag but `false` or absent), replies whose author is not `user` or `claude`, replies on private parents and Solo-held user replies are left out.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

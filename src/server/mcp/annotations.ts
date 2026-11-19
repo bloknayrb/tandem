@@ -22,7 +22,7 @@ import {
   describeSuggestionRangeRefusal,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { isClaudeFacing, narrowForChannel } from "../annotations/projection.js";
+import { isClaudeFacing, narrowForChannel, replyPrivacyAllows } from "../annotations/projection.js";
 import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
@@ -211,11 +211,21 @@ function threadItemAnsweredBy(
 
 /**
  * Replies safe to surface to Claude for `annotation`. The SINGLE place that
- * enforces both ADR-027 reply-privacy gates, so no Claude-facing caller can
+ * enforces the ADR-027 reply-privacy gates, so no Claude-facing caller can
  * forget one (#1000 security review R1):
- *   1. only `comment` parents expose replies at all, and
- *   2. `private` replies (note-authored or imported Word threads) are stripped
- *      even after a note→comment promotion.
+ *   1. only a Claude-facing `comment` parent exposes replies at all (#1619);
+ *   2. the reply's author is `"user"` or `"claude"`, written as an allow-list:
+ *      an imported Word reply (`"import"`), an unknown author and a missing
+ *      one are all withheld (#2460). Pull cannot copy push's user-only rule,
+ *      because `tandem_getAnnotations` and `tandem_exportAnnotations` return
+ *      Claude's own replies; and
+ *   3. the reply's `private` is literally `false` or absent
+ *      (`replyPrivacyAllows`, shared with the push gate), so a private reply
+ *      stays stripped after a note→comment promotion and a non-boolean value
+ *      (`"true"`, `1`, `null`, …) fails closed (#2460).
+ * This is the only copy of the author rule on the pull side: `file-io/docx.ts`
+ * and `inbox-selection.ts`'s `replyWaits` restate the privacy half only,
+ * because their input has already passed here.
  * `loadReplies` is a thunk so the replies Y.Map is only walked for comments.
  * Every Claude egress (`tandem_getAnnotations`, `tandem_exportAnnotations`)
  * MUST route through this — never call `collectRepliesForAnnotation` /
@@ -230,7 +240,9 @@ export function channelVisibleReplies(
   // must be withheld here too — this is the single reply gate every Claude
   // egress routes through, so `collectInboxUserReplies` inherits it.
   if (annotation.type !== "comment" || !isClaudeFacing(annotation)) return [];
-  return loadReplies(annotation.id).filter((r) => r.private !== true);
+  return loadReplies(annotation.id).filter(
+    (r) => (r.author === "user" || r.author === "claude") && replyPrivacyAllows(r),
+  );
 }
 
 /**
