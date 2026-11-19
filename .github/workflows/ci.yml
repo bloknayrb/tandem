@@ -634,6 +634,14 @@ jobs:
         run: node scripts/ci/ownership-bundle-probe.mjs --expect off
         timeout-minutes: 2
 
+      # The development allowance (#2410): a release build tells itself from a
+      # run from source by the __TANDEM_VERSION__ define, a test that fails
+      # open. This fails if the bundle just built still holds that test.
+      # Pinned by tests/scripts/models-dev-allowance-wiring.test.ts.
+      - name: Release bundle ignores TANDEM_MODELS_DEV_ORIGIN outside the E2E harness
+        run: node scripts/ci/models-dev-allowance-bundle-check.mjs
+        timeout-minutes: 2
+
       # The build generated dist/THIRD_PARTY_NOTICES.txt (and failed if it could
       # not). This checks the other half: that the file actually reaches the npm
       # tarball, and that the build-only files beside it (dist/.third-party,

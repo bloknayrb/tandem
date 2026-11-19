@@ -61,6 +61,9 @@ import {
 import { IDEMPOTENT_OVERWRITE_TOOL, IDEMPOTENT_WRITE_TOOL } from "./tool-annotations.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
 
+/** `tandem_getAnnotations`' advertised output schema, built once (#2465). */
+const getAnnotationsOutputSchema = z.object(getAnnotationsOutputShape);
+
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
 function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
   return (event) => relaySanitizationEvent(hash, event);
@@ -588,12 +591,33 @@ export function registerAnnotationTools(server: McpServer): void {
           };
         });
 
-        return mcpStructured({
+        const payload = {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
           ...(privateExcluded > 0 ? { privateExcluded } : {}),
-        });
+        };
+        // #2465: send only the advertised shape. Records and replies arrive
+        // here as stored, so a key the schema does not declare (a stale
+        // `heldInSolo`, the local model's `agentIdentity`, a reply's
+        // `private: false` or `importAuthor`, or a stray inside `range`,
+        // `relRange`, `importSource` or a `textSnapshotBreaks` element) would
+        // make a validating client (additionalProperties: false) reject the
+        // WHOLE call, every call, for this document. A strip-mode parse of the
+        // advertised schema removes undeclared keys at every depth, on
+        // annotations and replies alike, and changes nothing else: these
+        // schemas carry no transform, default or coercion, and
+        // `relRange.fromRel`/`toRel` are `z.unknown()` and pass through by
+        // reference. It runs after every privacy and Solo filter above, so it
+        // only removes. It builds new objects; the stored records keep their
+        // keys. `mcpStructured` builds the text part and `structuredContent`
+        // from the same parsed object, so both are stripped. On a failed parse
+        // (an invalid DECLARED value) the payload goes out exactly as built,
+        // so the SDK's own output check fails the call as it always has; no
+        // error result of our own. Mirrors the inbox's `admit`
+        // (`awareness.ts`).
+        const checked = getAnnotationsOutputSchema.safeParse(payload);
+        return mcpStructured(checked.success ? checked.data : payload);
       }),
     ),
   );

@@ -240,88 +240,114 @@ describe("createOwnWindowPolicy.classify", () => {
   });
 });
 
-describe(`resolveModelsDevOrigin (${MODELS_DEV_ORIGIN_ENV})`, () => {
+describe.each(["source", "e2e-harness"] as const)(
+  `resolveModelsDevOrigin (${MODELS_DEV_ORIGIN_ENV}), build %s: honoured as before`,
+  (build) => {
+    it("unset: not active, and nothing to log", () => {
+      expect(resolveModelsDevOrigin(undefined, build)).toEqual({ origin: null, log: null });
+    });
+
+    it.each([
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:4573",
+      "http://127.0.0.1:1",
+      "http://127.0.0.1:65535",
+    ])("%s is accepted, and the one boot line names it", (value) => {
+      const r = resolveModelsDevOrigin(value, build);
+      expect(r.origin).toBe(value);
+      expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
+      expect(r.log).toContain(value);
+      expect(r.log).toMatch(/development and tests only/i);
+      expect(r.log).not.toMatch(/NOT active/);
+      expect(r.log?.split("\n")).toHaveLength(1);
+    });
+
+    it.each(TAURI_FORMS)(
+      "the WebView form %s is accepted and logged as active: on an npm server it is not otherwise accepted",
+      (value) => {
+        const r = resolveModelsDevOrigin(value, build);
+        expect(r.origin).toBe(value);
+        expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
+        expect(r.log).toContain(`also be changed from ${value}`);
+        expect(r.log).toMatch(/development and tests only/i);
+        expect(r.log).not.toMatch(/NOT active/);
+        expect(r.log).not.toMatch(/no effect/);
+        expect(r.log?.split("\n")).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      ["a wildcard", "*"],
+      ["the opaque origin", "null"],
+      ["an empty string", ""],
+      ["a space", " "],
+      ["a comma list", "http://127.0.0.1:5173,http://127.0.0.1:5174"],
+      ["a space list", "http://127.0.0.1:5173 http://127.0.0.1:5174"],
+      ["a port range", "http://127.0.0.1:5000-6000"],
+      ["a port wildcard", "http://127.0.0.1:*"],
+      ["a prefix", "http://127.0.0.1:"],
+      ["no port", "http://127.0.0.1"],
+      ["port 80", "http://127.0.0.1:80"],
+      ["port 0", "http://127.0.0.1:0"],
+      ["port 65536", "http://127.0.0.1:65536"],
+      ["a six-digit port", "http://127.0.0.1:517300"],
+      ["a leading-zero port", "http://127.0.0.1:05173"],
+      ["a trailing slash", "http://127.0.0.1:5173/"],
+      ["a path", "http://127.0.0.1:5173/app"],
+      ["a query", "http://127.0.0.1:5173?x=1"],
+      ["leading whitespace", " http://127.0.0.1:5173"],
+      ["a trailing newline", "http://127.0.0.1:5173\n"],
+      ["localhost", "http://localhost:5173"],
+      ["https on loopback", "https://127.0.0.1:5173"],
+      ["a LAN host", "http://192.168.1.5:5173"],
+      ["IPv6 loopback", "http://[::1]:5173"],
+      ["a look-alike host", "http://127.0.0.1.evil.example:5173"],
+      ["userinfo", "http://user@127.0.0.1:5173"],
+      ["tauri.localhost with a port", `http://${TAURI_HOSTNAME}:5173`],
+      ["an upper-cased scheme", "HTTP://127.0.0.1:5173"],
+    ])("%s is refused, and the line says the allowance is NOT active", (_label, value) => {
+      const r = resolveModelsDevOrigin(value, build);
+      expect(r.origin).toBeNull();
+      expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
+      expect(r.log).toMatch(/was refused/);
+      expect(r.log).toMatch(/NOT active/);
+    });
+
+    it("quotes the refused value as JSON, so a newline in it cannot forge a log line", () => {
+      const r = resolveModelsDevOrigin('http://x\n[Tandem] forged "line"', build);
+      expect(r.log).toContain(JSON.stringify('http://x\n[Tandem] forged "line"'));
+      expect(r.log?.split("\n")).toHaveLength(1);
+    });
+
+    it("truncates a long refused value", () => {
+      const long = `http://${"a".repeat(500)}`;
+      const r = resolveModelsDevOrigin(long, build);
+      expect(r.origin).toBeNull();
+      expect(r.log).not.toContain("a".repeat(100));
+      expect(r.log).toContain("…");
+    });
+  },
+);
+
+/** R2.3, held here as a literal so a change to it is a change to this test. */
+const IGNORED =
+  "[Tandem] TANDEM_MODELS_DEV_ORIGIN is set but ignored: a release build of Tandem accepts local-model settings from Tandem's own window only. The variable works with a server run from source (npm run dev:server or npm run dev:standalone).";
+
+describe(`resolveModelsDevOrigin (${MODELS_DEV_ORIGIN_ENV}), a release build (#2410)`, () => {
   it("unset: not active, and nothing to log", () => {
-    expect(resolveModelsDevOrigin(undefined)).toEqual({ origin: null, log: null });
+    expect(resolveModelsDevOrigin(undefined, "release")).toEqual({ origin: null, log: null });
   });
 
   it.each([
     "http://127.0.0.1:5173",
-    "http://127.0.0.1:4573",
-    "http://127.0.0.1:1",
-    "http://127.0.0.1:65535",
-  ])("%s is accepted, and the one boot line names it", (value) => {
-    const r = resolveModelsDevOrigin(value);
-    expect(r.origin).toBe(value);
-    expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
-    expect(r.log).toContain(value);
-    expect(r.log).toMatch(/development and tests only/i);
-    expect(r.log).not.toMatch(/NOT active/);
-    expect(r.log?.split("\n")).toHaveLength(1);
-  });
-
-  it.each(TAURI_FORMS)(
-    "the WebView form %s is accepted and logged as active: on an npm server it is not otherwise accepted",
+    "http://tauri.localhost",
+    "*",
+    'http://x\n[Tandem] forged "line"',
+    "",
+  ])(
+    "%j is ignored: not active, one fixed line, the value neither validated nor echoed",
     (value) => {
-      const r = resolveModelsDevOrigin(value);
-      expect(r.origin).toBe(value);
-      expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
-      expect(r.log).toContain(`also be changed from ${value}`);
-      expect(r.log).toMatch(/development and tests only/i);
-      expect(r.log).not.toMatch(/NOT active/);
-      expect(r.log).not.toMatch(/no effect/);
-      expect(r.log?.split("\n")).toHaveLength(1);
+      expect(resolveModelsDevOrigin(value, "release")).toEqual({ origin: null, log: IGNORED });
     },
   );
-
-  it.each([
-    ["a wildcard", "*"],
-    ["the opaque origin", "null"],
-    ["an empty string", ""],
-    ["a space", " "],
-    ["a comma list", "http://127.0.0.1:5173,http://127.0.0.1:5174"],
-    ["a space list", "http://127.0.0.1:5173 http://127.0.0.1:5174"],
-    ["a port range", "http://127.0.0.1:5000-6000"],
-    ["a port wildcard", "http://127.0.0.1:*"],
-    ["a prefix", "http://127.0.0.1:"],
-    ["no port", "http://127.0.0.1"],
-    ["port 80", "http://127.0.0.1:80"],
-    ["port 0", "http://127.0.0.1:0"],
-    ["port 65536", "http://127.0.0.1:65536"],
-    ["a six-digit port", "http://127.0.0.1:517300"],
-    ["a leading-zero port", "http://127.0.0.1:05173"],
-    ["a trailing slash", "http://127.0.0.1:5173/"],
-    ["a path", "http://127.0.0.1:5173/app"],
-    ["a query", "http://127.0.0.1:5173?x=1"],
-    ["leading whitespace", " http://127.0.0.1:5173"],
-    ["a trailing newline", "http://127.0.0.1:5173\n"],
-    ["localhost", "http://localhost:5173"],
-    ["https on loopback", "https://127.0.0.1:5173"],
-    ["a LAN host", "http://192.168.1.5:5173"],
-    ["IPv6 loopback", "http://[::1]:5173"],
-    ["a look-alike host", "http://127.0.0.1.evil.example:5173"],
-    ["userinfo", "http://user@127.0.0.1:5173"],
-    ["tauri.localhost with a port", `http://${TAURI_HOSTNAME}:5173`],
-    ["an upper-cased scheme", "HTTP://127.0.0.1:5173"],
-  ])("%s is refused, and the line says the allowance is NOT active", (_label, value) => {
-    const r = resolveModelsDevOrigin(value);
-    expect(r.origin).toBeNull();
-    expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
-    expect(r.log).toMatch(/was refused/);
-    expect(r.log).toMatch(/NOT active/);
-  });
-
-  it("quotes the refused value as JSON, so a newline in it cannot forge a log line", () => {
-    const r = resolveModelsDevOrigin('http://x\n[Tandem] forged "line"');
-    expect(r.log).toContain(JSON.stringify('http://x\n[Tandem] forged "line"'));
-    expect(r.log?.split("\n")).toHaveLength(1);
-  });
-
-  it("truncates a long refused value", () => {
-    const long = `http://${"a".repeat(500)}`;
-    const r = resolveModelsDevOrigin(long);
-    expect(r.origin).toBeNull();
-    expect(r.log).not.toContain("a".repeat(100));
-    expect(r.log).toContain("…");
-  });
 });
