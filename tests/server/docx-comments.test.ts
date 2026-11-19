@@ -1797,10 +1797,11 @@ describe("injectCommentsAsAnnotations — repairs a stranded reply parent", () =
   it("stamps the repaired reply private, whatever the stored record said", () => {
     // `writeImportReply` stamps only the author, so `private` would otherwise
     // be spread from the stored record. The repaired reply hangs off a
-    // PROMOTED, Claude-facing parent — `channelVisibleReplies` is (parent
-    // Claude-facing) AND (`private !== true`), so a `{import, private:
-    // undefined}` record (the #1619 class, unhealed by `sanitizeAnnotation`)
-    // would be handed to Claude. A read filter is not a write guard (#1680).
+    // PROMOTED, Claude-facing parent. Since #2460 `channelVisibleReplies`
+    // withholds an `import` author whatever its `private`, so the
+    // `channelVisibleReplies` check below no longer distinguishes a stamped
+    // reply from an unstamped one: the `after.private` assertion is what pins
+    // the #1680 write stamp. A read filter is not a write guard (#1680).
     for (const stray of [undefined, false] as const) {
       doc = new Y.Doc();
       htmlToYDoc(doc, "<p>Hello World</p>");

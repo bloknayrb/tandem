@@ -20,15 +20,16 @@
  * `tests/server/replies-privacy.test.ts` (note / highlight / orphan skip + the
  * client-side `getVisibleReplies` mirror).
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
 import {
   channelVisibleReplies,
   collectRepliesForAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -315,6 +316,81 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     expect(out).toHaveLength(1);
     expect(out[0].text).toBe("now visible to Claude");
     expect(out.some((r) => r.author === "import")).toBe(false);
+  });
+});
+
+/**
+ * #2460 — the pull gate fails closed, the way the push gate always has.
+ *
+ * `channelVisibleReplies` used to keep `private !== true`, which admitted every
+ * other truthy (and falsy) non-boolean, and it had no author rule. It now keeps
+ * a reply only when its author is `user` or `claude` (an allow-list) AND its
+ * `private` is literally `false` or absent (`replyPrivacyAllows`). The gate
+ * reads no mode state, but the fixture rule (mode written before any fixture)
+ * is kept so these rows cannot later pass for a Solo-hold reason.
+ */
+describe("#2460: channelVisibleReplies fails closed", () => {
+  const NON_BOOLEAN: ReadonlyArray<[string, unknown]> = [
+    ['"true"', "true"],
+    ["1", 1],
+    ['"yes"', "yes"],
+    ["{}", {}],
+    ["null", null],
+    ["0", 0],
+    ['""', ""],
+    ["NaN", Number.NaN],
+  ];
+
+  afterEach(() => setCtrlMode(null));
+
+  /** A user comment parent plus `extras`, read back through the gate. */
+  function visibleIds(docId: string, extras: Array<Record<string, unknown>>): string[] {
+    setCtrlMode("tandem");
+    const ydoc = setupDoc(docId, "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "c");
+    const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    withInternal(ydoc, () => {
+      extras.forEach((extra, i) => {
+        const id = `rpl_${i}`;
+        repliesMap.set(id, {
+          id,
+          annotationId: annId,
+          author: "user",
+          text: `reply ${i}`,
+          timestamp: i + 1,
+          rev: 1,
+          ...extra,
+        });
+      });
+    });
+    const ann = map.get(annId) as Annotation;
+    return channelVisibleReplies(ann, (id) => collectRepliesForAnnotation(repliesMap, id)).map(
+      (r) => r.id,
+    );
+  }
+
+  it.each(NON_BOOLEAN)("B1: hides a user reply whose private is %s", (_label, value) => {
+    // rpl_0 is the bad reply; rpl_1 (private absent) proves the parent was read.
+    expect(visibleIds("cvr-bad", [{ private: value }, {}])).toEqual(["rpl_1"]);
+  });
+
+  it("guards: private absent and private false are both shown", () => {
+    expect(visibleIds("cvr-guard", [{}, { private: false }])).toEqual(["rpl_0", "rpl_1"]);
+  });
+
+  it("B2: an import reply with no private is hidden", () => {
+    expect(visibleIds("cvr-import", [{ author: "import" }, {}])).toEqual(["rpl_1"]);
+  });
+
+  it("B3: author local and a missing author are hidden (an allow-list, not a deny-list)", () => {
+    expect(visibleIds("cvr-unknown", [{ author: "local" }, { author: undefined }, {}])).toEqual([
+      "rpl_2",
+    ]);
+  });
+
+  it("B4: Claude's own reply with no private survives", () => {
+    expect(visibleIds("cvr-claude", [{ author: "claude" }])).toEqual(["rpl_0"]);
   });
 });
 

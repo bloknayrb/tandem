@@ -22,7 +22,7 @@ import {
   describeSuggestionRangeRefusal,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { isClaudeFacing, narrowForChannel } from "../annotations/projection.js";
+import { isClaudeFacing, narrowForChannel, replyPrivacyAllows } from "../annotations/projection.js";
 import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
@@ -60,6 +60,9 @@ import {
 } from "./response.js";
 import { IDEMPOTENT_OVERWRITE_TOOL, IDEMPOTENT_WRITE_TOOL } from "./tool-annotations.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
+
+/** `tandem_getAnnotations`' advertised output schema, built once (#2465). */
+const getAnnotationsOutputSchema = z.object(getAnnotationsOutputShape);
 
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
 function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
@@ -211,11 +214,21 @@ function threadItemAnsweredBy(
 
 /**
  * Replies safe to surface to Claude for `annotation`. The SINGLE place that
- * enforces both ADR-027 reply-privacy gates, so no Claude-facing caller can
+ * enforces the ADR-027 reply-privacy gates, so no Claude-facing caller can
  * forget one (#1000 security review R1):
- *   1. only `comment` parents expose replies at all, and
- *   2. `private` replies (note-authored or imported Word threads) are stripped
- *      even after a note→comment promotion.
+ *   1. only a Claude-facing `comment` parent exposes replies at all (#1619);
+ *   2. the reply's author is `"user"` or `"claude"`, written as an allow-list:
+ *      an imported Word reply (`"import"`), an unknown author and a missing
+ *      one are all withheld (#2460). Pull cannot copy push's user-only rule,
+ *      because `tandem_getAnnotations` and `tandem_exportAnnotations` return
+ *      Claude's own replies; and
+ *   3. the reply's `private` is literally `false` or absent
+ *      (`replyPrivacyAllows`, shared with the push gate), so a private reply
+ *      stays stripped after a note→comment promotion and a non-boolean value
+ *      (`"true"`, `1`, `null`, …) fails closed (#2460).
+ * This is the only copy of the author rule on the pull side: `file-io/docx.ts`
+ * and `inbox-selection.ts`'s `replyWaits` restate the privacy half only,
+ * because their input has already passed here.
  * `loadReplies` is a thunk so the replies Y.Map is only walked for comments.
  * Every Claude egress (`tandem_getAnnotations`, `tandem_exportAnnotations`)
  * MUST route through this — never call `collectRepliesForAnnotation` /
@@ -230,7 +243,9 @@ export function channelVisibleReplies(
   // must be withheld here too — this is the single reply gate every Claude
   // egress routes through, so `collectInboxUserReplies` inherits it.
   if (annotation.type !== "comment" || !isClaudeFacing(annotation)) return [];
-  return loadReplies(annotation.id).filter((r) => r.private !== true);
+  return loadReplies(annotation.id).filter(
+    (r) => (r.author === "user" || r.author === "claude") && replyPrivacyAllows(r),
+  );
 }
 
 /**
@@ -576,12 +591,33 @@ export function registerAnnotationTools(server: McpServer): void {
           };
         });
 
-        return mcpStructured({
+        const payload = {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
           ...(privateExcluded > 0 ? { privateExcluded } : {}),
-        });
+        };
+        // #2465: send only the advertised shape. Records and replies arrive
+        // here as stored, so a key the schema does not declare (a stale
+        // `heldInSolo`, the local model's `agentIdentity`, a reply's
+        // `private: false` or `importAuthor`, or a stray inside `range`,
+        // `relRange`, `importSource` or a `textSnapshotBreaks` element) would
+        // make a validating client (additionalProperties: false) reject the
+        // WHOLE call, every call, for this document. A strip-mode parse of the
+        // advertised schema removes undeclared keys at every depth, on
+        // annotations and replies alike, and changes nothing else: these
+        // schemas carry no transform, default or coercion, and
+        // `relRange.fromRel`/`toRel` are `z.unknown()` and pass through by
+        // reference. It runs after every privacy and Solo filter above, so it
+        // only removes. It builds new objects; the stored records keep their
+        // keys. `mcpStructured` builds the text part and `structuredContent`
+        // from the same parsed object, so both are stripped. On a failed parse
+        // (an invalid DECLARED value) the payload goes out exactly as built,
+        // so the SDK's own output check fails the call as it always has; no
+        // error result of our own. Mirrors the inbox's `admit`
+        // (`awareness.ts`).
+        const checked = getAnnotationsOutputSchema.safeParse(payload);
+        return mcpStructured(checked.success ? checked.data : payload);
       }),
     ),
   );

@@ -614,6 +614,35 @@ describe("exportAnnotations", () => {
     expect(result).not.toContain("reply on highlight");
   });
 
+  // #2460: the export filter restates the privacy half itself, so it needs a
+  // case of its own — the tool-level export rows pass once the gate alone is
+  // fixed. Same call: the bad USER reply (isolating the privacy half from the
+  // author rule, which lives only in `channelVisibleReplies`), a visible
+  // sibling, an explicit-false sibling, and an import reply with no `private`
+  // that must still print on this direct call.
+  it.each([["true"], [1], ["yes"], [{}], [null], [0], [""]])(
+    "drops a reply whose private flag is the non-boolean %o (#2460)",
+    (value) => {
+      loadHtml("<p>Hello world test content</p>");
+      const result = exportAnnotations(doc, [
+        {
+          ...makeAnnotation({ id: "c1", range: range(0, 5), content: "outbound" }),
+          audience: "outbound",
+          replies: [
+            reply({ id: "rb", text: "non-boolean private reply", private: value as boolean }),
+            reply({ id: "ra", text: "absent sibling" }),
+            reply({ id: "rf", text: "false sibling", private: false }),
+            reply({ id: "ri", author: "import", text: "word reply" }),
+          ],
+        },
+      ]);
+      expect(result).not.toContain("non-boolean private reply");
+      expect(result).toContain("    - You: absent sibling");
+      expect(result).toContain("    - You: false sibling");
+      expect(result).toContain("    - Imported: word reply");
+    },
+  );
+
   it("emits no Replies line when there are none", () => {
     loadHtml("<p>Hello world</p>");
     const result = exportAnnotations(doc, [

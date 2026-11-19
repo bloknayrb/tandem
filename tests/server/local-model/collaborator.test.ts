@@ -21,9 +21,11 @@ import {
   ANSWERING_CHANGED_NOTICE_KEY,
   answeringChangedNotice,
   answeringFingerprint,
+  CHAT_NOTICE_TEXT,
   type CollaboratorDeps,
   classifyFailure,
   createLocalModelCollaborator,
+  RUN_FAILURE_TEXT,
   UNUSABLE_NOTICE,
 } from "../../../src/server/local-model/collaborator.js";
 import type { LocalModelConfig } from "../../../src/server/local-model/config.js";
@@ -33,6 +35,7 @@ import type {
   LocalModelUnusableReason,
 } from "../../../src/server/local-model/config-source.js";
 import type { LoopResult, RunTurnOpts } from "../../../src/server/local-model/index.js";
+import type { LoopMetrics } from "../../../src/server/local-model/loop.js";
 import {
   appendClaudeChatMessage,
   finalizeClaudeChatMessage,
@@ -82,7 +85,7 @@ function cleanResult(finalContent: string): LoopResult {
   };
 }
 
-function errorResult(errorMessage: string): LoopResult {
+function errorResult(errorMessage: string, failure?: LoopMetrics["failure"]): LoopResult {
   return {
     metrics: {
       turns: 1,
@@ -94,6 +97,7 @@ function errorResult(errorMessage: string): LoopResult {
       wallMs: 1,
       exit: "error",
       errorMessage,
+      ...(failure ? { failure } : {}),
     },
     steps: [],
     finalContent: "",
@@ -968,7 +972,9 @@ describe("collaborator — failure + robustness", () => {
           // Under STREAM_FLUSH_CHARS (80), so nothing has been committed yet:
           // this content exists ONLY in the sink buffer when the fault lands.
           opts.onContentDelta?.("The answer is ");
-          return errorResult("local model response exceeded 4194304-byte cap");
+          return errorResult("local model response exceeded 4194304-byte cap", {
+            kind: "too-large",
+          });
         },
       }),
     );
@@ -981,7 +987,7 @@ describe("collaborator — failure + robustness", () => {
     // The notification is still required — the partial alone doesn't say why.
     const notes = getBuffer().filter((n) => n.documentId === "doc-err-partial");
     expect(notes).toHaveLength(1);
-    expect(notes[0].message).toMatch(/too large/);
+    expect(notes[0].message).toBe(RUN_FAILURE_TEXT["too-large"]);
     errorSpy.mockRestore();
   });
 
@@ -1057,27 +1063,80 @@ describe("collaborator — failure + robustness", () => {
   });
 });
 
-describe("classifyFailure — bucketing + redaction", () => {
-  const cases: Array<[string, RegExp]> = [
-    ["local model returned a non-JSON response", /unreadable/],
-    ["invalid local-model endpoint: http://evil", /misconfigured/],
-    ["local model response exceeded 16777216-byte cap", /too large/],
-    ["local model endpoint returned HTTP 500", /server returned an error/],
-    ["The operation was aborted", /interrupted/],
-    ["ECONNREFUSED 127.0.0.1:11434 secret-detail", /could not reach the server/],
+describe("classifyFailure — chosen by the failure tag, never by the error's text (#1123, ADR-039 P6)", () => {
+  // Each message written out, so a change of wording is a change of this test.
+  const TEXT = {
+    unreachable:
+      "Tandem's request to your local model's server did not complete. Check that the server is running, then edit the model in Settings → Models to check its Endpoint.",
+    notFound:
+      "Your local model's server could not find the model or address Tandem asked for. Check that the model is downloaded, then check its Model ID and Endpoint in Settings → Models.",
+    badRequest:
+      "Your local model's server refused Tandem's request. Tandem needs a model that supports tool calling; if this one does not, use another, or set chat to Claude in Settings → Models and send your message again. Any comments your local model already added are still there.",
+    refusedAccess:
+      "Your local model's server refused access to Tandem. Tandem sends no API key to local servers, so if the server requires one, turn that requirement off in the server.",
+    serverError:
+      "Your local model's server reported an error; its own log may say why. Try again in a moment, or set chat to Claude in Settings → Models and send your message again. Any comments your local model already added are still there.",
+    unreadable:
+      "Your local model's server sent a reply Tandem could not read. Its own log may say why; also check that the model's Endpoint in Settings → Models is the server's address.",
+    tooLarge:
+      "Your local model's reply grew too large, so Tandem stopped it. Send your message again, or try another model. Any comments your local model already added are still there.",
+    unknown:
+      "Your local model's reply stopped because of an error. Send your message again, or set chat to Claude in Settings → Models and send it again. Any comments your local model already added are still there.",
+  };
+
+  // Each `errorMessage` names ANOTHER cause, so a build that still reads the
+  // text picks the wrong message.
+  type Failure = LoopMetrics["failure"];
+  const http = (status: number): Failure => ({ kind: "http", status });
+  const cases: Array<[Failure, string, string]> = [
+    [undefined, "local model endpoint returned HTTP 404", TEXT.unknown],
+    [undefined, "local model returned a non-JSON response", TEXT.unknown],
+    [undefined, "ECONNREFUSED 127.0.0.1:11434 secret-detail", TEXT.unknown],
+    [undefined, "invalid local-model endpoint: http://evil", TEXT.unknown],
+    [{ kind: "unreachable" }, "local model returned a non-JSON response", TEXT.unreachable],
+    [{ kind: "unreadable" }, "local model endpoint returned HTTP 404", TEXT.unreadable],
+    [{ kind: "too-large" }, "fetch failed", TEXT.tooLarge],
+    [http(401), "local model endpoint returned HTTP 500", TEXT.refusedAccess],
+    [http(403), "local model endpoint returned HTTP 500", TEXT.refusedAccess],
+    [http(404), "local model endpoint returned HTTP 401", TEXT.notFound],
+    [http(400), "local model endpoint returned HTTP 404", TEXT.badRequest],
+    ...[402, 405, 408, 413, 422, 429, 500, 503].map((status): [Failure, string, string] => [
+      http(status),
+      "local model endpoint returned HTTP 400",
+      TEXT.serverError,
+    ]),
   ];
-  for (const [errorMessage, expected] of cases) {
-    it(`maps "${errorMessage.slice(0, 28)}…" to a fixed string with no raw detail`, () => {
-      const out = classifyFailure(errorResult(errorMessage).metrics);
-      expect(out).toMatch(expected);
+  for (const [failure, errorMessage, expected] of cases) {
+    const tagLabel = failure
+      ? failure.kind === "http"
+        ? `HTTP ${failure.status}`
+        : failure.kind
+      : "no tag";
+    it(`maps ${tagLabel} with "${errorMessage.slice(0, 28)}…" to a fixed string with no raw detail`, () => {
+      const out = classifyFailure(errorResult(errorMessage, failure).metrics);
+      expect(out).toBe(expected);
       // Never embeds third-party detail (a V8 parse snippet / secret) into the UI string.
       expect(out).not.toContain("secret-detail");
       expect(out).not.toContain("127.0.0.1");
       expect(out).not.toContain("evil");
     });
   }
-  it("falls back to the generic message when there is no errorMessage", () => {
-    expect(classifyFailure(cleanResult("").metrics)).toMatch(/could not reach the server/);
+
+  it("the exported table holds exactly these eight messages, each different", () => {
+    expect(Object.values(RUN_FAILURE_TEXT).sort()).toEqual(Object.values(TEXT).sort());
+    expect(new Set(Object.values(RUN_FAILURE_TEXT)).size).toBe(8);
+  });
+
+  it("maps a result with no failure tag and no errorMessage to the unknown message", () => {
+    expect(classifyFailure(cleanResult("").metrics)).toBe(TEXT.unknown);
+  });
+});
+
+describe("the no-local-model chat notice text (#1123)", () => {
+  it("names adding or turning on a local model, marking it Default, and sending again after setting Claude", () => {
+    expect(CHAT_NOTICE_TEXT["no-local-model"]).toBe(
+      "No local model could answer this message. In Settings → Models, add or turn on a local model and mark it as Default, or set who answers your chat back to Claude and send your message again.",
+    );
   });
 });
 
@@ -1383,7 +1442,9 @@ describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)
         runTurn: async (opts) => {
           opts.onContentDelta?.(partial); // > 80 → flush lands mid-stream
           await new Promise((r) => setTimeout(r, 0));
-          return errorResult("local model response exceeded 4194304-byte cap");
+          return errorResult("local model response exceeded 4194304-byte cap", {
+            kind: "too-large",
+          });
         },
       }),
     );

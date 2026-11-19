@@ -16,6 +16,12 @@
  * `TANDEM_CAPTURE_PART_C=1 npx vitest run` on this file. The file it wrote was
  * byte-identical to the committed fixture. Cases added after part C (R0.5
  * below) assert directly and capture nothing.
+ *
+ * One value was edited by hand afterwards: the toast `message` under the
+ * `error` key, by the clearer-failure-messages PR (#1123, ADR-039 P6). The
+ * message for that ending was changed by decision; the behaviour (one warning
+ * toast, the partial reply kept) was not. A capture re-run against b57d850 no
+ * longer reproduces that one value, so the file must still never be recaptured.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

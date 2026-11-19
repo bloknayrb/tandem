@@ -287,56 +287,95 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
    * `not.toContain(loser)` assertion is a real defect regardless of #1599.
    */
   describe("concurrency: parallel applyConfig calls", () => {
-    it("two callers racing with distinct tokens: both succeed, final file has no cross-contamination", async () => {
-      // Atomic rename guarantees the final file is ONE of the two
-      // writes, not a torn blob. Test with DISTINCT sentinel tokens
-      // so cross-contamination is detectable: if writer A's token
-      // appears inside the entry that writer B's rewrite produced,
-      // atomicWrite leaked state across the rename boundary.
-      fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    it("two callers race: the file is one caller's whole write, and a refused rename is the only allowed failure", async () => {
+      // Atomic rename guarantees the final file is ONE of the two writes,
+      // not a torn blob. DISTINCT sentinel tokens make cross-contamination
+      // detectable: if writer A's token appears inside the file writer B's
+      // rewrite produced, atomicWrite leaked state across the rename.
+      //
+      // Both callers read the original bytes before either writes, then
+      // rename their own UUID temp over the same destination. On Windows two
+      // renames onto one destination can collide and one is refused (EPERM,
+      // measured with plain `fs` outside Tandem). `applyConfig` deliberately
+      // does not retry: apply.ts's atomicWrite says "Unprepared temps keep a
+      // single try: their ACL step runs between the close and the rename".
+      // Reading of this test (not the code's stated reason): a retry with
+      // nothing to re-check against could also overwrite a write that finished
+      // during the back-off. This pins TODAY's single try; whether to change
+      // it is a product question for Bryan (#2436), not a test question.
+      // So off Windows both must succeed; on win32 exactly one refused rename
+      // is allowed per iteration and nothing else. Looped, because the
+      // collision is a timing race.
       const TOKEN_A = "sentinel-token-AAA";
       const TOKEN_B = "sentinel-token-BBB";
-      const opsA = {
+      const opsFor = (token: string) => ({
         create: {
           tandem: {
             type: "http" as const,
             url: "http://127.0.0.1:3479/mcp",
-            headers: { Authorization: `Bearer ${TOKEN_A}` },
+            headers: { Authorization: `Bearer ${token}` },
           },
         },
         remove: [],
-      };
-      const opsB = {
-        create: {
-          tandem: {
-            type: "http" as const,
-            url: "http://127.0.0.1:3479/mcp",
-            headers: { Authorization: `Bearer ${TOKEN_B}` },
-          },
-        },
-        remove: [],
-      };
+      });
+      const expectedFor = (token: string) =>
+        `${JSON.stringify({ mcpServers: opsFor(token).create }, null, 2)}\n`;
+      const ALLOWED_REFUSALS = ["EPERM", "EBUSY", "EACCES"];
+      const ITERATIONS = 25;
+      let refusedIterations = 0;
 
-      const results = await Promise.allSettled([
-        applyConfig(configPath, opsA),
-        applyConfig(configPath, opsB),
-      ]);
-      // Both should succeed — each call uses a UUID-suffixed tempfile
-      // so rename windows don't conflict. Pinning `=== 2` is stronger
-      // than `>= 1`; if a future regression introduces an EEXIST race
-      // or fails to retry, this catches it.
-      const succeeded = results.filter((r) => r.status === "fulfilled");
-      expect(succeeded.length).toBe(2);
+      for (let i = 0; i < ITERATIONS; i++) {
+        // The config gets its own directory so "nothing else left" is exact.
+        const dir = await fs.promises.mkdtemp(path.join(tmpDir, `race-${i}-`));
+        const target = path.join(dir, ".claude.json");
+        fs.writeFileSync(target, JSON.stringify({ mcpServers: {} }));
 
-      // Final file parses; the tandem entry came from EXACTLY ONE
-      // writer; the LOSER's token does NOT appear anywhere in the
-      // file (no half-merge, no token leak).
-      const finalText = fs.readFileSync(configPath, "utf-8");
-      const finalParsed = JSON.parse(finalText);
-      const finalToken = finalParsed.mcpServers.tandem.headers.Authorization;
-      expect([`Bearer ${TOKEN_A}`, `Bearer ${TOKEN_B}`]).toContain(finalToken);
-      const loser = finalToken === `Bearer ${TOKEN_A}` ? TOKEN_B : TOKEN_A;
-      expect(finalText).not.toContain(loser);
+        const results = await Promise.allSettled([
+          applyConfig(target, opsFor(TOKEN_A)),
+          applyConfig(target, opsFor(TOKEN_B)),
+        ]);
+
+        const describeRejection = (r: PromiseSettledResult<void>) =>
+          r.status === "rejected"
+            ? `code=${(r.reason as NodeJS.ErrnoException)?.code} message=${(r.reason as Error)?.message}`
+            : "fulfilled";
+        const context = `iteration ${i}: A ${describeRejection(results[0])}; B ${describeRejection(results[1])}`;
+
+        const fulfilledIdx = results.flatMap((r, idx) => (r.status === "fulfilled" ? [idx] : []));
+        const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (rejected.length === 0) {
+          expect(fulfilledIdx.length, context).toBe(2);
+        } else {
+          // Anything but one allowed rename refusal, on win32 only, fails.
+          expect(process.platform, context).toBe("win32");
+          expect(rejected.length, context).toBe(1);
+          const err = rejected[0].reason as NodeJS.ErrnoException;
+          expect(err.syscall, context).toBe("rename");
+          expect(ALLOWED_REFUSALS, context).toContain(err.code);
+          refusedIterations++;
+        }
+
+        // Final file: byte-equal to a fulfilled caller's whole write (when
+        // one was refused, that caller's), and the other token appears
+        // nowhere (no half-merge, no token leak).
+        const finalText = fs.readFileSync(target, "utf-8");
+        const candidates = fulfilledIdx.map((idx) => (idx === 0 ? TOKEN_A : TOKEN_B));
+        expect(candidates.map(expectedFor), `${context}; final file: ${finalText}`).toContain(
+          finalText,
+        );
+        const finalToken = finalText.includes(TOKEN_A) ? TOKEN_A : TOKEN_B;
+        const loser = finalToken === TOKEN_A ? TOKEN_B : TOKEN_A;
+        expect(finalText, context).not.toContain(loser);
+
+        // No temp, or anything else, left behind.
+        expect(fs.readdirSync(dir), context).toEqual([".claude.json"]);
+      }
+
+      if (process.platform === "win32") {
+        console.error(
+          `[apply-malformed] racing case: ${refusedIterations}/${ITERATIONS} iterations took the refusal branch`,
+        );
+      }
     });
   });
 });

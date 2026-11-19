@@ -107,6 +107,7 @@ import {
   resolveLocalModelConfig,
 } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
+import type { LocalModelFailure } from "./ollama-client.js";
 import { isShownTextEmpty, ThinkFilter } from "./think-filter.js";
 
 /** Inline the whole document into the prompt below this length; else windowed reads.
@@ -433,7 +434,7 @@ export const CHAT_NOTICE_TEXT: Record<LocalModelChatNoticeKind, string> = {
   "no-document":
     "The local model could not answer this message, because no document was open for it. Open the document you want to ask about and send your message again.",
   "no-local-model":
-    "No local model could answer this message. Add or enable a local model in Settings → Models, or set who answers your chat back to Claude there.",
+    "No local model could answer this message. In Settings → Models, add or turn on a local model and mark it as Default, or set who answers your chat back to Claude and send your message again.",
   // #1123 part C (R3.3): a fact, no instruction, no model named, no cause
   // guessed. Posted after a `clean` run that showed nothing.
   "no-reply": "Your local model produced no reply.",
@@ -522,25 +523,80 @@ function composeTask(text: string, selection?: ChatMessagePayload["selection"]):
   return text;
 }
 
+/** Why a run ended `error`, as far as Tandem can tell (#1123, ADR-039 P6). */
+export type RunFailureCause =
+  | "unreachable"
+  | "not-found"
+  | "bad-request"
+  | "refused-access"
+  | "server-error"
+  | "unreadable"
+  | "too-large"
+  | "unknown";
+
 /**
- * Map a failed run to a FIXED user-facing string. `metrics.errorMessage` is READ
- * to pick the bucket but NEVER embedded in the output (a third-party body /
- * V8-parse snippet must not reach the UI — it stays on stderr). Structural
- * redaction (#1123 M1.2 — no tracked #1123 plan doc covers it). Pinned by
- * `collaborator.test.ts`'s "surfaces an error exit as a structured
- * notification, never the raw error text" plus the table-driven
- * "maps … to a fixed string with no raw detail" cases; #1160's test plan
- * calls that pair `structured-failure-no-raw-leak`, which is a PR-body
- * label, not a name anything in `tests/` carries.
+ * What the run toast says for each cause (#1123, ADR-039 P6). Fixed strings:
+ * never the endpoint, the model id, a status number or the server's words.
+ * Observations are past tense, because a warning stays in the activity tray;
+ * what is present tense stays true there. Each claims only what the status or
+ * the place the error arose tells Tandem, so a "why" is conditional. The four
+ * that say to send the message again end by saying the comments the run
+ * already added are still there: a failed run removes none, so a second run
+ * can add them again. "Set chat to Claude" is always followed by sending the
+ * message again, because a message sent while chat was set to the local model
+ * is never handed to Claude.
+ */
+export const RUN_FAILURE_TEXT: Record<RunFailureCause, string> = {
+  unreachable:
+    "Tandem's request to your local model's server did not complete. Check that the server is running, then edit the model in Settings → Models to check its Endpoint.",
+  "not-found":
+    "Your local model's server could not find the model or address Tandem asked for. Check that the model is downloaded, then check its Model ID and Endpoint in Settings → Models.",
+  "bad-request":
+    "Your local model's server refused Tandem's request. Tandem needs a model that supports tool calling; if this one does not, use another, or set chat to Claude in Settings → Models and send your message again. Any comments your local model already added are still there.",
+  "refused-access":
+    "Your local model's server refused access to Tandem. Tandem sends no API key to local servers, so if the server requires one, turn that requirement off in the server.",
+  "server-error":
+    "Your local model's server reported an error; its own log may say why. Try again in a moment, or set chat to Claude in Settings → Models and send your message again. Any comments your local model already added are still there.",
+  unreadable:
+    "Your local model's server sent a reply Tandem could not read. Its own log may say why; also check that the model's Endpoint in Settings → Models is the server's address.",
+  "too-large":
+    "Your local model's reply grew too large, so Tandem stopped it. Send your message again, or try another model. Any comments your local model already added are still there.",
+  unknown:
+    "Your local model's reply stopped because of an error. Send your message again, or set chat to Claude in Settings → Models and send it again. Any comments your local model already added are still there.",
+};
+
+/** The cause, from the tag alone; first match wins. */
+function runFailureCause(failure: LocalModelFailure | undefined): RunFailureCause {
+  if (!failure) return "unknown";
+  switch (failure.kind) {
+    case "unreachable":
+    case "unreadable":
+    case "too-large":
+      return failure.kind;
+    case "http":
+      // Tandem sends no key to a local server, so a server that requires one
+      // refuses every request.
+      if (failure.status === 401 || failure.status === 403) return "refused-access";
+      if (failure.status === 404) return "not-found";
+      if (failure.status === 400) return "bad-request";
+      return "server-error";
+  }
+}
+
+/**
+ * Map a failed run to a FIXED user-facing string ({@link RUN_FAILURE_TEXT}).
+ * The choice reads only `metrics.failure`, the tag the chat client put on the
+ * error where it arose (`requestFailure` in `ollama-client.ts`); it never reads
+ * `metrics.errorMessage`, so no text of an error picks a message and none is
+ * embedded in it (a third-party body or V8-parse snippet must not reach the
+ * UI; it stays on stderr). Pinned by `collaborator.test.ts`'s "surfaces an
+ * error exit as a structured notification, never the raw error text" plus the
+ * table-driven "maps … to a fixed string with no raw detail" cases; #1160's
+ * test plan calls that pair `structured-failure-no-raw-leak`, which is a
+ * PR-body label, not a name anything in `tests/` carries.
  */
 export function classifyFailure(metrics: LoopMetrics): string {
-  const m = metrics.errorMessage ?? "";
-  if (/non-JSON response/.test(m)) return "The local model returned an unreadable response.";
-  if (/invalid local-model endpoint/.test(m)) return "The local model endpoint is misconfigured.";
-  if (/exceeded .*cap/.test(m)) return "The local model response was too large and was stopped.";
-  if (/HTTP \d/.test(m)) return "The local model server returned an error.";
-  if (/abort/i.test(m)) return "The local model request was interrupted.";
-  return "The local model could not reach the server or complete the request.";
+  return RUN_FAILURE_TEXT[runFailureCause(metrics.failure)];
 }
 
 export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_COLLABORATOR_DEPS) {
