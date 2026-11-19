@@ -724,6 +724,30 @@ describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (s
     expect(mounts[0]).toContain('[data-testid="model-edit-unavailable-close"]');
     expect(mounts[0]).toMatch(/\.focus\(\)/);
     const effects = [...src.matchAll(/^\$effect(?:\.pre)?\(/gm)].map((m) => block(m.index ?? 0));
-    for (const e of effects) expect(e).not.toMatch(/\.focus\(/);
+    expect(effects.length).toBeGreaterThan(0);
+    // Every call an $effect makes is on this list, so one that reaches focus
+    // through a helper of this file fails here, not only a direct `.focus(`.
+    const ALLOWED = new Set([
+      "$effect",
+      "addEventListener",
+      "removeEventListener",
+      "closest",
+      "contains",
+      "trapTab",
+      "preventDefault",
+      "onCancel",
+    ]);
+    const KEYWORDS = new Set(["if", "return", "for", "while", "switch", "function"]);
+    for (const e of effects) {
+      expect(e).not.toMatch(/\.focus\(/);
+      const calls = [...e.matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)]
+        .map((m) => m[1])
+        .filter((name) => !KEYWORDS.has(name));
+      for (const name of calls) expect(ALLOWED.has(name), `$effect calls ${name}()`).toBe(true);
+    }
+    // And every `.focus(` in the script sits inside the onMount block.
+    const script = src.slice(0, src.indexOf("</script>"));
+    const focusCalls = [...script.matchAll(/\.focus\(/g)].length;
+    expect([...mounts[0].matchAll(/\.focus\(/g)].length).toBe(focusCalls);
   });
 });
