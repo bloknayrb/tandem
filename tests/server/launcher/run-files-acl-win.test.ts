@@ -244,6 +244,7 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
   it("an explicit Everyone entry on launcher/ is refused by the lock's own read (#2440)", async () => {
     resetVerifiedLauncherDirsForTests();
     const calls: string[] = [];
+    const lockErrors: string[] = [];
     const counting: RunFileAcl = {
       assertOwned: async (p) => {
         calls.push("owner");
@@ -251,22 +252,19 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
       },
       lockDir: async (p) => {
         calls.push("lock");
-        await realRunFileAcl.lockDir(p);
+        try {
+          await realRunFileAcl.lockDir(p);
+        } catch (err) {
+          lockErrors.push((err as Error).message);
+          throw err;
+        }
       },
+      // Records a folder read re-added after the lock, which the call
+      // arrays below would then show.
       verifyNoBroadAce: async (p) => {
         calls.push("verify");
         await realRunFileAcl.verifyNoBroadAce(p);
       },
-    };
-    const lockErrors: string[] = [];
-    counting.lockDir = async (p) => {
-      calls.push("lock");
-      try {
-        await realRunFileAcl.lockDir(p);
-      } catch (err) {
-        lockErrors.push((err as Error).message);
-        throw err;
-      }
     };
     const dir = await ownLauncherDir();
     // An EXPLICIT grant to Everyone (S-1-1-0): `/inheritance:r` does not
