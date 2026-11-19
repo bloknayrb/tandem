@@ -11,6 +11,7 @@
 
 import { flushSync } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToastAction } from "../../src/client/hooks/useNotifications.svelte";
 import type { ChatMessage, TandemNotification } from "../../src/shared/types";
 import { drain, installHeldFetch } from "../helpers/held-fetch";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
@@ -43,6 +44,16 @@ const known = (answerer: "claude" | "local", extra: Record<string, unknown> = {}
   runGeneration: "gen-1",
   ...extra,
 });
+
+/** App's sink, as three spies ("Use it for chat", R3.3's judge). */
+function makeSink() {
+  return {
+    push: vi.fn<(n: TandemNotification, action?: ToastAction) => void>(),
+    dismiss: vi.fn<(id: string) => void>(),
+    dismissActivity: vi.fn<(id: string) => void>(),
+  };
+}
+const USE_IT_ACTION = { label: "Use it for chat", onClick: expect.any(Function), stay: true };
 
 beforeEach(() => {
   store._resetChatAnswererForTests();
@@ -591,41 +602,43 @@ describe("'Set chat to Claude' on a refused page (R2.6)", () => {
 });
 
 describe("the first local model's toast (R3)", () => {
-  let pushed: TandemNotification[];
+  let sink: ReturnType<typeof makeSink>;
+  const pushed = () => sink.push.mock.calls.map((c) => c[0]);
   beforeEach(() => {
-    pushed = [];
-    store.setChatAnswererToastSink((n) => pushed.push(n));
+    sink = makeSink();
+    store.setChatAnswererToastSink(sink);
   });
 
   it("known Claude: shown once, severity info, the brief's text, marked in localStorage; a second save shows nothing", async () => {
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(1)).answer(200, known("claude"));
-    expect(pushed.map((n) => [n.severity, n.message])).toEqual([
+    expect(pushed().map((n) => [n.severity, n.message])).toEqual([
       ["info", store.FIRST_LOCAL_MODEL_TOAST_TEXT],
     ]);
+    expect(sink.push.mock.calls[0][1]).toEqual(USE_IT_ACTION);
     expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBe("1");
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(2)).answer(200, known("claude"));
-    expect(pushed).toHaveLength(1);
+    expect(pushed()).toHaveLength(1);
   });
 
   it("an add that is not the first local model: nothing", async () => {
     signalModelsWriteCommitted({ firstLocal: false });
     await (await held.request(1)).answer(200, known("claude"));
-    expect(pushed).toHaveLength(0);
+    expect(pushed()).toHaveLength(0);
   });
 
   it("known local: dropped and marked (it would be false)", async () => {
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(1)).answer(200, known("local"));
-    expect(pushed).toHaveLength(0);
+    expect(pushed()).toHaveLength(0);
     expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBe("1");
   });
 
   it("not known: dropped unshown and unmarked", async () => {
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(1)).fail();
-    expect(pushed).toHaveLength(0);
+    expect(pushed()).toHaveLength(0);
     expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBeNull();
   });
 
@@ -640,14 +653,651 @@ describe("the first local model's toast (R3)", () => {
     await (await held.request(1)).answer(200, known("claude"));
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(2)).answer(200, known("claude"));
-    expect(pushed).toHaveLength(1);
+    expect(pushed()).toHaveLength(1);
   });
 
   it("an install that already showed it (mark in storage): nothing", async () => {
     localStorage.setItem(store.FIRST_LOCAL_MODEL_TOAST_KEY, "1");
     signalModelsWriteCommitted({ firstLocal: true });
     await (await held.request(1)).answer(200, known("claude"));
-    expect(pushed).toHaveLength(0);
+    expect(pushed()).toHaveLength(0);
+  });
+});
+
+describe("'Use it for chat' (the brief's R2, R3, R4)", () => {
+  let sink: ReturnType<typeof makeSink>;
+  beforeEach(() => {
+    sink = makeSink();
+    store.setChatAnswererToastSink(sink);
+  });
+
+  const N = store.USE_IT_FOR_CHAT_NOTICES;
+  const notice = (n: (typeof N)[keyof typeof N]) => ({
+    id: expect.any(String),
+    type: "launcher",
+    severity: n.severity,
+    dedupKey: n.dedupKey,
+    message: n.message,
+    timestamp: expect.any(Number),
+  });
+  const confirmation = () => ({
+    id: expect.any(String),
+    type: "launcher",
+    severity: "info",
+    message: store.FIRST_LOCAL_MODEL_TOAST_TEXT,
+    dedupKey: "first-local-model-chat",
+    timestamp: expect.any(Number),
+  });
+  /** Pushes after the confirmation. */
+  const notices = () => sink.push.mock.calls.slice(1);
+
+  /** The first local model saved; its read answers `body`. Returns the id. */
+  async function pushConfirmation(body: unknown = known("claude")): Promise<string> {
+    const n = held.calls.length;
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(n + 1)).answer(200, body);
+    expect(sink.push).toHaveBeenCalledTimes(1);
+    return (sink.push.mock.calls[0][0] as TandemNotification).id;
+  }
+  /** Press through the toast's own button, never the store function. */
+  const click = () => (sink.push.mock.calls[0][1] as ToastAction).onClick();
+  const expectWithdrawn = (id: string) => {
+    expect(sink.dismiss).toHaveBeenCalledTimes(1);
+    expect(sink.dismiss).toHaveBeenCalledWith(id);
+    expect(sink.dismissActivity).toHaveBeenCalledTimes(1);
+    expect(sink.dismissActivity).toHaveBeenCalledWith(id);
+  };
+  const expectKept = async (id: string) => {
+    expect(sink.dismiss).not.toHaveBeenCalled();
+    expect(sink.dismissActivity).not.toHaveBeenCalled();
+    // The id is kept: a later known-local read still takes the row down.
+    await readAs(200, known("local"));
+    expectWithdrawn(id);
+  };
+
+  it("the label and the five notices, word for word (R4)", () => {
+    expect(store.USE_IT_FOR_CHAT_LABEL).toBe("Use it for chat");
+    expect(N).toEqual({
+      set: {
+        severity: "info",
+        dedupKey: "use-it-for-chat-set",
+        message: "Chat was set to your local model.",
+      },
+      notSaved: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-saved",
+        message:
+          "Chat was set to your local model, but Tandem could not save that choice, so chat may be set back to Claude when Tandem restarts.",
+      },
+      refused: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-refused",
+        message: "Chat could not be set to your local model. It was left set to Claude.",
+      },
+      notConfirmed: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-confirmed",
+        message:
+          "Tandem could not confirm that chat was set to your local model. Check Who answers your chat in Settings → Models.",
+      },
+      notRead: {
+        severity: "warning",
+        dedupKey: "use-it-for-chat-not-read",
+        message:
+          "Tandem did not change who answers your chat, because it could not read the current setting. Check Who answers your chat in Settings → Models.",
+      },
+    });
+  });
+
+  describe("the push (R2)", () => {
+    for (const [label, body] of [
+      ["usable", known("claude", { localModelState: "usable", localModelResolves: true })],
+      ["none", known("claude", { localModelState: "none" })],
+      [
+        "absent (the check threw)",
+        { answerer: "claude", localModelResolves: false, runGeneration: "gen-1" },
+      ],
+    ] as const) {
+      it(`known Claude, state ${label}: the confirmation with the staying action; no POST`, async () => {
+        await pushConfirmation(body);
+        expect(sink.push).toHaveBeenCalledWith(confirmation(), USE_IT_ACTION);
+        await drain();
+        expect(posts()).toHaveLength(0);
+      });
+    }
+
+    it("the guard: a Settings switch to local settles while the push's read is held, which then answers Claude: nothing", async () => {
+      await readAs(200, known("claude"));
+      signalModelsWriteCommitted({ firstLocal: true });
+      const pushRead = await held.request(2);
+      const done = store.setChatAnswerer("local");
+      await (await held.request(3)).answer(200, { answerer: "local", persisted: true });
+      await pushRead.answer(200, known("claude"));
+      await (await held.request(4)).answer(200, known("local"));
+      await done;
+      expect(sink.push).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a sink whose push throws does not spend the offer: unmarked, and the next first local model pushes it (review round 1)", async () => {
+    sink.push.mockImplementationOnce(() => {
+      throw new Error("sink gone");
+    });
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(1)).answer(200, known("claude"));
+    expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBeNull();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[chat-answerer] the first-local-model toast failed",
+      expect.any(Error),
+    );
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(2)).answer(200, known("claude"));
+    expect(sink.push).toHaveBeenCalledTimes(2);
+    expect(sink.push).toHaveBeenLastCalledWith(confirmation(), USE_IT_ACTION);
+    expect(localStorage.getItem(store.FIRST_LOCAL_MODEL_TOAST_KEY)).toBe("1");
+    // The failed push's id was dropped: a known-local read withdraws only the shown one.
+    await readAs(200, known("local"));
+    const shown = (sink.push.mock.calls[1][0] as TandemNotification).id;
+    expect(sink.dismiss.mock.calls).toEqual([[shown]]);
+    expect(sink.dismissActivity.mock.calls).toEqual([[shown]]);
+  });
+
+  it("a push that throws leaves no id behind: a later known-local read dismisses nothing", async () => {
+    sink.push.mockImplementationOnce(() => {
+      throw new Error("sink gone");
+    });
+    signalModelsWriteCommitted({ firstLocal: true });
+    await (await held.request(1)).answer(200, known("claude"));
+    await readAs(200, known("local"));
+    expect(sink.dismiss).not.toHaveBeenCalled();
+    expect(sink.dismissActivity).not.toHaveBeenCalled();
+  });
+
+  describe("through the button", () => {
+    it("a push that throws during a press leaves nothing unhandled", async () => {
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        await pushConfirmation();
+        sink.push.mockImplementation(() => {
+          throw new Error("sink gone");
+        });
+        click();
+        await (await held.request(2)).fail(); // X, whose push throws
+        await drain();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(console.warn).toHaveBeenCalledWith(
+          "[chat-answerer] Use it for chat failed",
+          expect.any(Error),
+        );
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+  });
+
+  describe("SwitchResult (R3.1), one row per exit", () => {
+    async function result(status: number, body: unknown, value: "claude" | "local" = "local") {
+      const n = held.calls.length;
+      const done = store.setChatAnswerer(value);
+      await (await held.request(n + 1)).answer(status, body);
+      await (await held.request(n + 2)).answer(200, known("claude"));
+      return done;
+    }
+    const answered = (effective: string, saved: boolean, superseded: boolean) => ({
+      kind: "answered",
+      effective,
+      saved,
+      superseded,
+    });
+    const SUP = "CHAT_ANSWERER_SUPERSEDED";
+    const WF = "CHAT_ANSWERER_WRITE_FAILED";
+
+    it("local while not known: not-sent, nothing fetched", async () => {
+      expect(await store.setChatAnswerer("local")).toEqual({ kind: "not-sent" });
+      await drain();
+      expect(held.calls).toHaveLength(0);
+    });
+
+    describe("with a known read", () => {
+      beforeEach(async () => {
+        await readAs(200, known("claude"));
+      });
+
+      it("a switch pending: not-sent", async () => {
+        const first = store.setChatAnswerer("claude");
+        expect(await store.setChatAnswerer("local")).toEqual({ kind: "not-sent" });
+        await (await held.request(2)).answer(200, { answerer: "claude", persisted: true });
+        await (await held.request(3)).answer(200, known("claude"));
+        expect(await first).toEqual(answered("claude", true, false));
+      });
+
+      it("200 local: answered, saved", async () => {
+        expect(await result(200, { answerer: "local", persisted: true })).toEqual(
+          answered("local", true, false),
+        );
+      });
+      it("409 superseded local, persisted true and false", async () => {
+        expect(await result(409, { answerer: "local", persisted: true, code: SUP })).toEqual(
+          answered("local", true, true),
+        );
+        expect(await result(409, { answerer: "local", persisted: false, code: SUP })).toEqual(
+          answered("local", false, true),
+        );
+      });
+      it("409 superseded Claude", async () => {
+        expect(await result(409, { answerer: "claude", persisted: true, code: SUP })).toEqual(
+          answered("claude", true, true),
+        );
+      });
+      it("500 write-failed, Claude and local", async () => {
+        expect(await result(500, { answerer: "claude", persisted: false, code: WF })).toEqual(
+          answered("claude", false, false),
+        );
+        expect(await result(500, { answerer: "local", persisted: false, code: WF })).toEqual(
+          answered("local", false, false),
+        );
+      });
+      for (const [label, status, body] of [
+        ["403 OWN_WINDOW_ONLY", 403, { code: "OWN_WINDOW_ONLY" }],
+        ["404", 404, { error: "NOT_FOUND" }],
+        ["400", 400, { error: "BAD_REQUEST" }],
+        ["409 without the code", 409, { answerer: "local", persisted: true }],
+        ["an unreadable 200", 200, "not a body"],
+      ] as const) {
+        it(`${label}: unconfirmed`, async () => {
+          expect(await result(status, body)).toEqual({ kind: "unconfirmed" });
+        });
+      }
+      it("a throw and a timeout: unconfirmed", async () => {
+        let done = store.setChatAnswerer("local");
+        await (await held.request(2)).fail();
+        await (await held.request(3)).answer(200, known("claude"));
+        expect(await done).toEqual({ kind: "unconfirmed" });
+        done = store.setChatAnswerer("local");
+        await (await held.request(4)).timeout();
+        await (await held.request(5)).answer(200, known("claude"));
+        expect(await done).toEqual({ kind: "unconfirmed" });
+      });
+    });
+
+    it("a press, a clear while its POST is held, then 200 local: still answered local saved, and S", async () => {
+      const id = await pushConfirmation();
+      click();
+      await (await held.request(2)).answer(200, known("claude"));
+      const post = await held.request(3);
+      store.clearChatAnswererOutcome();
+      await post.answer(200, { answerer: "local", persisted: true });
+      await (await held.request(4)).answer(200, known("local"));
+      await drain();
+      expect(notices()).toEqual([[notice(N.set)]]);
+      expectWithdrawn(id);
+    });
+  });
+
+  describe("the press (R3.2)", () => {
+    it("row 2: a press during a pending Settings switch reads nothing, sends nothing, shows nothing", async () => {
+      await pushConfirmation();
+      const done = store.setChatAnswerer("local");
+      const post = await held.request(2);
+      click();
+      await drain();
+      expect(gets()).toHaveLength(1);
+      expect(posts()).toHaveLength(1);
+      await post.answer(500, {
+        answerer: "local",
+        persisted: false,
+        code: "CHAT_ANSWERER_WRITE_FAILED",
+      });
+      await (await held.request(3)).answer(200, known("local"));
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(notices()).toEqual([]);
+      expect(state.outcomeLine).toBe(store.CHAT_ANSWERER_OUTCOME_LINES.localNotSaved);
+    });
+
+    it("row 3: the press's own read answers known local: no POST, nothing shown, withdrawn", async () => {
+      const id = await pushConfirmation();
+      click();
+      await (await held.request(2)).answer(200, known("local"));
+      await drain();
+      expect(posts()).toHaveLength(0);
+      expect(notices()).toEqual([]);
+      expectWithdrawn(id);
+    });
+
+    it("not adopted: a Settings switch started during the press's read: nothing shown, one POST in all", async () => {
+      await pushConfirmation();
+      click();
+      const pressRead = await held.request(2);
+      const done = store.setChatAnswerer("claude");
+      const post = await held.request(3);
+      await pressRead.answer(200, known("claude"));
+      await post.answer(200, { answerer: "claude", persisted: true });
+      await (await held.request(4)).answer(200, known("claude"));
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(notices()).toEqual([]);
+    });
+
+    it("rows read the STORE: a press whose read is not adopted (a new server process) and fails still sends, by the store's known Claude", async () => {
+      const id = await pushConfirmation();
+      store.noteCtrlSynced({});
+      await (await held.request(2)).answer(200, known("claude"));
+      click();
+      const pressRead = await held.request(3);
+      store.noteCtrlSynced({}); // a new process: the press's read is not adopted
+      await pressRead.fail();
+      expect(state.known).toBe(true);
+      await vi.waitFor(() => expect(posts()).toHaveLength(1));
+      expect(posts()[0].body).toEqual({ answerer: "local" });
+      await posts()[0].answer(200, { answerer: "local", persisted: true });
+      for (let i = 0; i < 3; i++) {
+        await drain();
+        for (const c of held.calls.slice(3))
+          if (c.method === "GET") await c.answer(200, known("local"));
+      }
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(notices()).toEqual([[notice(N.set)]]);
+      expectWithdrawn(id);
+    });
+
+    it("row 4: the press's read fails: no POST, X once, the confirmation kept", async () => {
+      const id = await pushConfirmation();
+      click();
+      await (await held.request(2)).fail();
+      await drain();
+      expect(posts()).toHaveLength(0);
+      expect(notices()).toEqual([[notice(N.notRead)]]);
+      await expectKept(id);
+    });
+
+    it("row 4 with no confirmation pushed: X once (no early return on a missing id)", async () => {
+      const done = store.pressUseItForChat();
+      await (await held.request(1)).fail();
+      await done;
+      expect(sink.push.mock.calls).toEqual([[notice(N.notRead)]]);
+      expect(posts()).toHaveLength(0);
+    });
+
+    describe("row 5: one POST, reported by its result", () => {
+      async function press(status: number, body: unknown, reread: unknown) {
+        const id = await pushConfirmation();
+        click();
+        await (await held.request(2)).answer(200, known("claude"));
+        const post = await held.request(3);
+        expect(post.method).toBe("POST");
+        expect(post.body).toEqual({ answerer: "local" });
+        if (status === 0) await post.fail();
+        else if (status === -1) await post.timeout();
+        else await post.answer(status, body);
+        const get = await held.request(4);
+        if (reread === "fail") await get.fail();
+        else await get.answer(200, reread);
+        await drain();
+        expect(posts()).toHaveLength(1);
+        expect(state.outcomeLine).toBeNull();
+        return id;
+      }
+      const SUP = "CHAT_ANSWERER_SUPERSEDED";
+      const WF = "CHAT_ANSWERER_WRITE_FAILED";
+
+      it("S: 200 local, the re-read known local", async () => {
+        const id = await press(200, { answerer: "local", persisted: true }, known("local"));
+        expect(notices()).toEqual([[notice(N.set)]]);
+        expectWithdrawn(id);
+      });
+      it("S: 200 local, the re-read failing", async () => {
+        const id = await press(200, { answerer: "local", persisted: true }, "fail");
+        expect(notices()).toEqual([[notice(N.set)]]);
+        expectWithdrawn(id);
+      });
+      it("U: 500 write-failed with local in effect", async () => {
+        const id = await press(
+          500,
+          { answerer: "local", persisted: false, code: WF },
+          known("local"),
+        );
+        expect(notices()).toEqual([[notice(N.notSaved)]]);
+        expectWithdrawn(id);
+      });
+      it("S: 409 superseded local, persisted", async () => {
+        const id = await press(
+          409,
+          { answerer: "local", persisted: true, code: SUP },
+          known("local"),
+        );
+        expect(notices()).toEqual([[notice(N.set)]]);
+        expectWithdrawn(id);
+      });
+      it("U: 409 superseded local, not persisted", async () => {
+        const id = await press(
+          409,
+          { answerer: "local", persisted: false, code: SUP },
+          known("local"),
+        );
+        expect(notices()).toEqual([[notice(N.notSaved)]]);
+        expectWithdrawn(id);
+      });
+      it("nothing: 409 superseded Claude (another choice won)", async () => {
+        const id = await press(
+          409,
+          { answerer: "claude", persisted: true, code: SUP },
+          known("claude"),
+        );
+        expect(notices()).toEqual([]);
+        await expectKept(id);
+      });
+
+      // Review rounds 1 and 2: any other result, first match — the store
+      // known local after the re-read, S; the POST's own answer naming Claude
+      // in effect, R; anything else, N (a store still saying Claude may be
+      // stale, so it never gives R).
+      describe("a refused or failed write (500 write-failed, Claude in effect)", () => {
+        const refused = { answerer: "claude", persisted: false, code: WF };
+        it("store known Claude: R (a new string, not Settings' line)", async () => {
+          const id = await press(500, refused, known("claude"));
+          expect(notices()).toEqual([[notice(N.refused)]]);
+          expect(N.refused.message).not.toBe(store.CHAT_ANSWERER_OUTCOME_LINES.localRefused);
+          await expectKept(id);
+        });
+        it("store known local (another window set it): S, and the confirmation withdrawn", async () => {
+          const id = await press(500, refused, known("local"));
+          expect(notices()).toEqual([[notice(N.set)]]);
+          expectWithdrawn(id);
+        });
+        it("store not known (the re-read failed): R, on the server's own answer", async () => {
+          const id = await press(500, refused, "fail");
+          expect(notices()).toEqual([[notice(N.refused)]]);
+          await expectKept(id);
+        });
+      });
+
+      describe("unconfirmed", () => {
+        for (const [label, status, body] of [
+          ["403", 403, { code: "OWN_WINDOW_ONLY" }],
+          ["404", 404, { error: "NOT_FOUND" }],
+          ["a network failure", 0, null],
+        ] as const) {
+          it(`${label}, store known Claude: N (the response does not state the answerer)`, async () => {
+            const id = await press(status, body, known("claude"));
+            expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+            await expectKept(id);
+          });
+        }
+        it("a POST that timed out but landed, store known local: S, and the confirmation withdrawn", async () => {
+          const id = await press(-1, null, known("local"));
+          expect(notices()).toEqual([[notice(N.set)]]);
+          expectWithdrawn(id);
+        });
+        it("a server restart during the switch: the POST timed out but landed, its re-read (answering local) is dropped as a new process's, the stale store still says Claude: N, not R", async () => {
+          const id = await pushConfirmation();
+          store.noteCtrlSynced({});
+          await (await held.request(2)).answer(200, known("claude"));
+          click();
+          await (await held.request(3)).answer(200, known("claude"));
+          const post = await held.request(4);
+          await post.timeout();
+          const reread = await held.request(5);
+          store.noteCtrlSynced({}); // a new server process: this re-read is not adopted
+          await reread.answer(200, known("local")); // the POST landed
+          // The press has decided: the store is the stale Claude it held.
+          expect(state.known).toBe(true);
+          expect(state.answerer).toBe("claude");
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          await (await held.request(6)).answer(200, known("claude"));
+          await drain();
+          expect(posts()).toHaveLength(1);
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          await expectKept(id);
+        });
+        it("a POST that timed out, store not known (the re-read failed): N", async () => {
+          const id = await press(-1, null, "fail");
+          expect(notices()).toEqual([[notice(N.notConfirmed)]]);
+          await expectKept(id);
+        });
+      });
+    });
+
+    it("the switch counter: store not known, a press, then 'Set chat to Claude' sent during the press's read, which settles while that POST is on the wire: the press is silent (review round 2)", async () => {
+      const id = await pushConfirmation();
+      await readAs(403, { code: "OWN_WINDOW_ONLY" }); // the store is not known
+      click();
+      const pressRead = await held.request(3);
+      const done = store.setChatAnswerer("claude"); // allowed while not known
+      const post = await held.request(4);
+      await pressRead.answer(403, { code: "OWN_WINDOW_ONLY" });
+      await drain();
+      expect(notices()).toEqual([]);
+      await post.answer(200, { answerer: "claude", persisted: true });
+      await (await held.request(5)).answer(403, { code: "OWN_WINDOW_ONLY" });
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(notices()).toEqual([]);
+      await expectKept(id);
+    });
+
+    it("a full Settings switch to Claude during the press's read: the press sends nothing and shows nothing (review round 1)", async () => {
+      const id = await pushConfirmation();
+      click();
+      const pressRead = await held.request(2);
+      const done = store.setChatAnswerer("claude");
+      await (await held.request(3)).answer(200, { answerer: "claude", persisted: true });
+      await pressRead.answer(200, known("claude"));
+      await (await held.request(4)).answer(200, known("claude"));
+      await done;
+      await drain();
+      expect(posts()).toHaveLength(1);
+      expect(posts()[0].body).toEqual({ answerer: "claude" });
+      expect(notices()).toEqual([]);
+      await expectKept(id);
+    });
+  });
+
+  describe("the withdrawal (R3.3)", () => {
+    it("an adopted known-local read withdraws once", async () => {
+      const id = await pushConfirmation();
+      await readAs(200, known("local"));
+      await readAs(200, known("local"));
+      expectWithdrawn(id);
+    });
+
+    it("a Settings switch to local answered 200 whose re-read fails withdraws once (direct write)", async () => {
+      const id = await pushConfirmation();
+      const done = store.setChatAnswerer("local");
+      await (await held.request(2)).answer(200, { answerer: "local", persisted: true });
+      await (await held.request(3)).fail();
+      await done;
+      expectWithdrawn(id);
+    });
+
+    it("a Settings switch to local answered 500 write-failed (local in effect) whose re-read fails withdraws once (direct write)", async () => {
+      const id = await pushConfirmation();
+      const done = store.setChatAnswerer("local");
+      await (await held.request(2)).answer(500, {
+        answerer: "local",
+        persisted: false,
+        code: "CHAT_ANSWERER_WRITE_FAILED",
+      });
+      await (await held.request(3)).fail();
+      await done;
+      expectWithdrawn(id);
+    });
+
+    it("a refused page's 'Set chat to Claude' answered 409 superseded naming local withdraws once (read not known)", async () => {
+      const id = await pushConfirmation();
+      await readAs(403, { code: "OWN_WINDOW_ONLY" });
+      const done = store.setChatAnswerer("claude");
+      await (await held.request(3)).answer(409, {
+        answerer: "local",
+        persisted: true,
+        code: "CHAT_ANSWERER_SUPERSEDED",
+      });
+      await (await held.request(4)).answer(403, { code: "OWN_WINDOW_ONLY" });
+      await done;
+      expect(state.known).toBe(false);
+      expectWithdrawn(id);
+    });
+
+    it("a known-Claude read (state none, and absent) and a failed read withdraw nothing", async () => {
+      await pushConfirmation();
+      await readAs(200, known("claude"));
+      await readAs(200, { answerer: "claude", localModelResolves: false, runGeneration: "g" });
+      const p = store.requestRead();
+      await (await held.request(held.calls.length + 1)).fail();
+      await p;
+      expect(sink.dismiss).not.toHaveBeenCalled();
+      expect(sink.dismissActivity).not.toHaveBeenCalled();
+    });
+
+    it("a known-local read that is not adopted (a Claude switch in flight) withdraws nothing", async () => {
+      await pushConfirmation();
+      const done = store.setChatAnswerer("claude");
+      const post = await held.request(2);
+      const read = store.requestRead();
+      await (await held.request(3)).answer(200, known("local"));
+      await read;
+      await post.answer(200, { answerer: "claude", persisted: true });
+      await (await held.request(4)).answer(200, known("claude"));
+      await done;
+      expect(sink.dismiss).not.toHaveBeenCalled();
+      expect(sink.dismissActivity).not.toHaveBeenCalled();
+    });
+
+    it("a throwing dismiss leaves the read and the switch resolved, and warns", async () => {
+      await pushConfirmation();
+      sink.dismiss.mockImplementation(() => {
+        throw new Error("gone");
+      });
+      await expect(readAs(200, known("local"))).resolves.toMatchObject({ status: "known" });
+      expect(sink.dismissActivity).toHaveBeenCalledTimes(1);
+      expect(console.warn).toHaveBeenCalledWith(
+        "[chat-answerer] could not dismiss the confirmation",
+        expect.any(Error),
+      );
+    });
+
+    it("a throwing dismiss during a switch: setChatAnswerer still resolves with its result", async () => {
+      await pushConfirmation();
+      sink.dismiss.mockImplementation(() => {
+        throw new Error("gone");
+      });
+      const done = store.setChatAnswerer("local");
+      await (await held.request(2)).answer(200, { answerer: "local", persisted: true });
+      await (await held.request(3)).answer(200, known("local"));
+      await expect(done).resolves.toEqual({
+        kind: "answered",
+        effective: "local",
+        saved: true,
+        superseded: false,
+      });
+      expect(sink.dismissActivity).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
