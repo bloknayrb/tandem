@@ -19,8 +19,10 @@ import {
   noteNoticeRowArrived,
   noteNotifyNotice,
   observeChatForAnswerer,
+  pressUseItForChat,
   requestRead,
   setChatAnswerer,
+  setChatAnswererToastSink,
   takeSendRead,
 } from "../../src/client/hooks/useChatAnswerer.svelte";
 import { signalModelsWriteCommitted } from "../../src/client/models/models-write-signal";
@@ -68,13 +70,29 @@ describe("chat-answerer store, flag off", () => {
     });
     noteChatSent(msg, { aiOff: false, held: true });
     signalModelsWriteCommitted({ firstLocal: true });
-    await setChatAnswerer("local");
+    expect(await setChatAnswerer("local")).toEqual({ kind: "not-sent" });
     await drain();
     expect(fetchSpy).not.toHaveBeenCalled();
     const state = createChatAnswerer();
     expect(state.status).toBe("pending");
     expect(state.sentLocal.size).toBe(0);
     expect(inLocalPeriod(true)).toBe(false);
+  });
+
+  it("'Use it for chat': a first local model and a press push, dismiss and fetch nothing", async () => {
+    // A sink set by hand (App sets none while dark). Without the press's own
+    // flag line, its read answers "dark", the store is not known, and it
+    // pushes X: so this is red if that line is removed.
+    const sink = { push: vi.fn(), dismiss: vi.fn(), dismissActivity: vi.fn() };
+    setChatAnswererToastSink(sink);
+    signalModelsWriteCommitted({ firstLocal: true });
+    await drain();
+    await pressUseItForChat();
+    await drain();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(sink.push).not.toHaveBeenCalled();
+    expect(sink.dismiss).not.toHaveBeenCalled();
+    expect(sink.dismissActivity).not.toHaveBeenCalled();
   });
 
   it("a chat send records no read, so the send-time toast never waits (#2433 M1, R1.4)", () => {

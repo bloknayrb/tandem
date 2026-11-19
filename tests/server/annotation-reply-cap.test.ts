@@ -84,11 +84,18 @@ describe("the reply seam — write-time length bound", () => {
 });
 
 describe("the reply seam — not-owned remedy (#2216)", () => {
-  it("keeps the MCP / API wording byte-identical when no override is passed", () => {
+  it("the MCP wording: the neutral stem and the default remedy", () => {
     expect(describeReplyWriteRefusal({ kind: "not-owned", author: "user" })).toStrictEqual({
       code: "NOT_OWNED",
       message:
-        "Claude can only reply on annotations it authored; answer a user's comment with tandem_reply or a fresh tandem_comment",
+        "You cannot reply on this annotation; answer a user's comment with tandem_reply or a fresh tandem_comment",
+    });
+  });
+
+  it("invalid-note: one neutral sentence for every caller", () => {
+    expect(describeReplyWriteRefusal({ kind: "invalid-note" })).toStrictEqual({
+      code: "INVALID_ARGUMENT",
+      message: "You can only reply to comments that are shared with you",
     });
   });
 
@@ -100,7 +107,7 @@ describe("the reply seam — not-owned remedy (#2216)", () => {
       ),
     ).toStrictEqual({
       code: "NOT_OWNED",
-      message: "Claude can only reply on annotations it authored; do the other thing",
+      message: "You cannot reply on this annotation; do the other thing",
     });
   });
 });

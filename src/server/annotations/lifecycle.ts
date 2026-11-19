@@ -425,13 +425,20 @@ export type ReplyRefusalCode =
  * The three codes are exactly what the ternary produced for the three reachable
  * cases, so 8f changes how the answer is derived and not what it is.
  *
+ * **The two refusal sentences are neutral and shared by every caller.** Claude
+ * (over MCP) and the local-model loop both receive them, so neither names a
+ * caller: "You can only reply to comments that are shared with you" for
+ * `invalid-note`, and the `not-owned` stem "You cannot reply on this
+ * annotation; ". The stem is about the one record, not a class of
+ * annotations, so it stays true whichever parents the guard refuses.
+ *
  * **`opts.notOwnedRemedy` replaces only the remedy half of the `not-owned`
  * message (#2216).** The default names `tandem_reply` and `tandem_comment`,
  * which exist on the MCP surface only; the local-model loop has neither, and a
  * model told to call an absent tool burns a turn. A consumer whose tool set
  * differs passes its own remedy, and the stem, the code and the single `never`
- * anchor stay shared. Omitting `opts` keeps the MCP and `/api` output
- * byte-identical.
+ * anchor stay shared. Omitting `opts` gives the MCP and `/api` wording: the
+ * shared stem plus the default remedy.
  */
 export function describeReplyWriteRefusal(
   result: Exclude<ClaudeReplyResult, { kind: "ok" }>,
@@ -461,7 +468,7 @@ export function describeReplyWriteRefusal(
     case "invalid-note":
       return {
         code: "INVALID_ARGUMENT",
-        message: "Claude can only reply to comments that are shared with it",
+        message: "You can only reply to comments that are shared with you",
       };
     case "invalid-suggestion-range":
       return {
@@ -476,7 +483,7 @@ export function describeReplyWriteRefusal(
     case "not-owned":
       return {
         code: "NOT_OWNED",
-        message: `Claude can only reply on annotations it authored; ${
+        message: `You cannot reply on this annotation; ${
           opts?.notOwnedRemedy ??
           "answer a user's comment with tandem_reply or a fresh tandem_comment"
         }`,

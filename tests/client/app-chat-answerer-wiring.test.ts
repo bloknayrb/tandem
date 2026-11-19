@@ -50,6 +50,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chatMount, readAppSource } from "../helpers/app-source";
+import { stripComments } from "../helpers/src-tree";
 
 const app = readAppSource();
 
@@ -90,7 +91,15 @@ describe("App wires who answers chat (R1.2, R5.5, R7, R8)", () => {
     expect(app).toMatch(
       /createNotifications\(\{\s*onStreamNotice: \(n\) => noteNotifyNotice\(n\.dedupKey\)/,
     );
-    expect(app).toMatch(/if \(BYO_MODELS_ENABLED\) setChatAnswererToastSink\(/);
+    // "Use it for chat", R6.2: the sink once, under its own flag check, whole:
+    // the action, `dismiss` and `dismissActivity` all reach the notifications.
+    // On comment-stripped source (review round 1): a comment naming the call
+    // can neither satisfy nor fail the pin.
+    const appCode = stripComments(app);
+    expect(appCode.split("setChatAnswererToastSink(").length - 1).toBe(1);
+    expect(appCode).toMatch(
+      /if \(BYO_MODELS_ENABLED\)\s*\{?\s*setChatAnswererToastSink\(\{\s*push: \(n, action\) => notifications\.push\(n, action\),\s*dismiss: \(id\) => notifications\.dismiss\(id\),\s*dismissActivity: \(id\) => notifications\.dismissActivity\(id\),?\s*\}\);?\s*\}?/,
+    );
     expect(app).toMatch(/onNoticeRows: announceNoticeRows/);
     expect(app).toMatch(/onSent: \(message\) =>\s*noteChatSent\(message,/);
     // The notice announcement defers its writes and calls the store's trigger.
