@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { classifyFailure } from "../../../src/server/local-model/collaborator.js";
+import { classifyFailure, RUN_FAILURE_TEXT } from "../../../src/server/local-model/collaborator.js";
 import { runLoop } from "../../../src/server/local-model/loop.js";
 import { chat } from "../../../src/server/local-model/ollama-client.js";
 
@@ -18,8 +18,12 @@ import { chat } from "../../../src/server/local-model/ollama-client.js";
  * What it pins: a 3xx is refused, not followed (`redirect: "error"`); a timeout
  * mid-stream rejects with `name === "AbortError"`, so `runLoop` still reports
  * `timeout`; a caller abort still ends `aborted` and settles promptly; a body
- * over the cap is stopped with the "exceeded … cap" message `classifyFailure`
- * buckets; a non-JSON 200 still gives "local model returned a non-JSON response".
+ * over the cap is stopped with the "exceeded … cap" message; a non-JSON 200
+ * still gives "local model returned a non-JSON response". And, end to end
+ * through `runLoop` and `classifyFailure`, which message the user is shown for
+ * each way a request fails here (ADR-039 P6): the client's failure tag survives
+ * undici's own errors (a refused 3xx, a socket destroyed before the answer or
+ * mid-stream), so the message is chosen from where the error arose.
  */
 vi.unmock(import("../../../src/shared/loopback-fetch.js"));
 
@@ -178,7 +182,7 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     ["non-streaming", false],
     ["streaming", true],
   ])(
-    "a %s body over the 4 MiB cap is stopped with the message classifyFailure buckets",
+    "a %s body over the 4 MiB cap is stopped and gives the too-large message",
     async (_label, streaming) => {
       const { base } = await listen((_req, res) => {
         res.writeHead(200, {
@@ -195,9 +199,7 @@ describe("the local-model client on undici (#1123, #2422)", () => {
       });
       expect(r.metrics.exit).toBe("error");
       expect(r.metrics.errorMessage).toBe(`local model response exceeded ${CAP}-byte cap`);
-      expect(classifyFailure(r.metrics)).toBe(
-        "The local model response was too large and was stopped.",
-      );
+      expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT["too-large"]);
     },
   );
 
@@ -207,6 +209,62 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     });
     const r = await loop(base);
     expect(r.metrics.errorMessage).toBe("local model returned a non-JSON response");
-    expect(classifyFailure(r.metrics)).toBe("The local model returned an unreadable response.");
+    expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT.unreadable);
+  });
+
+  it.each([
+    [401, "refused-access"],
+    [404, "not-found"],
+    [400, "bad-request"],
+    [503, "server-error"],
+  ] as const)("a server answering HTTP %i gives the %s message", async (status, cause) => {
+    const { base } = await listen((_req, res) => {
+      res.writeHead(status, { "content-type": "text/plain" }).end("server detail");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await loop(base);
+    errorSpy.mockRestore();
+    expect(r.metrics.exit).toBe("error");
+    expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT[cause]);
+  });
+
+  it("a server that destroys the socket before answering gives the unreachable message", async () => {
+    const { base } = await listen((req) => {
+      req.socket.destroy();
+    });
+    const r = await loop(base);
+    expect(r.metrics.exit).toBe("error");
+    expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT.unreachable);
+  });
+
+  it("a refused 3xx, through runLoop, gives the unreachable message", async () => {
+    const { base } = await listen((_req, res) => {
+      res.writeHead(302, { location: "http://127.0.0.1:1/v1/chat/completions" }).end();
+    });
+    const r = await loop(base);
+    expect(r.metrics.exit).toBe("error");
+    expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT.unreachable);
+  });
+
+  it("a stream destroyed after the client saw its first frame gives the unreachable message", async () => {
+    let answer: ServerResponse | undefined;
+    const { base } = await listen((_req, res) => {
+      answer = res;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(sse("first"));
+    });
+    const deltas: string[] = [];
+    const r = await loop(base, {
+      timeoutMs: 30_000,
+      onContentDelta: (d) => {
+        deltas.push(d);
+        // Destroyed only once the client has the frame, so the failure is a
+        // read that fails mid-stream, not a request that never completed.
+        answer?.destroy();
+      },
+    });
+    expect(deltas).toEqual(["first"]);
+    expect(r.metrics.exit).toBe("error");
+    expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT.unreachable);
   });
 });

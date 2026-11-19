@@ -205,6 +205,35 @@ describe("runLoop — abort", () => {
     const r = await runLoop(base());
     expect(r.metrics.exit).toBe("error");
     expect(r.metrics.errorMessage).toMatch(/connection refused/);
+    // #1123 (ADR-039 P6): the client's tag reaches the metrics.
+    expect(r.metrics.failure).toEqual({ kind: "unreachable" });
+  });
+
+  it("copies an HTTP status tag into the metrics", async () => {
+    stubFetch(() => new Response("missing", { status: 404 }));
+    const r = await runLoop(base());
+    expect(r.metrics.exit).toBe("error");
+    expect(r.metrics.errorMessage).toBe("local model endpoint returned HTTP 404");
+    expect(r.metrics.failure).toEqual({ kind: "http", status: 404 });
+  });
+
+  it("a TypeError from the content-delta callback ends 'error' with no failure tag", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\ndata: [DONE]\n\n`,
+        ),
+    );
+    const r = await runLoop(
+      base({
+        onContentDelta: () => {
+          throw new TypeError("sink bug");
+        },
+      }),
+    );
+    expect(r.metrics.exit).toBe("error");
+    expect(r.metrics.errorMessage).toBe("sink bug");
+    expect(r.metrics.failure).toBeUndefined();
   });
 });
 

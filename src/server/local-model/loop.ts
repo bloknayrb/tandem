@@ -18,7 +18,13 @@
 import type * as Y from "yjs";
 import { DEFAULT_RUN_DEADLINE_MS } from "../../shared/local-run.js";
 import type { LocalModelConfig } from "./config.js";
-import { type ChatMessage, chat, type ToolSchema } from "./ollama-client.js";
+import {
+  type ChatMessage,
+  chat,
+  type LocalModelFailure,
+  requestFailure,
+  type ToolSchema,
+} from "./ollama-client.js";
 import { dispatch, type ToolOutcome } from "./tools.js";
 
 export interface LoopMetrics {
@@ -64,6 +70,13 @@ export interface LoopMetrics {
     | "doc-swapped"
     | "editing_off";
   errorMessage?: string;
+  /**
+   * On an `error` exit, why the request to the model's server failed, when the
+   * chat client tagged the error where it arose (`requestFailure`). Absent for
+   * any other throw. The collaborator chooses the user's message from this,
+   * never from `errorMessage`.
+   */
+  failure?: LocalModelFailure;
 }
 
 export interface LoopStep {
@@ -401,6 +414,8 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
     } else {
       metrics.exit = "error";
       metrics.errorMessage = err instanceof Error ? err.message : String(err);
+      const failure = requestFailure(err);
+      if (failure) metrics.failure = failure;
     }
   }
 

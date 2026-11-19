@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chat } from "../../../src/server/local-model/ollama-client.js";
+import * as Y from "yjs";
+import { runLoop } from "../../../src/server/local-model/loop.js";
+import { chat, requestFailure } from "../../../src/server/local-model/ollama-client.js";
 
 const V1 = { endpoint: "http://127.0.0.1:11434", modelId: "m", transport: "v1" } as const;
 const NATIVE = { endpoint: "http://127.0.0.1:11434", modelId: "m", transport: "native" } as const;
@@ -500,5 +502,218 @@ describe("ollama-client — a trailing /v1 in the saved address", () => {
     const config = { ...V1, endpoint: "http://localhost:1234/v1" };
     await chat({ config, messages: [], tools: [] });
     expect(config.endpoint).toBe("http://localhost:1234/v1");
+  });
+});
+
+/** The value `p` rejected with; fails the test if it resolved. */
+async function rejectionOf(p: Promise<unknown>): Promise<unknown> {
+  try {
+    await p;
+  } catch (err) {
+    return err;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** A body that yields `chunks`, one per read, then fails the next read with `err`. */
+function erroringBody(chunks: string[], err: unknown): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));
+      else controller.error(err);
+    },
+  });
+}
+
+const sseFrame = (content: string) =>
+  `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+
+const abortError = () =>
+  Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+
+/**
+ * #1123 (ADR-039 P6): why a request failed is a tag on the thrown value, set
+ * where the error arose, and the value thrown is the very one that arose.
+ */
+describe("ollama-client — failure tags", () => {
+  it("a rejected fetch rethrows the same error, tagged unreachable", async () => {
+    const original = new Error("connection refused");
+    stubFetch(() => {
+      throw original;
+    });
+    const err = await rejectionOf(chat({ config: V1, messages: [], tools: [] }));
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toEqual({ kind: "unreachable" });
+  });
+
+  it("a fetch rejected with an AbortError rethrows it untagged", async () => {
+    const original = abortError();
+    stubFetch(() => {
+      throw original;
+    });
+    const err = await rejectionOf(chat({ config: V1, messages: [], tools: [] }));
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toBeUndefined();
+  });
+
+  for (const [label, value] of [
+    ["a string", "boom"],
+    ["undefined", undefined],
+    ["null", null],
+  ] as const) {
+    it(`a fetch rejected with ${label} rethrows that value untagged, and the loop ends error with it`, async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw value;
+        }),
+      );
+      const err = await rejectionOf(chat({ config: V1, messages: [], tools: [] }));
+      expect(err).toBe(value);
+      expect(requestFailure(err)).toBeUndefined();
+
+      const r = await runLoop({
+        ydoc: new Y.Doc(),
+        config: { ...V1, agentIdentity: { provider: "local-ollama", displayName: "T" } },
+        tools: [],
+        systemPrompt: "sys",
+        userPrompt: "hi",
+        canEdit: () => false,
+        maxTurns: 1,
+      });
+      expect(r.metrics.exit).toBe("error");
+      expect(r.metrics.errorMessage).toBe(String(value));
+      expect(r.metrics.failure).toBeUndefined();
+    });
+  }
+
+  for (const status of [404, 400, 401, 503]) {
+    for (const streaming of [false, true]) {
+      it(`HTTP ${status} keeps its message and is tagged with its status (${streaming ? "streaming" : "non-streaming"})`, async () => {
+        stubFetch(() => new Response("detail", { status }));
+        const err = await rejectionOf(
+          chat({
+            config: V1,
+            messages: [],
+            tools: [],
+            ...(streaming ? { onContentDelta: () => {} } : {}),
+          }),
+        );
+        expect((err as Error).message).toBe(`local model endpoint returned HTTP ${status}`);
+        expect(requestFailure(err)).toEqual({ kind: "http", status });
+      });
+    }
+  }
+
+  it("a non-JSON 200 is tagged unreadable", async () => {
+    stubFetch(() => new Response("<html>x</html>", { status: 200 }));
+    const err = await rejectionOf(chat({ config: V1, messages: [], tools: [] }));
+    expect((err as Error).message).toBe("local model returned a non-JSON response");
+    expect(requestFailure(err)).toEqual({ kind: "unreadable" });
+  });
+
+  it("a stream with no valid frame is tagged unreadable", async () => {
+    stubFetch(() => streamResponse(["<html>x</html>\n"]));
+    const err = await rejectionOf(
+      chat({ config: V1, messages: [], tools: [], onContentDelta: () => {} }),
+    );
+    expect((err as Error).message).toBe("local model returned a non-JSON response");
+    expect(requestFailure(err)).toEqual({ kind: "unreadable" });
+  });
+
+  for (const streaming of [false, true]) {
+    it(`a body over the cap is tagged too-large (${streaming ? "streaming" : "non-streaming"})`, async () => {
+      stubFetch(() => streamResponse([`:${"x".repeat(10_000)}\n`]));
+      const err = await rejectionOf(
+        chat({
+          config: V1,
+          messages: [],
+          tools: [],
+          maxResponseBytes: 100,
+          ...(streaming ? { onContentDelta: () => {} } : {}),
+        }),
+      );
+      expect((err as Error).message).toBe("local model response exceeded 100-byte cap");
+      expect(requestFailure(err)).toEqual({ kind: "too-large" });
+    });
+  }
+
+  it("a stream that fails after one frame rethrows the same error, tagged unreachable", async () => {
+    const original = new Error("socket hang up");
+    stubFetch(() => new Response(erroringBody([sseFrame("first")], original)));
+    const deltas: string[] = [];
+    const err = await rejectionOf(
+      chat({ config: V1, messages: [], tools: [], onContentDelta: (d) => deltas.push(d) }),
+    );
+    expect(deltas).toEqual(["first"]);
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toEqual({ kind: "unreachable" });
+  });
+
+  it("a mid-stream read rejected with a TypeError (undici's 'terminated') is tagged unreachable", async () => {
+    const original = new TypeError("terminated");
+    stubFetch(() => new Response(erroringBody([sseFrame("first")], original)));
+    const err = await rejectionOf(
+      chat({ config: V1, messages: [], tools: [], onContentDelta: () => {} }),
+    );
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toEqual({ kind: "unreachable" });
+  });
+
+  it("a non-streaming body that fails after one chunk rethrows the same error, tagged unreachable", async () => {
+    const original = new Error("socket hang up");
+    stubFetch(() => new Response(erroringBody(['{"choices":'], original)));
+    const err = await rejectionOf(chat({ config: V1, messages: [], tools: [] }));
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toEqual({ kind: "unreachable" });
+  });
+
+  for (const streaming of [false, true]) {
+    it(`a body read rejected with an AbortError rethrows it untagged (${streaming ? "streaming" : "non-streaming"})`, async () => {
+      const original = abortError();
+      stubFetch(() => new Response(erroringBody([sseFrame("first")], original)));
+      const err = await rejectionOf(
+        chat({
+          config: V1,
+          messages: [],
+          tools: [],
+          ...(streaming ? { onContentDelta: () => {} } : {}),
+        }),
+      );
+      expect(err).toBe(original);
+      expect(requestFailure(err)).toBeUndefined();
+    });
+  }
+
+  it("a throw from onContentDelta is rethrown untagged", async () => {
+    const original = new TypeError("sink bug");
+    stubFetch(() => streamResponse([sseFrame("first"), "data: [DONE]\n\n"]));
+    const err = await rejectionOf(
+      chat({
+        config: V1,
+        messages: [],
+        tools: [],
+        onContentDelta: () => {
+          throw original;
+        },
+      }),
+    );
+    expect(err).toBe(original);
+    expect(requestFailure(err)).toBeUndefined();
+  });
+
+  it("an invalid endpoint keeps its message and is untagged", async () => {
+    stubFetch(() => new Response("{}"));
+    const err = await rejectionOf(
+      chat({
+        config: { endpoint: "http://192.168.1.9:11434", modelId: "m", transport: "v1" },
+        messages: [],
+        tools: [],
+      }),
+    );
+    expect((err as Error).message).toMatch(/^invalid local-model endpoint \(/);
+    expect(requestFailure(err)).toBeUndefined();
   });
 });

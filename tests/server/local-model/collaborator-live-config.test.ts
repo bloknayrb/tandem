@@ -555,6 +555,39 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     expect(getBuffer()).toEqual([]);
   });
 
+  describe("every state that resolves to no local model gets the same chat notice, whose fix holds there (#1123)", () => {
+    // Written out: a change of wording is a change of this test.
+    const NOTICE =
+      "No local model could answer this message. In Settings → Models, add or turn on a local model and mark it as Default, or set who answers your chat back to Claude and send your message again.";
+    const CLOUD = entry({
+      id: "c-1",
+      provider: "openai",
+      displayName: "Cloud",
+      modelId: "gpt-x",
+      endpoint: undefined,
+    });
+    const states: Array<[string, ModelsFile | null]> = [
+      ["nothing saved", null],
+      ["no enabled local model", file([entry({ enabled: false })], null)],
+      [
+        "the Default switched off, another local model on",
+        file([entry({ enabled: false }), entry({ id: "m-2" })], "m-1"),
+      ],
+      ["a cloud Default, a local model on", file([CLOUD, entry({ id: "m-2" })], "c-1")],
+    ];
+    for (const [label, saved] of states) {
+      it(`${label}: the notice's exact text, and nothing runs`, async () => {
+        if (saved) await save(saved);
+        await chat(2);
+        expect(runs).toEqual([]);
+        const rows = [...chatMap().values()] as ChatMessage[];
+        const notices = rows.filter((r) => r.chatNotice === "no-local-model");
+        expect(notices).toHaveLength(2);
+        for (const row of notices) expect(row.text).toBe(NOTICE);
+      });
+    }
+  });
+
   describe("the answering-changed notice, through the real route, for a write that is not from Tandem's own window (#2404)", () => {
     const answeringNotes = () =>
       getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
