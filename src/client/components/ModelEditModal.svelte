@@ -2,14 +2,21 @@
 import { onMount, untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
 import {
+  endpointAfterProviderChange,
   endpointPrefill,
+  nameFallback,
   PROVIDER_LABEL,
   PROVIDER_OPTION_ORDER,
   providerHeading,
 } from "../../shared/models/provider-ui.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
-import { endpointHint, LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../utils/local-model-copy.js";
+import {
+  endpointHint,
+  LOCAL_REQUEST_LINE,
+  LOCAL_SERVERS_LINE,
+  modelSaveReason,
+} from "../utils/local-model-copy.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 
 interface Props {
@@ -87,10 +94,18 @@ const initialEntry = untrack(() => entry);
 
 // A NEW entry defaults to the first local provider. An existing entry keeps its
 // stored provider; a cloud one is shown by the unavailable view, never the form.
-let provider = $state<ModelProvider>(initialEntry?.provider ?? "local-ollama");
+const initialProvider: ModelProvider = initialEntry?.provider ?? "local-ollama";
+let provider = $state<ModelProvider>(initialProvider);
+// On Add the name starts empty: a blank name saves as the provider's fallback
+// (`nameFallback`, V18). On Edit it holds the stored name, and a provider change
+// never touches it.
 let displayName = $state(initialEntry?.displayName ?? "");
 let modelId = $state(initialEntry?.modelId ?? "");
-let endpoint = $state(initialEntry?.endpoint ?? "");
+// #1123 V2: Add starts at the provider's usual address (Ollama's, or "" for a
+// provider with none); an existing entry keeps its saved address, or "".
+let endpoint = $state(
+  initialEntry ? (initialEntry.endpoint ?? "") : endpointPrefill(initialProvider),
+);
 let enabled = $state(initialEntry?.enabled ?? true);
 
 // Reveal-gated apiKey state. The plaintext key only enters this DOM when
@@ -120,8 +135,9 @@ const unavailableName =
 // field gating can never disagree with them about what "cloud" means.
 const isLocal = $derived(isLocalProvider(provider));
 const isCloud = $derived(!isLocal);
-// #1123 Ruling L-f: a new entry's address stays empty; the selected provider's
-// documented address (or nothing) is the placeholder and the hint's example.
+// The selected provider's documented address (or nothing): the Endpoint's
+// placeholder and the hint's example. A new entry also starts with it filled in
+// (V2, which replaced Ruling L-f's edit-modal half).
 const prefill = $derived(endpointPrefill(provider));
 
 // Last 4 chars of the opaque `apiKeyRef` for the masked preview. The ref
@@ -131,17 +147,24 @@ const prefill = $derived(endpointPrefill(provider));
 // secret itself.
 const existingKeyTail = initialEntry?.apiKeyRef ? initialEntry.apiKeyRef.slice(-4) : "";
 
+// Why Save cannot save (a local provider), or null (#1123 P10(5), V9): one
+// reason at a time, Model ID first. The address check is the server's own
+// `validateEndpoint`, called for this line only; the server checks again at
+// resolve and at fetch.
+const saveReason = $derived(isCloud ? null : modelSaveReason({ modelId, endpoint }));
+// A local entry can save exactly when there is no reason not to (the Display
+// name is optional, V18). The cloud arm is unreachable (see above) and keeps
+// its old conjuncts: a name, a model id, and the existing key or a new one.
 const canSave = $derived(
-  displayName.trim().length > 0 &&
-    modelId.trim().length > 0 &&
-    // Cloud providers require either the existing key (not replacing) OR a
-    // freshly-entered key (replacing). Local providers don't need a key.
-    (!isCloud || !replacingKey || apiKey.trim().length > 0) &&
-    // Local providers require an endpoint (the loop can't resolve an endpoint-less
-    // local model) — matches FirstRunModelPickerModal's canSave so the two pickers
-    // can't diverge on what a saveable local entry is.
-    (isCloud || endpoint.trim().length > 0),
+  isCloud
+    ? displayName.trim().length > 0 &&
+        modelId.trim().length > 0 &&
+        (!replacingKey || apiKey.trim().length > 0)
+    : saveReason === null,
 );
+// Save is focusable but does nothing (`aria-disabled`, never `disabled`): while
+// the page is refused (#2404), or while the form cannot save.
+const saveInert = $derived(saveUnavailable || !canSave);
 
 function handleSubmit(e: SubmitEvent) {
   e.preventDefault();
@@ -151,9 +174,11 @@ function handleSubmit(e: SubmitEvent) {
   // new key (add mode or "Replace key" path). In no-op edit, the field is
   // omitted and the parent preserves the existing `apiKeyRef`. Endpoint
   // is similarly gated to local providers.
+  // A blank name on Add saves as the selected provider's fallback (V18), the
+  // one shown as the placeholder; on Edit the field's text is saved, "" too.
   const payload: Parameters<typeof onSave>[0] = {
     provider,
-    displayName: displayName.trim(),
+    displayName: isEditing ? displayName.trim() : displayName.trim() || nameFallback(provider),
     modelId: modelId.trim(),
     enabled,
   };
@@ -205,6 +230,15 @@ $effect(() => {
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
 });
+
+// The only writer of `provider` and, on Add, of `endpoint` besides the field's
+// binding (#1123 R1.2). The address follows the provider only on Add and only
+// while it still holds the previous provider's usual address; on Edit it is
+// never replaced. Nothing is announced (P10(4)).
+function selectProvider(next: ModelProvider) {
+  if (!isEditing) endpoint = endpointAfterProviderChange(endpoint, provider, next);
+  provider = next;
+}
 
 function startReplacingKey() {
   replacingKey = true;
@@ -299,7 +333,7 @@ function startReplacingKey() {
         data-testid="model-edit-provider"
         class="mem-input"
         value={provider}
-        onchange={(e) => (provider = e.currentTarget.value as ModelProvider)}
+        onchange={(e) => selectProvider(e.currentTarget.value as ModelProvider)}
       >
         {#each PROVIDER_OPTIONS as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
@@ -315,13 +349,14 @@ function startReplacingKey() {
     {/if}
 
     <label class="mem-field">
-      <span class="mem-label">Display name</span>
+      <span class="mem-label">Display name (optional)</span>
       <input
         data-testid="model-edit-displayname"
         class="mem-input"
         type="text"
         autocomplete="off"
         bind:value={displayName}
+        placeholder={isEditing ? "" : nameFallback(provider)}
       />
     </label>
 
@@ -415,14 +450,23 @@ function startReplacingKey() {
         type="submit"
         class="mem-btn mem-btn--primary"
         data-testid="model-edit-save"
-        disabled={!canSave}
-        aria-disabled={saveUnavailable}
-        aria-describedby={saveUnavailable ? "model-edit-error-text" : undefined}
-        style={saveUnavailable ? "opacity: 0.5; cursor: not-allowed;" : undefined}
+        aria-disabled={saveInert}
+        aria-describedby={saveUnavailable
+          ? "model-edit-error-text"
+          : saveReason !== null
+            ? "model-edit-save-reason"
+            : undefined}
       >
         {isEditing ? "Save changes" : "Add model"}
       </button>
     </div>
+    <!-- Why Save is greyed out (P10(5)). Not a live region: nothing is
+         announced as the fields change (P10(4)); Save's description reads it. -->
+    {#if saveReason !== null && !saveUnavailable}
+      <p id="model-edit-save-reason" class="mem-save-reason" data-testid="model-edit-save-reason">
+        {saveReason}
+      </p>
+    {/if}
   </form>
   {/if}
 </div>
@@ -635,8 +679,26 @@ function startReplacingKey() {
     background: var(--tandem-accent);
     color: var(--tandem-accent-fg);
   }
-  .mem-btn--primary:disabled {
+  /* Focusable but inert (`aria-disabled`, never `disabled`): dimmed by colour,
+     not opacity, so the focus ring keeps its full strength (as the first-run
+     window's Save). */
+  .mem-btn--primary[aria-disabled="true"] {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg-muted);
     cursor: not-allowed;
-    opacity: 0.5;
+  }
+  @media (forced-colors: active) {
+    .mem-btn--primary[aria-disabled="true"] {
+      color: GrayText;
+      border: 1px solid GrayText;
+    }
+  }
+  /* Save's reason, under the buttons and aligned with Save. Muted, never
+     `--tandem-fg-subtle` (GrayText in forced colours). */
+  .mem-save-reason {
+    margin: 0;
+    font-size: 12px;
+    color: var(--tandem-fg-muted);
+    text-align: right;
   }
 </style>

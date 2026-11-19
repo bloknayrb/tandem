@@ -9,7 +9,7 @@
  * in a hand-written array, and an entry of any other provider was not shown).
  *
  * Pure data: the client bundles it and the server tests import it beside
- * `validateEndpoint`. The provider never reaches the wire (`config-source.ts`
+ * `validateEndpoint` (`src/shared/models/local-endpoint.ts`). The provider never reaches the wire (`config-source.ts`
  * sets the same `v1` transport for every local kind).
  */
 import {
@@ -80,4 +80,27 @@ export const MODELS_TAB_ORDER: readonly ModelProvider[] = [
  *  "Anthropic" never reads as Claude being unusable. */
 export function providerHeading(p: ModelProvider): string {
   return isLocalProvider(p) ? PROVIDER_LABEL[p] : `${PROVIDER_LABEL[p]} (API key)`;
+}
+
+/**
+ * The Endpoint field after a provider change (#1123, ADR-039 V2), in both the
+ * add-model window (on Add only) and the first-run window: replaced by `to`'s
+ * usual address only while it still holds `from`'s, by strict, untrimmed
+ * string equality, whoever typed it; otherwise kept as it is.
+ */
+export function endpointAfterProviderChange(
+  current: string,
+  from: ModelProvider,
+  to: ModelProvider,
+): string {
+  return current === endpointPrefill(from) ? endpointPrefill(to) : current;
+}
+
+/**
+ * The name a blank Display name saves as on Add, and its placeholder there
+ * (#1123, ADR-039 V18). Ruling L-h: Other's long label is not a name, so it
+ * saves as "Local server"; every other provider as its label.
+ */
+export function nameFallback(p: ModelProvider): string {
+  return p === "local-other" ? "Local server" : PROVIDER_LABEL[p];
 }

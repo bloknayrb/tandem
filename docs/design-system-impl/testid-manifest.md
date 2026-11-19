@@ -425,7 +425,7 @@ of these selectors renders in a release build.
 - Local-model editing opt-in (#1123): `local-model-editing-{section,toggle,loading,load-error,retry,force-off,force-off-pending,error}`
 - Who answers your chat (#1123 part B): `chat-answerer-{section,claude,local,status,loading,load-error,retry,use-claude,set-claude-done,refused,unavailable,error}` (`chat-answerer-{claude,local}` are the two radios)
 - Not Tandem's own window (#2404): `models-own-window-notice` (the one visible message at the top of the tab) and `models-own-window-live` (its always-mounted screen-reader announcer)
-- Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
+- Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save,save-reason}`
   (`apikey` and `apikey-replace-btn` are kept but unreachable while cloud providers
   are hidden; `provider-note` is now the unavailable window's sentence). An old
   cloud entry's window: `model-edit-unavailable-{provider,close}`
