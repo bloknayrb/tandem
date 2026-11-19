@@ -572,12 +572,15 @@ export function isTandemPresent(): boolean {
  * owner is Tandem's Claude, the caller is not, and the cause is not
  * `take-back`; nothing in production reaches that yet (the default rule needs
  * presence, which nothing sets), and while `startOrWake` is a stub its answer
- * starts nothing. `tandemWorkWaiting` (#2358 PR 3b-2b1b-chat) also asks it,
- * flag on, for each document Tandem's Claude holds and, while no other
- * session is connected, for each open document nobody holds that it could
- * claim (3b-2b1b-claimable); nothing calls that yet. Step 5's use of the
- * chat half (3b-2b1b-chat-step5) and the forward to the supervisor (3b-2b1c)
- * are later PRs.
+ * starts nothing. Step 5 asks it through `waitingAtDocumentChange`
+ * (3b-2b1b-chat-step5): the probe first, exactly as `(documentId,
+ * next.ownerId)`, and only when it answers false the chat that follows the
+ * document. A throw from the probe is not caught there: it reaches
+ * `setDocOwner`'s `total`, as before. `tandemWorkWaiting` (#2358 PR
+ * 3b-2b1b-chat) also asks it, flag on, for each document Tandem's Claude
+ * holds and, while no other session is connected, for each open document
+ * nobody holds that it could claim (3b-2b1b-claimable); nothing calls that
+ * yet. The forward to the supervisor (3b-2b1c) is a later PR.
  */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
   waitingProbe = probe;
@@ -1383,13 +1386,16 @@ export function setDocOwner(
     // Step 4, publishing (PR 5): no body yet.
     compositeObserver?.("publish", documentId);
     // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b-2's.
+    // It asks `waitingAtDocumentChange`: the waiting probe, then the chat that
+    // follows this document (3b-2b1b-chat-step5). After the re-owe above, so
+    // chat the handover has just owed again counts.
     compositeObserver?.("wake", documentId);
     if (
       next !== null &&
       next.ownerId === TANDEM_OWNER_ID &&
       caller !== TANDEM_OWNER_ID &&
       cause !== "take-back" &&
-      waitingProbe(documentId, next.ownerId)
+      waitingAtDocumentChange(documentId, next.ownerId)
     ) {
       startOrWake(cause);
     }
@@ -2742,14 +2748,19 @@ const CHAT_HALF_FAILED =
  * `"claim"` arm (chat following an open, unowned document) is
  * {@link claimableChatWaiting}'s (#2358 PR 3b-2b1b-claimable), asked only
  * while no other session is connected. `select` receives the facts because an
- * `owned` standing carries no document id. Unexported: the step-5 composite
- * and 3b-2b1c reuse it. Synchronous; no Y.Doc, registry, read-stamp or
+ * `owned` standing carries no document id. Unexported: `tandemWorkWaiting`
+ * and the step-5 composite (`waitingAtDocumentChange`) call it, and 3b-2b1c
+ * reuses it. Synchronous; no Y.Doc, registry, read-stamp or
  * ownership write (the chat member resolves the control room with the
  * creating getter, which exists from boot). May throw: its callers
  * catch.
  */
 function tandemChatWaiting(
-  select: (key: string, facts: ChatMessageFacts, standing: MessageStanding) => boolean,
+  select: (
+    key: string,
+    facts: ChatMessageFacts,
+    standing: Extract<MessageStanding, { kind: "owned" }>,
+  ) => boolean,
 ): boolean {
   for (const key of chatSide.owedToFreshReader()) {
     if (carriedOver.has(key)) continue;
@@ -2763,6 +2774,42 @@ function tandemChatWaiting(
 }
 
 /** Fixed text: no id, no record, nothing from the error. */
+const STEP5_CHAT_FAILED =
+  "[ownership] the chat that follows a document could not be read at its change of owner; it is read as nothing waiting.";
+
+/**
+ * Step 5's question (#2358 PR 3b-2b1b-chat-step5; ownership design §8.5): is
+ * work waiting for `ownerId` on `documentId`, which a change has just given
+ * to Tandem's Claude? Called only from step 5 of {@link setDocOwner}, after
+ * the handover's re-owe, so chat it has just owed again counts.
+ *
+ * The waiting probe first, called exactly as step 5 called it before (a
+ * throw from it is not caught here and reaches `setDocOwner`'s `total`). Only
+ * when it answers false, the chat that follows the document:
+ * {@link tandemChatWaiting} keeping a message only when it names this
+ * document and its standing is not per message. A doc-less message, a
+ * message on another document, and a message on this one with a per-message
+ * owner (even Tandem's Claude's) are not counted at this document's change;
+ * `tandemWorkWaiting` counts the ones Tandem's Claude owns. The chat half has
+ * its own catch: a throw reads it as false and logs one fixed, rate-limited
+ * line with no id and no error text. No licence term, on purpose: refusal is
+ * the supervisor's, at the call. Writes nothing.
+ */
+function waitingAtDocumentChange(documentId: string, ownerId: string): boolean {
+  if (waitingProbe(documentId, ownerId)) return true;
+  // The chat half answers for Tandem's Claude only (`tandemChatWaiting`'s
+  // owner filter); step 5 asks only for it, and any other owner reads false.
+  if (ownerId !== TANDEM_OWNER_ID) return false;
+  try {
+    return tandemChatWaiting(
+      (_key, facts, standing) => facts.documentId === documentId && standing.perMessage === false,
+    );
+  } catch {
+    logLimited("waiting-step5-chat", STEP5_CHAT_FAILED);
+    return false;
+  }
+}
+
 const OPEN_DOCUMENTS_FAILED =
   "[ownership] the open documents could not be read for waiting; no unheld document is counted.";
 
