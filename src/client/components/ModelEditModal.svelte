@@ -15,6 +15,7 @@ import {
   endpointHint,
   LOCAL_REQUEST_LINE,
   LOCAL_SERVERS_LINE,
+  modelRowName,
   modelSaveReason,
 } from "../utils/local-model-copy.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
@@ -126,10 +127,7 @@ const UNAVAILABLE_TITLE = "Model unavailable";
 const UNAVAILABLE_TEXT = "This provider can't be used in Tandem.";
 // The entry as the user named it, or its model ID when it has no name (and its
 // id when a hand-edited file left both empty), so the user can tell which it is.
-const unavailableName =
-  [initialEntry?.displayName, initialEntry?.modelId, initialEntry?.id].find(
-    (v) => v !== undefined && v.trim() !== "",
-  ) ?? "";
+const unavailableName = initialEntry ? modelRowName(initialEntry) : "";
 // Derived from the contract helper, the same predicate that filters the
 // provider options above and decides the unavailable view, so the key/endpoint
 // field gating can never disagree with them about what "cloud" means.
@@ -239,10 +237,29 @@ onMount(() => {
 // one keydown. A bare `if (e.defaultPrevented) return;` is NOT a substitute:
 // `trapTab` preventDefaults only on the wrap and recover branches, so ordinary
 // mid-dialog Tabs would still reach both handlers.
+//
+// Escape with focus stranded on the page (#1123, ADR-039 item 27, carried item
+// 4): the dialog's own `onkeydown` cannot see it, and Settings' Escape stands
+// down while this dialog is open, so without this branch Escape did nothing.
+// Only when no other modal is open above this one (the first-run window, say),
+// which owns that Escape instead. With focus inside the dialog the scrim's
+// handler stops the event first, so this never runs twice.
 $effect(() => {
   const handler = (e: KeyboardEvent) => {
     const owner = (document.activeElement as Element | null)?.closest('[aria-modal="true"]');
     if (owner && owner !== dialogEl && !dialogEl?.contains(owner)) return;
+    if (e.key === "Escape") {
+      if (e.defaultPrevented || e.isComposing) return;
+      const active = document.activeElement;
+      if (active !== null && active !== document.body) return;
+      const above = Array.from(document.querySelectorAll('[aria-modal="true"]')).some(
+        (d) => d !== dialogEl && !d.contains(dialogEl ?? null) && !d.closest("[inert]"),
+      );
+      if (above) return;
+      e.preventDefault();
+      onCancel();
+      return;
+    }
     trapTab(e, dialogEl ?? null);
   };
   window.addEventListener("keydown", handler);
@@ -541,11 +558,17 @@ function startReplacingKey() {
     padding: 0;
     border-radius: var(--tandem-r-2);
   }
-  .mem-close:hover,
+  .mem-close:hover {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+  }
+  /* A ring, not a colour alone: forced colours erase a colour change
+     (#1123, ADR-039 item 27). */
   .mem-close:focus-visible {
     color: var(--tandem-fg);
     background: var(--tandem-surface-sunk);
-    outline: none;
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   .mem-field {
@@ -569,7 +592,8 @@ function startReplacingKey() {
     border-radius: var(--tandem-r-2);
   }
   .mem-input:focus-visible {
-    outline: none;
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
     border-color: var(--tandem-accent-border);
   }
   select.mem-input {

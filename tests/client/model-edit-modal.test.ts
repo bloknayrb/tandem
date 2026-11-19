@@ -736,10 +736,14 @@ describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (s
       "trapTab",
       "preventDefault",
       "onCancel",
+      // The stranded-focus Escape branch: is another modal open above?
+      "querySelectorAll",
+      "from",
+      "some",
     ]);
     const KEYWORDS = new Set(["if", "return", "for", "while", "switch", "function"]);
     for (const e of effects) {
-      expect(e).not.toMatch(/\.focus\(/);
+      expect(e).not.toMatch(/\.focus\s*(\?\.)?\(/);
       const calls = [...e.matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)]
         .map((m) => m[1])
         .filter((name) => !KEYWORDS.has(name));
@@ -747,7 +751,70 @@ describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (s
     }
     // And every `.focus(` in the script sits inside the onMount block.
     const script = src.slice(0, src.indexOf("</script>"));
-    const focusCalls = [...script.matchAll(/\.focus\(/g)].length;
-    expect([...mounts[0].matchAll(/\.focus\(/g)].length).toBe(focusCalls);
+    const focusCalls = [...script.matchAll(/\.focus\s*(\?\.)?\(/g)].length;
+    expect([...mounts[0].matchAll(/\.focus\s*(\?\.)?\(/g)].length).toBe(focusCalls);
+  });
+});
+
+describe("ModelEditModal — Escape with focus stranded on the page (carried item 4)", () => {
+  const LOCAL: ModelRegistryEntry = {
+    id: "e-1",
+    provider: "local-ollama",
+    displayName: "Mine",
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+  for (const [mode, entry] of [
+    ["Add", undefined],
+    ["Edit", LOCAL],
+  ] as const) {
+    it(`${mode}: Escape with focus on <body> cancels once`, () => {
+      const onCancel = vi.fn();
+      render(ModelEditModal, { props: { ...(entry ? { entry } : {}), onCancel, onSave: vi.fn() } });
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+      document.body.dispatchEvent(escape());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("Escape with focus inside still cancels once, never twice", () => {
+    const onCancel = vi.fn();
+    const v = render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    v.getByTestId("model-edit-provider").dispatchEvent(escape());
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("another modal open above it owns that Escape: nothing is cancelled here", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const above = document.createElement("div");
+    above.setAttribute("role", "dialog");
+    above.setAttribute("aria-modal", "true");
+    document.body.appendChild(above);
+    try {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.dispatchEvent(escape());
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      above.remove();
+    }
+  });
+
+  it("an Escape already handled (defaultPrevented) or mid-composition is left alone", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    (document.activeElement as HTMLElement | null)?.blur();
+    const handled = escape();
+    handled.preventDefault();
+    document.body.dispatchEvent(handled);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, isComposing: true }),
+    );
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });
