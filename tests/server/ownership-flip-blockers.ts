@@ -69,8 +69,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
       "items are owed.",
     closedBy:
-      "PR 3b, where the re-owe's wake (startOrWake) can open the round (moved there from the " +
-      "'chat, rounds and the greeting' PR by the delivery-rounds PR's brief).",
+      "PR 3b, where the re-owe's wake can open the round (moved there from the 'chat, rounds " +
+      "and the greeting' PR by the delivery-rounds PR's brief). 3b-2b1c-a lands the re-owe's " +
+      "start-or-wake for Tandem's Claude but opens no round.",
   },
   {
     gap:
@@ -145,7 +146,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "merges annotations with withFileSync, which the channel skips), while the document's " +
       "items may still be owed, so /health can read idle with items owed (the delivery-rounds " +
       "PR, R3.1).",
-    closedBy: "PR 3b (its start-or-wake, which can open the round when it wakes someone).",
+    closedBy:
+      "PR 3b: a wake that opens the round when it wakes someone (3b-2b1c-a's start-or-wake " +
+      "opens none).",
   },
   {
     gap:
@@ -166,15 +169,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
       "banner up while another session polls and is never handed that document's item.",
     closedBy:
-      "Bryan's review of the banner against keyed rounds, in PR 3b (its start-or-wake changes " +
-      "when the banner shows).",
+      "Bryan's review of the banner against keyed rounds, in PR 3b (once its wakes open rounds, " +
+      "which changes when the banner shows; 3b-2b1c-a's start-or-wake opens none).",
   },
   {
     gap:
-      "A lapse to unowned wakes no session (startOrWake and the frames are stubs), so under " +
+      "A lapse to unowned wakes no session (the ownership frames are stubs, and 3b-2b1c-a's " +
+      "start-or-wake forwards only a document that goes to Tandem's Claude), so under " +
       "inbox scope a user's next comment on that document waits until some session polls for " +
       "an unrelated reason.",
-    closedBy: "PR 3b (presence, startOrWake and the ownership frames).",
+    closedBy: "PR 3b (presence, the ownership frames and the start rules of 3b-2b2).",
   },
   {
     gap:
@@ -255,7 +259,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "one (an acknowledged one included: since the posts PR an acknowledgement handles nothing) " +
       "is re-owed at the owner's lapse; a handled one (by a final reply or `settles`) is never " +
       "re-owed, and stays the owner's until its record is deleted.",
-    closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
+    closedBy:
+      "PR 3b for Tandem's Claude (3b-2b1c-a forwards a change of owner only, not a holder that " +
+      "keeps an item unanswered), or Bryan's answer for terminals.",
   },
   {
     gap:
@@ -442,7 +448,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "is attached. Bryan decided on 2026-11-17 (picked from options: 'Yes, unless Claude is " +
       "Off') that it starts whether or not another AI is on, unless Claude is Off. The behaviour " +
       "is still built as today's.",
-    closedBy: "3b-2b builds the decided behaviour, with a test pinning it.",
+    closedBy:
+      "The local-period start PR (piece 36) builds the decided behaviour, with a test pinning it.",
   },
   {
     gap:
@@ -476,8 +483,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
       "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
       "each ownership change that reaches step 5's probe; and when the probe answers false, step 5 " +
-      "(3b-2b1b-chat-step5) also clones every user chat row and parses each unhandled, unread one " +
-      "against the chat schema, inside setDocOwner.",
+      "(3b-2b1b-chat-step5) also clones every user chat row and parses each unhandled, unread, " +
+      "non-local-period one (chatRowsOwedToFreshReader) against the chat schema, inside " +
+      "setDocOwner.",
     closedBy: "3b-2b4's measurement.",
   },
   {
@@ -505,8 +513,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "one waiting probe per document Tandem's Claude holds, settledChatIds over every chat row, " +
       "one structuredClone and one schema parse per user chat row, and one message read per owed " +
       "key, and, while no other session is connected, one claim read and one waiting probe per " +
-      "open, unowned document. Once 3b-2b1c wires it, that happens at every forward and every " +
-      "start pass, and a " +
+      "open, unowned document. Since 3b-2b1c-a wires it as the supervisor's workWaiting, that " +
+      "happens at every start-or-wake pass, and a " +
       "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each.",
     closedBy: "3b-2b4's measurement.",
   },
@@ -554,12 +562,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "2026-11-19). By the review session's reading, chat that follows such a document and user " +
       "replies on its Claude-facing threads count the same way. Nothing asks the decision when " +
       "such work appears or when the other session goes: it changes no owner, so neither step 5 " +
-      "nor the message forward runs.",
+      "nor the message forward runs. A gone session also counts for its grace when a holder " +
+      "departs (3b-2b1c): with two sessions gone together the first one's waiting work is " +
+      "skipped and nothing asks again unless the second held waiting work; it reaches Claude at " +
+      "its next look or start. Bryan picked 'Yes, fine until the later piece (Recommended)', " +
+      "picked from options, 2026-11-19.",
     closedBy:
       "3b-2b2's widened start arm asking the decision, with a test where such a comment starts a " +
       "stopped Tandem's Claude with no other session connected and does not with one connected; " +
       "and when the last other session stops counting (its grace ends, or its transport is " +
-      "reaped) the decision is asked again, with a test.",
+      "reaped) the decision is asked again, with a test; and a test of two sessions going away " +
+      "together.",
   },
   {
     gap:
@@ -568,11 +581,22 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "for a while after it stops claimable work does not count (about two minutes if its " +
       "transport held a stream, up to about 37 minutes if it never did; which applies is " +
       "unmeasured); and it differs from the supervisor's otherAiAttached (#2196), which excludes " +
-      "Tandem's own children by session id.",
+      "Tandem's own children by session id. So also (3b-2b1c): if a session holding a document " +
+      "goes away while Tandem's Claude is running or has just stopped, Tandem's Claude is " +
+      "neither woken nor started for that session's waiting work; it reaches the work at its " +
+      "next look or start. And Tandem's own child can itself hold a document it opened and " +
+      "lapse when it stops, which starts Tandem's Claude for its own leftovers; with new " +
+      "blocker 2 (answered work reads as waiting after a handover) that can repeat after every " +
+      "idle stop. And while the child sits on a claude:<id> record, a document or chat that " +
+      "becomes Tandem's Claude's is refused to that child (reason 'default'), so a wake or start " +
+      "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
+      "starts it again.",
     closedBy:
       "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
       "transport does not count, and one 'another session' rule named for the decision and the " +
-      "start arm.",
+      "start arm; and a test where a holder lapses beside a running, idle Tandem's Claude with " +
+      "no other session and it is woken, and a test that a stopped child's own lapse starts " +
+      "nothing.",
   },
   {
     gap:
@@ -589,12 +613,59 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "After a server restart every ownership record is gone, so a Claude Code session that is " +
       "still open is not seen as connected until it next initializes (after a 404 on its next " +
       "request). Until then the decision (3b-2b1b-claimable) counts every open, unowned document " +
-      "as claimable, and with the restart row every old pending comment reads as waiting: once a " +
-      "later piece consumes the decision, Tandem's Claude could start at boot for old comments " +
-      "while the user's terminal is open.",
+      "as claimable, and with the restart row every old pending comment reads as waiting. " +
+      "3b-2b1c's pass (workWaiting: tandemWorkWaiting) is the first consumer of the decision, " +
+      "so Tandem's Claude could start for old comments while the user's terminal is open; and a " +
+      "session holding a document that goes away in that window can start or wake Tandem's " +
+      "Claude beside the still-open terminal (3b-2b1c).",
     closedBy:
-      "The piece that first consumes the claimable decision for a start (3b-2b2), with a boot " +
-      "quiet period or a 'written since boot' condition, and a test.",
+      "3b-2b2's boot quiet period or 'written since boot' condition, extended to a lapse in " +
+      "that window, with a test of each.",
+  },
+  {
+    gap:
+      "At the user's switch back from a local-model period, a start-or-wake start the period " +
+      "held runs as today's held message start, without asking again whether anything is still " +
+      "waiting. Bryan picked 'Yes, only if still waiting (Recommended)' (picked from options, " +
+      "2026-11-17).",
+    closedBy:
+      "The local-period start PR (piece 36), with a test where the work is gone by the switch " +
+      "back. It closes together with the row 'After a local-model period...' or says why not.",
+  },
+  {
+    gap:
+      "Answered work starts Tandem's Claude (3b-2b1c). A handover retires the document's " +
+      "delivery entries and nothing yet tells answered from unanswered, so after a holder " +
+      "lapses with no other session connected every pending user comment, every settled one " +
+      "ever edited, and every user reply on a Claude-facing thread reads as waiting, and the " +
+      "forward starts or wakes Tandem's Claude for work the user did not ask for again; " +
+      "likewise after a restart once anything forwards. See the handled-filter and restart rows.",
+    closedBy:
+      "The handled filter (#2360), with a test where a lapse of a holder that answered " +
+      "everything in its threads starts nothing; for what it cannot see (answers in chat or by " +
+      "an edit, state lost at a restart), the restart row's closer or Bryan's answer.",
+  },
+  {
+    gap:
+      "The presence gate 3b-2a deferred is not decided (its amendment, item 5: the pass 'does " +
+      "not consult presence ... gating starts on presence is 3b-2b's'). `startOrWakeStep` has no " +
+      "presence check, and after the claimable piece the decision can be true while Tandem's " +
+      "Claude is not present. Design §8.4's 'started if present' and the 2026-11-19 pick 'Yes, " +
+      "even before my first Start' (picked from options) pull in different directions for a " +
+      "claimable comment.",
+    closedBy:
+      "3b-2b2 (the standby arm that delivers claimable comments), which decides it with a test " +
+      "each way.",
+  },
+  {
+    gap:
+      "A session still open whose live stream dropped and that stayed quiet past its grace has " +
+      "lapsed and stays lapsed while registered, so it does not count as another session, and " +
+      "another session's departure starts or wakes Tandem's Claude beside it (3b-2b1c; how often " +
+      "Claude Code drops its GET stream is unmeasured).",
+    closedBy:
+      "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
+      "ADR; if it does not, 3b-2b2's re-ask, with a test.",
   },
 ];
 

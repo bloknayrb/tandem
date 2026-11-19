@@ -378,8 +378,8 @@ interface SupervisorOpts {
    * starts anything. MUST be synchronous and total — the supervisor never
    * awaits a document queue (design §4.4). Absent, or a throw, reads as
    * "nothing waiting", so a forgotten wiring starts nothing. Not Solo-gated
-   * here: a Solo-held item is never waiting, and that is the computation's
-   * job (3b-2b). `index.ts` does not pass it yet (a source pin holds that).
+   * here: a Solo-held item is never waiting. `index.ts` passes ownership's
+   * `tandemWorkWaiting` (#2358 PR 3b-2b1c-a; a source pin holds that).
    */
   workWaiting?: () => boolean;
 }
@@ -387,7 +387,7 @@ interface SupervisorOpts {
 /**
  * Why ownership asked the supervisor to start or wake Tandem's Claude (#2358
  * PR 3b-2a). The supervisor's own type: it and the ownership module do not
- * import each other, so 3b-2b maps ownership's `WakeCause` onto it. Goes into
+ * import each other, so ownership maps its `WakeCause` onto it (3b-2b1c-a). Goes into
  * a log line only; it carries no session or document id.
  */
 export type StartOrWakeCause = "document" | "message" | "solo-release";
@@ -848,7 +848,9 @@ export interface Supervisor {
    * nothing, never throws, leaves no rejection unhandled. Ownership on only.
    * Dropped at the call when the licence refuses, the live standby is Off or
    * shutdown has begun; otherwise it joins the one queued start pass, which
-   * asks the waiting decision first. Called by nothing in production yet.
+   * asks the waiting decision first. Called by ownership's step-5 forward
+   * through the sink `index.ts` sets (#2358 PR 3b-2b1c-a), which no
+   * production path reaches until presence or the `tandem` record is wired.
    */
   startOrWake?(cause: StartOrWakeCause): void;
 }

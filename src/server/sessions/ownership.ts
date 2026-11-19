@@ -13,7 +13,8 @@
  * **What is here.** PR 1a: records, labels, display kinds, attachment and lapse
  * (ownership design §3.4), the ownership map, `setDocOwner`, the default
  * rule's user-side seam, a presence seam that answers "not present" until PR
- * 3b, and a no-op `startOrWake`. PR 1c: the decisions enforcement rests on
+ * 3b, and `startOrWake`, step 5's seam (a no-op until 3b-2b1c made it the
+ * forward to the supervisor, through a sink `index.ts` sets). PR 1c: the decisions enforcement rests on
  * (`checkWrite`, `decideTake`, `takeDocument`), loss records (ownership design §5.3) and
  * the
  * thread answerers (ownership design §5.5). PR 2a: a write's claim takes
@@ -471,6 +472,7 @@ let transportMode: "http" | "stdio" | undefined;
 let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
+let startOrWakeSink: (cause: "document" | "message") => void = () => {};
 let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
@@ -571,16 +573,16 @@ export function isTandemPresent(): boolean {
  * unwired it answers false. Step 5 asks it only flag on, only when the new
  * owner is Tandem's Claude, the caller is not, and the cause is not
  * `take-back`; nothing in production reaches that yet (the default rule needs
- * presence, which nothing sets), and while `startOrWake` is a stub its answer
- * starts nothing. Step 5 asks it through `waitingAtDocumentChange`
+ * presence, which nothing sets). A true answer reaches `startOrWake`, which
+ * forwards to the supervisor (3b-2b1c). Step 5 asks it through `waitingAtDocumentChange`
  * (3b-2b1b-chat-step5): the probe first, exactly as `(documentId,
  * next.ownerId)`, and only when it answers false the chat that follows the
  * document. A throw from the probe is not caught there: it reaches
  * `setDocOwner`'s `total`, as before. `tandemWorkWaiting` (#2358 PR
  * 3b-2b1b-chat) also asks it, flag on, for each document Tandem's Claude
  * holds and, while no other session is connected, for each open document
- * nobody holds that it could claim (3b-2b1b-claimable); nothing calls that
- * yet. The forward to the supervisor (3b-2b1c) is a later PR.
+ * nobody holds that it could claim (3b-2b1b-claimable); the supervisor's
+ * start-or-wake pass asks that decision (3b-2b1c, `workWaiting`).
  */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
   waitingProbe = probe;
@@ -1055,7 +1057,9 @@ function reOweChat(keys: readonly string[]): boolean {
 
 /**
  * The step 5 seam for a change of a message's owner (R6.4, Ruling 13): the
- * same `startOrWake` a document's change reaches, a no-op until PR 3b-2.
+ * same `startOrWake` a document's change reaches. `startOrWake` tells the
+ * test observer and forwards nothing for this cause (3b-2b1c-a); the message
+ * forward is 3b-2b1c-b's.
  */
 function messageOwnerChanged(): void {
   startOrWake("message-owner");
@@ -1423,14 +1427,63 @@ function reOweDocumentChat(documentId: string): void {
 /** What reaches step 5: a document's change, or a change of a message's owner (R6.4). */
 export type WakeCause = OwnershipChangeCause | "message-owner";
 
+/** Fixed text: no id, no record, nothing from the error. */
+const FORWARD_FAILED =
+  "[ownership] a change of owner could not be passed on to Tandem's Claude; it may not have been started or woken.";
+
 /**
- * Start or wake Tandem's Claude for returning work (ownership design §8.4).
- * **A no-op until PR 3b-2**, whose body must refuse through `aiRefusal()` before
- * it writes to the child (ownership design §11.5, Critical Rule 9). A test may
- * watch it (`setWakeObserverForTests`).
+ * Start or wake Tandem's Claude for returning work (ownership design §8.4 as
+ * ADR-054's 3b-2b1c-a amendment rules it): the forward from step 5 to the
+ * supervisor, through the sink `src/server/index.ts` sets
+ * (`setStartOrWakeSink`, which calls the supervisor's `startOrWake`). Unset,
+ * the sink does nothing. The supervisor refuses at the call (flag off,
+ * shutdown, live Off, the licence) and its pass asks the whole waiting
+ * decision (`tandemWorkWaiting`) before it wakes or starts anything, so the
+ * licence refusal is the supervisor's (Critical Rule 9), not this function's.
+ *
+ * In order: nothing while ownership is off; the test observer is told every
+ * cause (`setWakeObserverForTests`); `user-open` and `message-owner` are
+ * dropped; a `lapse` is dropped while another session is connected
+ * ({@link anotherSessionConnected}); every other cause reaches the sink as
+ * `"document"`. The sink runs outside any MCP request context (a forward can
+ * run inside another client's request: an eviction in its `initialize`,
+ * `closeEntry`), in its own catch: a throw logs one fixed line and is never
+ * rethrown, so the caller's change stands.
  */
 export function startOrWake(cause: WakeCause): void {
+  if (!ownershipEnabled()) return;
   wakeObserverForTests?.(cause);
+  // An open is never a reason on its own (Bryan's pick 1, "No, never by
+  // itself"); this also covers the boot, whose restored and startup documents
+  // get the default rule with this cause. A later Off-to-On default rule
+  // (3b-2b4; design flip-change 13) must not reuse "user-open", or this drop
+  // loses its start.
+  if (cause === "user-open") return;
+  // The message forward is 3b-2b1c-b's: nothing is forwarded for it here.
+  if (cause === "message-owner") return;
+  try {
+    // One gate toward Bryan's pick 2 ("Only if no other session is open"): a
+    // holder going away forwards nothing while another session is connected.
+    // The departing record never counts (`lapse` marks it lapsed before any
+    // move). Only `lapse` is a holder going away: no other cause reaches here
+    // with a caller that is not Tandem's Claude, so the others are forwarded
+    // unchecked. A later writer that hands Tandem's Claude a document decides
+    // its own rule.
+    if (cause === "lapse" && anotherSessionConnected()) return;
+    runOutsideMcpContext(() => startOrWakeSink("document"));
+  } catch {
+    logLimited("forward-failed", FORWARD_FAILED);
+  }
+}
+
+/**
+ * Where `startOrWake` forwards (#2358 PR 3b-2b1c-a): `src/server/index.ts`
+ * sets a sink that calls the supervisor's `startOrWake` through its
+ * `launcherSupervisor` reference, read at call time (null does nothing). Only
+ * stored; called only by a flag-on `startOrWake`.
+ */
+export function setStartOrWakeSink(sink: (cause: "document" | "message") => void): void {
+  startOrWakeSink = sink;
 }
 
 /**
@@ -2749,8 +2802,8 @@ const CHAT_HALF_FAILED =
  * {@link claimableChatWaiting}'s (#2358 PR 3b-2b1b-claimable), asked only
  * while no other session is connected. `select` receives the facts because an
  * `owned` standing carries no document id. Unexported: `tandemWorkWaiting`
- * and the step-5 composite (`waitingAtDocumentChange`) call it, and 3b-2b1c
- * reuses it. Synchronous; no Y.Doc, registry, read-stamp or
+ * and the step-5 composite (`waitingAtDocumentChange`) call it, and
+ * 3b-2b1c-b's message forward will. Synchronous; no Y.Doc, registry, read-stamp or
  * ownership write (the chat member resolves the control room with the
  * creating getter, which exists from boot). May throw: its callers
  * catch.
@@ -2879,8 +2932,9 @@ function claimableChatWaiting(claimable: (documentId: string) => boolean): boole
  * Tandem's Claude could claim ({@link claimableByTandem}) with a user comment
  * or user thread reply waiting on it (the same probe), or chat that follows
  * such a document ({@link claimableChatWaiting}). False while ownership is off,
- * before anything is read. **Computed and not consumed**: nothing calls it
- * until 3b-2b1c wires the supervisor's decision to it. It claims nothing:
+ * before anything is read. The supervisor's waiting decision (`workWaiting`,
+ * wired in `src/server/index.ts` by 3b-2b1c-a): a start-or-wake pass asks it
+ * before it wakes or starts anything. It claims nothing:
  * synchronous; it makes no Y.Doc, registry, read-stamp or ownership write (the
  * probe, `documentWaiting`, can log a legacy migration or a failed read and
  * add to an in-memory dedup set; the chat side resolves the control room with
@@ -3061,7 +3115,10 @@ export function setChatOwnershipFaultForTests(
   chatFaultForTests = fault;
 }
 
-/** Watch `startOrWake` (step 5): told each cause that reaches it. Undefined clears it. */
+/**
+ * Watch `startOrWake` (step 5): told each cause that reaches it while
+ * ownership is on, before any cause is dropped or forwarded. Undefined clears it.
+ */
 export function setWakeObserverForTests(observer: ((cause: WakeCause) => void) | undefined): void {
   wakeObserverForTests = observer;
 }
@@ -3164,5 +3221,6 @@ export function resetOwnershipForTests(): void {
   chatSide = NO_CHAT_SIDE;
   chatFaultForTests = undefined;
   wakeObserverForTests = undefined;
+  startOrWakeSink = () => {};
   graceMs = DEFAULT_GRACE_MS;
 }
