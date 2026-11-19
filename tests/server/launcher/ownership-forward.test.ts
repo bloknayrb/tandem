@@ -1134,7 +1134,10 @@ describe("the decision table: A lapses", () => {
     register(C);
     expect(takeDocument(d.id, C)).toEqual({ ok: true, took: true });
     expect(getDocOwner(d.id)).toMatchObject({ ownerId: C, kind: "opened" });
-    // Nothing yet: the user open's own forward is dropped (A3).
+    // Nothing yet: the user open's own forward is dropped (A3). After the lock
+    // barrier, a pass the open had queued would have run (startPasses).
+    await lockBarrier(h);
+    expect(passes(h)).toBe(0);
     expect(children).toHaveLength(1);
     causes = [];
     lapse(C);

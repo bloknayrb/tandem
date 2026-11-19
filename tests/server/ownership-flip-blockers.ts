@@ -179,8 +179,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "inbox scope a user's next comment on that document waits until some session polls for " +
       "an unrelated reason.",
     closedBy:
-      "PR 3b (presence and the ownership frames; 3b-2b1c-a's start-or-wake does not cover a " +
-      "document that goes unowned).",
+      "PR 3b (presence, the ownership frames and the start rules of 3b-2b2; 3b-2b1c-a's " +
+      "start-or-wake does not cover a document that goes unowned).",
   },
   {
     gap:
