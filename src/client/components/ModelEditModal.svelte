@@ -227,9 +227,10 @@ onMount(() => {
 // behind the scrim on the first Tab.
 //
 // Window-level rather than an element `onkeydown`, because `trapTab`'s
-// recover-focus branch is the half that matters: a click on the dialog's own
-// padding leaves `document.activeElement` on `<body>`, and an element handler
-// never fires again once focus is outside.
+// recover-focus branch is the half that matters: once focus is outside the
+// dialog (on `<body>`, say), an element handler never fires again. Whether a
+// click on the dialog's own padding puts it there is unmeasured: the scrim is
+// focusable (`tabindex="-1"`), so the click may focus the scrim instead.
 //
 // The owner bail is required, not decorative. `trapTab`'s recover branch fires
 // whenever focus is outside ITS container — including inside another open

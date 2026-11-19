@@ -774,13 +774,16 @@ describe("ModelEditModal — Escape with focus stranded on the page (carried ite
     ["Add", undefined],
     ["Edit", LOCAL],
   ] as const) {
-    it(`${mode}: Escape with focus on <body> cancels once`, () => {
+    it(`${mode}: Escape with focus on <body> cancels once, and claims the key`, () => {
       const onCancel = vi.fn();
       render(ModelEditModal, { props: { ...(entry ? { entry } : {}), onCancel, onSave: vi.fn() } });
       (document.activeElement as HTMLElement | null)?.blur();
       expect(document.activeElement).toBe(document.body);
-      document.body.dispatchEvent(escape());
+      const ev = escape();
+      document.body.dispatchEvent(ev);
       expect(onCancel).toHaveBeenCalledTimes(1);
+      // Claimed, so a listener after it (or a later Escape owner) leaves it.
+      expect(ev.defaultPrevented).toBe(true);
     });
   }
 
