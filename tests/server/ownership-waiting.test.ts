@@ -447,7 +447,10 @@ interface Row {
   expected: "waiting" | "not";
   /** A recorded difference: what the fresh poll does instead of agreeing. */
   difference?: "poll-hands-it" | "poll-hands-notice";
-  /** The bucket in which the first `a-poll` handed the candidate (R0.5: rows 10 and 20). */
+  /**
+   * The bucket in which the first `a-poll` handed the candidate, and only it
+   * (R0.5: rows 10 and 20; row 40 since #2358 PR 3b-2b1b-chat).
+   */
   aHandedIn?: "userActions" | "userReplies";
   /** The row's `handover-throws` act logs the handover-failed line exactly once (R0.4: rows 39 and 40). */
   handoverLogged?: true;
@@ -1009,6 +1012,7 @@ const ROWS: readonly Row[] = [
     parent: "none",
     acts: ["take-a", "item", "a-poll", "handover-throws", "a-lapse"],
     expected: "waiting",
+    aHandedIn: "userActions",
     handoverLogged: true,
   },
   // The differences, both sides asserted.
@@ -1109,14 +1113,15 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
     it(row.name, async () => {
       const w = await buildRow(row);
 
-      // R0.5: the terminal's first poll handed the candidate, in the row's bucket.
+      // R0.5: the terminal's first poll handed the candidate, in the row's
+      // bucket, and nothing else there (exact since #2358 PR 3b-2b1b-chat).
       if (row.aHandedIn !== undefined) {
         expect(w.aInboxes.length, "a-polls").toBeGreaterThan(0);
         const first = w.aInboxes[0] as Inbox;
         expect(
           first[row.aHandedIn].map((x) => String(x.id)),
-          "the first a-poll handed the candidate",
-        ).toContain(w.candidate);
+          "the first a-poll handed the candidate, and only it",
+        ).toEqual([w.candidate]);
       }
 
       // Spies around the waiting call only (the poll's admit logs its own drops):

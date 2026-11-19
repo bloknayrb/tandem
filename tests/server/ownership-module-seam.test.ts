@@ -182,6 +182,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
+    "tests/server/ownership-waiting-chat.test.ts",
     "tests/server/ownership-waiting.test.ts",
   ];
 
@@ -231,6 +232,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
+      "tests/server/ownership-waiting-chat.test.ts",
       "tests/server/ownership-waiting.test.ts",
     ]);
   });
@@ -267,6 +269,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
+      "tests/server/ownership-waiting-chat.test.ts",
       "tests/server/ownership-waiting.test.ts",
     ]);
   });

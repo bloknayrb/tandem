@@ -1836,6 +1836,7 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       reOwe: (keys) => (counts.reOwe++, ownershipChatSide.reOwe(keys)),
       settleCandidates: (row) => ownershipChatSide.settleCandidates(row),
       addSettles: (row, keys) => ownershipChatSide.addSettles(row, keys),
+      owedToFreshReader: () => ownershipChatSide.owedToFreshReader(),
     });
     const r = reader(A);
     await r.poll();
