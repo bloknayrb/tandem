@@ -176,6 +176,7 @@ describe("one address rule (R3.5)", () => {
     expect(indexes(copy, /validateEndpoint\(/g)).toHaveLength(1);
     const picker = read("src/client/components/FirstRunModelPickerModal.svelte");
     expect(picker).not.toContain("validateEndpoint");
+    // A second import of the shared rule would be a second place to keep in step.
     expect(picker).not.toContain("local-endpoint");
   });
 

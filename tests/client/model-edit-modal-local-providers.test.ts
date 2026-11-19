@@ -333,6 +333,7 @@ describe("ModelEditModal — the document-text sentences (26c)", () => {
   for (const p of LOCAL_MODEL_PROVIDERS) {
     it(`${p}: Add and Edit show S7 as the third paragraph`, () => {
       for (const mount of [() => mountWith(), () => mountWith(p)]) {
+        // Add starts on the default provider; per-provider Add is the switch cases above.
         const m = mount();
         const lines = Array.from(m.getByTestId("model-edit-local-intro").querySelectorAll("p")).map(
           (el) => el.textContent,

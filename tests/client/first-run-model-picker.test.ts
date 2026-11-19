@@ -30,6 +30,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LOCAL_SENT_TO_LINE,
   PICKER_LOCAL_SUBTITLE,
   PICKER_MODEL_ID_HINT,
   PICKER_TITLE,
@@ -173,6 +174,8 @@ describe("FirstRunModelPickerModal — copy (R2.1)", () => {
       "Chat stays set to Claude. Your model server must be running on this computer for Tandem to use the model; you can also add models any time in Settings → Models.",
     );
     expect(m.getByTestId("first-run-model-modal").textContent).not.toMatch(/Step 1 of 2/);
+    // 26c: the document-text sentences belong to the add-model window only.
+    expect(m.getByTestId("first-run-model-modal").textContent).not.toContain(LOCAL_SENT_TO_LINE);
   });
 
   it("the × is named Close, the secondary button No thanks, Save is Save", () => {

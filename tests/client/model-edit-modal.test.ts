@@ -486,7 +486,7 @@ describe("ModelEditModal — an old cloud entry is shown as unavailable", () => 
           expect(dialog.querySelector(sel), sel).toBeNull();
         }
         expect(v.queryByTestId("model-edit-save")).toBeNull();
-        // No local copy: the intro, its two small-print lines and the hint.
+        // No local copy: the intro, its three paragraphs and the hint.
         expect(v.queryByTestId("model-edit-local-intro")).toBeNull();
         expect(v.queryByTestId("model-edit-endpoint-hint")).toBeNull();
         expect(dialog.textContent).not.toContain(LOCAL_SERVERS_LINE);
