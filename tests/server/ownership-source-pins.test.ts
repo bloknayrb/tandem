@@ -1105,23 +1105,53 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     ]);
   });
 
-  it("computed, not consumed, inside ownership.ts too: tandemWorkWaiting is only defined, tandemChatWaiting only defined and called once (review round 1, R1.3)", () => {
+  it("computed, not consumed, inside ownership.ts too: tandemWorkWaiting is only defined, tandemChatWaiting defined and called twice (by tandemWorkWaiting and the step-5 composite) (review round 1, R1.3; 3b-2b1b-chat-step5)", () => {
     // The per-file pin above cannot see a caller inside ownership.ts, where
-    // step 5 and startOrWake live. 3b-2b1b-chat-step5 and 3b-2b1c change these counts.
+    // step 5 and startOrWake live. 3b-2b1c changes these counts.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
-    expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(2);
+    expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(3);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
+  });
+
+  it("step 5 asks the composite, once, in its condition; the composite asks the probe first and the chat that follows the document (3b-2b1b-chat-step5)", () => {
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // Defined once and called once.
+    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(2);
+    const setDocOwner = text.slice(
+      text.indexOf("export function setDocOwner("),
+      text.indexOf("function reOweDocumentChat("),
+    );
+    expect(text.indexOf("export function setDocOwner(")).toBeGreaterThanOrEqual(0);
+    expect(setDocOwner).toMatch(
+      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*startOrWake\(cause\);/,
+    );
+    expect(setDocOwner).not.toContain("waitingProbe(");
+    // The re-owe precedes step 5.
+    expect(setDocOwner.indexOf("reOweDocumentChat(documentId)")).toBeGreaterThanOrEqual(0);
+    expect(setDocOwner.indexOf("reOweDocumentChat(documentId)")).toBeLessThan(
+      setDocOwner.indexOf("waitingAtDocumentChange("),
+    );
+    const start = text.indexOf("function waitingAtDocumentChange(");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const body = text.slice(start, text.indexOf("\n}\n", start));
+    expect(body).toContain("if (waitingProbe(documentId, ownerId)) return true;");
+    expect(body).toContain("if (ownerId !== TANDEM_OWNER_ID) return false;");
+    expect(body).toContain("facts.documentId === documentId");
+    expect(body).toContain("standing.perMessage === false");
+    expect(body).toContain('logLimited("waiting-step5-chat", STEP5_CHAT_FAILED)');
+    expect(body.indexOf("waitingProbe(")).toBeLessThan(body.indexOf("try {"));
   });
 
   it("the waiting rule builds the chat item from exactly admitChatItem's fields (review round 1, R1.2)", () => {
     // Each literal, comment-stripped and whitespace-folded: `admitChatItem`'s
     // `const item = { ... };` and `chatItemAdmitted`'s `safeParse({ ... })`.
     const literal = (text: string, fn: string, open: string) => {
+      // Fails when the function is missing (`slice(-1)` would leave one character).
+      expect(text.indexOf(`function ${fn}(`), fn).toBeGreaterThanOrEqual(0);
       const body = text.slice(text.indexOf(`function ${fn}(`));
-      expect(body.length, fn).toBeGreaterThan(0);
       const start = body.indexOf(open) + open.length;
       expect(start, `${fn}: ${open}`).toBeGreaterThan(open.length - 1);
       let depth = 1;
@@ -1135,16 +1165,18 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
         .replace(/\s+/g, " ")
         .trim();
     };
-    const admit = literal(
-      stripComments(SRC_FILES.get("src/server/mcp/awareness.ts") as string),
-      "admitChatItem",
-      "const item = {",
-    );
-    const waiting = literal(
-      stripComments(SRC_FILES.get("src/server/mcp/inbox-selection.ts") as string),
-      "chatItemAdmitted",
-      "safeParse({",
-    );
+    const awareness = stripComments(SRC_FILES.get("src/server/mcp/awareness.ts") as string);
+    const selection = stripComments(SRC_FILES.get("src/server/mcp/inbox-selection.ts") as string);
+    const admit = literal(awareness, "admitChatItem", "const item = {");
+    const waiting = literal(selection, "chatItemAdmitted", "safeParse({");
+    // Both sides parse with the same schema (carried from #2474's review).
+    const fnBody = (text: string, fn: string) => {
+      const start = text.indexOf(`function ${fn}(`);
+      expect(start, fn).toBeGreaterThanOrEqual(0);
+      return text.slice(start, text.indexOf("\n}\n", start));
+    };
+    expect(fnBody(awareness, "admitChatItem")).toContain("inboxChatMessageSchema.safeParse(item)");
+    expect(fnBody(selection, "chatItemAdmitted")).toContain("inboxChatMessageSchema.safeParse({");
     // The positive anchor: the literal is the one with the six fields.
     expect(admit).toContain("id: msg.id");
     expect(admit).toContain("replyTo: msg.replyTo");
