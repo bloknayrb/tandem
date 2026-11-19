@@ -11,8 +11,15 @@
  * converged. On POSIX the real function is already a no-op.
  *
  * Only `setRestrictiveAcl` is replaced; the rest of the module is real.
- * `assertNoBroadAce`'s one production caller outside acl-win
- * (install-claude-cli) is tested with injected deps.
+ * `assertNoBroadAce` has two production callers outside acl-win:
+ * install-claude-cli, tested with injected deps, and the launcher's run files
+ * (`realRunFileAcl.verifyNoBroadAce` in `src/server/launcher/run-files.ts`,
+ * the per-file check), which the spawn specs replace with an injected
+ * `runFileAcl` or reach for real only on Windows. Under this mock
+ * `realRunFileAcl.lockDir` is a no-op, so on Windows the folder's check
+ * (whose only ACL read is inside `setRestrictiveAcl`, #2440) passes
+ * unverified here; the folder's verification is proved by the real-ACL
+ * `run-files-acl-win.test.ts`.
  *
  * Opting out: a spec that needs real ACLs is listed in
  * `scripts/ci/windows-acl-proof.mjs` with `realAcl: true`, calls

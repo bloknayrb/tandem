@@ -41,12 +41,40 @@ import {
   REAPER_NOT_FOUND_MARKER,
 } from "../../../src/shared/launcher/contract.js";
 
+/**
+ * #2440: a barrier around each `writeRunFile` call, armed only inside the
+ * cases that set `hook`; a plain pass-through otherwise. State lives in
+ * `vi.hoisted` because the mock factory below is hoisted above everything.
+ */
+const barrier = vi.hoisted(() => ({
+  hook: null as null | ((kind: "mcp" | "settings", run: () => Promise<string>) => Promise<string>),
+}));
+
 // The stop bound's test makes one deletion hang; every other test gets the
-// real `deleteRunFile` through this pass-through.
+// real `deleteRunFile` through this pass-through. `writeRunFile` goes through
+// the #2440 barrier above, a pass-through unless a case arms it.
 vi.mock(import("../../../src/server/launcher/run-files.js"), async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, deleteRunFile: vi.fn(actual.deleteRunFile) };
+  return {
+    ...actual,
+    deleteRunFile: vi.fn(actual.deleteRunFile),
+    // A plain function, not `vi.fn`: a spy attaches its own handler to the
+    // promise it returns (to record `settledResults`), which would hide the
+    // unhandled rejection the both-failing case exists to catch.
+    writeRunFile: (...args: Parameters<typeof actual.writeRunFile>) => {
+      const hook = barrier.hook;
+      if (!hook) return actual.writeRunFile(...args);
+      return hook(args[1], () => actual.writeRunFile(...args));
+    },
+  };
 });
+
+/** Resolves when `probe` holds, or after `ms` regardless (the fallback that
+ * keeps a sequential build from deadlocking a spawn or hanging teardown). */
+async function until(probe: () => boolean, ms = 2_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!probe() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STUB_SOURCE = path.join(HERE, "stub-claude-cli.cjs");
@@ -204,6 +232,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  barrier.hook = null;
   for (const sup of supervisors.splice(0)) await sup.stop().catch(() => {});
   // The supervisor's invariant (owner-handle-bind.ts, `startOverlaps`): no
   // spawn became current while an earlier spawn's state was still alive. Read
@@ -343,17 +372,80 @@ describe("no usable bridge, no flags (R1.5)", () => {
     }, "the spawn");
     expect(flagsIn(rec.claudeArgs)).toEqual([]);
     // Only the planted file; nothing of the spawn's left behind, and the
-    // planted file untouched.
+    // planted file untouched. Since #2440 the settings file was also created
+    // (beside the refused mcp name) and is deleted by an un-awaited tracked
+    // delete, so wait for it to go.
+    await waitFor(
+      () => JSON.stringify(runFilesOnDisk()) === JSON.stringify([path.basename(planted)]),
+      "the settings file's delete",
+    );
     expect(runFilesOnDisk()).toEqual([path.basename(planted)]);
     expect(fs.readFileSync(planted, "utf8")).toBe("{}");
   });
 
-  it("the settings write fails after the MCP config was written: neither is left", async () => {
-    // A suffix that names a missing subdirectory makes the second create fail.
+  /**
+   * One kind fails (a suffix naming a missing subdirectory makes its create
+   * fail) while the other succeeds; the barrier holds the succeeding call until
+   * the failing one has rejected, so the success lands last (#2440).
+   */
+  async function oneFails(failing: "mcp" | "settings") {
+    let failedSettled = false;
+    let settledCalls = 0;
+    barrier.hook = async (kind, run) => {
+      try {
+        if (kind === failing) return await run().finally(() => (failedSettled = true));
+        await until(() => failedSettled);
+        return await run();
+      } finally {
+        settledCalls++;
+      }
+    };
+    const logs = captureErrors();
     const sup = makeSupervisor({
-      runFileNameSuffix: (kind) => (kind === "mcp" ? "b".repeat(32) : `nodir/${"c".repeat(32)}`),
+      runFileNameSuffix: (kind) => (kind === failing ? `nodir/${"c".repeat(32)}` : "b".repeat(32)),
     });
-    await expectNoFlags(sup);
+    await sup.startFresh(spawnDir);
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual([]);
+    // Both calls have settled (bounded, for a build that never starts one),
+    // then the tracked deletes must leave nothing.
+    await until(() => settledCalls >= 2);
+    await waitFor(() => runFilesOnDisk().length === 0, "the tracked deletes", 3_000);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    expect(logs()).toContain(`[Launcher] Not passing the run files: ${failing}-write failed`);
+  }
+
+  it("the settings write fails after the MCP config was written: neither is left", async () => {
+    await oneFails("settings");
+  });
+
+  it("the MCP config write fails after the settings file was written: neither is left", async () => {
+    await oneFails("mcp");
+  });
+
+  it("both writes fail: the MCP config's step is logged, and no rejection is left unhandled", async () => {
+    let settingsSettled = false;
+    barrier.hook = async (kind, run) => {
+      if (kind === "settings") return run().finally(() => (settingsSettled = true));
+      await until(() => settingsSettled);
+      return run();
+    };
+    const logs = captureErrors();
+    const sup = makeSupervisor({
+      runFileNameSuffix: (kind) => `nodir/${(kind === "mcp" ? "e" : "f").repeat(32)}`,
+    });
+    await sup.startFresh(spawnDir);
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual([]);
+    expect(runFilesOnDisk()).toEqual([]);
+    const lines = logs().filter((l) => l.includes("Not passing the run files"));
+    expect(lines).toEqual(["[Launcher] Not passing the run files: mcp-write failed"]);
   });
 
   it.runIf(POSIX)("a link at launcher/ (POSIX; Windows: run-files-acl-win)", async () => {
@@ -377,11 +469,77 @@ describe("no usable bridge, no flags (R1.5)", () => {
         return r.length > 0 ? r : null;
       }, "the spawn");
       expect(flagsIn(rec.claudeArgs)).toEqual([]);
-      // Only the planted link remains, still dangling: nothing was created through it.
-      expect(runFilesOnDisk()).toEqual([`tandem-run-mcp-${"d".repeat(32)}.json`]);
+      // Only the planted link remains, still dangling: nothing was created
+      // through it. The settings file (#2440: now also created) is deleted by
+      // an un-awaited tracked delete, so wait for it to go.
+      const planted = `tandem-run-mcp-${"d".repeat(32)}.json`;
+      await waitFor(
+        () => JSON.stringify(runFilesOnDisk()) === JSON.stringify([planted]),
+        "the settings file's delete",
+      );
+      expect(runFilesOnDisk()).toEqual([planted]);
       expect(fs.existsSync(target)).toBe(false);
     },
   );
+});
+
+describe("the two run files are written at the same time (#2440)", () => {
+  it("one spawn makes exactly two writeRunFile calls, both in flight at once", async () => {
+    let entered = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    barrier.hook = async (_kind, run) => {
+      entered++;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await until(() => entered >= 2);
+        return await run();
+      } finally {
+        inFlight--;
+      }
+    };
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(entered).toBe(2);
+    expect(maxInFlight).toBe(2);
+  });
+
+  // Only `vitest-windows` and a Windows developer's suite run this: off
+  // Windows `writeRunFile` makes no per-file check.
+  it.runIf(!POSIX)("the two per-file ACL checks are in flight at once (Windows)", async () => {
+    let entered = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const acl: RunFileAcl = {
+      ...NO_ACL,
+      verifyNoBroadAce: async (p) => {
+        if (!p.endsWith(".json")) return;
+        entered++;
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        try {
+          await until(() => entered >= 2);
+        } finally {
+          inFlight--;
+        }
+      },
+    };
+    const sup = makeSupervisor({ runFileAcl: acl });
+    await sup.startFresh(spawnDir);
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(entered).toBe(2);
+    expect(maxInFlight).toBe(2);
+  });
 });
 
 describe("the write's re-checks (R1.8, Ruling M)", () => {

@@ -13,11 +13,14 @@ import {
   type RunFileAcl,
   RunFileError,
   readHostileSettingsKeys,
+  realRunFileAcl,
+  resetVerifiedLauncherDirsForTests,
   SETTINGS_READ_MAX_BYTES,
   SETTINGS_READ_MAX_KEYS,
   sweepRunFiles,
   writeRunFile,
 } from "../../../src/server/launcher/run-files.js";
+import { stripComments } from "../../helpers/src-tree.js";
 
 /**
  * The launcher's run files as units (#2358 PR 3a, R1.2–R1.6, R1.9; Rulings
@@ -254,6 +257,164 @@ describe("writing the run files (R1.6)", () => {
     circular.self = circular;
     await expect(writeRunFile(dir, "mcp", circular, NO_ACL)).rejects.toBeInstanceOf(RunFileError);
     expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
+
+/**
+ * Runs `fn` with `process.platform` reading `"win32"`, restored in `finally`
+ * (precedent: tests/server/file-io/private-dir.test.ts), so the Windows branch
+ * of `ensureLauncherDir` and `writeRunFile` runs on Linux with a recording
+ * seam. Nothing here reaches acl-win: every ACL step is the seam's.
+ */
+async function asWin32<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    return await fn();
+  } finally {
+    if (prev) Object.defineProperty(process, "platform", prev);
+  }
+}
+
+describe("the Windows folder check makes one ACL read, the lock's own (#2440)", () => {
+  beforeEach(() => resetVerifiedLauncherDirsForTests());
+  afterEach(() => resetVerifiedLauncherDirsForTests());
+
+  function recording(lock: () => Promise<void> = async () => {}) {
+    const calls: string[] = [];
+    const acl: RunFileAcl = {
+      assertOwned: async (p) => {
+        calls.push(`assertOwned:${p}`);
+      },
+      lockDir: async (p) => {
+        calls.push(`lockDir:${p}`);
+        await lock();
+      },
+      verifyNoBroadAce: async (p) => {
+        calls.push(`verifyNoBroadAce:${p}`);
+      },
+    };
+    return { calls, acl };
+  }
+
+  it("a passing lock: the owner check then the lock, no separate folder read; cached after", async () => {
+    const dir = path.join(root, "launcher");
+    const { calls, acl } = recording();
+    await asWin32(async () => {
+      expect(await ensureLauncherDir(dir, { create: true, acl })).toBe(true);
+      expect(calls).toEqual([`assertOwned:${dir}`, `lockDir:${dir}`]);
+      expect(await ensureLauncherDir(dir, { create: true, acl })).toBe(true);
+    });
+    expect(calls).toEqual([`assertOwned:${dir}`, `lockDir:${dir}`]);
+  });
+
+  it("a refusing lock: launcher-dir-acl, and nothing is cached", async () => {
+    const dir = path.join(root, "launcher");
+    const { calls, acl } = recording(async () => Promise.reject(new Error("broad ACE")));
+    await asWin32(async () => {
+      await expect(ensureLauncherDir(dir, { create: true, acl })).rejects.toMatchObject({
+        step: "launcher-dir-acl",
+      });
+      await expect(ensureLauncherDir(dir, { create: true, acl })).rejects.toMatchObject({
+        step: "launcher-dir-acl",
+      });
+    });
+    expect(calls).toEqual([
+      `assertOwned:${dir}`,
+      `lockDir:${dir}`,
+      `assertOwned:${dir}`,
+      `lockDir:${dir}`,
+    ]);
+  });
+
+  it("each run file is checked while still empty, and a refusing check leaves the folder empty", async () => {
+    // A regression guard on writeRunFile, which #2440 leaves unchanged: the
+    // per-file check still runs before the write.
+    const dir = path.join(root, "launcher");
+    const sizes: Record<string, number> = {};
+    let refuse = false;
+    const acl: RunFileAcl = {
+      ...NO_ACL,
+      verifyNoBroadAce: async (p) => {
+        if (!p.endsWith(".json")) return;
+        sizes[path.basename(p).startsWith("tandem-run-mcp-") ? "mcp" : "settings"] =
+          fs.statSync(p).size;
+        if (refuse) throw new Error("broad ACE");
+      },
+    };
+    await asWin32(async () => {
+      await ensureLauncherDir(dir, { create: true, acl });
+      const a = await writeRunFile(dir, "mcp", { a: 1 }, acl);
+      const b = await writeRunFile(dir, "settings", { b: 2 }, acl);
+      expect(sizes).toEqual({ mcp: 0, settings: 0 });
+      expect(fs.statSync(a).size).toBeGreaterThan(0);
+      expect(fs.statSync(b).size).toBeGreaterThan(0);
+      fs.rmSync(a);
+      fs.rmSync(b);
+      refuse = true;
+      await expect(writeRunFile(dir, "mcp", { a: 1 }, acl)).rejects.toMatchObject({
+        step: "mcp-acl",
+      });
+      await expect(writeRunFile(dir, "settings", { b: 2 }, acl)).rejects.toMatchObject({
+        step: "settings-acl",
+      });
+    });
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("source pin: the real lock is setRestrictiveAcl, which re-reads unconditionally after icacls", () => {
+    const runFiles = stripComments(
+      fs.readFileSync(path.resolve("src/server/launcher/run-files.ts"), "utf8"),
+    );
+    const lockDir = /\blockDir:\s*\(p\)\s*=>([\s\S]*?)\bverifyNoBroadAce:/.exec(runFiles)?.[1];
+    expect(lockDir, "realRunFileAcl.lockDir not found").toBeDefined();
+    // The whole body is the call: no condition can route around it.
+    expect(lockDir?.trim()).toMatch(/^setRestrictiveAcl\(p, \{[^}]*\}\),$/);
+    expect(realRunFileAcl.lockDir).toBeTypeOf("function");
+
+    const acl = stripComments(
+      fs.readFileSync(path.resolve("src/server/integrations/acl-win.ts"), "utf8"),
+    );
+    const start = acl.indexOf("export async function setRestrictiveAcl(");
+    expect(start, "setRestrictiveAcl not found").toBeGreaterThanOrEqual(0);
+    // The body: from the first `{` after the parameter list's `)` + `: Promise<void>`.
+    const bodyOpen = acl.indexOf("{", acl.indexOf("Promise<void>", start));
+    let depth = 0;
+    let bodyClose = -1;
+    for (let i = bodyOpen; i < acl.length; i++) {
+      if (acl[i] === "{") depth++;
+      else if (acl[i] === "}" && --depth === 0) {
+        bodyClose = i;
+        break;
+      }
+    }
+    expect(bodyClose).toBeGreaterThan(bodyOpen);
+    const body = acl.slice(bodyOpen + 1, bodyClose);
+    const stmt = "await assertNoBroadAce(path, { signal });";
+    const at = body.indexOf(stmt);
+    expect(at, "the re-read statement is missing").toBeGreaterThanOrEqual(0);
+    expect(body.indexOf(stmt, at + 1), "the re-read appears twice").toBe(-1);
+    expect(at, "the re-read precedes icacls").toBeGreaterThan(body.indexOf("icacls.exe"));
+    // Top level: no open brace, paren or bracket before it within the body.
+    let braces = 0;
+    let parens = 0;
+    for (const ch of body.slice(0, at)) {
+      if (ch === "{") braces++;
+      else if (ch === "}") braces--;
+      else if (ch === "(" || ch === "[") parens++;
+      else if (ch === ")" || ch === "]") parens--;
+    }
+    expect({ braces, parens }).toEqual({ braces: 0, parens: 0 });
+    // No early exit at the top level between the platform guard and the
+    // re-read (`if (cond) return;` before it would skip it for some callers).
+    const guard = 'if (process.platform !== "win32") return;';
+    const guardAt = body.indexOf(guard);
+    expect(guardAt, "the platform guard moved").toBeGreaterThanOrEqual(0);
+    expect(body.slice(guardAt + guard.length, at)).not.toMatch(/\breturn\b/);
+    // A whole statement of its own: not the tail of a braceless `if`/`else`.
+    const before = body.slice(0, at).trimEnd();
+    expect(before.at(-1), "the re-read is not a statement of its own").toMatch(/[;}{]/);
+    expect(before).not.toMatch(/\b(?:if|else|while|for)\s*(?:\([^;]*\))?$/);
   });
 });
 
