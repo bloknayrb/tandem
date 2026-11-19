@@ -54,6 +54,20 @@ const SURFACES = [
   "suggestion-bg",
 ];
 
+/** Local-model agent tokens that colour text (ADR-039 item 20, #1123). */
+const AGENT_TEXT_TOKENS = ["agent-local-ollama", "agent-local-llamacpp"];
+
+/** The grounds those render text on: the card tints (by root author, or the
+ *  review target's accent-bg) and the plain panel grounds. */
+const AGENT_TEXT_SURFACES = [
+  "author-claude-bg",
+  "author-user-bg",
+  "author-import-bg",
+  "accent-bg",
+  "surface",
+  "bg",
+];
+
 /**
  * Ladder × surface pairs that are below AA and are deliberately left that way,
  * keyed `${theme}/${tier} on ${surface}`.
@@ -81,7 +95,7 @@ type Pair = { name: string; fg: string; bg: string; min: number };
 
 async function measure(page: Page, theme: string): Promise<Array<Pair & { ratio: number }>> {
   return page.evaluate(
-    ({ families, t, TIERS, SURFACES }) => {
+    ({ families, t, TIERS, SURFACES, AGENT_TEXT_TOKENS, AGENT_TEXT_SURFACES }) => {
       document.documentElement.setAttribute("data-theme", t);
 
       const canvas = document.createElement("canvas");
@@ -185,9 +199,27 @@ async function measure(page: Page, theme: string): Promise<Array<Pair & { ratio:
         }
       }
 
+      // The local-model agent tokens colour TEXT (the reply byline on any
+      // card tint, the chat author label) — ADR-039 item 20 (#1123). The chat
+      // bubble's own ground mixes the agent token into the surface, which no
+      // variable names, so that pair and the non-text pairs are measured by
+      // tests/design-system-impl/agent-token-contrast.test.ts instead.
+      for (const agent of AGENT_TEXT_TOKENS) {
+        for (const surface of AGENT_TEXT_SURFACES) {
+          add(`${agent} on ${surface}`, `--tandem-${agent}`, `--tandem-${surface}`, 4.5);
+        }
+      }
+
       return out;
     },
-    { families: FAMILIES as unknown as string[], t: theme, TIERS, SURFACES },
+    {
+      families: FAMILIES as unknown as string[],
+      t: theme,
+      TIERS,
+      SURFACES,
+      AGENT_TEXT_TOKENS,
+      AGENT_TEXT_SURFACES,
+    },
   );
 }
 
@@ -202,8 +234,14 @@ for (const theme of THEMES) {
     // would be empty and every assertion below would vacuously pass. Expected
     // count is 59: 11 family rows (6 families × 2, minus `suggestion: fg on
     // solid fill` — `--tandem-suggestion-fg` is intentionally not defined, and
-    // `add` skips undefined tokens) + 48 ladder rows (4 tiers × 12 surfaces).
+    // `add` skips undefined tokens) + 52 ladder rows (4 tiers × 13 surfaces)
+    // + 12 agent rows (2 local tokens × 6 surfaces) = 75.
     expect(results.length).toBeGreaterThan(50);
+    // `add` skips an undefined token silently, so pin the agent rows by count:
+    // a renamed agent token must fail here, not vanish from the sweep.
+    expect(results.filter((r) => r.fg.startsWith("--tandem-agent-local-")).length).toBe(
+      AGENT_TEXT_TOKENS.length * AGENT_TEXT_SURFACES.length,
+    );
 
     // A waiver key that no longer names a measured pair is the real rot mode:
     // rename a surface token and the exclusion silently stops applying to
