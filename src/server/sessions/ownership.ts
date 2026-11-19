@@ -471,6 +471,7 @@ let transportMode: "http" | "stdio" | undefined;
 let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
+let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
 let chatSide: OwnershipChatSide = NO_CHAT_SIDE;
@@ -567,20 +568,37 @@ export function isTandemPresent(): boolean {
  * it whether the document's new owner has work waiting. `src/server/index.ts`
  * wires the inbox's document half, `documentWaiting` (#2358 PR 3b-2b1b),
  * pinned from source in `tests/server/ownership-source-pins.test.ts`;
- * unwired it answers false. Asked only flag on, only when the new owner is
- * Tandem's Claude, the caller is not, and the cause is not `take-back`;
- * nothing in production reaches that yet (the default rule needs presence,
- * which nothing sets), and while `startOrWake` is a stub its answer starts
- * nothing. Step 5 asks it through `waitingAtDocumentChange` (3b-2b1b-chat-step5):
- * the probe first, exactly as `(documentId, next.ownerId)`, and only when it
- * answers false the chat that follows the document. A throw from the probe is
- * not caught there: it reaches `setDocOwner`'s `total`, as before. The chat
- * half exists (#2358 PR 3b-2b1b-chat, `tandemWorkWaiting`, which asks this
- * probe for each document Tandem's Claude holds); the forward to the
- * supervisor (3b-2b1c) is a later PR.
+ * unwired it answers false. Step 5 asks it only flag on, only when the new
+ * owner is Tandem's Claude, the caller is not, and the cause is not
+ * `take-back`; nothing in production reaches that yet (the default rule needs
+ * presence, which nothing sets), and while `startOrWake` is a stub its answer
+ * starts nothing. Step 5 asks it through `waitingAtDocumentChange`
+ * (3b-2b1b-chat-step5): the probe first, exactly as `(documentId,
+ * next.ownerId)`, and only when it answers false the chat that follows the
+ * document. A throw from the probe is not caught there: it reaches
+ * `setDocOwner`'s `total`, as before. `tandemWorkWaiting` (#2358 PR
+ * 3b-2b1b-chat) also asks it, flag on, for each document Tandem's Claude
+ * holds and, while no other session is connected, for each open document
+ * nobody holds that it could claim (3b-2b1b-claimable); nothing calls that
+ * yet. The forward to the supervisor (3b-2b1c) is a later PR.
  */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
   waitingProbe = probe;
+}
+
+/**
+ * The ids of the open documents (#2358 PR 3b-2b1b-claimable): what
+ * {@link tandemWorkWaiting} reads to find claimable work, an open document
+ * nobody holds. `src/server/index.ts` wires `getOpenDocs().keys()` beside the
+ * waiting probe, before both transport branches (pinned from source in
+ * `tests/server/ownership-source-pins.test.ts`): a seam, because importing
+ * `documents/` or `document-service` here would close an import cycle.
+ * Unwired it answers no document, so nothing claimable counts. Only stored:
+ * read only by a flag-on `tandemWorkWaiting`, which copies it into a set
+ * before it asks anything.
+ */
+export function setOpenDocumentIdsSource(source: () => Iterable<string>): void {
+  openDocumentIds = source;
 }
 
 /**
@@ -1834,6 +1852,9 @@ export type InboxScope = "holds" | "may-claim" | "neither";
  * It cannot see whether the document is open (this module never imports the
  * registry): pass open documents only. A chat message that follows an open
  * document reads its answer here too (the chat owners PR, {@link messageStanding}).
+ * The waiting decision asks it too, for Tandem's Claude while present, over
+ * the open documents its seam names (#2358 PR 3b-2b1b-claimable,
+ * `claimableByTandem`).
  */
 export function inboxScopeOf(
   documentId: string,
@@ -2724,8 +2745,9 @@ const CHAT_HALF_FAILED =
  * whose standing is `owned` by Tandem's Claude (per message, by following a
  * document it holds, or doc-less or on a closed document while it is
  * present): what the poll's `chatScopeOf` answers `"owns"` for. Its
- * `"claim"` arm (chat following an open, unowned document) is not counted
- * (the brief's Flag for Bryan). `select` receives the facts because an
+ * `"claim"` arm (chat following an open, unowned document) is
+ * {@link claimableChatWaiting}'s (#2358 PR 3b-2b1b-claimable), asked only
+ * while no other session is connected. `select` receives the facts because an
  * `owned` standing carries no document id. Unexported: `tandemWorkWaiting`
  * and the step-5 composite (`waitingAtDocumentChange`) call it, and 3b-2b1c
  * reuses it. Synchronous; no Y.Doc, registry, read-stamp or
@@ -2788,27 +2810,113 @@ function waitingAtDocumentChange(documentId: string, ownerId: string): boolean {
   }
 }
 
+const OPEN_DOCUMENTS_FAILED =
+  "[ownership] the open documents could not be read for waiting; no unheld document is counted.";
+
 /**
- * Whether anything is waiting for Tandem's Claude (#2358 PR 3b-2b1b-chat):
- * on a document it holds (the waiting probe, `documentWaiting`), or in chat
- * it owns ({@link tandemChatWaiting}). False while ownership is off, before
- * anything is read. **Computed and not consumed**: nothing calls it until
- * 3b-2b1c wires the supervisor's decision to it. Synchronous; it makes no
- * Y.Doc, registry, read-stamp or ownership write (the probe, `documentWaiting`,
- * can log a legacy migration and add to an in-memory dedup set; the chat side
- * resolves the control room with the creating getter, which exists from boot).
- * No licence term, on purpose: refusal is the supervisor's, at the call.
- * Both halves are always asked, each in its own catch, so a throw in one
- * cannot hide a waiting answer from the other: a failed half reads as false
- * and logs one fixed, rate-limited line with no id and no error text.
+ * "Another session is connected" (#2358 PR 3b-2b1b-claimable; the brief's
+ * ruling): some record that is not built in (`tandem`, or `local`, the
+ * stdio-mode record), has not lapsed, and whose self-reported client name is
+ * not Claude Desktop's, whatever its kind (the kind comes from headers, the
+ * name from `initialize`). A record that has not lapsed is attached or in its
+ * grace (`recompute` arms a grace whenever it is not attached), so a gone
+ * session counts for its grace, and one that never held a stream counts while
+ * its transport is registered, then for its grace (up to about 37 minutes with
+ * the idle reaper). A lapsed record stays lapsed until attached again, even if
+ * it claims while detached: not connected. Tandem's own launched Claude counts
+ * until its transports reach the `tandem` record (3b-2b3; flip-blocker row).
+ * Unlike the supervisor's `otherAiAttached` (#2196), which judges registry
+ * entries by session id and a 60-second recency. Pure.
+ */
+function anotherSessionConnected(): boolean {
+  for (const record of records.values()) {
+    if (isBuiltin(record) || record.lapsed) continue;
+    if (record.clientName === CLAUDE_DESKTOP_CLIENT_NAME) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether Tandem's Claude could claim `documentId` now, an open document
+ * (#2358 PR 3b-2b1b-claimable). Present: exactly the poll's own answer,
+ * `inboxScopeOf(...) === "may-claim"` (nobody holds it, its queue is idle or
+ * past the bound, no blocking loss). Not present, before its first bind
+ * included (Bryan's pick "Yes, even before my first Start"): nobody holds it,
+ * and nothing else (a busy queue or a loss is not read; the brief's Accepted
+ * 5). Pure.
+ */
+function claimableByTandem(documentId: string, now: number): boolean {
+  if (isTandemPresent()) return inboxScopeOf(documentId, TANDEM_OWNER_ID, now) === "may-claim";
+  return readEntry(documentId) === undefined;
+}
+
+/**
+ * Whether some user chat message a fresh reader would be handed follows an
+ * open document nobody holds that `claimable` accepts (#2358 PR
+ * 3b-2b1b-claimable): the poll's `"claim"` arm, which {@link tandemChatWaiting}
+ * does not count. A carried-over key is skipped, as there. Doc-less chat
+ * claimable per message is not counted. May throw: its caller catches.
+ */
+function claimableChatWaiting(claimable: (documentId: string) => boolean): boolean {
+  for (const key of chatSide.owedToFreshReader()) {
+    if (carriedOver.has(key)) continue;
+    const facts = chatSide.message(key);
+    if (facts === undefined) continue;
+    const standing = messageStanding(key, facts);
+    if (standing.kind === "with-document" && claimable(standing.documentId)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether anything is waiting for Tandem's Claude (#2358 PR 3b-2b1b-chat,
+ * widened by 3b-2b1b-claimable). Held work, always: on a document it holds
+ * (the waiting probe, `documentWaiting`), or in chat it owns
+ * ({@link tandemChatWaiting}). Claimable work, only while no other session is
+ * connected ({@link anotherSessionConnected}; Bryan's pick "Yes, unless
+ * another session is open (Recommended)"): an open document nobody holds that
+ * Tandem's Claude could claim ({@link claimableByTandem}) with a user comment
+ * or user thread reply waiting on it (the same probe), or chat that follows
+ * such a document ({@link claimableChatWaiting}). False while ownership is off,
+ * before anything is read. **Computed and not consumed**: nothing calls it
+ * until 3b-2b1c wires the supervisor's decision to it. It claims nothing:
+ * synchronous; it makes no Y.Doc, registry, read-stamp or ownership write (the
+ * probe, `documentWaiting`, can log a legacy migration or a failed read and
+ * add to an in-memory dedup set; the chat side resolves the control room with
+ * the creating getter, which exists from boot). No licence term, on purpose:
+ * refusal is the supervisor's, at the call. The open documents are read first,
+ * in their own catch (unwired, or a throw: none, with one fixed line), so a
+ * throw in either half cannot hide claimable chat; then both halves are always
+ * asked, each in its own catch, so a throw in one cannot hide a waiting answer
+ * from the other (inside the document half, a throw from the held probe also
+ * hides its claimable arm, which shares the catch): a failed half reads as
+ * false and logs one fixed, rate-limited line with no id and no error text.
  */
 export function tandemWorkWaiting(): boolean {
   if (!ownershipEnabled()) return false;
+  let open = new Set<string>();
+  try {
+    open = new Set(openDocumentIds());
+  } catch {
+    logLimited("waiting-open-documents", OPEN_DOCUMENTS_FAILED);
+  }
+  const now = performance.now();
+  const claimable = (documentId: string) =>
+    open.has(documentId) && claimableByTandem(documentId, now);
+  // The held arm and the claimable document arm share this one catch: a
+  // throw from the held probe also hides the claimable document arm (the
+  // same probe answers both), never the chat half's.
   let documents = false;
   try {
-    documents = heldDocumentIds(TANDEM_OWNER_ID).some((documentId) =>
-      waitingProbe(documentId, TANDEM_OWNER_ID),
-    );
+    documents =
+      heldDocumentIds(TANDEM_OWNER_ID).some((documentId) =>
+        waitingProbe(documentId, TANDEM_OWNER_ID),
+      ) ||
+      (!anotherSessionConnected() &&
+        [...open].some(
+          (documentId) => claimable(documentId) && waitingProbe(documentId, TANDEM_OWNER_ID),
+        ));
   } catch {
     logLimited("waiting-document-half", DOCUMENT_HALF_FAILED);
   }
@@ -2816,7 +2924,9 @@ export function tandemWorkWaiting(): boolean {
   // half that throws is logged even beside a waiting document.
   let chat = false;
   try {
-    chat = tandemChatWaiting(() => true);
+    chat =
+      tandemChatWaiting(() => true) ||
+      (!anotherSessionConnected() && claimableChatWaiting(claimable));
   } catch {
     logLimited("waiting-chat-half", CHAT_HALF_FAILED);
   }
@@ -3048,6 +3158,7 @@ export function resetOwnershipForTests(): void {
   transportView = () => [];
   presenceSource = () => false;
   waitingProbe = () => false;
+  openDocumentIds = () => [];
   seqSource = () => 0;
   inboxHandover = () => {};
   chatSide = NO_CHAT_SIDE;
