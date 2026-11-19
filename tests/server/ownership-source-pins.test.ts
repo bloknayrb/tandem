@@ -990,23 +990,29 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
   });
 });
 
-describe("the supervisor's start-or-wake and requestWake are called by nothing yet (#2358 PR 3b-2a, R2.8)", () => {
-  // 3b-2b deletes this describe in the PR that wires them. Token-level, not a
+describe("the supervisor's start-or-wake is wired from ownership, requestWake is called by nothing yet (#2358 PR 3b-2a, R2.8; 3b-2b1c-a)", () => {
+  // 3b-2b deletes this describe once requestWake is wired too. Token-level, not a
   // call regex: a `.startOrWake(` regex misses an optional call (`?.`), a
   // reference passed on without being called, bracket access and a
   // destructuring (including in a parameter), all of which name the token.
   const SUPERVISOR = "src/server/launcher/supervisor.ts";
   const OWNERSHIP = "src/server/sessions/ownership.ts";
 
-  it("no src file but the supervisor names requestWake or the waiting decision", () => {
+  it("no src file but the supervisor names requestWake; only index.ts names the waiting decision", () => {
     expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual([]);
     // Covers `index.ts`'s `createSupervisor` options however they are built
     // (a literal, an object built first, a spread).
-    expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual([]);
+    expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
   });
 
-  it("startOrWake outside the supervisor is only ownership.ts's own function: its definition and two bare calls", () => {
-    expect(filesMentioning("startOrWake", [SUPERVISOR])).toEqual([OWNERSHIP]);
+  it("startOrWake outside the supervisor is index.ts's one sink call and ownership.ts's own function: its definition and two bare calls", () => {
+    expect(filesMentioning("startOrWake", [SUPERVISOR])).toEqual([
+      "src/server/index.ts",
+      OWNERSHIP,
+    ]);
+    expect(
+      stripComments(SRC_FILES.get("src/server/index.ts") as string).match(/\bstartOrWake\b/g),
+    ).toHaveLength(1);
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     const sites = [...text.matchAll(/\bstartOrWake\b/g)].map((m) => {
       const before = text.slice(0, m.index).trimEnd();
@@ -1026,6 +1032,56 @@ describe("the supervisor's start-or-wake and requestWake are called by nothing y
     expect(text).toMatch(/export function startOrWake\(cause: WakeCause\): void \{/);
     expect(text).toMatch(/\bstartOrWake\("message-owner"\);/);
     expect(text).toMatch(/\bstartOrWake\(cause\);/);
+  });
+});
+
+describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  // Re-declared from the chat-side describe above (local there), not lifted.
+  const beforeBothBranches = (line: string) => {
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  };
+
+  it("only index.ts sets the sink, once, as a statement of main() before either branch, reading launcherSupervisor at call time", () => {
+    expect(filesMentioning("setStartOrWakeSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    // The import and the one call.
+    expect(stripComments(index).match(/\bsetStartOrWakeSink\b/g)).toHaveLength(2);
+    beforeBothBranches(
+      "  setStartOrWakeSink((cause) => launcherSupervisor?.startOrWake?.(cause));",
+    );
+  });
+
+  it("index.ts passes the real decision to createSupervisor", () => {
+    const text = stripComments(index);
+    const start = text.indexOf("createSupervisor({");
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = start + "createSupervisor(".length;
+    for (; end < text.length; end++) {
+      if (text[end] === "{") depth++;
+      else if (text[end] === "}") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    expect(text.slice(start, end)).toContain("workWaiting: tandemWorkWaiting,");
+  });
+
+  it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    expect(text).toContain(
+      'let startOrWakeSink: (cause: "document" | "message") => void = () => {};',
+    );
+    expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
   });
 });
 
@@ -1086,10 +1142,10 @@ describe("waiting on a document (#2358 PR 3b-2b1b)", () => {
 describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () => {
   const OWNERSHIP = "src/server/sessions/ownership.ts";
 
-  it("tandemWorkWaiting is named by no src file but ownership.ts (3b-2b1c changes this pin)", () => {
-    expect(filesMentioning("tandemWorkWaiting", [OWNERSHIP])).toEqual([]);
+  it("tandemWorkWaiting is named by index.ts (the supervisor's workWaiting, 3b-2b1c-a) and ownership.ts only", () => {
+    expect(filesMentioning("tandemWorkWaiting", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
     // The positive anchor: the scan sees the definition.
-    expect(filesMentioning("tandemWorkWaiting")).toEqual([OWNERSHIP]);
+    expect(filesMentioning("tandemWorkWaiting")).toEqual(["src/server/index.ts", OWNERSHIP]);
   });
 
   it("the pure chat rule is reached from awareness.ts only", () => {
@@ -1105,9 +1161,9 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     ]);
   });
 
-  it("computed, not consumed, inside ownership.ts too: tandemWorkWaiting is only defined, tandemChatWaiting defined and called twice (by tandemWorkWaiting and the step-5 composite) (review round 1, R1.3; 3b-2b1b-chat-step5)", () => {
+  it("inside ownership.ts: tandemWorkWaiting is only defined (index.ts consumes it), tandemChatWaiting defined and called twice (by tandemWorkWaiting and the step-5 composite) (review round 1, R1.3; 3b-2b1b-chat-step5; 3b-2b1c-a)", () => {
     // The per-file pin above cannot see a caller inside ownership.ts, where
-    // step 5 and startOrWake live. 3b-2b1c changes these counts.
+    // step 5 and startOrWake live. 3b-2b1c-b adds the message forward's call.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
@@ -1138,6 +1194,10 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     expect(start).toBeGreaterThanOrEqual(0);
     const body = text.slice(start, text.indexOf("\n}\n", start));
     expect(body).toContain("if (waitingProbe(documentId, ownerId)) return true;");
+    // The chat half goes through `tandemChatWaiting` (carried from #2485's
+    // review: the file-wide count above cannot tell a composite that walks
+    // the chat side itself).
+    expect(body).toContain("tandemChatWaiting(");
     expect(body).toContain("if (ownerId !== TANDEM_OWNER_ID) return false;");
     expect(body).toContain("facts.documentId === documentId");
     expect(body).toContain("standing.perMessage === false");
@@ -1194,6 +1254,8 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // The positive anchor: the scan finds the module's real imports.
     expect(specifiers).toContain("../ownership-flag.js");
     expect(specifiers.filter((spec) => /awareness/.test(spec))).toEqual([]);
+    // 3b-2b1c-a: the supervisor is reached only through the sink.
+    expect(specifiers.filter((spec) => /launcher\//.test(spec))).toEqual([]);
     // 3b-2b1b-claimable: the open documents come through a seam, never the
     // registry or the document service (either import would close a cycle).
     expect(

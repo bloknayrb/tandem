@@ -594,9 +594,9 @@ const DOCUMENT_WAITING_FAILED =
  * never in a loop, and a limiter's clock would be state outside this
  * function (Ruling J: nothing existing changes, `resetInbox` included).
  * *Corrected by #2358 PR 3b-2b1b-chat:* `tandemWorkWaiting` (ownership) now
- * asks it once per document Tandem's Claude holds, so once 3b-2b1c consumes
- * that decision a document whose read keeps failing logs this line at every
- * ask, unlimited; the flip-blocker row on the decision's cost names it.
+ * asks it once per document Tandem's Claude holds, and since 3b-2b1c-a the
+ * supervisor's start-or-wake pass consumes that decision, so a document whose
+ * read keeps failing logs this line at every pass, unlimited; the flip-blocker row on the decision's cost names it.
  */
 export function documentWaiting(documentId: string): boolean {
   try {
