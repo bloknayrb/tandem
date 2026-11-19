@@ -519,8 +519,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "happens at every start-or-wake pass, and a " +
       "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each. " +
       "And (3b-2b1c-b) the message forward's admit runs one tandemChatWaiting scan (every owed " +
-      "key's message read and standing) per changed key at the release loop and at " +
-      "dropChatOwners, none at setMessageOwner.",
+      "key's message read and standing, one structuredClone per user chat row) per changed key " +
+      "that passes its caller check and departure gate, at the release loop and at " +
+      "dropChatOwners, none at setMessageOwner; a deleted record releasing N keys, handled ones " +
+      "included, runs up to N such scans.",
     closedBy: "3b-2b4's measurement.",
   },
   {
@@ -597,7 +599,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "idle stop. And while the child sits on a claude:<id> record, a document or chat that " +
       "becomes Tandem's Claude's is refused to that child (reason 'default'), so a wake or start " +
       "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
-      "starts it again.",
+      "starts it again. The same holds for chat (3b-2b1c-b): if the child's record held a " +
+      "document when it was closed, it owns that document's chat per message, and its lapse " +
+      "releases the message and starts Tandem's Claude for it.",
     closedBy:
       "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
       "transport does not count, and one 'another session' rule named for the decision and the " +

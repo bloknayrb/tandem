@@ -2265,6 +2265,9 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           const owner = ownerByMessage.get(key);
           if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
           ownerByMessage.delete(key);
+          // Runs before the poll's chat revert (awareness.ts), so the admit
+          // reads the poll's stamps; inert while its caller is a terminal and
+          // presence cannot flip between the take and this undo (R6).
           messageOwnerChanged({ key, caller: callerId });
         }
       });

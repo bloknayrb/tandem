@@ -1104,10 +1104,24 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     expect(body).toContain("change.caller !== TANDEM_OWNER_ID");
     expect(body).toContain("(change.caller !== undefined || !anotherSessionConnected())");
     expect(body).toContain("tandemChatWaiting((k) => k === change.key)");
-    // The gate runs before the scan.
+    // In the brief's order: the caller, the gate, then the scan.
+    expect(body.indexOf("change.caller !== TANDEM_OWNER_ID")).toBeLessThan(
+      body.indexOf("anotherSessionConnected()"),
+    );
     expect(body.indexOf("anotherSessionConnected()")).toBeLessThan(
       body.indexOf("tandemChatWaiting("),
     );
+  });
+
+  it("both sink calls run outside any MCP request context", () => {
+    const body = fnBody("startOrWake");
+    const calls = [...body.matchAll(/startOrWakeSink\(/g)].map((m) => m.index as number);
+    expect(calls).toHaveLength(2);
+    for (const at of calls) {
+      expect(body.slice(at - "runOutsideMcpContext(() => ".length, at)).toBe(
+        "runOutsideMcpContext(() => ",
+      );
+    }
   });
 
   it("R6's three sites: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing", () => {

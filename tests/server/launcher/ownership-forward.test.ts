@@ -1369,6 +1369,30 @@ describe("the message forward (PR b)", () => {
     expect(logText()).toContain("Start-or-wake queued (message)");
   });
 
+  it("M1, read first (the release loop's order: re-owe, then forward): the holder had read the message before it went away: a wake", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { m } = await worldB();
+    const row = chatMap().get(m) as Record<string, unknown>;
+    withInternal(ctrl(), () => chatMap().set(m, { ...row, read: true }));
+    expect(ownershipChatSide.owedToFreshReader()).not.toContain(m);
+    lapse(A);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("R1.5 for the message branch: an admitted forward made inside a request context reaches the sink with no caller identity readable", () => {
+    const seen: unknown[] = [];
+    setStartOrWakeSink((cause) => seen.push([cause, getMcpContext() ?? resolveToolCaller()]));
+    runWithMcpContext({ ownerId: A }, () => {
+      expect(resolveToolCaller()).toEqual({ ownerId: A });
+      startOrWake("message-owner", () => true);
+    });
+    expect(seen).toEqual([["message", null]]);
+  });
+
   it("M1, transport removed (M2's anchor): the record is deleted, its message released: a wake", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
