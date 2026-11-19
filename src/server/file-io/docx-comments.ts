@@ -1127,10 +1127,14 @@ export function injectCommentsAsAnnotations(
             // from `clash`. `effectiveKey` names a promoted, Claude-facing
             // record. Since #2460 `channelVisibleReplies` also withholds any
             // non-user, non-Claude author, so Claude's pull reads would hide
-            // this reply either way — but the stamp is what every other reader
-            // of the replies map keys on (the client's display filter, the
-            // push gate's refusal reason, the `.docx` comment export), and a
-            // read filter is not a write guard (#1680). Do not drop it.
+            // this reply either way. The stamp is still read: the client's
+            // thread-answer detector (`isThreadAnswer`,
+            // `client/notifications/thread-answer-detector.ts`) refuses a
+            // `private: true` reply, and the record must not depend on its
+            // author alone for that. (The client's `getVisibleReplies` ignores
+            // `private`; the push gate answers `reply-author` before it reads
+            // it; the `.docx` comment export ignores it on an import reply.)
+            // A read filter is not a write guard (#1680). Do not drop it.
             writeImportReply(repliesMap, replyId, {
               ...clash,
               annotationId: effectiveKey,
