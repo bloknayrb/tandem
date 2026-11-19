@@ -1654,7 +1654,7 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(w.wakes).toEqual([]);
   });
 
-  it("S2: A owns the message per message (D closed while A held it); the user reopens D: the probe is asked once, no wake", async () => {
+  it("S2, a guard (S2b is the positive arm): A owns the message per message (D closed while A held it); the user reopens D: the probe is asked once, no wake", async () => {
     const w = await stepWorld();
     await aTakesD(w);
     const m = userChat(key("m"), w.id);
@@ -1734,6 +1734,29 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(ownershipLines(error)).toEqual([[STEP5_CHAT_FAILED]]);
     expect(STEP5_CHAT_FAILED).not.toContain(w.id);
     expect(STEP5_CHAT_FAILED).not.toContain(m);
+    // The rate limit (carried from #2485's review): a second throwing change
+    // inside the minute asks the chat side again and writes no second line.
+    setDocOwner(w.id, null, "stale");
+    setDocOwner(w.id, { ownerId: TANDEM, kind: "default" }, "user-open");
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    expect(owedToFreshReader).toHaveBeenCalledTimes(2);
+    expect(w.wakes).toEqual([]);
+    expect(ownershipLines(error)).toEqual([[STEP5_CHAT_FAILED]]);
+  });
+
+  it("S5b, carried-over chat (carried from #2485's review): S1 with the message carried over (constructed): no wake", async () => {
+    // A composite that walked the chat side itself, rather than through
+    // `tandemChatWaiting`, would count the carried-over key and wake.
+    const w = await stepWorld();
+    await aTakesD(w);
+    const m = userChat(key("m"), w.id);
+    // Constructed: production carries over read rows only.
+    captureCarriedOverChat(() => [m]);
+    expect(ownershipChatSide.owedToFreshReader()).toContain(m);
+    lapseByGrace(A);
+    expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
+    probeAskedOnceFalse(w);
+    expect(w.wakes).toEqual([]);
   });
 
   it("S5's twin: a probe answering true wakes, and the chat side is not asked", async () => {

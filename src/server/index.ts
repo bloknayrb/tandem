@@ -99,7 +99,9 @@ import {
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  setStartOrWakeSink,
   setWaitingProbe,
+  tandemWorkWaiting,
   undoClientChatWrites,
 } from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
@@ -220,6 +222,9 @@ async function startLauncherSupervisor(): Promise<void> {
       // local model answers it. Never held while dark (guard 1 reads Claude
       // until primed, and priming happens only under the flag).
       localPeriod: { held: inLocalPeriod, subscribe: subscribeLocalPeriod },
+      // The waiting decision (#2358 PR 3b-2b1c-a): a start-or-wake pass asks
+      // it before it wakes or starts anything. Read only flag on.
+      workWaiting: tandemWorkWaiting,
       // The address the MCP listener actually bound (#2358 PR 3a, Ruling D14),
       // never the configured host: the run MCP config names it.
       getBoundMcpAddress: () => {
@@ -860,10 +865,17 @@ async function main() {
   // ownership's step 5 asks when a document goes to Tandem's Claude. Beside
   // the handover for the same reason; only a flag-on `setDocOwner` asks it.
   setWaitingProbe(documentWaiting);
+  // The forward from step 5 to the supervisor's start-or-wake (#2358 PR
+  // 3b-2b1c-a). Reads `launcherSupervisor` at call time: null (stdio, a
+  // disabled or deferred launcher, a failed creation, the boot before the
+  // supervisor exists) does nothing. Beside the probe for the same reason;
+  // only a flag-on `startOrWake` calls it.
+  setStartOrWakeSink((cause) => launcherSupervisor?.startOrWake?.(cause));
   // The open documents, for the waiting decision's claimable work (#2358 PR
   // 3b-2b1b-claimable): an open document nobody holds counts for Tandem's
   // Claude while no other session is connected. Beside the probe for the same
-  // reason; only stored, and read only by a flag-on decision nothing calls yet.
+  // reason; only stored, and read only by a flag-on decision (the
+  // supervisor's start-or-wake pass, 3b-2b1c-a).
   setOpenDocumentIdsSource(() => getOpenDocs().keys());
   // The chat side of ownership (the chat owners PR, R2.2): which messages are
   // handled, which are on a document, a row's facts, and the re-owe. And the

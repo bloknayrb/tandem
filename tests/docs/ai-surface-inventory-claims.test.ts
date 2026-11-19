@@ -418,7 +418,9 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     // The R2.8 source pin excludes supervisor.ts. Within it, the only
     // references to the two entry points (and to a spawn's `requestWake`
     // member) are their declarations, the pass's own wake of a live child,
-    // and the public seam. 3b-2b changes this list when it wires them.
+    // and the public seam. Since 3b-2b1c-a, `startOrWake` is called from
+    // outside the supervisor (ownership's forward, through the sink
+    // `index.ts` sets), never inside it, so this list is unchanged.
     const sites = sitesIn(SUPERVISOR, (node) => {
       if (ts.isIdentifier(node) && (node.text === "startOrWake" || node.text === "requestWake")) {
         const p = node.parent;
