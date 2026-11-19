@@ -609,6 +609,7 @@ HIGHLIGHT — always stamped `private` per ADR-027 — no longer appears on any
 Claude-facing read, which is why `tandem_getAnnotations`'s own description now
 says `type: "highlight"` returns nothing.
 
+
 **The write half took the widening one step further, and the asymmetry it closed
 is worth recording.** `isPrivateForClaude` (edit, reply) deliberately exempts
 highlights so they answer their own arm — `not-repliable`,
@@ -628,6 +629,8 @@ a note and the AI's next resolve on that id starts erroring where it silently
 succeeded. That is the correct break — ADR-027's revised import model makes
 imported content user-gated for promotion, so resolving one via MCP was never
 intended — but it is a behaviour change, not a no-op.
+
+**The pull reply gate failed open on a non-boolean private flag: FIXED in #2460, not counted among the open findings.** The push gate (`narrowReplyForChannel`) admitted a reply only when its `private` was literally `false` or absent, but the pull gate `channelVisibleReplies` and two code restatements of it — the export filter in `file-io/docx.ts` and `replyWaits` in `mcp/inbox-selection.ts` (reached only through ownership, which ships dark) — tested `private !== true`, and a comment in `file-io/docx-comments.ts` described the gate the same way. So a stored `"true"`, `1` or `null` was handed to Claude by `tandem_exportAnnotations` and `tandem_checkInbox`, and made `tandem_getAnnotations` fail its own output validation (its reply schema declares no `private` key) rather than return the document's annotations. The pull side also had no author rule, so an imported Word reply stored without its `private` stamp, or a reply with an unknown author, was returned too. Both gates now share one predicate, `replyPrivacyAllows` in `annotations/projection.ts` (`private === false || private === undefined`), and `channelVisibleReplies` keeps only `author` `"user"` or `"claude"`, as an allow-list; push keeps its own stricter user-only rule. No first-party writer produces any of these values — each stamps `true` or leaves the key absent — so this was defence in depth. It is also why the read gate must fail closed rather than trust the writer: the durable envelope types `private` as a boolean (`annotations/schema.ts`), but a session-file restore and any Hocuspocus client write the replies Y.Map without validation, and gating those writers is not built.
 
 ### Accepted (bounded) — decided, not fixed
 
