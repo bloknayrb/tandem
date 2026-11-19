@@ -43,7 +43,8 @@ interface Props {
   /** Fires after Save (success) or Skip. Caller should advance its state. */
   onComplete: () => void;
   /** Raises a notice (App: `notifications.push`). Called at most once, after
-   *  `onComplete`, when the window's set-default failed (R0.1). */
+   *  `onComplete`, when the window's set-default failed (ADR-039's title-chip
+   *  amendment of 2026-11-18). */
   onNotify: (n: TandemNotification) => void;
 }
 
@@ -240,7 +241,8 @@ async function handleSave(e: SubmitEvent) {
     // already completed it) and drops the store's rollback message, which
     // would otherwise surface later in Settings → Models. Then, read after
     // the write resolved, if the model is still saved and still not the
-    // Default, one notice says so (R0.1, replacing RW-5's silence): he
+    // Default, one notice says so (ADR-039's title-chip amendment of
+    // 2026-11-18, replacing RW-5's silence): he
     // pressed Save, so a close while it was pending still gets it. A model
     // removed, or made the Default, meanwhile gets none.
     if (models.defaultModelId !== id) {

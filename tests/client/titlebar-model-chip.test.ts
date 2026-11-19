@@ -18,6 +18,7 @@ vi.mock(import("@client/cowork/cowork-helpers"), () => ({
 }));
 
 const { default: TitleBar } = await import("../../src/client/shell/TitleBar.svelte");
+const { resolveDefaultModelChip } = await import("../../src/client/utils/model-chip");
 
 afterEach(() => cleanup());
 
@@ -33,6 +34,25 @@ describe("TitleBar model chip (#1123 L2)", () => {
     expect(chip.getAttribute("title")).toBe("Chat is set to your local model: Qwen");
     await fireEvent.click(chip);
     expect(onOpenModelsSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('a blank-named local Default renders the "Local model" fallback (CT-2)', () => {
+    const label = resolveDefaultModelChip({
+      defaultModelId: "l1",
+      models: [{ id: "l1", displayName: "  ", provider: "local-ollama", enabled: true }],
+      loaded: true,
+      chatSetting: "local",
+      aiOff: false,
+    });
+    const v = render(TitleBar, {
+      props: { defaultModelLabel: label, onOpenModelsSettings: vi.fn() },
+    });
+    const chip = v.getByTestId("titlebar-default-model");
+    expect(chip.textContent?.trim()).toBe("Local model");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Chat is set to your local model: Local model. Open Settings → Models.",
+    );
+    expect(chip.getAttribute("title")).toBe("Chat is set to your local model: Local model");
   });
 
   it("no chip with a null label", () => {

@@ -357,6 +357,17 @@ describe("toasts — an action with `stay` keeps its toast until pressed or clos
     expect(toastIds(api)).toEqual([]);
   });
 
+  it("a staying toast coalescing with a staying action of another severity stays", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "f1", dedupKey: "k", severity: "info" }), STAY);
+    vi.advanceTimersByTime(3_000);
+    api.push(note({ id: "f2", dedupKey: "k", severity: "warning" }), STAY);
+    // Past the longest pop duration, so no re-armed timer of either severity hides.
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.error + 1_000);
+    await tick();
+    expect(toastIds(api)).toEqual(["f2"]);
+  });
+
   it("an ordinary toast re-pushed with a staying action becomes staying", async () => {
     const api = await mountStore();
     api.push(note({ id: "d1", dedupKey: "k", severity: "info" }));
@@ -470,6 +481,22 @@ describe("toasts — existing toasts that carry an action are unchanged by `stay
     expect(toastIds(api)).toEqual(["cta"]);
     vi.advanceTimersByTime(1);
     await tick();
+    expect(toastIds(api)).toEqual([]);
+  });
+
+  // The info cleanup runs before the 4 s pop timer here (a timestamp a full
+  // TTL old leaves it no time), so only the cleanup's own `stay` test decides.
+  it("the info TTL removes an info toast whose action does not stay", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "old", severity: "info", timestamp: Date.now() - ACTIVITY_INFO_TTL_MS }), {
+      label: "Undo",
+      onClick: () => {},
+    });
+    await tick();
+    expect(toastIds(api)).toEqual(["old"]);
+    vi.advanceTimersByTime(1);
+    await tick();
+    expect(api.activity.map((a) => a.id)).not.toContain("old");
     expect(toastIds(api)).toEqual([]);
   });
 

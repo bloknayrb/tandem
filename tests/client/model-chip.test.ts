@@ -70,6 +70,15 @@ describe("resolveDefaultModelChip — the Default", () => {
     ).toBeNull();
   });
 
+  for (const provider of ["openai", "gemini"] as const) {
+    it(`row 7: a cloud Default (${provider}) beside an enabled local model: hidden (DD1; "not anthropic" is not local)`, () => {
+      const cloud: ChipModelEntry = { ...CLOUD, id: provider, provider };
+      expect(
+        resolveDefaultModelChip({ ...SHOWN, models: [cloud, LOCAL], defaultModelId: cloud.id }),
+      ).toBeNull();
+    });
+  }
+
   it("row 8: a switched-off Default beside an enabled local model: hidden (DD1)", () => {
     expect(
       resolveDefaultModelChip({ ...SHOWN, models: [LOCAL, OFF], defaultModelId: OFF.id }),
