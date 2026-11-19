@@ -66,7 +66,7 @@ function ctx(overrides: Partial<InboxPollContext> = {}): InboxPollContext {
     modeState: "tandem",
     documentId: DOC_KEY,
     wasChannelEmitted: () => false,
-    admit: () => true,
+    admit: (_bucket, item) => item,
     ...overrides,
   };
 }
@@ -1135,12 +1135,14 @@ describe("InboxPollContext (#1702)", () => {
     // ANY kind turns `typecheck:tests` red and has to be added here on purpose.
     // `admit` (PR #2225 review) is added here deliberately: required, so a
     // caller cannot leave the last gate out and stamp an item the SDK will
-    // reject.
+    // reject. It moved from `=> boolean` to returning what is sent (#2465):
+    // the caller pushes the returned, schema-stripped item, so an undeclared
+    // key cannot reach a client that rejects the whole response over it.
     expectTypeOf<InboxPollContext>().toEqualTypeOf<{
       modeState: ModeState;
       documentId: string;
       wasChannelEmitted: (payloadId: string) => boolean;
-      admit: (bucket: InboxBucket, item: InboxItem) => boolean;
+      admit: <T extends InboxItem>(bucket: InboxBucket, item: T) => T | null;
     }>();
   });
 
