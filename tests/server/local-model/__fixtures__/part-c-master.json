@@ -205,7 +205,7 @@
     "toasts": [
       {
         "severity": "warning",
-        "message": "The local model could not reach the server or complete the request."
+        "message": "Tandem's request to your local model's server did not complete. Check that the server is running, then edit the model in Settings → Models to check its Endpoint."
       }
     ]
   },

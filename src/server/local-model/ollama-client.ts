@@ -17,7 +17,9 @@
  *  - a mandatory bounded reader caps the response (content-length is untrusted);
  *  - the caller's AbortSignal is honored alongside the per-request timeout;
  *  - error bodies are kept on stderr, never folded into the thrown message that
- *    may later reach the UI (the message carries only the status class).
+ *    may later reach the UI (the message carries only the status class);
+ *  - why a request failed travels as a tag on the thrown error
+ *    ({@link requestFailure}), never as text in its message.
  *
  * No SDK. The request goes through `loopbackFetch` (`src/shared/loopback-fetch.ts`,
  * #2422): `baseUrl` leaves the host `127.0.0.1` or `[::1]`, so it is made with
@@ -82,6 +84,62 @@ export interface ChatOpts {
    * non-streaming `stream:false` path runs verbatim (byte-identical wire body).
    */
   onContentDelta?: (delta: string) => void;
+}
+
+/**
+ * Why a request to the local model's server failed, as far as Tandem can tell
+ * from WHERE the error arose (#1123, ADR-039 P6), never from its words:
+ *  - `unreachable`: the request or the body read did not complete (refused,
+ *    reset, dropped mid-stream, or a 3xx refused by `redirect: "error"`);
+ *  - `http`: the server answered with a non-2xx status;
+ *  - `unreadable`: a 200 whose body was not JSON, or a stream with no valid frame;
+ *  - `too-large`: the response passed the byte cap.
+ * An error with no tag (a throw from Tandem's own code outside the fetch call
+ * and the body reads, a caller's callback, an abort) is none of these, and the
+ * collaborator says so generically. Anything the fetch call itself rejects with,
+ * other than an abort, is `unreachable`.
+ */
+export type LocalModelFailure =
+  | { kind: "unreachable" }
+  | { kind: "http"; status: number }
+  | { kind: "unreadable" }
+  | { kind: "too-large" };
+
+/**
+ * The tags. Keyed by the thrown value itself, so a tagged error is thrown
+ * unchanged: no wrapper, no new message, the same `TypeError` and `cause` a
+ * caller or the measurement harness already matches on.
+ */
+const failures = new WeakMap<object, LocalModelFailure>();
+
+/** Only an object or a function can key a `WeakMap`; `set` on anything else
+ *  would throw a `TypeError` of its own inside the catch and replace `err`. */
+function isTaggable(err: unknown): err is object {
+  return (typeof err === "object" && err !== null) || typeof err === "function";
+}
+
+/** Tag `err` with `failure` and return the same value, for `throw tag(...)`. */
+function tag<E>(err: E, failure: LocalModelFailure): E {
+  if (isTaggable(err)) failures.set(err, failure);
+  return err;
+}
+
+/** An abort (the caller's signal or the per-request timeout) is never a
+ *  server failure: the loop tells those apart by `name` and its own signal. */
+function tagUnlessAbort<E>(err: E, failure: LocalModelFailure): E {
+  if (isTaggable(err) && (err as { name?: unknown }).name === "AbortError") return err;
+  return tag(err, failure);
+}
+
+/** The failure a thrown value was tagged with by this client, if any. */
+export function requestFailure(err: unknown): LocalModelFailure | undefined {
+  return isTaggable(err) ? failures.get(err) : undefined;
+}
+
+/** The rejection handler for a body `reader.read()`: a dropped connection is
+ *  tagged `unreachable`. Attached to the read only, never to what consumes it. */
+function readFailed(err: unknown): never {
+  throw tagUnlessAbort(err, { kind: "unreachable" });
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -150,13 +208,15 @@ async function readBoundedText(res: Response, capBytes: number): Promise<string>
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await reader.read().catch(readFailed);
       if (done) break;
       if (value) {
         total += value.byteLength;
         if (total > capBytes) {
           await reader.cancel().catch(() => {});
-          throw new Error(`local model response exceeded ${capBytes}-byte cap`);
+          throw tag(new Error(`local model response exceeded ${capBytes}-byte cap`), {
+            kind: "too-large",
+          });
         }
         chunks.push(value);
       }
@@ -182,30 +242,42 @@ async function postLoopback<T>(
   opts: { timeoutMs: number; signal?: AbortSignal },
   consume: (res: Response) => Promise<T>,
 ): Promise<T> {
+  // Serialized before anything else, so a throw here is Tandem's own and is
+  // never tagged as the server's (and leaves no timer behind).
+  const body = JSON.stringify(payload);
   const timeoutCtrl = new AbortController();
   const timer = setTimeout(() => timeoutCtrl.abort(), opts.timeoutMs);
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, timeoutCtrl.signal])
     : timeoutCtrl.signal;
   try {
-    // `loopbackFetch` (above), never the global `fetch`: under Node's environment
-    // proxy that would send this loopback request, prompt and all, through the
-    // proxy (#2422).
-    const res = await clientFetch(url, {
+    const init: RequestInit = {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body,
       // A redirect to a non-loopback host would defeat the allowlist — never follow.
       redirect: "error",
       signal,
-    });
+    };
+    let res: Response;
+    try {
+      // `loopbackFetch` (above), never the global `fetch`: under Node's environment
+      // proxy that would send this loopback request, prompt and all, through the
+      // proxy (#2422).
+      res = await clientFetch(url, init);
+    } catch (err) {
+      throw tagUnlessAbort(err, { kind: "unreachable" });
+    }
     if (!res.ok) {
       // Keep the raw body on stderr only; the thrown message carries only the
       // status class so it's safe if it later reaches the UI.
       const errBody = await readBoundedText(res, 4096).catch(() => "");
       if (errBody)
         console.error(`[local-model] endpoint ${res.status} body: ${errBody.slice(0, 300)}`);
-      throw new Error(`local model endpoint returned HTTP ${res.status}`);
+      throw tag(new Error(`local model endpoint returned HTTP ${res.status}`), {
+        kind: "http",
+        status: res.status,
+      });
     }
     return await consume(res);
   } finally {
@@ -229,7 +301,7 @@ async function postJson(
       // error — surface it as its own message so the loop doesn't bucket it as a
       // generic "error". Body-free on purpose: the raw text is a third-party
       // payload and a V8 parse error can embed a source snippet.
-      throw new Error("local model returned a non-JSON response");
+      throw tag(new Error("local model returned a non-JSON response"), { kind: "unreadable" });
     }
   });
 }
@@ -464,13 +536,15 @@ async function readStream(
   let done = false;
   try {
     while (!done) {
-      const { done: streamDone, value } = await reader.read();
+      const { done: streamDone, value } = await reader.read().catch(readFailed);
       if (streamDone) break;
       if (!value) continue;
       rawBytes += value.byteLength;
       if (rawBytes > capBytes) {
         await reader.cancel().catch(() => {});
-        throw new Error(`local model response exceeded ${capBytes}-byte cap`);
+        throw tag(new Error(`local model response exceeded ${capBytes}-byte cap`), {
+          kind: "too-large",
+        });
       }
       lineBuffer += decoder.decode(value, { stream: true });
       let nl = lineBuffer.indexOf("\n");
@@ -538,7 +612,9 @@ async function chatStreaming(
 
   // A 200 that produced zero recognizable frames (e.g. a reverse-proxy HTML
   // page despite stream:true) is a non-JSON response — body-free, like postJson.
-  if (acc.validFrames === 0) throw new Error("local model returned a non-JSON response");
+  if (acc.validFrames === 0) {
+    throw tag(new Error("local model returned a non-JSON response"), { kind: "unreadable" });
+  }
 
   const toolCalls: RawToolCall[] =
     transport === "v1"
