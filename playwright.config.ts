@@ -183,7 +183,9 @@ export default defineConfig({
         // The server logs one stderr line at boot for it, and a write admitted
         // through it is not an own-window write: it raises the warning notices
         // the specs expect. `tests/perf/playwright.config.ts` is not given it
-        // (it runs no Models spec).
+        // (it runs no Models spec). The built (CI) backend honours it only
+        // because scripts/e2e-server.mjs adds `--tandem-e2e-harness` to its
+        // argv: a release build ignores the variable otherwise (#2410, V15).
         [MODELS_DEV_ORIGIN_ENV]: `http://127.0.0.1:${E2E_VITE_PORT}`,
       },
     },

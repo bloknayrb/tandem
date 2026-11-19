@@ -16,7 +16,9 @@
  *  - `unknown`: another `127.0.0.1` port (the Vite dev client, a test harness)
  *    or a desktop window whose origin string is not one of the expected forms.
  *    The server decides: it accepts such a page only when started with
- *    `TANDEM_MODELS_DEV_ORIGIN` naming it, which this page cannot see. Its
+ *    `TANDEM_MODELS_DEV_ORIGIN` naming it, which this page cannot see, and
+ *    only when that server is run from source or under the E2E harness (a
+ *    release build ignores the variable, #2410). Its
  *    refusal IS readable there, and the first one switches the tab to the same
  *    unavailable state.
  *
@@ -83,7 +85,7 @@ export function ownWindowNotice(
     pageOrigin !== ownAddress &&
     isLoopbackDevOrigin(pageOrigin)
   ) {
-    return `${BASE_NOTICE} This page is served from ${pageOrigin}. In a development setup, start Tandem's server with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}, then reload this page.`;
+    return `${BASE_NOTICE} This page is served from ${pageOrigin}. In a development setup, start Tandem's server from source with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}, then reload this page.`;
   }
   return BASE_NOTICE;
 }
