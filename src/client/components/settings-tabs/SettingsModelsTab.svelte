@@ -142,11 +142,13 @@ async function onEditingChange(event: Event) {
 
 // --- Who answers your chat (#1123 part B, R2; Decision B1) --------------------
 //
-// The one place the switch is changed. The store (`useChatAnswerer`) holds
-// the editor's read; this section reads it and sends the switch ONLY on the
-// user's own selection — a click, or Space/Enter, which a <button> turns into
-// a click (so `onclick` alone: a keydown handler too would send twice). Arrow
-// keys, Home and End move focus only. Nothing sends on mount, on a read, on a
+// The one place the switch is changed, with one other: the first-local-model
+// confirmation's "Use it for chat" button (Bryan's P5). The store
+// (`useChatAnswerer`) holds the editor's read; this section reads it and
+// sends the switch ONLY on the user's own selection — a click, or
+// Space/Enter, which a <button> turns into a click (so `onclick` alone: a
+// keydown handler too would send twice). Arrow keys, Home and End move focus
+// only. Nothing sends on mount, on a read, on a
 // models save or on Retry: re-sending "local" upgrades the server's record
 // from "told" to "chosen" (#2417), so this is a correctness rule, not a nicety.
 //
