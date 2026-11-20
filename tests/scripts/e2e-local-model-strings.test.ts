@@ -48,7 +48,9 @@ describe("tests/e2e/local-model-strings.ts matches its sources", () => {
       "const line = `Your Default model${name} ${why}, so your local models won't answer chat.`;",
     );
     expect(src).toContain('const why = def.enabled ? "is a cloud model" : "is switched off";');
-    expect(src).toContain('const name = def.displayName.trim() === "" ? "" : `, ${def.displayName},`;');
+    expect(src).toContain(
+      'const name = def.displayName.trim() === "" ? "" : `, ${def.displayName},`;',
+    );
     expect(copies.defaultIsCloudLine("X")).toBe(
       "Your Default model, X, is a cloud model, so your local models won't answer chat.",
     );

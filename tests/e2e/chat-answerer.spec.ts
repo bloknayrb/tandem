@@ -92,8 +92,7 @@ test("the control reads Claude by default and switches only on the user's select
   await claude.focus();
   await page.keyboard.press("Enter");
   await expect(claude).toHaveAttribute("aria-checked", "true");
-  await expect.poll(() => posts).toEqual([
-    JSON.stringify({ answerer: "local" }),
-    JSON.stringify({ answerer: "claude" }),
-  ]);
+  await expect
+    .poll(() => posts)
+    .toEqual([JSON.stringify({ answerer: "local" }), JSON.stringify({ answerer: "claude" })]);
 });

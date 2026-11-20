@@ -679,11 +679,7 @@ export async function resetLocalModelState(tag: string): Promise<void> {
       `[${tag}] GET ${API_MODELS_LOCAL_SETTINGS}`,
     )
   ).editing;
-  if (
-    !isDeepStrictEqual(models, EMPTY_MODELS_FILE) ||
-    answerer !== "claude" ||
-    editing !== false
-  ) {
+  if (!isDeepStrictEqual(models, EMPTY_MODELS_FILE) || answerer !== "claude" || editing !== false) {
     throw new Error(
       `[${tag}] the local-model reset did not hold: models=${JSON.stringify(models)} ` +
         `answerer=${answerer} editing=${String(editing)}`,
