@@ -1,5 +1,6 @@
 [
   "agent-identity.spec.ts",
   "chat-answerer.spec.ts",
+  "local-model-chat.spec.ts",
   "settings-models.spec.ts"
 ]

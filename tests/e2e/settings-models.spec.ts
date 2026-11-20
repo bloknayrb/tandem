@@ -25,6 +25,7 @@ import {
   MODEL_UNAVAILABLE_TEXT,
   nameFallback,
   providerHeading,
+  SAVING_LABEL,
   USE_IT_FOR_CHAT_LABEL,
 } from "./local-model-strings";
 
@@ -564,4 +565,129 @@ test("v99 forward-compat boot — unknown field is preserved", async ({ page }) 
   }, TANDEM_SETTINGS_KEY);
   expect(settings?.futureField).toBe("preserved-value");
   expect(settings?.schemaVersion).toBe(99);
+});
+
+// #1123 PR 8b: the keyboard, only what #2491 built (Rulings R-b, R-c, R-d of
+// ADR-039's amendment on focus into and out of the add-model window).
+test.describe("the add-model window and the row controls by keyboard", () => {
+  test("Add puts focus on Provider; Escape closes at once and returns focus to Add", async ({
+    page,
+  }) => {
+    await gotoModelsTab(page);
+    const add = page.locator(ADD_BTN);
+    await add.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(MODAL)).toBeVisible();
+    await expect(page.locator("[data-testid='model-edit-provider']")).toBeFocused();
+    await page.keyboard.press("Escape");
+    // "At once": a short timeout, so a close that waits on anything fails.
+    await expect(page.locator(MODAL)).toHaveCount(0, { timeout: 500 });
+    await expect(page.locator(SETTINGS_MODAL)).toBeVisible();
+    await expect(add).toBeFocused();
+  });
+
+  test("Edit, change the name, Enter on Save: focus returns to that row's Edit", async ({
+    page,
+  }) => {
+    const entry = localEntry({ displayName: "Before rename" });
+    await seedModels(fileOf([entry], entry.id));
+    await page.reload();
+    await gotoModelsTab(page);
+    const edit = page.locator(`[data-testid='model-edit-btn-${entry.id}']`);
+    await edit.click();
+    await page.locator("[data-testid='model-edit-displayname']").fill("After rename");
+    await page.locator("[data-testid='model-edit-save']").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(MODAL)).toHaveCount(0);
+    await expect(edit).toBeFocused();
+    await expect
+      .poll(async () => (await readServerModels()).file.models[0]?.displayName)
+      .toBe("After rename");
+  });
+
+  test("one save per press: a second Enter while saving sends nothing", async ({ page }) => {
+    const posts: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/models") {
+        posts.push(req.postData() ?? "");
+      }
+    });
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    await page.route(
+      (url) => url.pathname === "/api/models",
+      async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await held;
+        await route.fallback();
+      },
+    );
+
+    await gotoModelsTab(page);
+    await page.locator(ADD_BTN).click();
+    await page.locator("[data-testid='model-edit-modelid']").fill("pressed-twice");
+    await page.locator("[data-testid='model-edit-endpoint']").fill(NO_SERVER_ENDPOINT);
+    const save = page.locator("[data-testid='model-edit-save']");
+    await save.focus();
+    await page.keyboard.press("Enter");
+    await expect(save).toHaveText(SAVING_LABEL);
+    await expect(save).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Enter");
+    // The held POST is counted when it is sent (the request event fires
+    // before routing); the count is read after the release below.
+    release();
+    await expect(page.locator(MODAL)).toHaveCount(0);
+    await expect
+      .poll(async () => (await readServerModels()).file.models.map((m) => m.modelId))
+      .toEqual(["pressed-twice"]);
+    await expect(page.locator("[data-testid^='model-row-']")).toHaveCount(1);
+    expect(posts).toHaveLength(1);
+  });
+
+  test("Delete focuses Cancel; Cancel returns to Delete; Confirm on the only row focuses Add", async ({
+    page,
+  }) => {
+    const entry = localEntry({ displayName: "Only row" });
+    await seedModels(fileOf([entry], entry.id));
+    await page.reload();
+    await gotoModelsTab(page);
+    const del = page.locator(`[data-testid='model-delete-btn-${entry.id}']`);
+    const cancel = page.locator(`[data-testid='model-delete-cancel-${entry.id}']`);
+    const confirm = page.locator(`[data-testid='model-delete-confirm-${entry.id}']`);
+
+    await del.focus();
+    await page.keyboard.press("Enter");
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(del).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await expect(cancel).toBeFocused();
+    // Reach Confirm by keyboard, in whichever direction the DOM puts it.
+    const confirmFirst = await confirm.evaluate(
+      (c, other) => !!(c.compareDocumentPosition(other as Node) & Node.DOCUMENT_POSITION_FOLLOWING),
+      await cancel.elementHandle(),
+    );
+    await page.keyboard.press(confirmFirst ? "Shift+Tab" : "Tab");
+    await expect(confirm).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("[data-testid='models-empty-state']")).toBeVisible();
+    await expect(page.locator(ADD_BTN)).toBeFocused();
+    await expect.poll(async () => (await readServerModels()).file.models.length).toBe(0);
+  });
+
+  test("Confirm on the first of two rows focuses the second row's Delete", async ({ page }) => {
+    const first = localEntry({ displayName: "First row" });
+    const second = localEntry({ displayName: "Second row" });
+    await seedModels(fileOf([first, second], first.id));
+    await page.reload();
+    await gotoModelsTab(page);
+    await page.locator(`[data-testid='model-delete-btn-${first.id}']`).click();
+    await page.locator(`[data-testid='model-delete-confirm-${first.id}']`).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(`[data-testid='model-row-${first.id}']`)).toHaveCount(0);
+    await expect(page.locator(`[data-testid='model-delete-btn-${second.id}']`)).toBeFocused();
+  });
 });
