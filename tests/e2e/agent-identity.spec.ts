@@ -143,9 +143,12 @@ async function finishWizard(page: Page): Promise<void> {
 }
 
 /**
- * A settle point for "the window did not open": the wizard's close decides
- * synchronously, and the Settings modal opening is refused while the window
- * is up (RW-2). So once Settings opens and closes, the decision is behind us.
+ * A settle point for "the window did not open". The wizard's close decides the
+ * window synchronously (App's `closeIntegrationWizard`), and the model list
+ * has loaded before the wizard is driven (`modelsLoaded`), so by now the
+ * decision is made; a round trip through Settings gives the page a few frames
+ * more. If the window did open, it takes Escape (its own keydown handler), so
+ * Settings stays open and this step fails as well as the count check after it.
  */
 async function settleAfterClose(page: Page): Promise<void> {
   await page.evaluate(() => {
