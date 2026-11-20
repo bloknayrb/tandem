@@ -1569,6 +1569,49 @@ describe("applyChangesCore — the backup sidecar", () => {
     );
 
     it(
+      "a symlinked parent outside app data that points into it (the check is on the canonical path)",
+      async (ctx) => {
+        const dir = await appDataDir();
+        const target = path.join(dir, "models.json");
+        await fsp.rm(target, { force: true });
+        const link = path.join(tmpDir, "looks-elsewhere");
+        try {
+          // A directory junction on Windows needs no privilege; elsewhere a
+          // plain directory symlink.
+          await fsp.symlink(dir, link, process.platform === "win32" ? "junction" : "dir");
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          // Skipped only where this host cannot create the link at all.
+          if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") ctx.skip();
+          throw err;
+        }
+        // The spelled path is outside app data; only its realpath is inside.
+        expect(path.relative(dir, link).startsWith("..")).toBe(true);
+        await expectRefusedAndUnwritten(path.join(link, "models.json"), target);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
+      "a sibling folder whose name starts with the app-data folder's name is allowed",
+      async () => {
+        const dir = await appDataDir();
+        const sibling = `${dir}-backup`;
+        await fsp.mkdir(sibling, { recursive: true });
+        try {
+          const target = path.join(sibling, "models.json");
+          await fsp.rm(target, { force: true });
+          const result = await applyChangesCore(DOC_ID, undefined, target);
+          expect(result.backupPath).toBe(fs.realpathSync.native(target));
+          expect(fs.existsSync(target)).toBe(true);
+        } finally {
+          await fsp.rm(sibling, { recursive: true, force: true });
+        }
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
       "an ordinary path outside app data still works",
       async () => {
         const target = path.join(tmpDir, "elsewhere.backup.docx");
