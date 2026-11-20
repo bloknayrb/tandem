@@ -1,0 +1,5 @@
+[
+  "agent-identity.spec.ts",
+  "chat-answerer.spec.ts",
+  "settings-models.spec.ts"
+]

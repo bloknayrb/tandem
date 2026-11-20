@@ -1,13 +1,20 @@
 import { expect, type Page, test } from "@playwright/test";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
+import { expectOnlyAllowanceNotices, resetLocalModelState } from "./helpers";
+import { ANSWERER_LOCAL_NOTICE, CHAT_ANSWERER_CLAUDE_STATUS } from "./local-model-strings";
+
+// Local models ship dark: the Models tab is filtered out while the flag is off,
+// so this whole file is skipped there (pinned by
+// tests/scripts/e2e-local-model-skip-wiring.test.ts; the flip deletes it).
+test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
 
 /**
  * "Who answers your chat" in Settings → Models (#1123 part B, R2, R10.3).
  *
- * SKIP-GUARDED like `settings-models.spec.ts`: the Models tab is hidden while
- * `BYO_MODELS_ENABLED` is off, so the whole suite is skipped and runs the
- * moment the flag flips. CI's E2E backend has the flag baked off, so until
- * then this spec has never run.
+ * Skipped at file level while local models ship dark; the advisory
+ * `byo-flag-on` CI job runs it lit (ADR-039, #1123 PR 8a). Who answers chat is
+ * SERVER state that outlives the page, so it is reset from Node before and
+ * after each test (`resetLocalModelState`).
  *
  * The page is the Vite client on the harness port, not Tandem's own window;
  * `playwright.config.ts` gives the backend the development allowance for that
@@ -17,8 +24,6 @@ import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 
 const SETTINGS_MODAL = "[data-testid='settings-modal']";
 const MODELS_TAB = "[data-testid='settings-modal-tab-models']";
-const ALLOWANCE_LOCAL_NOTICE =
-  "Your chat was set to be answered by a local model. If you did not do this, set who answers your chat back to Claude in Settings → Models.";
 
 async function gotoModelsTab(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -33,8 +38,17 @@ async function gotoModelsTab(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
+  await resetLocalModelState("chat-answerer");
   await page.goto("/");
+});
+
+test.afterEach(async ({ page }) => {
+  if (!BYO_MODELS_ENABLED) return;
+  try {
+    await expectOnlyAllowanceNotices(page);
+  } finally {
+    await resetLocalModelState("chat-answerer");
+  }
 });
 
 test("the control reads Claude by default and switches only on the user's selection", async ({
@@ -51,7 +65,7 @@ test("the control reads Claude by default and switches only on the user's select
   const local = page.locator("[data-testid='chat-answerer-local']");
   await expect(claude).toHaveAttribute("aria-checked", "true");
   await expect(page.locator("[data-testid='chat-answerer-status']")).toHaveText(
-    "Chat is set to Claude. Local models are not sent your chat.",
+    CHAT_ANSWERER_CLAUDE_STATUS,
   );
 
   // Arrow keys move focus only: nothing is sent.
@@ -60,15 +74,17 @@ test("the control reads Claude by default and switches only on the user's select
   await expect(local).toBeFocused();
   await page.keyboard.press("Home");
   await expect(claude).toBeFocused();
+  // Read after a completed positive anchor (focus moved twice), so a POST the
+  // arrow keys sent would have been recorded by now.
   expect(posts).toEqual([]);
 
   // Space on the other position selects it: one POST.
   await local.focus();
   await page.keyboard.press(" ");
   await expect(local).toHaveAttribute("aria-checked", "true");
-  expect(posts).toEqual([JSON.stringify({ answerer: "local" })]);
+  await expect.poll(() => posts).toEqual([JSON.stringify({ answerer: "local" })]);
   await expect(page.locator("[data-testid='toast-container']")).toContainText(
-    ALLOWANCE_LOCAL_NOTICE,
+    ANSWERER_LOCAL_NOTICE,
   );
 
   // Enter on the other position selects it too: back to Claude (so later
@@ -76,8 +92,7 @@ test("the control reads Claude by default and switches only on the user's select
   await claude.focus();
   await page.keyboard.press("Enter");
   await expect(claude).toHaveAttribute("aria-checked", "true");
-  expect(posts).toEqual([
-    JSON.stringify({ answerer: "local" }),
-    JSON.stringify({ answerer: "claude" }),
-  ]);
+  await expect
+    .poll(() => posts)
+    .toEqual([JSON.stringify({ answerer: "local" }), JSON.stringify({ answerer: "claude" })]);
 });

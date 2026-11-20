@@ -1,0 +1,48 @@
+{
+  "config": {},
+  "errors": [],
+  "stats": {
+    "expected": 1,
+    "skipped": 1,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "suites": [
+    {
+      "title": "integration-wizard.spec.ts",
+      "file": "integration-wizard.spec.ts",
+      "line": 0,
+      "column": 0,
+      "specs": [
+        {
+          "title": "Reopen wizard button is visible in Settings → AI Assistant tab",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 0,
+                  "errors": [],
+                  "retry": 0
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "x",
+          "file": "integration-wizard.spec.ts",
+          "line": 65,
+          "column": 1
+        }
+      ]
+    }
+  ]
+}

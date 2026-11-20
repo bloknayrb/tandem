@@ -5,9 +5,19 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { isDeepStrictEqual } from "util";
 import { E2E_APP_DATA_DIR } from "../../scripts/e2e-paths.js";
-import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
+import { E2E_MCP_PORT, E2E_VITE_PORT } from "../../scripts/test-ports.js";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { API_CHAT } from "../../src/shared/api-paths.js";
+import {
+  API_MODELS,
+  API_MODELS_CHAT_ANSWERER,
+  API_MODELS_LOCAL_SETTINGS,
+  MODELS_SCHEMA_VERSION,
+  type ModelsFile,
+  type ModelsGetResponse,
+} from "../../src/shared/models/contract.js";
 import type { ToolResponse } from "../../src/shared/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -532,14 +542,147 @@ export const ALLOWANCE_NOTICE_PREFIXES: readonly string[] = [
  * entry, endpoint or model id), or when a local model starts answering
  * (`noticeAnsweringChange` in `src/server/local-model/collaborator.ts`).
  */
-export async function expectOnlyAllowanceNotices(page: Page): Promise<void> {
+export async function expectOnlyAllowanceNotices(
+  page: Page,
+  extra: readonly string[] = [],
+): Promise<void> {
   const texts = await page
     .locator("[data-testid='toast-container'] [role='alert']")
     .allInnerTexts();
   for (const text of texts) {
     expect(
-      ALLOWANCE_NOTICE_PREFIXES.some((p) => text.includes(p)),
+      [...ALLOWANCE_NOTICE_PREFIXES, ...extra].some((p) => text.includes(p)),
       `an unexpected warning toast: ${text}`,
     ).toBe(true);
+  }
+}
+
+// --- Local-model server state, reset from Node (#1123 PR 8a, ADR-039) --------
+//
+// The models registry, who answers chat, the commenting switch and chat all
+// live on the SERVER and outlive the page, the context and the spec. A test
+// that dies with chat set to the local model would send every later spec's
+// chat to a model that is gone. So each flag-gated spec resets them from Node,
+// before `page.goto` and again after the test: Node needs no page, so a crashed
+// page, a retry and `afterAll` are all covered.
+//
+// Every request carries `Origin: <the Vite page's origin>`, the one origin the
+// harness's development allowance names (`playwright.config.ts`), because the
+// settings routes answer only Tandem's own window or that allowance. Node's
+// `fetch` sends an explicit `Origin` header as given (measured on Node 22).
+// These routes answer 404 while `BYO_MODELS_ENABLED` is off, so only lit code
+// calls them (behind the specs' file-level skip and `afterEach` guard).
+
+/** The page origin the allowance names. */
+export const E2E_PAGE_ORIGIN = `http://127.0.0.1:${E2E_VITE_PORT}`;
+const E2E_API = `http://127.0.0.1:${E2E_MCP_PORT}`;
+
+async function modelsFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = { Origin: E2E_PAGE_ORIGIN };
+  if (init.body !== undefined) headers["Content-Type"] = "application/json";
+  return fetch(`${E2E_API}${path}`, { ...init, headers });
+}
+
+async function jsonOrThrow<T>(res: Response, what: string): Promise<T> {
+  if (!res.ok) throw new Error(`${what} answered ${res.status}: ${await res.text()}`);
+  return (await res.json()) as T;
+}
+
+/** The models registry as the server holds it now, with its ETag. */
+export async function readServerModels(): Promise<ModelsGetResponse> {
+  return jsonOrThrow<ModelsGetResponse>(await modelsFetch(API_MODELS), `GET ${API_MODELS}`);
+}
+
+/** Who answers chat, as the server holds it now. */
+export async function readServerAnswerer(): Promise<string> {
+  const body = await jsonOrThrow<{ answerer: string }>(
+    await modelsFetch(API_MODELS_CHAT_ANSWERER),
+    `GET ${API_MODELS_CHAT_ANSWERER}`,
+  );
+  return body.answerer;
+}
+
+/** Set who answers chat from Node, as an allowance write; throws unless it took. */
+export async function setServerAnswerer(answerer: "claude" | "local"): Promise<void> {
+  const body = await jsonOrThrow<{ answerer: string }>(
+    await modelsFetch(API_MODELS_CHAT_ANSWERER, {
+      method: "POST",
+      body: JSON.stringify({ answerer }),
+    }),
+    `POST ${API_MODELS_CHAT_ANSWERER}`,
+  );
+  if (body.answerer !== answerer) {
+    throw new Error(`POST ${API_MODELS_CHAT_ANSWERER} left the answerer at ${body.answerer}`);
+  }
+}
+
+/**
+ * Replace the server's models registry with `file`, then read it back and
+ * throw unless the server holds exactly `file`. One retry on 409 (a write that
+ * landed between the GET and the POST); any other refusal throws. A test that
+ * seeds after `page.goto` must reload: the page's Models store holds the old
+ * list and ETag.
+ */
+export async function seedModels(file: ModelsFile): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const { etag } = await readServerModels();
+    const res = await modelsFetch(API_MODELS, {
+      method: "POST",
+      body: JSON.stringify({ file, ifMatch: etag }),
+    });
+    if (res.status === 409 && attempt === 1) continue;
+    await jsonOrThrow(res, `POST ${API_MODELS}`);
+    break;
+  }
+  const back = (await readServerModels()).file;
+  if (!isDeepStrictEqual(back, file)) {
+    throw new Error(
+      `the server holds ${JSON.stringify(back)} after seeding ${JSON.stringify(file)}`,
+    );
+  }
+}
+
+/** An empty registry. */
+export const EMPTY_MODELS_FILE: ModelsFile = {
+  schemaVersion: MODELS_SCHEMA_VERSION,
+  models: [],
+  defaultModelId: null,
+};
+
+/**
+ * Put every piece of local-model server state back to its default: no models,
+ * chat answered by Claude, local models not allowed to comment, chat cleared.
+ * Reads each back and throws on any difference, so a 403 or 409 can never
+ * pass silently. Chat has no read route; its DELETE's status is checked.
+ */
+export async function resetLocalModelState(tag: string): Promise<void> {
+  await seedModels(EMPTY_MODELS_FILE);
+  await setServerAnswerer("claude");
+  const settings = await jsonOrThrow<{ editing: boolean }>(
+    await modelsFetch(API_MODELS_LOCAL_SETTINGS, {
+      method: "POST",
+      body: JSON.stringify({ editing: false }),
+    }),
+    `[${tag}] POST ${API_MODELS_LOCAL_SETTINGS}`,
+  );
+  if (settings.editing !== false) {
+    throw new Error(`[${tag}] local-model commenting is still on after the reset`);
+  }
+  const chat = await fetch(`${E2E_API}${API_CHAT}`, { method: "DELETE" });
+  if (!chat.ok) throw new Error(`[${tag}] DELETE ${API_CHAT} answered ${chat.status}`);
+
+  const models = (await readServerModels()).file;
+  const answerer = await readServerAnswerer();
+  const editing = (
+    await jsonOrThrow<{ editing: boolean }>(
+      await modelsFetch(API_MODELS_LOCAL_SETTINGS),
+      `[${tag}] GET ${API_MODELS_LOCAL_SETTINGS}`,
+    )
+  ).editing;
+  if (!isDeepStrictEqual(models, EMPTY_MODELS_FILE) || answerer !== "claude" || editing !== false) {
+    throw new Error(
+      `[${tag}] the local-model reset did not hold: models=${JSON.stringify(models)} ` +
+        `answerer=${answerer} editing=${String(editing)}`,
+    );
   }
 }

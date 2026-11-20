@@ -78,8 +78,10 @@ export default defineConfig({
     // scripts/design-baselines inherit it; tests/perf defines its own `use` and
     // does not (it runs no Models spec). `agent-identity.spec.ts`, which expects
     // the window, opts out with an empty `storageState`. The key stays the
-    // window's per-profile guard; the window is unreachable in E2E while the
-    // wizard is disabled there.
+    // window's per-profile guard (RW-6). The server's wizard is disabled here,
+    // so the window is reachable in E2E only through that spec's ROUTED wizard
+    // (`page.route` answers `first-run-needed`, `existing`, the persist and the
+    // apply; ADR-039's amendment on E2E for the Models specs, R-e2).
     storageState: {
       cookies: [],
       origins: [
