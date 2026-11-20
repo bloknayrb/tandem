@@ -124,6 +124,11 @@ const NEW_COPY = [
   "The Endpoint must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.",
   "The Endpoint is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).",
   "Display name (optional)",
+  // 26a, 26c: the first-run window's two address reasons and the document-text
+  // sentences (the add-model window; neither mounts dark).
+  "The Endpoint URL must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.",
+  "The Endpoint URL is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).",
+  "For this model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.",
 ];
 
 function expectNoNewCopy(text: string) {
