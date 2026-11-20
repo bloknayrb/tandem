@@ -64,7 +64,10 @@ let run = 0;
 beforeEach(() => {
   run++;
   resetInbox();
-  resetOwnershipForTests();
+  // No `resetOwnershipForTests()` here: it would wipe the test caller's
+  // record that `registerTestCallerRecord()` installs in its own `beforeEach`,
+  // and with ownership on a poll would then read no document. `afterEach`
+  // resets it.
   __resetLocalPeriodForTests();
   setCtrlMode("tandem");
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-local-model-mark-"));
@@ -269,6 +272,44 @@ describe("tandem_getAnnotations: the local-model mark (lit)", () => {
   });
 });
 
+describe("tandem_getAnnotations: a byLocalModel key stored on a record is never the mark (lit)", () => {
+  it("a stored true on a user comment or user reply marks nothing; a stored false fails nothing", async () => {
+    await start(true);
+    writeAnnotation(record("user-stored", "user", { byLocalModel: true }));
+    writeAnnotation(record("claude-parent-3", "claude", { byLocalModel: false }));
+    writeReply("user-reply-stored", "claude-parent-3", "user", { byLocalModel: true });
+    writeReply("claude-reply-false", "claude-parent-3", "claude", { byLocalModel: false });
+    writeReply("lm-reply-false", "claude-parent-3", "claude", {
+      byLocalModel: false,
+      agentIdentity: STAMP,
+    });
+
+    const got = marks(await getAnnotations());
+
+    expect(got).toEqual({
+      "user-stored": false,
+      "claude-parent-3": false,
+      "user-reply-stored": false,
+      "claude-reply-false": false,
+      "lm-reply-false": true,
+    });
+  });
+
+  it("export: a stored key neither marks nor labels a user record or reply, lit", async () => {
+    await start(true);
+    writeAnnotation(record("claude-parent-4", "claude"));
+    writeReply("user-reply-stored-2", "claude-parent-4", "user", { byLocalModel: true });
+    writeAnnotation(record("user-stored-2", "user", { byLocalModel: true }));
+
+    const json = await callTool("tandem_exportAnnotations", { documentId: docId, format: "json" });
+    expect(JSON.stringify(json)).not.toContain("byLocalModel");
+    const md = (
+      await callTool("tandem_exportAnnotations", { documentId: docId, format: "markdown" })
+    ).markdown as string;
+    expect(md).not.toContain("Local model");
+  });
+});
+
 describe("tandem_getAnnotations: dark (honour seam off)", () => {
   it("no item carries byLocalModel, and the tool's schema and description are master's", async () => {
     await start(false);
@@ -389,5 +430,17 @@ describe("tandem_exportAnnotations: the mark (#1123 item 31, R1.3)", () => {
       expect(sidecar).not.toContain("Local model");
     }
     expect((md.markdown as string).match(/Assistant/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("dark: a byLocalModel key stored on a claude record or reply does not change the markdown", async () => {
+    await start(false);
+    writeAnnotation(record("claude-stored", "claude", { byLocalModel: true }));
+    writeReply("claude-reply-stored", "claude-stored", "claude", { byLocalModel: true });
+
+    const md = (await exportAs("markdown")).markdown as string;
+
+    expect(md).not.toContain("Local model");
+    expect(md).toMatch(/\(Assistant\)/);
+    expect(md).toMatch(/- Assistant: text of claude-reply-stored/);
   });
 });

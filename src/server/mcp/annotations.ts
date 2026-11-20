@@ -62,6 +62,19 @@ import {
 import { IDEMPOTENT_OVERWRITE_TOOL, IDEMPOTENT_WRITE_TOOL } from "./tool-annotations.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
 
+/**
+ * A record (and its replies) without any `byLocalModel` key it carries as
+ * stored. The export's markdown reads that key for its "Local model" byline,
+ * so while dark it is handed records cleared of it: a key a client stored can
+ * then never change the markdown (#1123 item 31).
+ */
+function withoutStoredLocalModelMark<T extends object>(rec: T): T {
+  type Marked = { byLocalModel?: unknown; replies?: readonly Record<string, unknown>[] };
+  const { byLocalModel: _stored, ...rest } = rec as Marked;
+  const replies = (rec as Marked).replies?.map(({ byLocalModel: _r, ...reply }) => reply);
+  return { ...rest, ...(replies ? { replies } : {}) } as T;
+}
+
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
 function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
   return (event) => relaySanitizationEvent(hash, event);
@@ -428,12 +441,21 @@ export function registerAnnotationTools(server: McpServer): void {
   const getAnnotationsOutputSchema = z.object(getAnnotationsOutputShape);
   // Mark a record or reply written by the local model. The author term is
   // required: a stamp on a user's or imported record must never mark it.
-  // Runs after every filter and gate; `agentIdentity` itself stays undeclared
-  // and is stripped below.
-  const localModelMarkOf = (rec: { author?: unknown }) =>
-    localModelMark && rec.author === "claude" && isLocalModelRecord(rec)
-      ? { byLocalModel: true as const }
-      : {};
+  // Lit, any `byLocalModel` key already stored on the record is dropped first
+  // (records and replies live in client-writable maps and keep unknown keys),
+  // so the mark is only ever the derived one: a stored `true` cannot mark a
+  // user's record, and a stored `false` cannot fail the whole call against the
+  // declared `const: true`. Dark the record is returned as is, so every output
+  // stays as before (`tandem_getAnnotations`' strip removes the undeclared key;
+  // the export's markdown input is cleared separately). Runs after every
+  // filter and gate; `agentIdentity` itself stays undeclared and is stripped.
+  const withLocalModelMark = <T extends { author?: unknown }>(rec: T): T => {
+    if (!localModelMark) return rec;
+    const { byLocalModel: _stored, ...rest } = rec as T & { byLocalModel?: unknown };
+    return (
+      rec.author === "claude" && isLocalModelRecord(rec) ? { ...rest, byLocalModel: true } : rest
+    ) as T;
+  };
   server.tool(
     "tandem_comment",
     "Attach a comment to the non-empty flat range [from, to) (offsets from tandem_getTextContent, " +
@@ -597,12 +619,11 @@ export function registerAnnotationTools(server: McpServer): void {
         const annotationsWithReplies = results.map((ann) => {
           const kind = kindById.get(ann.id);
           return {
-            ...ann,
+            ...withLocalModelMark(ann),
             ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
-            ...localModelMarkOf(ann),
             replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
               .filter((r) => !hideFromAI(r, modeState))
-              .map((r) => ({ ...r, ...localModelMarkOf(r) })),
+              .map(withLocalModelMark),
           };
         });
 
@@ -942,11 +963,12 @@ export function registerAnnotationTools(server: McpServer): void {
         // `tandem_getAnnotations` derives it (author `claude` AND the stamp;
         // never the stamp alone, or a stamped user comment would be labelled
         // "Local model" in a sidecar the user shares), once, here. The JSON
-        // carries it and the markdown reads it. Dark, `localModelMarkOf`
-        // returns `{}`, so both formats and the sidecar are byte-identical.
+        // carries it and the markdown reads it. Dark, `withLocalModelMark`
+        // returns each record as is, so the JSON is byte-identical, and the
+        // markdown is handed copies without any stored `byLocalModel` key, so
+        // it labels nothing "Local model".
         const enriched = exportable.map((ann) => ({
-          ...ann,
-          ...localModelMarkOf(ann),
+          ...withLocalModelMark(ann),
           // ADR-027 + #1000: comment-only + `private`-stripped (see
           // tandem_getAnnotations / channelVisibleReplies).
           //
@@ -957,7 +979,7 @@ export function registerAnnotationTools(server: McpServer): void {
           // chains both for the same reason.
           replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
             .filter((r) => !hideFromAI(r, modeState))
-            .map((r) => ({ ...r, ...localModelMarkOf(r) })),
+            .map(withLocalModelMark),
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),
@@ -969,7 +991,11 @@ export function registerAnnotationTools(server: McpServer): void {
         // response and (when requested) the sidecar — no double work.
         // #2113: markdown reads the same `enriched` list, so its replies pass
         // the same two gates (ADR-027 + Solo) as the JSON `replies`.
-        const markdown = isJson ? undefined : store.exportAnnotationsMarkdown(enriched);
+        const markdown = isJson
+          ? undefined
+          : store.exportAnnotationsMarkdown(
+              localModelMark ? enriched : enriched.map(withoutStoredLocalModelMark),
+            );
 
         // Sidecar write (#314): persist a sharable export next to the document.
         let writtenPath: string | undefined;
