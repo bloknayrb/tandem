@@ -168,25 +168,40 @@ export function partitionMammothMessages(
 // -- Annotation export --
 
 /**
+ * The local-model mark the export's caller derives (#1123 item 31, R1.3):
+ * present only on a `claude`-authored record or reply the user's local model
+ * wrote, and only once local models are on. The exporter reads this field,
+ * never the `agentIdentity` stamp.
+ */
+type LocalModelMark = { byLocalModel?: true };
+
+/**
  * Human-readable author label for the exported Markdown review summary (#438).
  *
  * The durable `author` enum (`"claude"`) is an internal role discriminator, not
  * a display label — emitting it verbatim leaks "(claude)" into a report a
  * GPT/Gemini user generated. The server has no access to the browser's Models
  * registry, so it can't name the specific model; it maps to a neutral
- * "Assistant" instead. Imported Word comments surface their real reviewer.
+ * "Assistant" instead, or to the fixed words "Local model" when the caller
+ * marked the record `byLocalModel` (never the stamp's free-text display name).
+ * Imported Word comments surface their real reviewer.
  */
-function exportAuthorLabel(ann: Annotation): string {
+function exportAuthorLabel(ann: Annotation & LocalModelMark): string {
   if (ann.author === "user") return "You";
   if (ann.author === "import") return ann.importSource?.author?.trim() || "Imported";
-  return "Assistant";
+  return ann.byLocalModel === true ? LOCAL_MODEL_LABEL : "Assistant";
 }
+
+/** The fixed byline for a record or reply marked `byLocalModel`. */
+const LOCAL_MODEL_LABEL = "Local model";
 
 /**
  * An annotation as the markdown export receives it: the record plus, when the
- * caller attached them, the replies it may show (#2113).
+ * caller attached them, the replies it may show (#2113), each with the
+ * caller's local-model mark when it set one.
  */
-export type ExportAnnotation = Annotation & { replies?: readonly AnnotationReply[] };
+export type ExportAnnotation = Annotation &
+  LocalModelMark & { replies?: readonly (AnnotationReply & LocalModelMark)[] };
 
 const STATUS_LABEL: Record<AnnotationStatus, string> = {
   pending: "Pending",
@@ -197,13 +212,20 @@ const STATUS_LABEL: Record<AnnotationStatus, string> = {
 /**
  * Reply byline. Never `importAuthor` (types.ts: never serialized to a
  * Claude-facing surface) and never `agentIdentity` — every AI maps to
- * "Assistant", matching {@link exportAuthorLabel}.
+ * "Assistant", except a `claude` reply the caller marked `byLocalModel`, which
+ * reads "Local model", matching {@link exportAuthorLabel}.
  */
 const REPLY_AUTHOR_LABEL: Record<ReplyAuthor, string> = {
   user: "You",
   claude: "Assistant",
   import: "Imported",
 };
+
+function replyAuthorLabel(r: AnnotationReply & LocalModelMark): string {
+  return r.author === "claude" && r.byLocalModel === true
+    ? LOCAL_MODEL_LABEL
+    : REPLY_AUTHOR_LABEL[r.author];
+}
 
 /**
  * Indent every continuation line of `text` so a multi-line value stays nested
@@ -317,9 +339,7 @@ export function exportAnnotations(doc: Y.Doc, annotations: readonly ExportAnnota
       if (replies.length > 0) {
         lines.push("  - Replies:");
         for (const r of replies) {
-          lines.push(
-            `    - ${REPLY_AUTHOR_LABEL[r.author]}: ${indentContinuation(r.text, "      ")}`,
-          );
+          lines.push(`    - ${replyAuthorLabel(r)}: ${indentContinuation(r.text, "      ")}`);
           if (r.suggestedText !== undefined) {
             lines.push(`      - Proposes: "${indentContinuation(r.suggestedText, "        ")}"`);
           }

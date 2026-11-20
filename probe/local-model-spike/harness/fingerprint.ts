@@ -17,6 +17,7 @@
  */
 import * as Y from "yjs";
 
+import { REPLY_TEXT_MAX } from "../../../src/server/annotations/schema.js";
 import { loadMarkdown } from "../../../src/server/file-io/markdown.js";
 import { INLINE_CHAR_LIMIT } from "../../../src/server/local-model/collaborator.js";
 import {
@@ -107,6 +108,12 @@ function dispatchTexts(): Record<string, unknown> {
     run("unknown-tool-editing", "no_such_tool", {});
     run("editing-off", "comment_on_quote", { quoted_text: "eight weeks", comment: "c" }, deny);
     run("unknown-tool-chat", "no_such_tool", {}, deny);
+    // The argument cap (#1123 item 31, F3): the refusal a model gets for an
+    // over-long comment, rationale or suggested text.
+    run("comment-over-cap", "comment_on_quote", {
+      quoted_text: "eight weeks",
+      comment: "c".repeat(REPLY_TEXT_MAX + 1),
+    });
     run("document-changed", "comment_on_quote", { quoted_text: "eight weeks", comment: "c" }, {
       ...allow,
       isDocCurrent: () => false,

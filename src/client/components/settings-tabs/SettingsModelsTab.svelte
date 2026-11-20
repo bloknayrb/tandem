@@ -738,8 +738,11 @@ async function cancelDelete(id: string) {
     <!-- A page that is plainly not Tandem's own (`http://localhost:<port>` can
          read nothing from the server) AND the read failed: the notice above is
          the whole explanation. No alert and no Retry — a Retry here could never
-         succeed. (A development page that was merely refused a write can still
-         read, so it keeps the ordinary load error and its Retry below.) This branch is still TAKEN, so the list never
+         succeed. (A development page that was merely refused a write is not
+         `access.foreign`, so it keeps the ordinary load error and its Retry
+         below. Its read is refused too, since the server's models reads
+         answer only Tandem's own window once local models are on — #1123
+         item 31 — so it reaches the load error rather than the list.) This branch is still TAKEN, so the list never
          falls through to "No models configured". -->
   {:else if models.loadFailed}
     <!-- Load threw: distinct from the empty state so we never claim "no models"
