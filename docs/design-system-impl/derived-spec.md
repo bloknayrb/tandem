@@ -328,8 +328,8 @@ Each row:
 > step-dot indicator, no Continue/Back pair and no secrets step (see the
 > Integration wizard section of `testid-manifest.md`). Two anti-patterns
 > below still hold and are kept: never log secret values, and never remove
-> the keychain-fallback banner. Cowork setup and the local-model surfaces
-> (F1, F2) ship dark.
+> the keychain-fallback banner. Cowork setup ships dark; the local-model
+> surfaces (F1, F2) are on from v0.32.0.
 
 - **Bundle ref.** Wizard shell follows the cluster-3.2 modal recipe
   (palette + settings family). Step indicator follows the bundle's

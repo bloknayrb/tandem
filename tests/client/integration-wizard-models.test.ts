@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants")>()),
-  // Production ships this dark as a literal `false`; the flip is deliberate.
+  // Pinned true here so the lit path is tested whatever the production literal says.
   BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants").BYO_MODELS_ENABLED,
 }));
 

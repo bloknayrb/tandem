@@ -14,7 +14,7 @@
  *
  * Mounted by `App.svelte` behind `modelPickerOpen` (offered once, when the
  * integration wizard closes after Claude was set up in it), which is gated on
- * `BYO_MODELS_ENABLED` — so this stays DARK (never mounts) until the flag flips.
+ * `BYO_MODELS_ENABLED` (on since 0.32; with the flag false it never mounts).
  *
  * Only local providers are listed (P4); the cloud branch below stays in source
  * (its `data-testid`s are a contract) but is unreachable.

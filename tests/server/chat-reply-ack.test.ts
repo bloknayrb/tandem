@@ -6,7 +6,7 @@
  * `/api/channel-reply` — deliberately not folded into `appendClaudeChatMessage`,
  * whose third caller, the local-model collaborator, replies to EVERY user chat
  * with `replyTo` set: stamping on its behalf would hide each message from
- * Claude's inbox the moment `BYO_MODELS_ENABLED` flips. The "append alone does not
+ * Claude's inbox now that `BYO_MODELS_ENABLED` is on (since 0.32). The "append alone does not
  * stamp" case below is that caller's exact call shape.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

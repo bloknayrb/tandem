@@ -22,7 +22,7 @@
  * unreachable from `src/server/mcp/`. `requireDocument` (`documents/registry.ts`,
  * re-exported by `document-service.ts`) returns `{ doc: Y.Doc }` to seven call
  * sites in `document.ts`, one in `docx-apply.ts` and four in
- * `local-model/collaborator.ts` (which ships dark), and always has. Those
+ * `local-model/collaborator.ts` (on since 0.32), and always has. Those
  * writes are correctly `withMcp`-tagged today — a sweep finds no raw
  * `.transact(` in `src/` outside `shared/origins.ts`, which is where the six
  * helpers are implemented — but by discipline, exactly as this store's hatch

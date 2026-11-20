@@ -788,7 +788,7 @@ export interface AnnotationLifecycle {
 /**
  * The create-only half of {@link AnnotationLifecycle}.
  *
- * The local-model loop (#1123, ships dark) has `comment_on_quote`,
+ * The local-model loop (#1123, on since 0.32) has `comment_on_quote`,
  * `propose_replacement` and `reply_to_annotation` and **no** accept/dismiss
  * tool, so it structurally cannot resolve an annotation today. Handing it a
  * three-method lifecycle would grant that capability for the first time, in a

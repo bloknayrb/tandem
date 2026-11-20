@@ -1,7 +1,8 @@
 /**
  * AI-readiness reader (#1018/#1022/#1054).
  *
- * "AI" in Tandem today is the external Claude Code integration. The
+ * "AI" here is the external Claude Code integration (a local model answering
+ * chat is tracked separately, #1123). The
  * auto-launcher (#477 PR 4) can spawn and supervise it, but it is NOT the only
  * way an agent connects: a user can launch Claude Code manually from a terminal
  * with the tandem MCP server configured. That externally-launched agent is

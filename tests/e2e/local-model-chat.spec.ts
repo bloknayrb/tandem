@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import { MODELS_SCHEMA_VERSION } from "../../src/shared/models/contract";
 import type { ToolResponse } from "../../src/shared/types";
 import {
@@ -24,11 +23,6 @@ import {
   RUN_FAILURE_NOT_FOUND,
 } from "./local-model-strings";
 import { type StubModel, startStubModel, userTexts } from "./local-model-stub";
-
-// Local models ship dark: a dark server answers no chat with a local model, so
-// this whole file is skipped there (pinned by
-// tests/scripts/e2e-local-model-skip-wiring.test.ts; the flip deletes it).
-test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
 
 /**
  * Chat answered by a local model, against a stub model server (#1123 PR 8b;
@@ -167,7 +161,6 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
-  if (!BYO_MODELS_ENABLED) return;
   try {
     await expectOnlyAllowanceNotices(page, expectedAlerts);
   } finally {

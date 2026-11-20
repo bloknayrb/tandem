@@ -5,7 +5,8 @@
  * MAIN view: the MCP connect machine driven by `createIntegrationWizard()`
  * (detection → card selection → optional Advanced token → applying → done /
  * error), with a "More integrations" section below it surfacing Cowork
- * (opt-in, Windows-only) and an "AI models — coming soon" line.
+ * (opt-in, Windows-only) and an "AI models" row (Set up, which opens
+ * Settings → Models; a "coming soon" line only with `BYO_MODELS_ENABLED` false).
  *
  * COWORK sub-view (`view === "cowork"`): a minimal enable screen lifted from
  * CoworkSettings — the firewall/UAC warning renders first and
@@ -86,9 +87,9 @@ interface Props {
   onClose: (reason?: WizardCloseReason) => void;
   /**
    * Close the wizard and open the Models settings path. Wired by App.svelte to
-   * `openModelsSettings`. Only invoked from the flag-ON "AI models" row, which
-   * never renders while `BYO_MODELS_ENABLED` is false — so this stays unused
-   * (and undefined-safe via `?.`) while dark.
+   * `openModelsSettings`. Only invoked from the "AI models" row, which renders
+   * only while `BYO_MODELS_ENABLED` is true (on since 0.32) — so with the flag
+   * false this stays unused (and undefined-safe via `?.`).
    */
   onSetupModels?: () => void;
   /**

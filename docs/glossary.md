@@ -13,15 +13,14 @@ owns the detail; when the two disagree, the linked doc wins. Back to the [docs h
 - **Working with the AI:** [Solo mode](#solo-mode) · [Tandem mode](#tandem-mode) ·
   [annotation](#annotation) · [comment](#comment) · [suggestion](#suggestion) · [note](#note) ·
   [highlight](#highlight) · [pending, accepted, dismissed](#pending-accepted-dismissed) ·
-  [inbox](#inbox) · [chat](#chat)
+  [inbox](#inbox) · [chat](#chat) · [local-model collaborator](#local-model-collaborator)
 - **Documents:** [scratchpad](#scratchpad) · [read-only document](#read-only-document) ·
   [upload](#upload) · [documentId](#documentid)
 - **Connecting and waking Claude:** [MCP](#mcp) · [MCP server](#mcp-server) ·
   [Tandem's Claude](#tandems-claude) · [supervisor](#supervisor) · [wake watch](#wake-watch) ·
   [plugin monitor](#plugin-monitor) · [channel shim](#channel-shim) · [push and pull](#push-and-pull)
 - **Dark features:** [ships dark](#ships-dark) · [.docx support](#docx-support) ·
-  [Cowork setup](#cowork-setup) · [licensing gate](#licensing-gate) ·
-  [local-model collaborator](#local-model-collaborator) · [LAN bind](#lan-bind)
+  [Cowork setup](#cowork-setup) · [licensing gate](#licensing-gate) · [LAN bind](#lan-bind)
 - **Under the hood:** [Hocuspocus](#hocuspocus) · [Y.Doc and CRDT](#ydoc-and-crdt) ·
   [flat offsets](#flat-offsets) · [ProseMirror positions](#prosemirror-positions) ·
   [RelativePosition](#relativeposition) · [degraded anchor](#degraded-anchor) ·
@@ -98,6 +97,13 @@ The conversation panel beside the document. There is one chat thread for the who
 per document; each message records which document it was sent from. The AI answers with
 `tandem_reply`. Chat is never held in Solo mode. See [Chat](user-guide.md#chat) and
 [ADR-048](decisions.md#adr-048-chat-stays-global-ctrl_room-scoped-not-document-scoped).
+
+## Local-model collaborator
+
+Letting a model on your computer (Ollama, LM Studio, llama.cpp or another OpenAI-compatible server)
+answer chat instead of Claude and, if you allow it, comment and suggest changes. On from v0.32.0,
+in Settings → **Models**. See [User guide → Local models](user-guide.md#local-models) and
+[ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11).
 
 ## Scratchpad
 
@@ -210,11 +216,10 @@ pushed. See [Real-time push](user-guide.md#real-time-push-recommended).
 
 Built, merged and tested, but switched off in release builds by a constant in the source, so users
 cannot reach it. Docs that describe a dark feature describe the code, not something you can use
-today, and turning one on follows its ADR's checklist. Five features ship dark:
+today, and turning one on follows its ADR's checklist. These features ship dark:
 [.docx support](#docx-support), [Cowork setup](#cowork-setup), the
-[licensing gate](#licensing-gate), the [local-model collaborator](#local-model-collaborator) and
-the [LAN bind](#lan-bind). Licensing and the local model are inert at runtime; the `.docx` and
-Cowork switches still clean up after earlier versions. Each one's ADR is listed under
+[licensing gate](#licensing-gate) and the [LAN bind](#lan-bind). Licensing is inert at runtime;
+the `.docx` and Cowork switches still clean up after earlier versions. Each one's ADR is listed under
 [Internals → Decisions by topic](maps/internals.md#decisions-by-topic).
 
 ## .docx support
@@ -238,13 +243,6 @@ The v1.0 one-time paid licence. Without a key, Tandem stays a fully editable edi
 features are refused, at the points where the AI connects. It ships dark: the public beta is free
 for personal use and nothing is enforced. See [How licensing works](licensing-explained.md) and
 [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).
-
-## Local-model collaborator
-
-Letting a local model (Ollama, LM Studio) act as the collaborator instead of Claude. It ships dark,
-the Settings **Models** tab is hidden, and it is planned to switch on at v1.0. See
-[ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) and the
-[roadmap](roadmap.md#active--toward-v10).
 
 ## LAN bind
 

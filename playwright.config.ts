@@ -178,8 +178,8 @@ export default defineConfig({
         // tutorial annotations idempotently whenever the sample doc is opened.
         TANDEM_NO_SAMPLE: "1",
         // #1123 part B, R10.3: the E2E client is the Vite page on the harness
-        // port, not Tandem's own window, so the Models specs (skipped while
-        // BYO_MODELS_ENABLED is off) need the development allowance naming
+        // port, not Tandem's own window, so the Models specs need the
+        // development allowance naming
         // exactly that one origin. Set here, in the BACKEND's env only — never
         // on process.env above, which Vite and everything else would inherit.
         // The server logs one stderr line at boot for it, and a write admitted

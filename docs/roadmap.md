@@ -25,14 +25,14 @@ One feature programme is still being built: document ownership (#2358). After it
 remains is the licence gate's last checks, the commercial setup, hardware verification, and
 the flag flips.
 
-**Release shape (Bryan, 2026-11-10).** v0.31.0 is the release before ownership turns on: it
-carries the Claude Code setup entry's move to Tandem's stdio bridge (PR 2b of
-[the ownership plan](plans/2358-ownership.md), live, with its own hardware smoke). The release
-after it is meant to be feature complete, with ownership, Claude's replies inside a user's
-comment thread (#2360) and honest chat status (#2167) all on, so that the licence flip is the
-only flag left to flip before v1.0. The local-model flip moves into that release too, ahead of
-the licence flip. Commercial readiness and the hardware matrix below still stand before v1.0
-either way.
+**Release shape (2026-11-19).** Asked how close 0.32 was and whether it was a distraction from
+launching v1.0, the review session recommended cutting 0.32 to local models switched on with
+ownership still dark, so that the release unblocks the payment-provider work held "until after one
+more pre-v1.0 release". Bryan answered: "ok ill take that advice. make the change". So 0.32 ships
+with local models on and multi-session ownership dark. As the review session reads it (told to
+Bryan, not changed by him), Claude's replies inside a user's comment thread (#2360) and honest chat
+status (#2167) travel with the ownership series. Commercial readiness and the hardware matrix
+below still stand before v1.0 either way.
 
 0. **Document ownership (#2358): one Claude answers each comment.** Design v5 and the plan
    are merged, and so are PR 1a (identity, dark) and PR 1b (the #1952 wake-address fix, live).
@@ -50,14 +50,10 @@ either way.
    2026-06-13 with every box unchecked, so it tracks nothing.
 3. **Hardware verification.** This covers the install matrix (#2034). Windows is the only
    platform with a machine on hand; Ubuntu 22.04 runs in a VM on it, and macOS has none.
-4. **Two flips besides ownership's, in two independent systems** (local models in the release
-   after v0.31.0, licensing at the v1.0 cut):
+4. **One flip besides ownership's** (licensing, at the v1.0 cut):
    - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
      (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
      on a half-flip.
-   - **[Local models](glossary.md#local-model-collaborator).** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
-     whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
-     is the flip and its gates.
 5. **The pre-v1.0 review's remainder.** 6 of 93 `v1-review` issues are open: #1792, #1822,
    #1823, #1825, #1920, and #1754 (moot while `.docx` is dark).
 
@@ -156,7 +152,7 @@ rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
 - **First-run wizard and keychain.** UNMET. One-click Claude Code connect has to work on all three platforms (detect → connect → `/mcp` shows Tandem's tools). The OS keychain must also pass a store→read round-trip on Windows Credential Manager and macOS Keychain, which CI cannot do. The rows exist in the smoke checklist (§1–§2, #1761), but no run of them is recorded.
 - **Updater banner and dot.** PARTIAL. The dot was observed on the macOS update run, and the Windows runs recorded the in-app banner. The dot clearing, on opening settings or on install, was not recorded.
-- **Local model.** UNMET, and verifiable only after the `BYO_MODELS_ENABLED` flip. With a local model served by Ollama on the same computer and the network off: add it in Settings → Models (the setup wizard's AI models row opens that tab), choose it for chat, and complete a chat round trip. Then, in Tandem mode with the experimental editing toggle on, the model reads the document, comments on text the user selected, and proposes a replacement that the user accepts or rejects; in Solo mode it only chats. Results depend on the model, and smaller models answer less reliably. Multi-step and 50-page autonomous flows are out of scope. See ADR-039.
+- **Local model.** UNMET. Local models are on from v0.32.0, and the flip merged with this check still owed (ADR-039 item 30, by the owner's pick of 2026-11-20): it is done by hand with Ollama and the network off before v1.0 (macOS and Linux unverified). With a local model served by Ollama on the same computer and the network off: add it in Settings → Models (the setup wizard's AI models row opens that tab), choose it for chat, and complete a chat round trip. Then, in Tandem mode with the experimental editing toggle on, the model reads the document, comments on text the user selected, and proposes a replacement that the user accepts or rejects; in Solo mode it only chats. Results depend on the model, and smaller models answer less reliably. Multi-step and 50-page autonomous flows are out of scope. See ADR-039.
 
 **Soak gates**
 - **Observer soak.** UNMET, with no recorded run. Six docs open, rapid tab switching, Y.Doc swaps, and network drop and reconnect, with zero leaks and zero broken observers. Then a one-hour session with 50+ annotations, 20+ tab opens and closes, and 5+ network blips.
@@ -213,7 +209,7 @@ What is deliberately not in v1.0 and is still open. Closed and shipped rows from
 deferred table are in the history file.
 
 **v1.1 (committed)**
-- **Cloud BYO-model providers** (OpenAI, Gemini, Anthropic API keys) and their adapter. Behind `BYO_MODELS_ENABLED` per [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11).
+- **Cloud BYO-model providers** (OpenAI, Gemini, Anthropic API keys) and their adapter. Hidden in the product until they work ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), P4).
 
 **Deferred, open**
 - **Diff/Apply-edit hunk staging.** D3 locked option B (modal-based) for a v1.1 *revisit*, which is not a commitment. The surface is the `.docx` Apply-changes flow, so it waits on #2110.

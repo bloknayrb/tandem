@@ -149,8 +149,8 @@
         /* Per-agent authorship colors (#1123 M4, ADR-039). Keyed to the closed
            `provider` enum; `anthropic` reuses --tandem-author-claude (Claude
            family). Distinct, well-spaced hues avoiding author-user (245) and
-           author-claude coral (~40). Dark until the BYO_MODELS_ENABLED flip, so
-           these are only ever consumed once an annotation carries agentIdentity. */
+           author-claude coral (~40). Consumed only once an annotation carries
+           agentIdentity (local models, on since 0.32 via BYO_MODELS_ENABLED). */
         --tandem-agent-openai: oklch(0.60 0.12 160);
         --tandem-agent-gemini: oklch(0.55 0.15 285);
         /* The two local tokens colour TEXT (chat author label on its bubble,

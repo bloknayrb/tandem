@@ -4,7 +4,7 @@
  * The ONLY server importer of the `local-model/` engine. Bridges the event queue
  * to `runLocalModelTurn`: wake on a user `chat:message`, run one loop turn
  * against the active document, and STREAM the reply token-by-token back into the
- * chat sidebar. Ships DARK — `startLocalModelCollaborator()` early-returns when
+ * chat sidebar. On since 0.32; `startLocalModelCollaborator()` early-returns when
  * `BYO_MODELS_ENABLED` is false (the subscriber is never registered).
  *
  * The model config is resolved on EVERY chat event from the registry cache, so

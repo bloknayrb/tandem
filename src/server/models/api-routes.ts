@@ -114,9 +114,9 @@ export interface ModelsRoutesDeps {
    */
   ownWindow: OwnWindowPolicy;
   /**
-   * Are the local-model settings routes live? Defaults to `BYO_MODELS_ENABLED`,
-   * so in a release they answer 404 and neither read nor write anything while
-   * the feature is dark. A test passes `true` to exercise them.
+   * Are the local-model settings routes live? Defaults to `BYO_MODELS_ENABLED`
+   * (on since 0.32); with the flag false they answer 404 and neither read nor
+   * write anything. A test passes `true` to exercise them.
    */
   localModelSettingsEnabled?: boolean;
   /**

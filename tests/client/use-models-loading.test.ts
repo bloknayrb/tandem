@@ -4,7 +4,7 @@
  * `loading` / `reload` are flag-gated (`loadFromServer` early-returns while dark),
  * so this file mocks `BYO_MODELS_ENABLED=true` to exercise the lit path. This is
  * the ONLY seam used for flag-on coverage — a `vi.mock` of the constant, NOT a
- * runtime env/define override (the production const stays a literal `false`; a
+ * runtime env/define override (the production const is a plain literal, `true` since 0.32; a
  * build-define would crash the vite client bundle — see #1123's M2b plan §3.8).
  */
 
@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
-  // The production const is a literal `false` (ships dark), so a test that
-  // deliberately flips it must say so rather than widen the export type.
+  // Pinned true here so the lit path is tested whatever the production literal
+  // says (it is `true` since 0.32), without widening the export type.
   BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 

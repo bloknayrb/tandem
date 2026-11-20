@@ -112,12 +112,11 @@ function stepByMarker(job: Job, marker: string): { index: number; step: Step } {
  * count pin is what stops all but one being deleted, and what makes a new
  * site arrive red rather than silently unflagged. (#1345 retired
  * tauri-webdriver.yml, which held one; `vitest-windows`, #2397, added the
- * seventh; the temporary `byo-flag-on`, #1123 PR 8a, the eighth, which the
- * flip PR removes, putting this back to 7.)
+ * seventh.)
  */
 describe("#1832 npm ci runs no dependency lifecycle scripts", () => {
   const EXPECTED = "npm ci --ignore-scripts";
-  const EXPECTED_SITES = 8;
+  const EXPECTED_SITES = 7;
 
   function installSteps() {
     return allSteps().filter(({ step }) => step.run?.includes("npm ci"));

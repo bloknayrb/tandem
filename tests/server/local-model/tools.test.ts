@@ -353,8 +353,8 @@ describe("dispatch — replies", () => {
     // covers Claude". Before this spec that claim had no driver — the loop's
     // pre-8f call passed a literal `"claude"` to the free helper, so the
     // behaviour is unchanged, but an unasserted claim is the kind that gets read
-    // as verified. `BYO_MODELS_ENABLED` is false, so this is the only thing
-    // standing between the prose and a regression.
+    // as verified. This drives the loop's dispatch directly, so it guards the
+    // prose whichever way `BYO_MODELS_ENABLED` is set.
     doc = makeMarkdownDoc(FIXTURE);
     const map = getAnnotationsMap(doc);
     const created = dispatch(

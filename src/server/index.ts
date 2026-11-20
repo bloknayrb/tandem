@@ -744,11 +744,12 @@ async function main() {
   // Warm the model-registry cache from disk BEFORE the collaborator is wired
   // (#1123 M1a). The collaborator resolves from this cache, synchronously, on
   // every chat event; without this a fresh boot with a valid models.json would
-  // read a cold cache and resolve nothing until the next write. Gated on the SAME flag as the collaborator: while
-  // dark, `start()` early-returns before `wire()` (collaborator.ts) so nothing
-  // reads the cache — priming would be wasted boot-time disk I/O and would break
-  // byte-identical-when-dark. At M4 both light up together, preserving the
-  // "prime before wire" ordering. Awaited (like the session/doc restores above).
+  // read a cold cache and resolve nothing until the next write. Gated on the
+  // SAME flag as the collaborator, which is on since 0.32: both are live, and
+  // this preserves the "prime before wire" ordering. With the flag false,
+  // `start()` early-returns before `wire()` (collaborator.ts), so nothing would
+  // read the cache and priming would only add boot-time disk I/O to a build
+  // that must not touch models.json. Awaited (like the session/doc restores above).
   if (BYO_MODELS_ENABLED) {
     try {
       const { primeModelStoreCache } = await import("./models/registry.js");
@@ -791,7 +792,7 @@ async function main() {
     }
   }
 
-  // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
+  // Wire the local-model collaborator (#1123 M1.2). On since 0.32; a no-op while
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
 
