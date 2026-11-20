@@ -270,9 +270,11 @@ test("the first local model's confirmation stays until pressed; pressing it sets
   await expect(action).toHaveText(USE_IT_FOR_CHAT_LABEL);
   await expect(page.locator(CHIP)).toHaveCount(0);
 
-  // Longer than any timed toast lives (an error's 8 s), under the 30 s
-  // reconnect timeout: it is still there (W2), and chat is still Claude (P5).
-  await page.clock.fastForward(25_000);
+  // Longer than any timed toast lives (an error's 8 s), and well under the
+  // provider's 30 s reconnect timeout, which reads this clock: the jump must
+  // not close the socket the steps below need. It is still there (W2), and
+  // chat is still Claude (P5).
+  await page.clock.fastForward(10_000);
   await expect(confirmation).toBeVisible();
   expect(await readServerAnswerer()).toBe("claude");
 

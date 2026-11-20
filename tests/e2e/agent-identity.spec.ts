@@ -66,7 +66,10 @@ async function routeWizard(page: Page, applyAs: ApplyAs = "applied"): Promise<vo
   // not answer is refused and recorded, never sent to the server (the
   // installer, Keep, secrets). A read the wizard makes on the way (for
   // example `claude-cli-status`) goes to the server: GETs change nothing.
-  await page.route("**/api/integrations/**", async (route) => {
+  // Matched on the pathname, not a glob: a glob is matched against the whole
+  // URL, so a query string would slip past it to the server.
+  const under = (url: URL) => url.pathname.startsWith("/api/integrations/");
+  await page.route(under, async (route) => {
     const req = route.request();
     if (req.method() === "GET") return route.fallback();
     unexpected.push(`${req.method()} ${new URL(req.url()).pathname}`);
@@ -111,18 +114,21 @@ async function routeWizard(page: Page, applyAs: ApplyAs = "applied"): Promise<vo
       },
     });
   });
-  await page.route("**/api/integrations", async (route) => {
-    const req = route.request();
-    if (req.method() === "GET") return route.fallback();
-    if (req.method() !== "POST") {
-      unexpected.push(`${req.method()} /api/integrations`);
-      return route.abort();
-    }
-    const file = req.postDataJSON() as { integrations: Array<{ id: string }> };
-    await route.fulfill({
-      json: { ids: file.integrations.map((i) => i.id), confirmationNonce: "e2e-nonce" },
-    });
-  });
+  await page.route(
+    (url) => url.pathname === "/api/integrations",
+    async (route) => {
+      const req = route.request();
+      if (req.method() === "GET") return route.fallback();
+      if (req.method() !== "POST") {
+        unexpected.push(`${req.method()} /api/integrations`);
+        return route.abort();
+      }
+      const file = req.postDataJSON() as { integrations: Array<{ id: string }> };
+      await route.fulfill({
+        json: { ids: file.integrations.map((i) => i.id), confirmationNonce: "e2e-nonce" },
+      });
+    },
+  );
 }
 
 /** Wait for the page's model list to load: the window is decided only after. */
@@ -138,6 +144,8 @@ async function finishWizard(page: Page): Promise<void> {
   await expect(page.locator(WINDOW)).toHaveCount(0);
   await page.locator("[data-testid='integration-wizard-connect-btn']").click();
   await expect(page.locator("[data-testid='integration-wizard-step-done']")).toBeVisible();
+  // Not on Done either: the window is decided when the wizard CLOSES (W1).
+  await expect(page.locator(WINDOW)).toHaveCount(0);
   await page.locator("[data-testid='integration-wizard-done-close']").click();
   await expect(page.locator(WIZARD)).toHaveCount(0);
 }
@@ -223,7 +231,9 @@ test("closing the window is remembered: a later setup on a new launch offers not
   page,
 }) => {
   await routeWizard(page);
+  const loaded = modelsLoaded(page);
   await page.goto("/");
+  await loaded;
   await finishWizard(page);
   await expect(page.locator(WINDOW)).toBeVisible();
   await page.locator("[data-testid='first-run-skip']").click();

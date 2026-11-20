@@ -99,7 +99,7 @@ describe("E2E local-model skips while local models ship dark (ADR-039)", () => {
       expect(guards).toHaveLength(afterEachHooks.length);
       // Each hook's first statement is the guard.
       for (const hook of text.split(/^test\.afterEach\(/m).slice(1)) {
-        expect(hook.split("\n")[1]).toBe(GUARD_LINE);
+        expect(hook.split(/\r?\n/)[1]).toBe(GUARD_LINE);
       }
     },
   );
