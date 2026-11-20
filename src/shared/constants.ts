@@ -111,17 +111,17 @@ export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
 export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
 
 /**
- * Feature flag for the in-app "bring your own API key" Models registry UI
- * (#1018/#1022). The registry stores provider keys in the OS keychain, but no
- * server-side LLM client consumes them yet (see `src/server/models/api-routes.ts`
- * — "a future LLM client"). Until that lands, offering the picker is a dead end:
- * users configure a key, AI still doesn't work, and they conclude the app is
- * broken. So the entire BYO-models surface (first-run picker, Settings → Models
- * tab, titlebar default-model chip) is gated OFF behind this flag. AI today is
- * the external Claude Code integration (MCP). Flip to `true` — or wire to an
- * env/build define — once the outbound LLM client exists.
+ * The switch for the local-model collaborator and its UI (ADR-039, #1123): the
+ * Settings → Models tab, the first-run window, the chat-answerer control and the
+ * server-side loop that lets a model on this computer answer chat and, if the
+ * user allows it, comment and suggest changes. On since 0.32. Cloud providers
+ * stay hidden in the UI (ADR-039 P4). Turning it back off is its own reviewed
+ * release, not a one-line revert: a dark build after a lit one misreads what the
+ * lit build left behind (chat sent during a local period is handed to Claude,
+ * and the local model's stamped comments reach Claude as Claude's own), so
+ * ADR-039's flip amendment (R-a) must be read first.
  */
-export const BYO_MODELS_ENABLED = false;
+export const BYO_MODELS_ENABLED = true;
 
 /**
  * `.docx` support ships DARK (ADR-053, 2026-09-24): it isn't fit for serious
