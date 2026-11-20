@@ -29,8 +29,11 @@
 .tandem-editor:focus-within .tandem-selection-blurred {
   background-color: transparent;
 }
+/* Headings inherit the user's editor font from `.tandem-editor`, like every
+ * other block — never set a family here (the serif `--tandem-h1-font` /
+ * `--tandem-h2-font` roles are chrome-only; using them left H1/H2 serif with
+ * Sans selected). Pinned by tests/design-system-impl/editor-heading-font.test.ts. */
 .tandem-editor h1 {
-  font-family: var(--tandem-h1-font);
   font-size: var(--tandem-h1-size);
   font-weight: var(--tandem-h1-weight);
   letter-spacing: var(--tandem-h1-tracking);
@@ -38,7 +41,6 @@
   line-height: var(--tandem-h1-leading);
 }
 .tandem-editor h2 {
-  font-family: var(--tandem-h2-font);
   font-size: var(--tandem-h2-size);
   font-weight: var(--tandem-h2-weight);
   letter-spacing: var(--tandem-h2-tracking);
@@ -664,6 +666,9 @@ body.tandem-reduce-motion .tandem-editor [data-tandem-author-block]::before {
   background: transparent;
   color: var(--tandem-fg-muted);
   cursor: pointer;
+  /* A <button> does not inherit font-family from the UA sheet; keep the glyph
+   * in the heading's (the user's) font. */
+  font-family: inherit;
   font-size: 0.65em;
   line-height: 1;
   opacity: 0;

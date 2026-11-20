@@ -95,7 +95,7 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 | `--tandem-suggestion-bg` | color-mix derived | same | **SAME ✓** (PROTECTED) |
 | `--tandem-suggestion-border` | color-mix derived | same | **SAME ✓** (PROTECTED) |
 | `--tandem-highlight-yellow/green/blue/pink` | `rgba(..., 0.30)` | same | **SAME ✓** |
-| `--tandem-editor-font-family` | `var(--tandem-font-sans)` | `var(--tandem-font-serif)` | **PROD WINS** — per 2026-05-20 commit ("changed default serif→sans"); bundle's serif default is a regression. Bundle's separate `--tandem-h1/h2` serif heading tokens (see ADOPT below) cover the case where serif IS wanted. |
+| `--tandem-editor-font-family` | `var(--tandem-font-sans)` | `var(--tandem-font-serif)` | **PROD WINS** — per 2026-05-20 commit ("changed default serif→sans"); bundle's serif default is a regression. Bundle's separate `--tandem-h1/h2` serif heading tokens (see ADOPT below) are chrome-only; since 2026-11-20 document headings follow this token too, so the whole document uses the font the user picked. |
 | `--tandem-editor-font-size` | `17px` | `17px` | **SAME ✓** |
 | `--tandem-page-bg` | `#e8e8e8` | (missing) | **PROD WINS** — paged-docx feature surface |
 | `--tandem-page-paper` | `#ffffff` | (missing) | **PROD WINS** |
@@ -173,7 +173,10 @@ The bundle defines `--tandem-h1-font` / `--tandem-h1-size` / `--tandem-h1-weight
 
 **Adoption status (re-checked 2026-10-20).** The h1 and h2 roles are **adopted**:
 `index.html` `:root` defines them and `src/client/editor/editor.css` consumes
-them for editor headings. The body and ui roles are defined in `index.html`
+the size, weight, leading and tracking roles for editor headings. The `-font`
+roles are NOT used there: since 2026-11-20 (Bryan's request) document headings
+take `--tandem-editor-font-family`, so a Sans choice no longer leaves H1/H2
+serif. `--tandem-h1-font` / `--tandem-h2-font` remain for chrome utilities. The body and ui roles are defined in `index.html`
 too (body on the sans stack, not the bundle's serif, per the PROD WINS editor-font
 row above; `--tandem-ui-leading` has a consumer in `ChatPanel.svelte`). The code
 role is not defined.
