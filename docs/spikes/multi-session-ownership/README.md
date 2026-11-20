@@ -466,7 +466,7 @@ A run started by a chat while Off follows the 2026-10-13 behaviour (the mode bec
 
 **Rule.** A present Tandem's Claude that is not running starts, whether or not another AI is on, for:
 - on a document it holds: a user chat message, a new user comment (`annotation:created` of a user comment, with or without a suggestion), or any user thread reply;
-- a doc-less or closed-document chat message it owns.
+- a doc-less or closed-document chat message it owns. *[Amended: ADR-054's 3b-2b1c-b amendment: a close that gives Tandem's Claude a closed document's message starts or wakes nothing by itself (Bryan's pick "No, never by itself (Recommended)", picked from options); the message reaches it at its next look or start. A message that becomes its own by a holder going away is forwarded only while no other session is connected.]*
 
 An event on a document held by another attached record starts nothing. If a run started for one of the reasons above then fails to bind, the item is not stranded: the document goes unowned and the child, and any attached terminal, is woken to pick it up (§8.7). Everything else is today's rule: `isStartWorthy` (`src/shared/events/wake-scope.ts:57`) and "not if another AI is on", including for a document whose holder is in its grace; such a start takes back that document if it is `claimed`.
 
