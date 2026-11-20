@@ -580,7 +580,8 @@ test.describe("the add-model window and the row controls by keyboard", () => {
     await expect(page.locator(MODAL)).toBeVisible();
     await expect(page.locator("[data-testid='model-edit-provider']")).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.locator(MODAL)).toHaveCount(0);
+    // "At once": a short timeout, so a close that waits on anything fails.
+    await expect(page.locator(MODAL)).toHaveCount(0, { timeout: 500 });
     await expect(page.locator(SETTINGS_MODAL)).toBeVisible();
     await expect(add).toBeFocused();
   });
@@ -634,8 +635,8 @@ test.describe("the add-model window and the row controls by keyboard", () => {
     await expect(save).toHaveText(SAVING_LABEL);
     await expect(save).toHaveAttribute("aria-disabled", "true");
     await page.keyboard.press("Enter");
-    // The first press's POST is in flight (held); the second sent none.
-    await expect.poll(() => posts.length).toBe(1);
+    // The held POST is counted when it is sent (the request event fires
+    // before routing); the count is read after the release below.
     release();
     await expect(page.locator(MODAL)).toHaveCount(0);
     await expect

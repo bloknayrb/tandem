@@ -236,13 +236,25 @@ test("after the switch back to Claude, comments reach Claude and the local perio
   await sendChat(page, chatX);
   await expect.poll(() => requestsCarrying(chatX).length).toBe(1);
   await commentOnFirstParagraph(page, commentC);
+  // The comment travels over the document's socket, the switch below over
+  // HTTP: wait until the SERVER holds C, so C is a comment of the local
+  // period and not one that landed after the switch back.
+  await expect
+    .poll(async () => {
+      const res = (await mcp.callTool("tandem_getAnnotations")) as ToolResponse<{
+        annotations: Array<{ content?: string }>;
+      }>;
+      return res.error === false && res.data.annotations.some((a) => a.content === commentC);
+    })
+    .toBe(true);
 
   await setServerAnswerer("claude");
   expect(await readServerAnswerer()).toBe("claude");
   await sendChat(page, chatY);
 
-  // A cursor-less poll hands each item out once, so everything handed over
-  // across the polls is collected. Anchor: Y reaches Claude; only then are the
+  // A cursor-less poll hands each item out once (an unacknowledged item
+  // repeats only for a cursor reader), so everything handed over across the
+  // polls is collected. Anchor: Y reaches Claude; only then are the
   // absences read.
   const chats: string[] = [];
   const actions: string[] = [];
@@ -261,6 +273,8 @@ test("after the switch back to Claude, comments reach Claude and the local perio
   expect(chats.filter((t) => t.includes(chatX))).toEqual([]);
   // A later anchor before reading the stub: a local run would start on the
   // same chat event that handed Y over, so wait for something after it.
+  // Claude's reply is a separate pipeline, so this is a bound, not proof: a
+  // local run started by Y would reach the stub long before this renders.
   const later = "Claude answers after the switch back.";
   await mcp.callTool("tandem_reply", { text: later });
   await expect(bubbleWith(page, later).bubble).toBeVisible();
