@@ -13,7 +13,7 @@
  * from this one, and why a fetched checksum is not an integrity control.
  */
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { createHash } from "crypto";
 import {
   chmodSync,
@@ -222,9 +222,20 @@ function extractZip(archivePath, nodeVersion, info, outputPath, licencePath) {
   const prefix = `node-v${nodeVersion}-win-${info.arch}`;
   const tempDir = join(dirname(archivePath), "_node_extract");
 
+  // Windows' own tar.exe (bsdtar, in System32 since Windows 10 1803) reads zip.
+  // Not `Expand-Archive`: started from a PowerShell 7 parent, Windows
+  // PowerShell 5.1 inherits PSModulePath, loads PowerShell 7's Archive module
+  // and fails with "Cannot find an overload for ExtractToDirectory" (#2500),
+  // which broke the v0.32.0 tag build once the runner image carried 7.7.
+  // The full path, because under Git Bash a bare `tar` is GNU tar, which
+  // cannot read zip. No shell, so no quoting of the paths.
+  const systemTar = join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
   try {
-    execSync(
-      `powershell -NoProfile -Command "Expand-Archive -Path '${archivePath.replace(/'/g, "''")}' -DestinationPath '${tempDir.replace(/'/g, "''")}' -Force"`,
+    rmSync(tempDir, { recursive: true, force: true });
+    mkdirSync(tempDir, { recursive: true });
+    execFileSync(
+      systemTar,
+      ["-xf", archivePath, "-C", tempDir, `${prefix}/${info.binary}`, `${prefix}/LICENSE`],
       { stdio: "inherit" },
     );
   } catch (err) {
