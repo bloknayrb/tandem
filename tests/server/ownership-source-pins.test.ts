@@ -1029,8 +1029,13 @@ describe("the supervisor's start-or-wake is wired from ownership, requestWake is
       expect(site.next).toBe("(");
       expect([".", "["]).not.toContain(site.prev);
     }
-    expect(text).toMatch(/export function startOrWake\(cause: WakeCause\): void \{/);
-    expect(text).toMatch(/\bstartOrWake\("message-owner"\);/);
+    expect(text).toMatch(
+      /export function startOrWake\(cause: WakeCause, admit\?: \(\) => boolean\): void \{/,
+    );
+    // R5's one call (3b-2b1c-b): no admit without a change.
+    expect(text).toContain(
+      'startOrWake("message-owner", change === undefined ? undefined : admit);',
+    );
     expect(text).toMatch(/\bstartOrWake\(cause\);/);
   });
 });
@@ -1082,6 +1087,52 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
+  });
+});
+
+describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+  const fnBody = (name: string) => {
+    const start = text.indexOf(`function ${name}(`);
+    expect(start, name).toBeGreaterThanOrEqual(0);
+    return text.slice(start, text.indexOf("\n}\n", start));
+  };
+
+  it("the admit: not Tandem's Claude as caller, the departure gate only with no caller, then the changed key alone", () => {
+    const body = fnBody("messageOwnerChanged");
+    expect(body).toContain("change.caller !== TANDEM_OWNER_ID");
+    expect(body).toContain("(change.caller !== undefined || !anotherSessionConnected())");
+    expect(body).toContain("tandemChatWaiting((k) => k === change.key)");
+    // In the brief's order: the caller, the gate, then the scan.
+    expect(body.indexOf("change.caller !== TANDEM_OWNER_ID")).toBeLessThan(
+      body.indexOf("anotherSessionConnected()"),
+    );
+    expect(body.indexOf("anotherSessionConnected()")).toBeLessThan(
+      body.indexOf("tandemChatWaiting("),
+    );
+  });
+
+  it("both sink calls run outside any MCP request context", () => {
+    const body = fnBody("startOrWake");
+    const calls = [...body.matchAll(/startOrWakeSink\(/g)].map((m) => m.index as number);
+    expect(calls).toHaveLength(2);
+    for (const at of calls) {
+      expect(body.slice(at - "runOutsideMcpContext(() => ".length, at)).toBe(
+        "runOutsideMcpContext(() => ",
+      );
+    }
+  });
+
+  it("R6's three sites: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing", () => {
+    const calls = [...text.matchAll(/\bmessageOwnerChanged\(([^)]*)\)/g)].map((m) => m[1]);
+    // The definition's parameter list, then the three sites.
+    expect(calls).toHaveLength(4);
+    expect(fnBody("releaseMessageOwners")).toContain("messageOwnerChanged({ key });");
+    expect(text).toMatch(
+      /dropChatOwners: \(out\) => \{[\s\S]*?messageOwnerChanged\(\{ key, caller: callerId \}\);/,
+    );
+    expect(fnBody("setMessageOwner")).toContain("messageOwnerChanged();");
   });
 });
 
@@ -1161,15 +1212,17 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     ]);
   });
 
-  it("inside ownership.ts: tandemWorkWaiting is only defined (index.ts consumes it), tandemChatWaiting defined and called twice (by tandemWorkWaiting and the step-5 composite) (review round 1, R1.3; 3b-2b1b-chat-step5; 3b-2b1c-a)", () => {
+  it("inside ownership.ts: tandemWorkWaiting is only defined (index.ts consumes it), tandemChatWaiting defined and called three times (by tandemWorkWaiting, the step-5 composite and the message forward's admit) (review round 1, R1.3; 3b-2b1b-chat-step5; 3b-2b1c-a; 3b-2b1c-b)", () => {
     // The per-file pin above cannot see a caller inside ownership.ts, where
-    // step 5 and startOrWake live. 3b-2b1c-b adds the message forward's call.
+    // step 5 and startOrWake live. 3b-2b1c-b added the message forward's call.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
-    expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(3);
+    expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(4);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
+    // The message forward's admit asks the changed key alone (3b-2b1c-b, R5).
+    expect(text).toContain("tandemChatWaiting((k) => k === change.key)");
   });
 
   it("step 5 asks the composite, once, in its condition; the composite asks the probe first and the chat that follows the document (3b-2b1b-chat-step5)", () => {
