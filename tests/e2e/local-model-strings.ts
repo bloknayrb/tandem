@@ -43,3 +43,18 @@ export const CHAT_ANSWERER_CLAUDE_STATUS =
 export function defaultIsCloudLine(name: string): string {
   return `Your Default model, ${name}, is a cloud model, so your local models won't answer chat.`;
 }
+
+// --- #1123 PR 8b: chat against a stubbed local model ---------------------------
+
+export { LOCAL_COMMENT_INFO_TEXT } from "../../src/client/status/addressed-ai-notice.js";
+
+/** `LOCAL_PERIOD_STATUS_LINE`, `src/server/mcp/awareness.ts`. */
+export const LOCAL_PERIOD_STATUS_LINE =
+  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem. You do not need to wait for this; a later poll will no longer carry this line once chat is answered by Claude again. If you already have a Tandem wake watch running, leave it running.";
+
+/** `RUN_FAILURE_TEXT["not-found"]`, `src/server/local-model/collaborator.ts`. */
+export const RUN_FAILURE_NOT_FOUND =
+  "Your local model's server could not find the model or address Tandem asked for. Check that the model is downloaded, then check its Model ID and Endpoint in Settings → Models.";
+
+/** Save's label while a save is in flight, `ModelEditModal.svelte` (Ruling R-b). */
+export const SAVING_LABEL = "Saving…";

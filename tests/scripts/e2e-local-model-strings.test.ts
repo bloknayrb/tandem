@@ -6,6 +6,8 @@ import {
   FIRST_LOCAL_MODEL_TOAST_TEXT,
   USE_IT_FOR_CHAT_LABEL,
 } from "../../src/client/hooks/useChatAnswerer.svelte.js";
+import { RUN_FAILURE_TEXT } from "../../src/server/local-model/collaborator.js";
+import { LOCAL_PERIOD_STATUS_LINE } from "../../src/server/mcp/awareness.js";
 import { ANSWERER_LOCAL_NOTICE } from "../../src/server/models/chat-answerer.js";
 import * as copies from "../e2e/local-model-strings.js";
 
@@ -26,6 +28,15 @@ describe("tests/e2e/local-model-strings.ts matches its sources", () => {
     expect(copies.FIRST_LOCAL_MODEL_TOAST_TEXT).toBe(FIRST_LOCAL_MODEL_TOAST_TEXT);
     expect(copies.USE_IT_FOR_CHAT_LABEL).toBe(USE_IT_FOR_CHAT_LABEL);
     expect(copies.ANSWERER_LOCAL_NOTICE).toBe(ANSWERER_LOCAL_NOTICE);
+    expect(copies.LOCAL_PERIOD_STATUS_LINE).toBe(LOCAL_PERIOD_STATUS_LINE);
+    expect(copies.RUN_FAILURE_NOT_FOUND).toBe(RUN_FAILURE_TEXT["not-found"]);
+  });
+
+  it("Save's in-flight label is the add-model window's", () => {
+    const src = read("src/client/components/ModelEditModal.svelte");
+    expect(src).toContain(
+      `{saving ? ${JSON.stringify(copies.SAVING_LABEL)} : isEditing ? "Save changes" : "Add model"}`,
+    );
   });
 
   it("the add-model window's unavailable view says what the specs expect", () => {
