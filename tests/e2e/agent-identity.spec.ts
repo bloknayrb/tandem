@@ -227,29 +227,41 @@ test("the window is offered when the wizard closes on Done with Claude set up, n
   expect(providers.filter((v) => !v.startsWith("local-"))).toEqual([]);
 });
 
-test("closing the window is remembered: a later setup on a new launch offers nothing", async ({
-  page,
-}) => {
-  await routeWizard(page);
-  const loaded = modelsLoaded(page);
-  await page.goto("/");
-  await loaded;
-  await finishWizard(page);
-  await expect(page.locator(WINDOW)).toBeVisible();
-  await page.locator("[data-testid='first-run-skip']").click();
-  await expect(page.locator(WINDOW)).toHaveCount(0);
-  expect(await page.evaluate(() => localStorage.getItem("tandem:modelPickerDismissed"))).toBe("1");
+// The window's × (`first-run-skip`) and Escape both close it through its one
+// skip path (`handleSkip` in FirstRunModelPickerModal.svelte), which records
+// the dismissal; each is driven, so a close path that forgets it is caught.
+const CLOSE_WAYS: ReadonlyArray<[string, (page: Page) => Promise<void>]> = [
+  ["its close button", (page) => page.locator("[data-testid='first-run-skip']").click()],
+  ["Escape", (page) => page.keyboard.press("Escape")],
+];
 
-  // A new launch (fresh launchId) with the wizard's own dismissal cleared: the
-  // wizard opens again and is set up again, and the window stays shut.
-  await page.evaluate(() => localStorage.removeItem("tandem:wizard-dismissed"));
-  const reloaded = modelsLoaded(page);
-  await page.reload();
-  await reloaded;
-  await finishWizard(page);
-  await settleAfterClose(page);
-  await expect(page.locator(WINDOW)).toHaveCount(0);
-});
+for (const [way, closeWindow] of CLOSE_WAYS) {
+  test(`closing the window by ${way} is remembered: a later setup on a new launch offers nothing`, async ({
+    page,
+  }) => {
+    await routeWizard(page);
+    const loaded = modelsLoaded(page);
+    await page.goto("/");
+    await loaded;
+    await finishWizard(page);
+    await expect(page.locator(WINDOW)).toBeVisible();
+    await closeWindow(page);
+    await expect(page.locator(WINDOW)).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("tandem:modelPickerDismissed"))).toBe(
+      "1",
+    );
+
+    // A new launch (fresh launchId) with the wizard's own dismissal cleared: the
+    // wizard opens again and is set up again, and the window stays shut.
+    await page.evaluate(() => localStorage.removeItem("tandem:wizard-dismissed"));
+    const reloaded = modelsLoaded(page);
+    await page.reload();
+    await reloaded;
+    await finishWizard(page);
+    await settleAfterClose(page);
+    await expect(page.locator(WINDOW)).toHaveCount(0);
+  });
+}
 
 test("closing the wizard before Done offers no window", async ({ page }) => {
   await routeWizard(page);

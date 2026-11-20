@@ -14,11 +14,11 @@ import { trapTab } from "../utils/focus-trap.js";
 import {
   endpointHint,
   LOCAL_REQUEST_LINE,
+  LOCAL_SENT_TO_LINE,
   LOCAL_SERVERS_LINE,
   modelRowName,
   modelSaveReason,
 } from "../utils/local-model-copy.js";
-import CollapsibleSection from "./CollapsibleSection.svelte";
 
 interface Props {
   /** Existing entry when editing; `undefined` when adding. */
@@ -381,6 +381,7 @@ function startReplacingKey() {
       <div class="mem-local-intro" data-testid="model-edit-local-intro">
         <p>{LOCAL_SERVERS_LINE}</p>
         <p>{LOCAL_REQUEST_LINE}</p>
+        <p>{LOCAL_SENT_TO_LINE}</p>
       </div>
     {/if}
 
@@ -463,14 +464,6 @@ function startReplacingKey() {
       <input type="checkbox" class="mem-enabled-cbx" bind:checked={enabled} />
       <span>Enabled</span>
     </label>
-
-    <CollapsibleSection label="Advanced parameters" testid="model-edit-advanced">
-      <p class="mem-advanced-help">
-        Per-model parameter overrides (temperature, max tokens, etc.) are not editable in
-        this preview. The data model accepts a `params` map for forward-compat with
-        Wave 6 surfaces.
-      </p>
-    </CollapsibleSection>
 
     {#if error}
       <div role="alert" id="model-edit-error-text" data-testid="model-edit-error" class="mem-error">
@@ -644,12 +637,6 @@ function startReplacingKey() {
   }
   .mem-enabled-cbx {
     accent-color: var(--tandem-accent);
-  }
-
-  .mem-advanced-help {
-    font-size: 11px;
-    color: var(--tandem-fg-subtle);
-    margin: 0;
   }
 
   /* An old cloud entry's window (#1123): the entry's name, its provider and why

@@ -130,6 +130,19 @@ function toastWith(page: Page, text: string): Locator {
     .filter({ hasText: text });
 }
 
+/**
+ * The editor's own read of who answers chat has settled on `value`: its radio
+ * is checked and no longer `aria-disabled` (the read is known and no switch is
+ * pending). The title chip derives from that same module-level state
+ * (`useChatAnswerer`, which App and the tab both read), so a chip-absent check
+ * made after this cannot pass on a chip that is merely late.
+ */
+async function answererSettled(page: Page, value: "claude" | "local"): Promise<void> {
+  const radio = page.locator(`[data-testid='chat-answerer-${value}']`);
+  await expect(radio).toHaveAttribute("aria-checked", "true");
+  await expect(radio).toHaveAttribute("aria-disabled", "false");
+}
+
 test.beforeAll(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
@@ -198,7 +211,8 @@ test("add a local model: prefill, Save's reasons in order, optional name, first 
   const options = await provider
     .locator("option")
     .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-  expect(options.every((v) => v.startsWith("local-"))).toBe(true);
+  expect(options.length).toBeGreaterThan(0);
+  expect(options.filter((v) => !v.startsWith("local-"))).toEqual([]);
   await expect(endpoint).toHaveValue("http://127.0.0.1:11434");
   await expect(reason).toHaveText(MODEL_SAVE_REASON.noModelId);
 
@@ -299,7 +313,7 @@ test("the title chip shows only while chat is set to an enabled local Default", 
 
   // Chat on Claude: no chip.
   await gotoModelsTab(page);
-  await expect(claude).toHaveAttribute("aria-checked", "true");
+  await answererSettled(page, "claude");
   await closeSettings(page);
   await expect(page.locator(CHIP)).toHaveCount(0);
 
@@ -314,6 +328,7 @@ test("the title chip shows only while chat is set to an enabled local Default", 
   await gotoModelsTab(page);
   await claude.click();
   await expect.poll(readServerAnswerer).toBe("claude");
+  await answererSettled(page, "claude");
   await closeSettings(page);
   await expect(page.locator(CHIP)).toHaveCount(0);
 
@@ -324,9 +339,14 @@ test("the title chip shows only while chat is set to an enabled local Default", 
   await closeSettings(page);
   await expect(page.locator(CHIP)).toBeVisible();
   await gotoModelsTab(page);
-  await page.locator(`[data-testid='model-toggle-${entry.id}']`).click();
+  const toggle = page.locator(`[data-testid='model-toggle-${entry.id}']`);
+  await toggle.click();
   await expect.poll(async () => (await readServerModels()).file.models[0]?.enabled).toBe(false);
   expect(await readServerAnswerer()).toBe("local");
+  // The chip reads the same models store as this box, and the same answerer
+  // read as the radio: both settled before the chip is checked.
+  await expect(toggle).not.toBeChecked();
+  await answererSettled(page, "local");
   await closeSettings(page);
   await expect(page.locator(CHIP)).toHaveCount(0);
 });
@@ -345,6 +365,8 @@ test("a cloud Default the user set is kept when a local model is added (DD1)", a
 
   await page.locator("[data-testid='chat-answerer-local']").click();
   await expect.poll(readServerAnswerer).toBe("local");
+  await answererSettled(page, "local");
+  await expect(page.locator(`[data-testid='model-default-${cloud.id}']`)).toBeChecked();
   await closeSettings(page);
   await expect(page.locator(CHIP)).toHaveCount(0);
   expect((await readServerModels()).file.defaultModelId).toBe(cloud.id);
