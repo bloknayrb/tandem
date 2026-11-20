@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
+import { REPLY_TEXT_MAX } from "../../../src/server/annotations/schema.js";
 import {
   type DispatchCtx,
   dispatch,
@@ -1030,5 +1031,60 @@ describe("dispatch — a write result says it proposed, not that it changed the 
       expect(note, name).toMatch(/not been changed/i);
       expect(note, name).not.toMatch(/has been (made|applied|replaced)|is now (in|part of)/i);
     }
+  });
+});
+
+describe("the comment arguments are capped (#1123 item 31, F3)", () => {
+  const OVER = "x".repeat(REPLY_TEXT_MAX + 1);
+  const AT = "x".repeat(REPLY_TEXT_MAX);
+  const cases: Array<[string, string, string, Record<string, unknown>]> = [
+    ["comment", "comment_on_quote", "comment", { quoted_text: "the first phase" }],
+    [
+      "rationale",
+      "propose_replacement",
+      "rationale",
+      { quoted_text: "We proceeded carefully", suggested_text: "y" },
+    ],
+    [
+      "suggested_text",
+      "propose_replacement",
+      "suggested_text",
+      { quoted_text: "We proceeded carefully", rationale: "why" },
+    ],
+  ];
+
+  it.each(cases)(
+    "%s one over the cap is refused with INVALID_ARGUMENT and nothing is written",
+    (_label, tool, field, base) => {
+      doc = makeMarkdownDoc(FIXTURE);
+      const out = dispatch(tool, { ...base, [field]: OVER }, { ydoc: doc, canEdit: ON });
+      expect(out.result).toEqual({
+        error: "INVALID_ARGUMENT",
+        message: `${field} exceeds the 100000-character limit. Nothing was written.`,
+      });
+      expect(out.effect).toMatchObject({
+        kind: tool === "comment_on_quote" ? "comment" : "replacement",
+        ok: false,
+        errorCode: "INVALID_ARGUMENT",
+        anchor: { quoted_text: base.quoted_text, occurrence_index: 1 },
+      });
+      expect(getAnnotationsMap(doc).size).toBe(0);
+      expect(JSON.stringify(out.result)).not.toMatch(/claude/i);
+    },
+  );
+
+  it.each(cases)("%s exactly at the cap is written whole", (_label, tool, field, base) => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(tool, { ...base, [field]: AT }, { ydoc: doc, canEdit: ON });
+    expect(out.effect).toMatchObject({ ok: true });
+    const map = getAnnotationsMap(doc);
+    expect(map.size).toBe(1);
+    const ann = [...map.values()][0] as Annotation;
+    const stored = field === "suggested_text" ? ann.suggestedText : ann.content;
+    expect(stored).toHaveLength(REPLY_TEXT_MAX);
+  });
+
+  it("the limit is the reply bound", () => {
+    expect(REPLY_TEXT_MAX).toBe(100_000);
   });
 });

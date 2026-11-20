@@ -589,7 +589,8 @@ function runFailureCause(failure: LocalModelFailure | undefined): RunFailureCaus
  * error where it arose (`requestFailure` in `ollama-client.ts`); it never reads
  * `metrics.errorMessage`, so no text of an error picks a message and none is
  * embedded in it (a third-party body or V8-parse snippet must not reach the
- * UI; it stays on stderr). Pinned by `collaborator.test.ts`'s "surfaces an
+ * UI; since #1123 item 31 an endpoint's error body is not logged either, only
+ * its status). Pinned by `collaborator.test.ts`'s "surfaces an
  * error exit as a structured notification, never the raw error text" plus the
  * table-driven "maps … to a fixed string with no raw detail" cases; #1160's
  * test plan calls that pair `structured-failure-no-raw-leak`, which is a

@@ -140,7 +140,7 @@ const annotationBaseShape = {
  * stripped by `channelVisibleReplies` before serialization (ADR-027/#1000),
  * so the author enum here omits "import".
  */
-const VisibleReplySchema = z.object({
+const visibleReplyShape = {
   id: z.string(),
   annotationId: z.string(),
   author: z.enum(["user", "claude"]),
@@ -161,7 +161,28 @@ const VisibleReplySchema = z.object({
     .describe(
       "Replacement proposal carried by a Claude-authored reply, over the parent annotation's range",
     ),
-});
+};
+const VisibleReplySchema = z.object(visibleReplyShape);
+
+/**
+ * `tandem_getAnnotations`' local-model mark (#1123, ADR-039 item 31, F1).
+ * Declared on that tool's annotation and reply items only — never on
+ * `annotationBaseShape`, which the inbox shares — and only on a registration
+ * made with local-period records honoured (`honourLocalPeriodRecords()`, off
+ * while `BYO_MODELS_ENABLED` is), so a dark server's `tools/list` and output
+ * are unchanged. Derived per call from the record's `agentIdentity` stamp AND
+ * `author: "claude"`; the stamp itself stays undeclared (and so stripped): a
+ * declared object would let a malformed stamp fail the whole call, and its
+ * `displayName` is free text Claude does not need.
+ */
+const byLocalModelShape = {
+  byLocalModel: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Present when the user's local model wrote this record, not you. A hint, not proof: anything that can write to the editor can add or remove it",
+    ),
+};
 
 // ---------------------------------------------------------------------------
 // tandem_status
@@ -257,25 +278,45 @@ export const getTextContentOutputShape = {
 // tandem_getAnnotations
 // ---------------------------------------------------------------------------
 
-const annotationWithRepliesSchema = z.object({
-  ...annotationBaseShape,
-  // #1764. Declared on THIS schema only — `annotationBaseShape` is shared with
-  // `tandem_checkInbox`, which surfaces a different population and must not
-  // grow the field. The enum is the two DEGRADATION verdicts, not all five
-  // `RefreshResult` kinds: `updated` fires for every annotation past any edit
-  // and `repaired` for the whole collection after any reload, so emitting them
-  // would bury the one signal this exists to carry.
-  anchor: z
-    .enum(["degraded", "failed"])
-    .optional()
-    .describe(
-      'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+function annotationWithRepliesSchemaFor(localModelMark: boolean) {
+  return z.object({
+    ...annotationBaseShape,
+    ...(localModelMark ? byLocalModelShape : {}),
+    // #1764. Declared on THIS schema only — `annotationBaseShape` is shared with
+    // `tandem_checkInbox`, which surfaces a different population and must not
+    // grow the field. The enum is the two DEGRADATION verdicts, not all five
+    // `RefreshResult` kinds: `updated` fires for every annotation past any edit
+    // and `repaired` for the whole collection after any reload, so emitting them
+    // would bury the one signal this exists to carry.
+    anchor: z
+      .enum(["degraded", "failed"])
+      .optional()
+      .describe(
+        'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+      ),
+    replies: z.array(
+      localModelMark
+        ? z.object({ ...visibleReplyShape, ...byLocalModelShape })
+        : VisibleReplySchema,
     ),
-  replies: z.array(VisibleReplySchema),
-});
+  });
+}
+
+/**
+ * `tandem_getAnnotations`' output shape for one registration: with
+ * `localModelMark`, annotation and reply items also declare `byLocalModel`.
+ * The registration advertises and strip-parses this same object, so the two
+ * cannot differ (a mismatch would strip the lit field).
+ */
+export function getAnnotationsOutputShapeFor(localModelMark: boolean) {
+  return {
+    ...getAnnotationsOutputShape,
+    annotations: z.array(annotationWithRepliesSchemaFor(localModelMark)),
+  };
+}
 
 export const getAnnotationsOutputShape = {
-  annotations: z.array(annotationWithRepliesSchema),
+  annotations: z.array(annotationWithRepliesSchemaFor(false)),
   count: z.number(),
   notesExcluded: z
     .number()

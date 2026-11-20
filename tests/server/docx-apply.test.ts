@@ -1512,6 +1512,117 @@ describe("applyChangesCore — the backup sidecar", () => {
     REAL_APPLY_TIMEOUT_MS,
   );
 
+  // #1123 item 31, review round 1: a caller-named backup may not land in
+  // Tandem's app-data directory, which holds the local-model settings that
+  // #2410's acceptance says no caller-named writer can reach.
+  describe("a backupPath inside Tandem's app-data directory is refused", () => {
+    async function appDataDir(): Promise<string> {
+      const dir = resolveAppDataDir();
+      await fsp.mkdir(dir, { recursive: true });
+      return dir;
+    }
+    async function expectRefusedAndUnwritten(backupPath: string, landsAt: string) {
+      const before = await fsp.readFile(docPath);
+      await expect(applyChangesCore(DOC_ID, undefined, backupPath)).rejects.toMatchObject({
+        code: "INVALID_PATH",
+        message: expect.stringContaining("Tandem's own data folder"),
+      });
+      expect(fs.existsSync(landsAt), `${landsAt} was written`).toBe(false);
+      // Refused before any write: the document itself is untouched too.
+      expect((await fsp.readFile(docPath)).equals(before)).toBe(true);
+    }
+
+    it(
+      "an ordinary file in app data",
+      async () => {
+        const target = path.join(await appDataDir(), "apply-backup-test.docx");
+        await expectRefusedAndUnwritten(target, target);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it.each(["models.json", "local-model-settings.json", "chat-answerer.json"])(
+      "a reserved settings name there (%s)",
+      async (name) => {
+        const target = path.join(await appDataDir(), name);
+        await fsp.rm(target, { force: true });
+        await expectRefusedAndUnwritten(target, target);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
+      "a path that reaches it through ..",
+      async () => {
+        const dir = await appDataDir();
+        const sub = path.join(dir, "apply-backup-sub");
+        await fsp.mkdir(sub, { recursive: true });
+        const target = path.join(dir, "models.json");
+        await fsp.rm(target, { force: true });
+        // Spelled from outside app data, climbing back in: the check runs on
+        // the canonical path, not the string.
+        const viaDots = `${tmpDir}${path.sep}..${path.sep}${path.relative(path.dirname(tmpDir), sub)}${path.sep}..${path.sep}models.json`;
+        expect(viaDots).toContain(`..${path.sep}`);
+        await expectRefusedAndUnwritten(viaDots, target);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
+      "a symlinked parent outside app data that points into it (the check is on the canonical path)",
+      async (ctx) => {
+        const dir = await appDataDir();
+        const target = path.join(dir, "models.json");
+        await fsp.rm(target, { force: true });
+        const link = path.join(tmpDir, "looks-elsewhere");
+        try {
+          // A directory junction on Windows needs no privilege; elsewhere a
+          // plain directory symlink.
+          await fsp.symlink(dir, link, process.platform === "win32" ? "junction" : "dir");
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          // Skipped only where this host cannot create the link at all.
+          if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") ctx.skip();
+          throw err;
+        }
+        // The spelled path is outside app data; only its realpath is inside.
+        expect(path.relative(dir, link).startsWith("..")).toBe(true);
+        await expectRefusedAndUnwritten(path.join(link, "models.json"), target);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
+      "a sibling folder whose name starts with the app-data folder's name is allowed",
+      async () => {
+        const dir = await appDataDir();
+        const sibling = `${dir}-backup`;
+        await fsp.mkdir(sibling, { recursive: true });
+        try {
+          const target = path.join(sibling, "models.json");
+          await fsp.rm(target, { force: true });
+          const result = await applyChangesCore(DOC_ID, undefined, target);
+          expect(result.backupPath).toBe(fs.realpathSync.native(target));
+          expect(fs.existsSync(target)).toBe(true);
+        } finally {
+          await fsp.rm(sibling, { recursive: true, force: true });
+        }
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+
+    it(
+      "an ordinary path outside app data still works",
+      async () => {
+        const target = path.join(tmpDir, "elsewhere.backup.docx");
+        const result = await applyChangesCore(DOC_ID, undefined, target);
+        expect(result.backupPath).toBe(target);
+        expect(fs.existsSync(target)).toBe(true);
+      },
+      REAL_APPLY_TIMEOUT_MS,
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "refuses a symlinked backup destination instead of writing through it",
     async () => {

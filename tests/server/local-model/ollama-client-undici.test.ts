@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { classifyFailure, RUN_FAILURE_TEXT } from "../../../src/server/local-model/collaborator.js";
 import { runLoop } from "../../../src/server/local-model/loop.js";
-import { chat } from "../../../src/server/local-model/ollama-client.js";
+import { chat, requestFailure } from "../../../src/server/local-model/ollama-client.js";
 
 /**
  * #1123 / #2422 R1.5: the local-model client's behaviour on the REAL
@@ -267,4 +267,51 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     expect(r.metrics.exit).toBe("error");
     expect(classifyFailure(r.metrics)).toBe(RUN_FAILURE_TEXT.unreachable);
   });
+});
+
+describe("an endpoint's error body is never logged (#1123 item 31, F4)", () => {
+  const SENTINEL = "SENTINEL-prompt-echo-7f3a9c";
+
+  function spyAllConsole() {
+    return (["error", "warn", "info", "log", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+  }
+  function loggedText(spies: ReturnType<typeof spyAllConsole>): string[] {
+    return spies.flatMap((spy) =>
+      spy.mock.calls.map((args) =>
+        args.map((a) => (a instanceof Error ? `${a.message} ${a.stack}` : String(a))).join(" "),
+      ),
+    );
+  }
+
+  it.each([500, 400])(
+    "HTTP %i with a body: no console line, thrown message or tag carries the body; one line names the status",
+    async (status) => {
+      const { base } = await listen((_req, res) => {
+        res.writeHead(status, { "content-type": "text/plain" }).end(`detail ${SENTINEL} detail`);
+      });
+      const spies = spyAllConsole();
+      let thrown: unknown;
+      try {
+        await chat({ config: config(base), messages: [], tools: [] });
+      } catch (err) {
+        thrown = err;
+      }
+      const viaLoop = await loop(base);
+      const lines = loggedText(spies);
+      for (const spy of spies) spy.mockRestore();
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).not.toContain(SENTINEL);
+      expect(requestFailure(thrown)).toEqual({ kind: "http", status });
+      expect(JSON.stringify(requestFailure(thrown))).not.toContain(SENTINEL);
+      for (const line of lines) expect(line).not.toContain(SENTINEL);
+      // One line per request (the direct call and the loop's), naming the status.
+      expect(lines.filter((l) => l.includes(`HTTP ${status}`))).toHaveLength(2);
+      expect(viaLoop.metrics.exit).toBe("error");
+      expect(viaLoop.metrics.errorMessage ?? "").not.toContain(SENTINEL);
+      expect(viaLoop.metrics.failure).toEqual({ kind: "http", status });
+    },
+  );
 });

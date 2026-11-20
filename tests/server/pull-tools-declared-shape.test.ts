@@ -79,6 +79,7 @@ import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";
 import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
+  honourLocalPeriodRecords,
 } from "../../src/server/models/local-period.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
 import { anchoredRange } from "../../src/server/positions.js";
@@ -986,10 +987,17 @@ describe("G2: strays are removed at every depth, and nothing stored changes", ()
       reply: stored(o.doc, "reply-agent", Y_MAP_ANNOTATION_REPLIES),
     };
     const declared = await getAnnotationsDeclared();
+    // The local-model mark (#1123 item 31, F1): declared and derived exactly
+    // when the honour seam was on at registration (this file's server is built
+    // in `beforeEach` with no override, so it follows the shipped flag). The
+    // stamped user record `walk` is never marked; the stamped Claude reply is.
+    const markOn = honourLocalPeriodRecords();
+    expect(declared.reply.has("byLocalModel"), "the mark is declared on replies").toBe(markOn);
 
     const { annotations } = await getAnnotations(o.documentId);
 
     expect(annotations.map((a) => a.id)).toEqual(["walk"]);
+    expect("byLocalModel" in annotations[0], "a stamped user record is never marked").toBe(false);
     const item = annotations[0];
     const expected = wire(clean);
     for (const [k, v] of Object.entries(expected)) {
@@ -1010,6 +1018,7 @@ describe("G2: strays are removed at every depth, and nothing stored changes", ()
         text: "from the helper",
         timestamp: 1_700_000_005_000,
         rev: 1,
+        ...(markOn ? { byLocalModel: true } : {}),
       },
     ]);
 

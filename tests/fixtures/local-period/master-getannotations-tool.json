@@ -1,0 +1,266 @@
+{
+  "description": "Read the annotations on a document, optionally filtered by author/type/status, each comment with its visible replies. Only records shared with you are returned. User notes are private and excluded, counted in notesExcluded (including imported comments awaiting user promotion; promoted ones surface as user comments). Every other record the user has not shared is excluded too and counted in privateExcluded — user highlights are always private, so type: \"highlight\" returns only a highlight Claude authored, which no current tool or seed creates (a store from an older version may still hold the old tutorial highlight). In solo mode the user's own annotations and replies are also held back. A record whose anchor no longer matches its text carries anchor: \"degraded\" or \"failed\". For only what is new since your last poll, use tandem_checkInbox.",
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "annotations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string",
+              "enum": [
+                "user",
+                "claude",
+                "import"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "highlight",
+                "comment"
+              ],
+              "description": "User-private notes are never surfaced, so \"note\" cannot appear here."
+            },
+            "range": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "number",
+                  "description": "Flat text offset (inclusive)"
+                },
+                "to": {
+                  "type": "number",
+                  "description": "Flat text offset (exclusive)"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            "relRange": {
+              "type": "object",
+              "properties": {
+                "fromRel": {
+                  "description": "Opaque serialized Y.js RelativePosition"
+                },
+                "toRel": {
+                  "description": "Opaque serialized Y.js RelativePosition"
+                }
+              },
+              "additionalProperties": false
+            },
+            "content": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "accepted",
+                "dismissed"
+              ]
+            },
+            "timestamp": {
+              "type": "number"
+            },
+            "textSnapshot": {
+              "description": "Document text at creation time, capped at 200 chars. Check textSnapshotTruncated before treating it as the annotation's full text.",
+              "type": "string"
+            },
+            "textSnapshotTruncated": {
+              "description": "True when textSnapshot is only the first 200 chars of the annotated text. Do not pass a truncated snapshot back as a range guard — it will resolve to a shorter range than the annotation covers.",
+              "type": "boolean"
+            },
+            "textSnapshotBreaks": {
+              "description": "Which newlines in textSnapshot were structure: 'block' a boundary between blocks, 'hard' a hard break. A newline not listed is a literal newline (a soft wrap). Offsets are relative to textSnapshot.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "number"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "block",
+                      "block-opaque",
+                      "hard"
+                    ]
+                  }
+                },
+                "required": [
+                  "at",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "editedAt": {
+              "type": "number"
+            },
+            "rev": {
+              "description": "Durable-store last-writer-wins counter",
+              "type": "number"
+            },
+            "resolvedBy": {
+              "description": "Who resolved this record; absent means the user",
+              "type": "string",
+              "enum": [
+                "user",
+                "claude"
+              ]
+            },
+            "acceptedReplyId": {
+              "description": "Set while accepted: the reply whose replacement was applied",
+              "type": "string"
+            },
+            "priorSuggestedText": {
+              "description": "Set while accepted via a reply: this record's own suggestedText before (null: none)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": "string",
+              "enum": [
+                "private",
+                "outbound"
+              ]
+            },
+            "promotedFrom": {
+              "type": "string",
+              "const": "note"
+            },
+            "importSource": {
+              "description": "Original author/file for an imported comment",
+              "type": "object",
+              "properties": {
+                "author": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "commentId": {
+                  "description": "Source comment id (round-trip identity on save)",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "author",
+                "file"
+              ],
+              "additionalProperties": false
+            },
+            "color": {
+              "description": "Highlight annotations only",
+              "type": "string",
+              "enum": [
+                "yellow",
+                "green",
+                "blue",
+                "pink"
+              ]
+            },
+            "suggestedText": {
+              "description": "Replacement proposal (comment annotations only)",
+              "type": "string"
+            },
+            "anchor": {
+              "description": "Present only when this annotation's CRDT anchor is untrustworthy. \"degraded\": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.",
+              "type": "string",
+              "enum": [
+                "degraded",
+                "failed"
+              ]
+            },
+            "replies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "annotationId": {
+                    "type": "string"
+                  },
+                  "author": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "claude"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "number"
+                  },
+                  "editedAt": {
+                    "type": "number"
+                  },
+                  "rev": {
+                    "type": "number"
+                  },
+                  "suggestedText": {
+                    "description": "Replacement proposal carried by a Claude-authored reply, over the parent annotation's range",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "annotationId",
+                  "author",
+                  "text",
+                  "timestamp"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "id",
+            "author",
+            "type",
+            "range",
+            "content",
+            "status",
+            "timestamp",
+            "audience",
+            "replies"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "count": {
+        "type": "number"
+      },
+      "notesExcluded": {
+        "description": "How many user-private notes were filtered out; omitted when zero",
+        "type": "number"
+      },
+      "privateExcluded": {
+        "description": "How many non-note records were filtered out because the user has not shared them — user highlights included; omitted when zero",
+        "type": "number"
+      }
+    },
+    "required": [
+      "annotations",
+      "count"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  }
+}
