@@ -146,10 +146,12 @@ test("Manual reopen → close does NOT persist wizard dismissal", async ({ page 
 
 // Unified-wizard "More integrations" section. In the browser (E2E) the
 // Cowork row is hidden because `loadInvoke`/`isTauriRuntime()` reject — only
-// the "AI models — coming soon" line is shown. The Cowork sub-view renders
+// the "AI models" row is shown. Flag-neutral (#1123 PR 8a): that row reads
+// "coming soon" with local models off and offers "Set up" with them on, so
+// only its name is asserted. The Cowork sub-view renders
 // only in the Tauri WebView (claude-in-chrome can't drive it; covered by
 // unit tests with a mocked invoke + Bryan's manual Tauri pass).
-test("More integrations section shows models coming-soon; Cowork row hidden in browser", async ({
+test("More integrations section shows the AI models row; Cowork row hidden in browser", async ({
   page,
 }) => {
   await openSettingsModal(page);
@@ -160,7 +162,6 @@ test("More integrations section shows models coming-soon; Cowork row hidden in b
   const more = page.locator("[data-testid='integration-wizard-more']");
   await expect(more).toBeVisible();
   await expect(more).toContainText("AI models");
-  await expect(more).toContainText("coming soon");
   // Cowork is Tauri-only — its row/Set-up button must not render in the browser.
   await expect(page.locator("[data-testid='integration-wizard-cowork-setup']")).toHaveCount(0);
   await expect(page.locator("[data-testid='integration-wizard-cowork-step']")).toHaveCount(0);
