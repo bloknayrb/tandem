@@ -59,7 +59,10 @@ import {
   judgeBind,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
-import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
+import {
+  REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_WAKE_PROMPT,
+} from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
 
 // --- Fake child ---------------------------------------------------------------
@@ -1050,8 +1053,16 @@ describe("R2.6: a throwing stopAndSpawn records spawn-failed when nothing else d
     const h = makeSupervisor();
     await boundFreshRun(h);
     vi.stubEnv("TANDEM_REAPER_PATH", path.join(tmpRoot, "no-such-reaper"));
-    await expect(h.sup.relaunch()).rejects.toThrow();
-    expect(h.sup.status().lastError).toBe("binary-not-found");
+    // Nor under the working directory: `reaperPath` falls back to
+    // `<cwd>/reaper/target/release/`, which a developer's build fills (as in
+    // owner-handle-spawn.test.ts).
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(tmpRoot);
+    try {
+      await expect(h.sup.relaunch()).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
+      expect(h.sup.status().lastError).toBe("binary-not-found");
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("with the late licence refusal: unlicensed kept", async () => {
