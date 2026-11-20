@@ -175,7 +175,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // 39 adds the fourth absent-tools cause (#2357): the plugin starts through `npx`, so a
   // Claude Code with no Node.js on its PATH gets no tools while Tandem is running. Keyed in
   // the lead-in, with a carve-out at the head of step 3. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*39$/m);
+  // 40 adds the local period and the `byLocalModel` mark (#1123, the flip). Outside the wake
+  // section.
+  expect(skill).toMatch(/^version:\s*40$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -565,7 +567,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "39", bodyHash: "956a3a64a648" });
+    ).toEqual({ version: "40", bodyHash: "0eff67be257f" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

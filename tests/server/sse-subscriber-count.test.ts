@@ -54,8 +54,8 @@ describe("getSubscriberCount tracks the SSE fan-out", () => {
   });
 
   // The reason `subscribe` takes a kind at all. `local-model/collaborator.ts`
-  // attaches to the same fan-out; it is dark behind BYO_MODELS_ENABLED today, but
-  // on that flip an in-process listener would hold the count above zero forever —
+  // attaches to the same fan-out; with BYO_MODELS_ENABLED on (since 0.32) that
+  // in-process listener would otherwise hold the count above zero forever —
   // making "nothing is attached" unreachable in `tandem doctor` and stamping every
   // comment `alreadyPushed` on the strength of a listener that never left the
   // machine. Both are the false signal #1242/#1243 exist to remove.

@@ -25,7 +25,7 @@ Client compatibility:
 | **Claude Desktop** (local app) | Supported on all three platforms — the wizard and `tandem setup --apply` write `claude_desktop_config.json` wherever Claude Desktop puts it (`%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/claude/`, plus the Microsoft Store's MSIX location). Request/response only — none of the push transports apply. **Cowork** (Claude Desktop's local agent mode) is not a supported surface in this version: Tandem's Cowork setup ships dark ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio as an MCP host, …) | Best-effort, MCP-contract-compatible, not validated. |
-| **Non-MCP AIs** | Not supported today. **Local models** (Ollama / LM Studio via OpenAI-compatible endpoints) are committed for v1.0 ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), tracked in #1123); cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |
+| **Non-MCP AIs** | **Local models** (Ollama, LM Studio, llama.cpp or another OpenAI-compatible server on this computer) work from v0.32.0 through Tandem's own loop, not MCP: see [User guide → Local models](user-guide.md#local-models) ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), #1123). Other non-MCP AIs are not supported today; cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |
 
 ## MCP tools at a glance
 

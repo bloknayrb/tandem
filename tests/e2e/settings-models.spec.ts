@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
-import { BYO_MODELS_ENABLED, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
+import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import type { ModelsEntry, ModelsFile } from "../../src/shared/models/contract";
 import {
   cleanupAllOpenDocuments,
@@ -28,11 +28,6 @@ import {
   SAVING_LABEL,
   USE_IT_FOR_CHAT_LABEL,
 } from "./local-model-strings";
-
-// Local models ship dark: the Models tab is filtered out while the flag is off,
-// so this whole file is skipped there (pinned by
-// tests/scripts/e2e-local-model-skip-wiring.test.ts; the flip deletes it).
-test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
 
 /**
  * Settings → Models E2E (#659; rewritten for local providers in #1123 PR 8a,
@@ -172,7 +167,6 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
-  if (!BYO_MODELS_ENABLED) return;
   // The reset runs even when an assertion here fails: a server left with chat
   // set to a local model would break every later spec's chat.
   try {

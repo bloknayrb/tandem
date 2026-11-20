@@ -195,18 +195,18 @@ const ROUTE_GATES: RouteGate[] = [
   {
     constant: "API_MODELS",
     gate: "open",
-    why: "BYO-model config (ADR-039), itself dark behind BYO_MODELS_ENABLED; the local model is refused per run in `local-model/collaborator.ts`",
+    why: "BYO-model config (ADR-039); the local model is refused per run in `local-model/collaborator.ts`",
   },
   { constant: "API_MODELS_SECRET", gate: "open", why: "provider API key, not document content" },
   {
     constant: "API_MODELS_LOCAL_SETTINGS",
     gate: "open",
-    why: "whether a local model may comment and suggest (#1123, ADR-039), itself dark behind BYO_MODELS_ENABLED; it starts nothing and reaches no model — the setting only narrows or widens what an already-admitted run may write, the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching editing off must never be refused",
+    why: "whether a local model may comment and suggest (#1123, ADR-039); it starts nothing and reaches no model — the setting only narrows or widens what an already-admitted run may write, the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching editing off must never be refused",
   },
   {
     constant: "API_MODELS_CHAT_ANSWERER",
     gate: "open",
-    why: "who answers chat, Claude or the local model (#1123, ADR-039), itself dark behind BYO_MODELS_ENABLED; it starts nothing and reaches no model — the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching to Claude must never be refused",
+    why: "who answers chat, Claude or the local model (#1123, ADR-039); it starts nothing and reaches no model — the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching to Claude must never be refused",
   },
 ];
 

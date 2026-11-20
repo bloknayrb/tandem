@@ -34,7 +34,7 @@ When all three are ticked the strip says "You're ready!" and closes itself a few
 
 ![The getting-started checklist above the welcome document](screenshots/08-onboarding-tutorial.png)
 
-**On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item.
+**On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item. After you set up Claude in the wizard, Tandem may offer an optional window to add a [local model](#local-models).
 
 ![The integration wizard listing each Claude client it found, with the settings file it will write to](screenshots/13-setup-wizard.png)
 
@@ -70,7 +70,7 @@ When text is selected, a floating popup appears with two parts:
 - **Highlight swatches** — One-click highlighting in 4 colors (yellow, green, blue, pink), plus a "no highlight" swatch that clears an existing highlight.
 - **Annotate** — Opens a small composer anchored to the selection. Type your text, then choose the audience:
   - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
-  - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button is labelled with your configured assistant's name. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
+  - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button reads **Send to Claude**. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
 The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
@@ -100,7 +100,7 @@ Hover over a heading and a small chevron appears to its left. Click it to collap
 
 - **In the document:** Undo/Redo, Cut/Copy/Paste, **Paste as Raw Text** (`Ctrl+Shift+V`), and Select All. Right-clicking a link gives Open / Copy / Edit / Remove Link; right-clicking inside a table gives row and column submenus plus Merge Cells, Split Cell, and Delete Table. With text selected, three more items appear: **Ask AI about selection…**, **Comment to AI…**, and **Private Note…**. (On macOS, plain text keeps the native menu so Look Up and Services still work.)
 - **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer / Show in File Manager (macOS / Windows / Linux).
-- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button and the annotate popup use your configured assistant's name; this one OS menu item says "Claude" whichever model you have configured.
+- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button, the annotate popup and this menu item all read **Send to Claude**.
 
 Right-clicking empty app chrome — rails, panel padding, the status bar — deliberately does nothing.
 
@@ -354,7 +354,7 @@ A private note to yourself. Notes are never sent to the AI — it cannot read th
 
 ### Creating Annotations
 
-Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or the send button (an outbound comment — it carries your assistant's name).
+Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or the send button (an outbound comment — it reads **Send to Claude**).
 
 ### Editing Annotations
 
@@ -489,6 +489,28 @@ Change any of this under **Settings → Notifications**:
 
 In the browser, a reply that arrives before your first click or keypress in the Tandem tab plays no sound, because browsers block audio until you interact with the page; the notification and the title count still appear. In the desktop app, whether notifications appear at all is up to your operating system's notification settings, such as Focus Assist or Do Not Disturb. A desktop app hidden to the tray has no taskbar icon to flash, so you get the notification and sound only. If several Tandem windows are open, the one you're using plays the sound; with **I keep Tandem visible beside other apps** on, every window that counts as in use plays it, so two visible windows both chime. A window you're not using stays quiet once the reply has been read in another window.
 
+## Local models
+
+Tandem can use a model running on your own computer to answer chat instead of Claude. It is optional: chat stays with Claude until you choose otherwise.
+
+**What you need.** A model server on this computer that offers the OpenAI-compatible chat API and supports tool calling, such as Ollama, LM Studio or llama.cpp, with a model loaded. Tandem does not download models. Tandem recommends no model: use any local model; results depend on the model, and smaller models answer less reliably.
+
+**Adding one.** In Settings → **Models**, choose **Add model**. Ollama and LM Studio come with their usual address filled in; for llama.cpp or another server, enter its address and port. Enter the model's name exactly as your server lists it. The address must be on this computer (127.0.0.1, localhost or [::1]). A model is used only when it is switched **On**: with one On, that one is used; with more than one On, the one marked **Default**. In the browser version, open Tandem at its 127.0.0.1 address to change models: a `localhost` page cannot.
+
+**Choosing it for chat.** Under **Who answers your chat**, choose **Local model**; after you add your first local model, Tandem also offers **Use it for chat**. If no local model can be used (none On, several On and none marked Default, or your Default is an older cloud model), Settings says so under that choice and your messages get a note saying what to fix: turn a local model On and mark it Default, or set chat back to Claude. A local model needs an open document to answer.
+
+**What Claude still sees.** While a local model answers chat, Tandem stops handing Claude your chat messages and the changes you make. A Claude session that is already connected can still read your document and finish the step it is on. Choose **Claude** to switch back: comments and notes you sent meanwhile then reach Claude; chat messages from that time do not.
+
+**Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments, reply in threads it started and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
+
+**What is sent.** For a local model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.
+
+**LM Studio.** Tandem sends no API token, so an LM Studio server set to require one cannot be used.
+
+**When a reply fails,** Tandem says why it thinks it did: the server is not running, the model name is wrong, or the model may not support tools; you can also set chat back to Claude.
+
+**Licence.** From v1.0 a local model counts as an AI feature under Tandem's licence, so after the free trial it needs a licence key, as Claude does; without one, Tandem stays a full editor with no AI.
+
 ## Settings
 
 Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
@@ -504,6 +526,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
 | **Notifications** | Reply notifications, what they say, the taskbar flash or tab-title count, whether a visible Tandem window counts as the one you're using (**I keep Tandem visible beside other apps**), and the reply sound and its volume — see [Reply Notifications](#reply-notifications) |
 | **AI Assistant** | **Selection Sensitivity**, **Show floating selection toolbar**, the margin annotation view, **Claude working directory**, **Tandem's Claude** (when it starts and how long it runs), **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), and the integration wizard — see [AI Assistant settings](#ai-assistant-settings) below |
+| **Models** | Your local models, who answers your chat, and whether local models may comment and suggest changes: see [Local models](#local-models) |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | License status — this version of Tandem doesn't require a license — and a field to activate a key you've been sent |
 | **About** | **View Documentation**, version details, **Copy Diagnostics**, and **Open Log Folder** (desktop app only) |

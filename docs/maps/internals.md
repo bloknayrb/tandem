@@ -77,6 +77,7 @@ Every ADR lives in [decisions.md](../decisions.md). Grouped by what they govern:
   [which-helper table](../gotchas.md#origin-tagging--which-helper-to-use-critical-rule-2).
 - **MCP-first integration:** [ADR-003](../decisions.md#adr-003-mcp-over-rest-for-claude-integration),
   [ADR-038](../decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) the policy,
+  [ADR-039](../decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) non-MCP model providers (local models, on from v0.32.0),
   [ADR-008](../decisions.md#adr-008-shared-mcp-response-helpers),
   [ADR-010](../decisions.md#adr-010-docidfrompath-for-multi-document-room-names) and
   [ADR-011](../decisions.md#adr-011-optional-documentid-on-all-mcp-tools) document IDs,
@@ -94,7 +95,6 @@ Every ADR lives in [decisions.md](../decisions.md). Grouped by what they govern:
 - **Security:** [ADR-050](../decisions.md#adr-050-api-is-loopback-only-for-non-get-enforced-at-the-mount)
   loopback-only mutations, [ADR-030](../decisions.md#adr-030-windows-code-signing-via-azure-trusted-signing--oidc) Windows signing.
 - **Dark gates:** [ADR-040](../decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) licensing,
-  [ADR-039](../decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) local models,
   [ADR-053](../decisions.md#adr-053-docx-ships-dark) `.docx`,
   [ADR-054](../decisions.md#adr-054-multi-session-document-ownership--identity-and-shipping-dark) document ownership,
   [ADR-055](../decisions.md#adr-055-cowork-setup-ships-dark) Cowork setup,

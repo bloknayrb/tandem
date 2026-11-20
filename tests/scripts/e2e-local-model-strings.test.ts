@@ -13,9 +13,10 @@ import * as copies from "../e2e/local-model-strings.js";
 
 /**
  * The local-model E2E specs take their expected words from
- * `tests/e2e/local-model-strings.ts` (#1123 PR 8a). Those specs run only with
- * `BYO_MODELS_ENABLED` on, so a reworded string would otherwise be caught only
- * by the lit E2E job. This file is flag-neutral and runs in `check`: each copy
+ * `tests/e2e/local-model-strings.ts` (#1123 PR 8a). Those specs run in `check`'s
+ * E2E now that local models are on, but a reworded string would then fail there
+ * as an E2E timeout far from its cause. This file is flag-neutral and runs in
+ * vitest: each copy
  * must equal its source. Constants are imported; the two that live only inside
  * a component's markup or script are read from the `.svelte` source text.
  */

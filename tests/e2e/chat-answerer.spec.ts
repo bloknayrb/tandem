@@ -1,18 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
-import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import { expectOnlyAllowanceNotices, resetLocalModelState } from "./helpers";
 import { ANSWERER_LOCAL_NOTICE, CHAT_ANSWERER_CLAUDE_STATUS } from "./local-model-strings";
-
-// Local models ship dark: the Models tab is filtered out while the flag is off,
-// so this whole file is skipped there (pinned by
-// tests/scripts/e2e-local-model-skip-wiring.test.ts; the flip deletes it).
-test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
 
 /**
  * "Who answers your chat" in Settings → Models (#1123 part B, R2, R10.3).
  *
- * Skipped at file level while local models ship dark; the advisory
- * `byo-flag-on` CI job runs it lit (ADR-039, #1123 PR 8a). Who answers chat is
+ * Runs in `check`'s E2E with local models on (ADR-039, #1123). Who answers chat is
  * SERVER state that outlives the page, so it is reset from Node before and
  * after each test (`resetLocalModelState`).
  *
@@ -43,7 +36,6 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
-  if (!BYO_MODELS_ENABLED) return;
   try {
     await expectOnlyAllowanceNotices(page);
   } finally {

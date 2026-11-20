@@ -96,9 +96,8 @@ export function createReplyDetector(
         // nothing more (the id is already known). This branch matters only
         // when the row and its sidecar land together, e.g. a client that
         // reconnects mid-stream and receives both in one update.
-        // Local-model streaming ships dark (BYO_MODELS_ENABLED). The partial
-        // first-flush preview is accepted for now — revisit when BYO models
-        // ship. (A held row is announced on a later, non-seeding pass, so its
+        // Local-model streaming is on since 0.32 (BYO_MODELS_ENABLED). The partial
+        // first-flush preview is accepted for 0.32 by Bryan; tracked by #2499. (A held row is announced on a later, non-seeding pass, so its
         // timestamp frozen at the first flush no longer matters.)
         if (streamingIds.has(message.id)) continue;
         known.add(message.id);

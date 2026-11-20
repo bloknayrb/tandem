@@ -142,8 +142,8 @@ const subscribers = new Set<EventCallback>();
  * (channel shim or plugin monitor). A subset of `subscribers`.
  *
  * The distinction is load-bearing, not bookkeeping. `src/server/local-model/
- * collaborator.ts` subscribes to the same fan-out; it is dark behind
- * `BYO_MODELS_ENABLED` today, but on that flip an enabled collaborator would hold
+ * collaborator.ts` subscribes to the same fan-out; with `BYO_MODELS_ENABLED` on
+ * (since 0.32) an enabled collaborator holds
  * a permanent subscription with no external consumer attached. Counting it would
  * make `subscribers.size >= 1` always true, which (a) stamps every user comment
  * `alreadyPushed` on the strength of an in-process listener and (b) makes

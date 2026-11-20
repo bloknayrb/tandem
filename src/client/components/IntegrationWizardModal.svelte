@@ -86,9 +86,9 @@ interface Props {
   onClose: (reason?: WizardCloseReason) => void;
   /**
    * Close the wizard and open the Models settings path. Wired by App.svelte to
-   * `openModelsSettings`. Only invoked from the flag-ON "AI models" row, which
-   * never renders while `BYO_MODELS_ENABLED` is false — so this stays unused
-   * (and undefined-safe via `?.`) while dark.
+   * `openModelsSettings`. Only invoked from the "AI models" row, which renders
+   * only while `BYO_MODELS_ENABLED` is true (on since 0.32) — so with the flag
+   * false this stays unused (and undefined-safe via `?.`).
    */
   onSetupModels?: () => void;
   /**

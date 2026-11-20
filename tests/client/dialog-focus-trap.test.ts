@@ -117,10 +117,10 @@ describe("FileOpenDialog traps Tab (#1778)", () => {
   });
 });
 
-// Both model modals ship dark (`BYO_MODELS_ENABLED` is a `const false`), so
-// E2E structurally cannot reach them. Their trap is byte-identical in shape to
-// the two reachable ones, and these unit cases are what cover it at flip time.
-describe("ModelEditModal traps Tab (#1778, dark)", () => {
+// Both model modals render with `BYO_MODELS_ENABLED` on (since 0.32). Their trap
+// is byte-identical in shape to the two other modals', and these unit cases
+// cover it directly, flag-neutral.
+describe("ModelEditModal traps Tab (#1778)", () => {
   it("wraps forward, backward, and recovers stranded focus", () => {
     const { container } = render(ModelEditModal, {
       props: { onCancel: vi.fn(), onSave: vi.fn() },
@@ -147,7 +147,7 @@ describe("ModelEditModal traps Tab (#1778, dark)", () => {
   });
 });
 
-describe("FirstRunModelPickerModal traps Tab (#1778, dark)", () => {
+describe("FirstRunModelPickerModal traps Tab (#1778)", () => {
   it("wraps forward, backward, and recovers stranded focus", () => {
     const { container } = render(FirstRunModelPickerModal, {
       props: { onComplete: vi.fn(), onNotify: vi.fn() },

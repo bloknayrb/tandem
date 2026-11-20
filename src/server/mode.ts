@@ -130,8 +130,8 @@ let lastModeWrite: ModeProvenance | null = null;
  * `"tandem"` (#1123). In memory only. A local-model run captures it at its
  * start and compares it on every tool call, so a run started in Tandem mode
  * cannot comment or suggest once the mode has left Tandem — even when it is
- * back in Tandem before the run's next tool call. Nothing reads it while local
- * models ship dark.
+ * back in Tandem before the run's next tool call. Nothing reads it with
+ * `BYO_MODELS_ENABLED` false (local models are on since 0.32).
  */
 let leftTandem = 0;
 /** What the mode last left Tandem FOR, so a refusal can name it. */

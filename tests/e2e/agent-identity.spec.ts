@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { E2E_MCP_PORT } from "../../scripts/test-ports";
-import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   E2E_PAGE_ORIGIN,
@@ -13,11 +12,6 @@ import {
   resetLocalModelState,
 } from "./helpers";
 import { PICKER_TITLE } from "./local-model-strings";
-
-// Local models ship dark: the first-run window never mounts while the flag is
-// off, so this whole file is skipped there (pinned by
-// tests/scripts/e2e-local-model-skip-wiring.test.ts; the flip deletes it).
-test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1123)");
 
 /**
  * The first-run local-model window (#1123; Bryan's pick W1 of 2026-11-17,
@@ -198,7 +192,6 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async ({ page }) => {
-  if (!BYO_MODELS_ENABLED) return;
   try {
     expect(unexpected, "a wizard request reached no handler").toEqual([]);
     expect(await serverSavedSetup(), "the routed wizard wrote the real setup").toEqual([]);

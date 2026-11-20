@@ -873,7 +873,8 @@ function cloneYDoc(doc: Y.Doc): Y.Doc {
  * CTRL state never carries a LIVE `chatStream` entry.
  *
  * TOTAL by construction, because this runs on every persist and every restore
- * for all users while the only streaming producer ships dark: an entry folds
+ * for all users, whether or not the only streaming producer (the local model) is
+ * on: an entry folds
  * only when it is a real `Y.Text` AND its chat row still exists; everything
  * else — an entry whose row the user erased mid-stream (a fold there would
  * durably resurrect a message the user just deleted), or a malformed value

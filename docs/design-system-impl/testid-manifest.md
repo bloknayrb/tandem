@@ -412,9 +412,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `settings-modal-shortcuts-list` (listed under the modal above)
 
 ### Settings — Models tab
-The local-model collaborator ships dark (`BYO_MODELS_ENABLED`, ADR-039): while
-that flag is false the Models tab is filtered out of Settings entirely, so none
-of these selectors renders in a release build.
+These render from v0.32.0 (`BYO_MODELS_ENABLED`, ADR-039); with the flag false
+the Models tab is filtered out of Settings entirely.
 - `models-{empty-state,loading,load-error,reload-btn,save-error}`. The three
   `models-legacy-migration-*` / `models-legacy-migrate-btn` ids this list used
   to name no longer ship.
@@ -480,8 +479,9 @@ shipped and were removed:
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
 - `integration-wizard-models-setup` — the "More integrations" row for a local
-  model; rendered only when `BYO_MODELS_ENABLED` is true, so a release build
-  shows a disabled "coming soon" row with no testid instead
+  model; rendered only when `BYO_MODELS_ENABLED` is true, so every release from
+  v0.32.0 renders it; with the flag false a disabled "coming soon" row with no
+  testid shows instead
 - Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy,-copy-status}`
   in the push-mode block (`integration-wizard-push-mode`, which carries
   `data-push-mode` `shim` / `no-shim`). **These four now live in `PushRoutesInfo.svelte`, not

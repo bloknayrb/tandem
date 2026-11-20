@@ -440,8 +440,9 @@ Two more, of the same kind:
   of them while Tandem is running, because it goes through that route (#2205); with no Tandem
   running it writes the file directly, and the next launch reads it.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
-  checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
-  unreachable today; revisit if that flag flips.
+  checked per run, not per token, so one in-flight reply finishes. Reachable only once the licence gate
+  is armed too (local models are on from v0.32.0; the gate is still dark); revisit at the licence
+  flip.
 
 ## AI surfaces — the #1346 inventory
 
