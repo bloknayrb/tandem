@@ -117,6 +117,38 @@ async function copyBackupExclusive(
   });
 }
 
+/**
+ * Is `target` (an absolute, canonical path) Tandem's app-data directory or
+ * inside it? (#1123 item 31, review round 1.) The app-data directory holds the
+ * local-model settings (`models.json`, `local-model-settings.json`,
+ * `chat-answerer.json`, the announced record and its baseline marker), and
+ * #2410's acceptance rests on no caller-named writer reaching them, so a
+ * caller-supplied `backupPath` may not land anywhere in it.
+ *
+ * Both sides are canonical in the SAME flavour: `target`'s parent comes from
+ * `fs.promises.realpath` (the native one, which expands Windows 8.3 short
+ * names), and so does the root here; never mix it with the JS flavour
+ * (CLAUDE.md, #2400). Windows and macOS compare case-insensitively, as their
+ * default filesystems do. A root that does not exist holds nothing, and the
+ * target's parent exists (it was just realpathed), so the plain resolved form
+ * is then enough.
+ */
+async function isInsideAppDataDir(target: string): Promise<boolean> {
+  const configured = resolveAppDataDir();
+  let root: string;
+  try {
+    root = await fs.realpath(configured);
+  } catch {
+    root = path.resolve(configured);
+  }
+  const fold = (p: string) =>
+    process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p;
+  const rel = path.relative(fold(root), fold(target));
+  if (rel === "") return true;
+  if (path.isAbsolute(rel)) return false;
+  return rel !== ".." && !rel.startsWith(`..${path.sep}`);
+}
+
 export async function applyChangesCore(
   documentId?: string,
   author?: string,
@@ -398,6 +430,20 @@ export async function applyChangesCore(
     throw Object.assign(
       new Error(`Backup directory does not exist: ${path.dirname(defaultBackup)}`),
       { code: "FILE_NOT_FOUND" },
+    );
+  }
+  // A caller-named backup may not land in Tandem's app-data directory (#1123
+  // item 31, review round 1): checked on the canonical path (the parent's
+  // realpath, so `..`, a symlinked parent and a short name all resolve
+  // first), before anything is written. The default backup sits beside the
+  // document and is not caller-named, so it is not checked here.
+  if (resolvedBackupPath !== undefined && (await isInsideAppDataDir(defaultBackup))) {
+    throw Object.assign(
+      new Error(
+        "backupPath is inside Tandem's own data folder, which holds its settings. " +
+          "Choose a folder outside it.",
+      ),
+      { code: "INVALID_PATH" },
     );
   }
   let resolvedBackup = defaultBackup;

@@ -231,7 +231,8 @@ async function readBoundedText(res: Response, capBytes: number): Promise<string>
  * POST JSON to a validated loopback URL with timeout + abort, then hand the OK
  * response to `consume`. Single-sources the loopback-security contract —
  * `redirect:"error"`, the dual-signal (caller + timeout) abort merge, and the
- * body-free HTTP-error redaction (raw body to stderr only) — so the streaming
+ * body-free HTTP-error redaction (the body is never logged, thrown or tagged:
+ * only the status is, #1123 item 31) — so the streaming
  * (`fetchStream`) and non-streaming (`postJson`) callers can never drift. The
  * timeout timer is held across `consume` (a streamed read must run under it), so
  * the deadline bounds the whole request+read, not just the connect.
@@ -269,11 +270,15 @@ async function postLoopback<T>(
       throw tagUnlessAbort(err, { kind: "unreachable" });
     }
     if (!res.ok) {
-      // Keep the raw body on stderr only; the thrown message carries only the
-      // status class so it's safe if it later reaches the UI.
-      const errBody = await readBoundedText(res, 4096).catch(() => "");
-      if (errBody)
-        console.error(`[local-model] endpoint ${res.status} body: ${errBody.slice(0, 300)}`);
+      // The body is drained (bounded) so the connection is released, and then
+      // dropped: no log line, thrown message or tag carries any of its text
+      // (#1123 item 31, F4) — an endpoint's error body can echo the prompt,
+      // which is document text, into `tandem.log`. Only the status is logged;
+      // the thrown message carries only the status too.
+      await readBoundedText(res, 4096).catch(() => "");
+      console.error(
+        `[local-model] endpoint answered HTTP ${res.status}; the response body is not logged.`,
+      );
       throw tag(new Error(`local model endpoint returned HTTP ${res.status}`), {
         kind: "http",
         status: res.status,

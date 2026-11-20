@@ -726,6 +726,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 
 `anchor` is present on an individual annotation **only when its CRDT anchor is untrustworthy** ([#1764](https://github.com/bloknayrb/tandem/issues/1764)): `"degraded"` means the anchor no longer describes this text and the `range` shown is the last one the server trusted, `"failed"` means the anchor resolved inverted. It is absent on every healthy refresh, so its absence is the normal case and carries no information.
 
+`byLocalModel: true` is present on an annotation or reply **only once local models are on** (`BYO_MODELS_ENABLED`), and only on a `claude`-authored record the user's local model wrote (its `agentIdentity` stamp, which is itself never sent). It is a hint, not proof: anything that can write to the editor can add or remove the stamp (#1123, ADR-039 item 31).
+
 ---
 
 ### tandem_resolveAnnotation
@@ -889,6 +891,8 @@ The markdown lists each item's status (pending, accepted or dismissed), quotes i
 | `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 [Solo mode](glossary.md#solo-mode) applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+
+Once local models are on, a `claude`-authored record or reply the user's local model wrote carries `byLocalModel: true` in the JSON (derived as in `tandem_getAnnotations`), and the markdown labels it "Local model" instead of "Assistant" — never the model's display name. While local models are off, neither appears.
 
 The sidecar and the response carry `heldFromExport` and `privateExcluded` as **two separate floors** — the first counts what the Solo hold withheld, the second what ADR-027's audience gate withheld before it (#1619/#1710) — and both are absent when zero. Neither count appears in the markdown text.
 

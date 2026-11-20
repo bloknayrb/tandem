@@ -255,9 +255,17 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       expect((await getSetting(base)).body).toEqual({ editing: false });
     });
 
-    it("GET needs no Origin and writes nothing", async () => {
+    it("GET with no Origin is answered only as a same-origin request (#1123 item 31), and writes nothing", async () => {
       const base = await listen(makeApp({ live: true }));
-      const res = await call(base, "GET", API_MODELS_LOCAL_SETTINGS, { origin: null });
+      // Neither an Origin nor `Sec-Fetch-Site: same-origin`: not provably
+      // Tandem's own window, so refused, as the chat-answerer read is.
+      const bare = await call(base, "GET", API_MODELS_LOCAL_SETTINGS, { origin: null });
+      expect(bare.status).toBe(403);
+      expect(bare.body).toMatchObject({ code: "OWN_WINDOW_ONLY" });
+      const res = await call(base, "GET", API_MODELS_LOCAL_SETTINGS, {
+        origin: null,
+        headers: { "Sec-Fetch-Site": "same-origin" },
+      });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ editing: false });
       expect(fs.readdirSync(dir)).toEqual([]);

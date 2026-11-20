@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_SAVE_REASON, modelSaveReason } from "../../../src/client/utils/local-model-copy.js";
+import {
+  MODEL_SAVE_REASON,
+  modelSaveReason,
+  pickerSaveReason,
+} from "../../../src/client/utils/local-model-copy.js";
 import {
   type EndpointRejectCode,
   validateEndpoint,
@@ -107,5 +111,47 @@ describe("modelSaveReason (R3.1, R5)", () => {
       notThisComputer: U3,
       incomplete: U4,
     });
+  });
+});
+
+// 26a: the first-run window's reasons. Same rule as the add-model window's,
+// the field named "Endpoint URL" (R-a). Literals, never the product's strings.
+describe("pickerSaveReason (26a)", () => {
+  const P_BOTH = "Enter an Endpoint URL and a Model ID to save.";
+  const P_ENDPOINT = "Enter an Endpoint URL to save.";
+  const P_ID = "Enter a Model ID to save.";
+  const P3 =
+    "The Endpoint URL must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.";
+  const P4 =
+    "The Endpoint URL is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).";
+  // [modelId, endpoint, reason]
+  const rows: ReadonlyArray<readonly [string, string, string | null]> = [
+    ["", "", P_BOTH],
+    ["  ", "  ", P_BOTH],
+    ["m", "", P_ENDPOINT],
+    ["m", "   ", P_ENDPOINT],
+    ["", "http://127.0.0.1:1234", P_ID],
+    ["   ", "http://127.0.0.1:1234", P_ID],
+    ["", "http://192.168.1.5:11434", P_ID], // blank ranks above a refused address
+    ["m", "http://127.0.0.1:99999", P4],
+    ["m", "http://127.0.0.1:12a", P4],
+    ["m", "http://", P4],
+    ["m", " http://127.0.0.1:99999", P4],
+    ["m", "HTTP://127.0.0.1:99999", P4],
+    ["m", "127.0.0.1:1234", P3],
+    ["m", "not a url", P3],
+    ["m", "localhost:11434", P3],
+    ["m", "https://127.0.0.1:1234", P3],
+    ["m", "http://u:p@127.0.0.1:1234", P3],
+    ["m", "http://192.168.1.5:11434", P3],
+    ["m", "http://localhost.example:1", P3],
+    ["m", "http://0.0.0.0:1", P3],
+    ["m", "http://127.0.0.1:1234", null],
+    ["m", "http://localhost:1234", null],
+    ["m", "http://[::1]:1234", null],
+    ["m", "  http://127.0.0.1:1  ", null],
+  ];
+  it.each(rows)("model %j, endpoint %j", (modelId, endpoint, reason) => {
+    expect(pickerSaveReason({ modelId, endpoint })).toBe(reason);
   });
 });
