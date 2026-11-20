@@ -136,8 +136,11 @@ export function createOwnWindowPolicy(opts: OwnWindowPolicyOptions): OwnWindowPo
 }
 
 /**
- * May this request READ a local-model setting (#1123: who answers chat)? The
- * same decision as a write, for a request that carries an `Origin`. A browser
+ * May this request READ a local-model setting? Three reads use it (#1123): who
+ * answers chat (`GET /api/models/chat-answerer`), and — once local models are
+ * on, since item 31's review — `GET /api/models/local-settings` and
+ * `GET /api/models` (the saved models; while dark that read is not gated by
+ * this). The same decision as a write, for a request that carries an `Origin`. A browser
  * sends none on a same-origin GET, so the npm install's own page is admitted
  * by `Sec-Fetch-Site: same-origin` instead — a header a web page cannot set
  * (the notify stream's own-window test uses the same pair). Anything else is

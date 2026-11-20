@@ -45,6 +45,7 @@ import {
   describeReplyWriteRefusal,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
+import { REPLY_TEXT_MAX } from "../annotations/schema.js";
 import { captureSnapshot } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
@@ -378,7 +379,7 @@ function annotateFromQuote(
 }
 
 /** The refusal an annotate tool returns when the document changed under the run (#2070). */
-function changedAnnotateOutcome(
+function refusedAnnotateOutcome(
   kind: "comment" | "replacement",
   args: Record<string, unknown>,
   result: { error: string; message: string },
@@ -392,9 +393,37 @@ function changedAnnotateOutcome(
         quoted_text: asString(args.quoted_text),
         occurrence_index: asOccurrence(args.occurrence_index),
       },
-      errorCode: "DOCUMENT_CHANGED",
+      errorCode: result.error,
     },
   };
+}
+
+/**
+ * The cap on the local model's comment arguments (#1123 item 31, F3): the
+ * reply bound reused — replies already refuse above it (`too-long`), and the
+ * durable `content` and `suggestedText` had no bound at all. Refused, never
+ * truncated: a truncated `suggested_text` is a wrong replacement one Accept
+ * away. Checked on the raw arguments, after the `DOCUMENT_CHANGED` check and
+ * before anything is anchored or written. `quoted_text` is not capped: it is
+ * never stored (the snapshot is capped at 200).
+ *
+ * The `error` key is a string literal on purpose: the harness's fingerprint
+ * test finds every code with the regex `error: "([A-Z_]+)"`.
+ */
+function overCapOutcome(
+  kind: "comment" | "replacement",
+  args: Record<string, unknown>,
+  fields: readonly string[],
+): ToolOutcome | null {
+  for (const field of fields) {
+    if (asString(args[field]).length > REPLY_TEXT_MAX) {
+      return refusedAnnotateOutcome(kind, args, {
+        error: "INVALID_ARGUMENT",
+        message: `${field} exceeds the ${REPLY_TEXT_MAX}-character limit. Nothing was written.`,
+      });
+    }
+  }
+  return null;
 }
 
 export function dispatch(
@@ -446,8 +475,10 @@ export function dispatch(
         effect: { kind: "read" },
       };
     }
-    case "comment_on_quote":
-      if (documentChanged) return changedAnnotateOutcome("comment", args, changedResult);
+    case "comment_on_quote": {
+      if (documentChanged) return refusedAnnotateOutcome("comment", args, changedResult);
+      const overCap = overCapOutcome("comment", args, ["comment"]);
+      if (overCap) return overCap;
       return annotateFromQuote(
         "comment",
         ydoc,
@@ -457,8 +488,11 @@ export function dispatch(
         undefined,
         ctx.agentIdentity,
       );
-    case "propose_replacement":
-      if (documentChanged) return changedAnnotateOutcome("replacement", args, changedResult);
+    }
+    case "propose_replacement": {
+      if (documentChanged) return refusedAnnotateOutcome("replacement", args, changedResult);
+      const overCap = overCapOutcome("replacement", args, ["rationale", "suggested_text"]);
+      if (overCap) return overCap;
       return annotateFromQuote(
         "replacement",
         ydoc,
@@ -468,6 +502,7 @@ export function dispatch(
         { suggestedText: asString(args.suggested_text) },
         ctx.agentIdentity,
       );
+    }
     case "reply_to_annotation": {
       const annotationId = asString(args.annotation_id);
       if (documentChanged) {

@@ -3,7 +3,9 @@
  *
  * Routes:
  *   GET    /api/models                — load the registry (+ a content-hash
- *                                       ETag). Loopback-full / LAN-scrubbed.
+ *                                       ETag). Loopback-full / LAN-scrubbed;
+ *                                       once local models are on, Tandem's
+ *                                       own window only (#1123 item 31).
  *                                       The client store's load source (M2).
  *   POST   /api/models                — replace the whole server-side registry
  *                                       file (`models.json`). The client's
@@ -15,7 +17,8 @@
  *   DELETE /api/models/secrets/:ref   — remove a stored key.
  *
  *   GET    /api/models/local-settings — whether local models may comment and
- *                                       suggest (#1123). Loopback only.
+ *                                       suggest (#1123). Loopback, and
+ *                                       Tandem's own window only.
  *   POST   /api/models/local-settings — switch that setting. Body
  *                                       `{ editing: boolean }`.
  *
@@ -149,8 +152,12 @@ export function registerModelsRoutes(
   mw: Handler,
   deps: ModelsRoutesDeps,
 ): void {
+  // Route-live: the value the local-settings and chat-answerer routes answer
+  // 404 by while dark. It also decides whether `GET /api/models` is own-window
+  // only (#1123 item 31, R2.2) — dark, that read is exactly as before.
+  const settingsLive = deps.localModelSettingsEnabled ?? BYO_MODELS_ENABLED;
   app.options(API_MODELS, mw);
-  app.get(API_MODELS, mw, makeGetModelsHandler());
+  app.get(API_MODELS, mw, makeGetModelsHandler(settingsLive, deps.ownWindow));
   app.post(API_MODELS, mw, largeBody, makePostModelsHandler(deps.ownWindow));
   app.options(API_MODELS_SECRET, mw);
   app.post(API_MODELS_SECRET, mw, largeBody, makePostSecretHandler(deps));
@@ -160,9 +167,8 @@ export function registerModelsRoutes(
   // backstop that keeps this registration in `ROUTE_OWNED_BODY_PARSERS`'s
   // table. The OPTIONS registration is what answers the preflight — the
   // desktop WebView's JSON POST is cross-origin, and the 204 comes from `mw`.
-  const settingsLive = deps.localModelSettingsEnabled ?? BYO_MODELS_ENABLED;
   app.options(API_MODELS_LOCAL_SETTINGS, mw);
-  app.get(API_MODELS_LOCAL_SETTINGS, mw, makeGetLocalSettingsHandler(settingsLive));
+  app.get(API_MODELS_LOCAL_SETTINGS, mw, makeGetLocalSettingsHandler(settingsLive, deps.ownWindow));
   app.post(
     API_MODELS_LOCAL_SETTINGS,
     mw,
@@ -301,11 +307,14 @@ function makePostChatAnswererHandler(live: boolean, ownWindow: OwnWindowPolicy):
 }
 
 /**
- * `GET /api/models/local-settings` (#1123). Loopback only: a non-loopback
- * caller is refused outright rather than scrubbed, so the non-loopback bind
- * (dark, ADR-056) would not expose the setting. 404 while the feature is dark.
+ * `GET /api/models/local-settings` (#1123). 404 while the feature is dark (to
+ * every origin). Loopback only: a non-loopback caller is refused outright
+ * rather than scrubbed, so the non-loopback bind (dark, ADR-056) would not
+ * expose the setting. And readable only from Tandem's own window (#1123 item
+ * 31, R2.1), by the switch's read test (`mayReadOwnWindowSetting`): an own or
+ * allowance `Origin`, or none with `Sec-Fetch-Site: same-origin`.
  */
-function makeGetLocalSettingsHandler(live: boolean): Handler {
+function makeGetLocalSettingsHandler(live: boolean, ownWindow: OwnWindowPolicy): Handler {
   return (req: Request, res: Response) => {
     if (!live) {
       res.status(404).json({ error: "NOT_FOUND" });
@@ -313,6 +322,10 @@ function makeGetLocalSettingsHandler(live: boolean): Handler {
     }
     if (!isLoopback(req.socket.remoteAddress)) {
       res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+      return;
+    }
+    if (!mayReadOwnWindowSetting(ownWindow, req)) {
+      refuseNotOwnWindow(res);
       return;
     }
     const body: LocalModelSettingsResponse = { editing: isLocalModelEditingEnabled() };
@@ -391,14 +404,27 @@ function scrubEntryForLan(entry: ModelsEntry): ModelsEntry {
  * `GET /api/models` (#1123 M2) — the client's load source. Serves the warm
  * cache synchronously with a content-hash ETag the client echoes as `ifMatch`
  * on its next write. Loopback → full file; non-loopback authenticated LAN →
- * per-entry allowlist scrub (see `scrubEntryForLan`). Read-only: no
- * origin/loopback mutation gate, no license gate — consistent with the other
- * `GET` routes and M1a's read posture. The route is live-callable while dark
- * (like `POST /api/models` since M1a); only the client's *fetch* is
- * `BYO_MODELS_ENABLED`-gated, and the registry holds no plaintext.
+ * per-entry allowlist scrub (see `scrubEntryForLan`). No loopback mutation
+ * gate and no license gate. The route is live-callable while dark (like
+ * `POST /api/models` since M1a) — the client's one-time reconcile reads it at
+ * every boot — and the registry holds no plaintext.
+ *
+ * Once local models are on (`live`, the value the local-settings and
+ * chat-answerer routes answer 404 by), every caller must first pass the
+ * switch's read test (`mayReadOwnWindowSetting`, #1123 item 31, R2.2): an own
+ * or allowance `Origin`, or none with `Sec-Fetch-Site: same-origin`. The
+ * shared CORS middleware grants any `127.0.0.1` port, so without it a page on
+ * another loopback port could read every saved endpoint and model id. A
+ * refused read is answered with the plain refusal, never a write-refused
+ * notice. While dark the handler is exactly as before, so a dark response is
+ * byte-identical.
  */
-function makeGetModelsHandler(): Handler {
+function makeGetModelsHandler(live: boolean, ownWindow: OwnWindowPolicy): Handler {
   return (req: Request, res: Response) => {
+    if (live && !mayReadOwnWindowSetting(ownWindow, req)) {
+      refuseNotOwnWindow(res);
+      return;
+    }
     const full = getCachedModelsFile();
     if (isLoopback(req.socket.remoteAddress)) {
       const body: ModelsGetResponse = { file: full, etag: getModelsEtag() };
