@@ -6,20 +6,19 @@ import { BYO_MODELS_ENABLED } from "../../src/shared/constants.js";
 /**
  * **The local-model flip gate's tracked home** (#1123, "who answers chat").
  *
- * The feature is built in four PRs (ADR-039, amendment 2026-11-12). A1 builds
- * the switch and the local model's side; until **A2** (Claude is handed
- * nothing while the local model is chosen) and **B** (the editor's control,
- * labels and notices) land, turning `BYO_MODELS_ENABLED` on would ship a
- * switch with no control in Settings, notices naming a place where nothing
- * is, and two answerers for one chat.
- *
- * So ADR-039's owed-by-the-flip bullet carries a fixed sentence saying A2 and
- * B must land first, and this pins the two together:
- *  - while the flag is off, the sentence must be there (removing it without
- *    editing this file is a deliberate, visible act);
- *  - with the flag on, it must be gone: whoever flips the flag has to record,
- *    in the ADR, that A2 and B landed — and if they have not, `check` is red.
- * `check` is a required status check on `master`.
+ * The feature was built in four PRs (ADR-039, amendment 2026-11-12). Turning
+ * `BYO_MODELS_ENABLED` on before **A2** (Claude is handed nothing while the
+ * local model is chosen) and **B** (the editor's control, labels and notices)
+ * landed would have shipped a switch with no control in Settings and two
+ * answerers for one chat. So ADR-039's owed-by-the-flip bullet carried a fixed
+ * sentence saying A2 and B must land first, and this pins the two together:
+ *  - with the flag off, the sentence must be there;
+ *  - with the flag on, it must be gone.
+ * Both landed, and the flip (ADR-039's amendment 2026-11-20) reworded the
+ * clause to record that, so the flag is on and the sentence is absent. The test
+ * stays as a guard: the old wording cannot return while the flag is on, and a
+ * flag turned back off without restoring it is red. `check` is a required
+ * status check on `master`.
  */
 const GATE_SENTENCE =
   "parts A2 (Claude's side) and B (the editor's control) must both land before the flip";
