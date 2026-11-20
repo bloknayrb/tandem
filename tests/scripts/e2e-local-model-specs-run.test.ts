@@ -24,6 +24,9 @@ const SPECS = [
 
 const E2E_DIR = join(__dirname, "..", "e2e");
 
+/** Any `.skip(` or `.fixme(` call, whatever its receiver: `test`, `test.describe`, `testInfo`, `test.info()` or an alias. */
+const SKIP_OR_FIXME = /\.(skip|fixme)\s*\(/;
+
 /** Source with line and block comments removed, so prose about skips is not a skip. */
 function code(file: string): string {
   return readFileSync(join(E2E_DIR, file), "utf8")
@@ -38,9 +41,8 @@ describe("the formerly gated local-model E2E specs run in check (#1123)", () => 
 
   it.each(SPECS)("%s has no skip, fixme or only", (file) => {
     const src = code(file);
-    expect(src).not.toMatch(/\btest(?:\.describe)?\.skip\(/);
-    expect(src).not.toMatch(/\btest(?:\.describe)?\.fixme\(/);
-    expect(src).not.toMatch(/\.only\(/);
+    expect(src).not.toMatch(SKIP_OR_FIXME);
+    expect(src).not.toMatch(/\.only\s*\(/);
   });
 
   it.each(SPECS)("%s does not import BYO_MODELS_ENABLED", (file) => {
@@ -54,8 +56,11 @@ describe("the formerly gated local-model E2E specs run in check (#1123)", () => 
       "test.only('x', async () => {});",
       'import { BYO_MODELS_ENABLED } from "../../src/shared/constants";',
     ];
-    expect(planted[0]).toMatch(/\btest(?:\.describe)?\.skip\(/);
-    expect(planted[1]).toMatch(/\btest(?:\.describe)?\.fixme\(/);
+    expect(planted[0]).toMatch(SKIP_OR_FIXME);
+    expect(planted[1]).toMatch(SKIP_OR_FIXME);
+    for (const call of ["test.skip (x)", "testInfo.skip()", "test.info().skip()", "t.skip()"]) {
+      expect(call).toMatch(SKIP_OR_FIXME);
+    }
     expect(planted[2]).toMatch(/\.only\(/);
     expect(planted[3]).toMatch(/\bBYO_MODELS_ENABLED\b/);
   });
