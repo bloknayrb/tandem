@@ -30,6 +30,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LOCAL_SENT_TO_LINE,
   PICKER_LOCAL_SUBTITLE,
   PICKER_MODEL_ID_HINT,
   PICKER_TITLE,
@@ -182,6 +183,8 @@ describe("FirstRunModelPickerModal — copy (R2.1)", () => {
       "Chat stays set to Claude. Your model server must be running on this computer for Tandem to use the model; you can also add models any time in Settings → Models.",
     );
     expect(m.getByTestId("first-run-model-modal").textContent).not.toMatch(/Step 1 of 2/);
+    // 26c: the document-text sentences belong to the add-model window only.
+    expect(m.getByTestId("first-run-model-modal").textContent).not.toContain(LOCAL_SENT_TO_LINE);
   });
 
   it("the × is named Close, the secondary button No thanks, Save is Save", () => {
@@ -248,6 +251,36 @@ describe("FirstRunModelPickerModal — Save says why (V14)", () => {
     await fireEvent.submit(saveButton(m).closest("form") as HTMLFormElement);
     expect(addModel).not.toHaveBeenCalled();
     expect(m.onComplete).not.toHaveBeenCalled();
+  });
+
+  it("an address the server would refuse is named, and Save stays inert (26a, V13, V14)", async () => {
+    const P3 =
+      "The Endpoint URL must start with http:// and name this computer as 127.0.0.1, localhost or [::1], with no user name or password.";
+    const P4 =
+      "The Endpoint URL is not a complete address. Check it, including the port number (for example http://127.0.0.1:11434).";
+    const m = mount();
+    await typeModelId(m, "qwen");
+    const endpoint = m.getByTestId("first-run-endpoint");
+    await fireEvent.input(endpoint, { target: { value: "http://192.168.1.5:11434" } });
+    const dialog = m.getByTestId("first-run-model-modal");
+    expect(dialog.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    expectInertWith(m, P3);
+    await fireEvent.click(saveButton(m));
+    await fireEvent.submit(saveButton(m).closest("form") as HTMLFormElement);
+    expect(addModel).not.toHaveBeenCalled();
+    expect(m.onComplete).not.toHaveBeenCalled();
+
+    await fireEvent.input(endpoint, { target: { value: "http://127.0.0.1:99999" } });
+    expectInertWith(m, P4);
+
+    await fireEvent.input(endpoint, { target: { value: "http://127.0.0.1:11434" } });
+    expect(m.queryByTestId("first-run-save-reason")).toBeNull();
+    expect(saveButton(m).getAttribute("aria-describedby")).toBeNull();
+    addModel.mockResolvedValue("new-id");
+    await fireEvent.click(saveButton(m));
+    await flush();
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(addModel.mock.calls[0]?.[0]).toMatchObject({ endpoint: "http://127.0.0.1:11434" });
   });
 });
 
