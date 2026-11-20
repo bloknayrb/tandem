@@ -1383,6 +1383,19 @@ describe("the message forward (PR b)", () => {
     expect(wakes(c1)).toBe(1);
   });
 
+  it("R1.1 for the message branch: flag off, an admit that would answer true is not asked and nothing reaches the sink; the flag-on twin forwards", () => {
+    const admit = vi.fn(() => true);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    startOrWake("message-owner", admit);
+    expect(admit).not.toHaveBeenCalled();
+    expect(causes).toEqual([]);
+    expect(sink).not.toHaveBeenCalled();
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    startOrWake("message-owner", admit);
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(sink.mock.calls).toEqual([["message"]]);
+  });
+
   it("R1.5 for the message branch: an admitted forward made inside a request context reaches the sink with no caller identity readable", () => {
     const seen: unknown[] = [];
     setStartOrWakeSink((cause) => seen.push([cause, getMcpContext() ?? resolveToolCaller()]));
@@ -1393,7 +1406,10 @@ describe("the message forward (PR b)", () => {
     expect(seen).toEqual([["message", null]]);
   });
 
-  it("M1, transport removed (M2's anchor): the record is deleted, its message released: a wake", async () => {
+  // M1 with the transport removed instead of the stream dropped: the grace's
+  // lapse releases the unhandled message (the lapse path, not deleteRecord's),
+  // then the record holds nothing and is deleted.
+  it("M1, transport removed (M2's anchor): the lapse's own release frees the unhandled message, then the record is deleted: a wake", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { m } = await worldB();
@@ -1405,7 +1421,13 @@ describe("the message forward (PR b)", () => {
     expect(wakes(c1)).toBe(1);
   });
 
-  it("M2 (anchor: M1, transport removed): the message handled, A's transport removed: nothing; the observer told message-owner", async () => {
+  // The deleted-record path. `deleteRecord` runs only for a lapsed record that
+  // holds no state, and `recordHoldsState` counts every owned message that is
+  // unhandled and still a live, non-local-period user row; so every key it
+  // releases is handled, gone or local-period, and the admit refuses each. No
+  // positive row through this path exists: M2 is its regression row (it still
+  // fails a forward that ignores the admit).
+  it("M2 (regression row, the deleted-record path; anchor: M1, transport removed): the message handled, A's transport removed: nothing; the observer told message-owner", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { m } = await worldB();
@@ -1414,7 +1436,7 @@ describe("the message forward (PR b)", () => {
     removeTransport(A);
     advance(GRACE + 1);
     expect(messageOwner(m)).toBeUndefined();
-    expect(causes).toContain("message-owner");
+    expect(causes).toEqual(["message-owner"]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);

@@ -601,7 +601,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
       "starts it again. The same holds for chat (3b-2b1c-b): if the child's record held a " +
       "document when it was closed, it owns that document's chat per message, and its lapse " +
-      "releases the message and starts Tandem's Claude for it.",
+      "releases the message and, while no other session is connected (the departure gate), " +
+      "starts Tandem's Claude for it.",
     closedBy:
       "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
       "transport does not count, and one 'another session' rule named for the decision and the " +
