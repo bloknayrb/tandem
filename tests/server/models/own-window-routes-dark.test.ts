@@ -12,6 +12,7 @@ import {
 import { __resetLocalModelSettingsForTests } from "../../../src/server/models/local-model-settings.js";
 import {
   __resetModelRegistryForTests,
+  getCachedModelsFile,
   getModelsEtag,
 } from "../../../src/server/models/registry.js";
 import { MODELS_FILE_NAME } from "../../../src/server/models/store.js";
@@ -210,6 +211,23 @@ describe("the real server, dark: the settings routes (#2404 R1, #1123)", () => {
       expect(bytes(path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME))).toBeNull();
       expect(bytes(path.join(dir, "local-model-baseline.json"))).toBeNull();
     });
+  });
+
+  it("GET /api/models answers a foreign loopback port and a request with no Origin exactly as before while dark (#1123 item 31: the own-window read test is lit only)", async () => {
+    await boot();
+    const seeded = await send(port, API_MODELS, {
+      origin: own,
+      contentType: JSON_CT,
+      body: modelsBody(fileWith(localModel), { reconcile: true }),
+    });
+    expect(seeded.status, seeded.text).toBe(200);
+    for (const origin of ["http://127.0.0.1:8080", undefined]) {
+      const res = await send(port, API_MODELS, { method: "GET", origin });
+      expect(res.status).toBe(200);
+      // The bytes master sends: the full file (endpoint included) and its etag.
+      expect(res.text).toBe(JSON.stringify({ file: getCachedModelsFile(), etag: getModelsEtag() }));
+      expect(res.text).toContain(localModel.endpoint as string);
+    }
   });
 
   it("GET /api/models/local-settings is still 404 while dark, for any origin", async () => {

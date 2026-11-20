@@ -127,6 +127,35 @@ describe("runLoop — metric tallies", () => {
     expect(r.metrics.anchorResolutionFailures).toBe(1);
   });
 
+  it("an over-cap argument (#1123 item 31) moves oversizedArguments, not anchorResolutionFailures", async () => {
+    let turn = 0;
+    stubFetch(() =>
+      turn++ === 0
+        ? v1ToolCalls([
+            {
+              name: "comment_on_quote",
+              args: { quoted_text: "body text", comment: "x".repeat(100_001) },
+            },
+            {
+              name: "propose_replacement",
+              args: { quoted_text: "body text", suggested_text: "y".repeat(100_001) },
+            },
+          ])
+        : v1Text("done"),
+    );
+    const r = await runLoop(base({ maxTurns: 9, maxToolCalls: 9 }));
+    expect(r.metrics.toolCalls).toBe(2);
+    expect(r.metrics.oversizedArguments).toBe(2);
+    expect(r.metrics.anchorResolutionFailures).toBe(0);
+    expect(getAnnotationsMap(doc as Y.Doc).size).toBe(0);
+  });
+
+  it("a run with no over-cap argument reports oversizedArguments 0", async () => {
+    stubFetch(() => v1Text("all good"));
+    const r = await runLoop(base());
+    expect(r.metrics.oversizedArguments).toBe(0);
+  });
+
   it("counts a failed reply_to_annotation in replyFailures", async () => {
     stubFetch(() => v1ToolCallArgs("reply_to_annotation", { annotation_id: "nope", text: "hi" }));
     const r = await runLoop(base({ maxToolCalls: 1, maxTurns: 99 }));

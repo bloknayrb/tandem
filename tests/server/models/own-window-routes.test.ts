@@ -45,6 +45,7 @@ import {
   API_MODELS,
   API_MODELS_CHAT_ANSWERER,
   API_MODELS_LOCAL_SETTINGS,
+  ERROR_CODE_MODELS_STALE,
   ERROR_CODE_OWN_WINDOW_ONLY,
   MODELS_DEV_ORIGIN_ENV,
   type ModelsEntry,
@@ -105,12 +106,15 @@ interface SendOpts {
   host?: string;
   contentType?: string;
   body?: string;
+  /** Omitted → no `Sec-Fetch-Site` header. */
+  secFetchSite?: string;
 }
 
 function send(port: number, urlPath: string, opts: SendOpts = {}): Promise<Answer> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = { Host: opts.host ?? `127.0.0.1:${port}` };
     if (opts.origin !== undefined) headers.Origin = opts.origin;
+    if (opts.secFetchSite !== undefined) headers["Sec-Fetch-Site"] = opts.secFetchSite;
     if (opts.contentType !== undefined) headers["Content-Type"] = opts.contentType;
     if (opts.body !== undefined) headers["Content-Length"] = String(Buffer.byteLength(opts.body));
     const req = httpRequest(
@@ -745,20 +749,46 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     });
   });
 
-  describe("reads are unchanged (R1.3)", () => {
+  // #1123 item 31 (R2.2): once local models are on, the models read answers
+  // only Tandem's own window, by the switch's read test. This server follows
+  // the shipped flag, so the expectation does too: dark, the read is exactly
+  // as before (the dark-only cases are in `own-window-routes-dark.test.ts`).
+  describe("GET /api/models from elsewhere: refused lit, unchanged dark (#1123 item 31)", () => {
     it.each([
       ["a foreign loopback port", "http://127.0.0.1:8080"],
-      ["no Origin at all", undefined],
-    ])("GET /api/models answers the file and its etag for %s", async (_label, origin) => {
+      ["no Origin and no Sec-Fetch-Site", undefined],
+    ])(
+      "GET /api/models from %s: lit 403 with no file in the body, dark the file and its etag",
+      async (_label, origin) => {
+        await boot();
+        await send(port, API_MODELS, {
+          origin: own,
+          contentType: JSON_CT,
+          body: modelsBody(fileWith(localModel)),
+        });
+        const res = await send(port, API_MODELS, { method: "GET", origin });
+        if (BYO_MODELS_ENABLED) {
+          expectOwnWindowRefusal(res);
+          expect(res.text).not.toContain(localModel.endpoint);
+        } else {
+          expect(res.status).toBe(200);
+          expect(res.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
+        }
+      },
+    );
+
+    it("GET /api/models from the page this server serves, or a same-origin request with no Origin, answers the file", async () => {
       await boot();
       await send(port, API_MODELS, {
         origin: own,
         contentType: JSON_CT,
         body: modelsBody(fileWith(localModel)),
       });
-      const res = await send(port, API_MODELS, { method: "GET", origin });
-      expect(res.status).toBe(200);
-      expect(res.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
+      for (const opts of [{ origin: own }, { secFetchSite: "same-origin" }]) {
+        const res = await send(port, API_MODELS, { method: "GET", ...opts });
+        expect(res.status, JSON.stringify(opts)).toBe(200);
+        expect(res.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
+      }
     });
   });
 });
@@ -995,17 +1025,87 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
     expect(isLocalModelEditingEnabled()).toBe(false);
   });
 
-  it("reads are unchanged: both GETs answer a foreign allowlisted origin, and one with no Origin", async () => {
+  it("reads are own-window only (#1123 item 31): both GETs refuse a foreign allowlisted origin, and one with no Origin and no Sec-Fetch-Site", async () => {
     await boot();
     await postSetting(own, true);
+    await send(port, API_MODELS, {
+      origin: own,
+      contentType: JSON_CT,
+      body: modelsBody(fileWith(localModel)),
+    });
     for (const origin of ["http://127.0.0.1:8080", undefined]) {
       const settings = await send(port, API_MODELS_LOCAL_SETTINGS, { method: "GET", origin });
-      expect(settings.status).toBe(200);
-      expect(settings.json).toEqual({ editing: true });
+      expectOwnWindowRefusal(settings);
       const models = await send(port, API_MODELS, { method: "GET", origin });
-      expect(models.status).toBe(200);
-      expect(models.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
+      expectOwnWindowRefusal(models);
+      expect(models.text).not.toContain(localModel.endpoint);
+      expect(models.text).not.toContain(localModel.modelId);
     }
+  });
+
+  it.each([
+    ["the page this server serves (npm-shaped)", () => ({ origin: own }), {}],
+    ["a same-origin request with no Origin", () => ({ secFetchSite: "same-origin" }), {}],
+    [
+      "the desktop WebView on a sidecar",
+      () => ({ origin: `http://${TAURI_HOSTNAME}` }),
+      { desktop: true },
+    ],
+    [
+      "the development allowance",
+      () => ({ origin: VITE_DEV_ORIGIN }),
+      { allowance: VITE_DEV_ORIGIN },
+    ],
+  ] as Array<[string, () => Partial<SendOpts>, { desktop?: boolean; allowance?: string }]>)(
+    "both GETs answer %s (#1123 item 31)",
+    async (_label, headers, bootOpts) => {
+      await boot(bootOpts);
+      await postSetting(own, true);
+      await send(port, API_MODELS, {
+        origin: own,
+        contentType: JSON_CT,
+        body: modelsBody(fileWith(localModel)),
+      });
+      const settings = await send(port, API_MODELS_LOCAL_SETTINGS, {
+        method: "GET",
+        ...headers(),
+      });
+      expect(settings.status, settings.text).toBe(200);
+      expect(settings.json).toEqual({ editing: true });
+      const models = await send(port, API_MODELS, { method: "GET", ...headers() });
+      expect(models.status, models.text).toBe(200);
+      expect(models.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
+    },
+  );
+
+  it("a cross-site Sec-Fetch-Site with no Origin is refused on both GETs", async () => {
+    await boot();
+    for (const route of [API_MODELS_LOCAL_SETTINGS, API_MODELS]) {
+      expectOwnWindowRefusal(await send(port, route, { method: "GET", secFetchSite: "same-site" }));
+    }
+  });
+
+  it("a refused read, then a save from Tandem's own window with the empty ifMatch the client sends after a failed load: 409 MODELS_STALE, models.json unchanged (documents the client, not a guard)", async () => {
+    await boot();
+    await send(port, API_MODELS, {
+      origin: own,
+      contentType: JSON_CT,
+      body: modelsBody(fileWith(localModel)),
+    });
+    const before = bytes(modelsFile);
+    expect(before).not.toBeNull();
+    expectOwnWindowRefusal(await send(port, API_MODELS, { method: "GET" }));
+    const save = await send(port, API_MODELS, {
+      origin: own,
+      contentType: JSON_CT,
+      body: JSON.stringify({
+        file: fileWith({ ...localModel, endpoint: "http://127.0.0.1:9999" }),
+        ifMatch: "",
+      }),
+    });
+    expect(save.status, save.text).toBe(409);
+    expect(save.json?.code).toBe(ERROR_CODE_MODELS_STALE);
+    expect(bytes(modelsFile)).toBe(before);
   });
 
   it("POST /api/models/secrets/:ref is NOT covered: another loopback port can still store and delete a key", async () => {

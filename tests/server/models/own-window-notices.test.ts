@@ -1636,7 +1636,11 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect((await record())?.answering).toBe(fp(B));
 
       // The cache was not mutated by the listener: GET agrees with the disk.
-      const got = await fetch(`${baseUrl}${API_MODELS}`);
+      // From Tandem's own window: lit, the models read answers only that
+      // (#1123 item 31).
+      const got = await fetch(`${baseUrl}${API_MODELS}`, {
+        headers: { Origin: OWN_WINDOW_ORIGIN },
+      });
       expect(got.status).toBe(200);
       const view = (await got.json()) as { file: ModelsFile; etag: string };
       expect(view.file.defaultModelId).toBe(B.id);

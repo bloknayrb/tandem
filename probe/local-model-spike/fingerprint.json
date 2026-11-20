@@ -1,5 +1,5 @@
 {
-  "current": "d4fe758ee095440befd726c66e14b80b",
+  "current": "577fff6ce42c8dad83070016519deb27",
   "published": "d4fe758ee095440befd726c66e14b80b",
   "statement": "Published 2026-11-15 in docs/spikes/local-llm-capability-spike.md (Results of the new measurement): screens of qwen3.5:9b, gemma4:12b and granite4.2:8b and full runs of gemma4:12b (chat FAIL, editing reported), made at commit 42f64393, before #1123 part C changed what the user is shown, and read under rubric 2026-11-13.5 (re-stamped to 2026-11-15.1 without a re-read: no record holds a think tag); an unchanged fingerprint does not make runs comparable across part C."
 }

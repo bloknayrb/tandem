@@ -35,6 +35,11 @@ export interface LoopMetrics {
    *  server rejected (heading overlap, RANGE_*). Not just ANCHOR_NOT_FOUND, so
    *  the capability ledger can't under-report a documented model failure mode. */
   anchorResolutionFailures: number;
+  /** comment/replacement calls refused because an argument was over the
+   *  length cap (`INVALID_ARGUMENT`, #1123 item 31). Not an anchor failure, so
+   *  never counted in `anchorResolutionFailures`. Optional so a hand-built
+   *  `LoopMetrics` need not name it; `runLoop` always sets it. */
+  oversizedArguments?: number;
   flatOnlyAnchors: number; // fullyAnchored === false on a successful anchor
   /** failed reply_to_annotation calls (bad/hallucinated id, wrong type) */
   replyFailures: number;
@@ -201,6 +206,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
     toolCalls: 0,
     jsonParseFailures: 0,
     anchorResolutionFailures: 0,
+    oversizedArguments: 0,
     flatOnlyAnchors: 0,
     replyFailures: 0,
     wallMs: 0,
@@ -330,8 +336,13 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         });
         const eff = outcome.effect;
         if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {
-          // Any anchor failure: quote-not-found OR a found-but-rejected span.
-          metrics.anchorResolutionFailures += 1;
+          if (eff.errorCode === "INVALID_ARGUMENT") {
+            // An argument over the length cap: refused before any anchoring.
+            metrics.oversizedArguments = (metrics.oversizedArguments ?? 0) + 1;
+          } else {
+            // Any anchor failure: quote-not-found OR a found-but-rejected span.
+            metrics.anchorResolutionFailures += 1;
+          }
         }
         if (
           (eff.kind === "comment" || eff.kind === "replacement") &&
