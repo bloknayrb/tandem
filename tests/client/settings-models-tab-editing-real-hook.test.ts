@@ -21,7 +21,7 @@ import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
-  // The production const is a literal `false` (ships dark).
+  // Pinned true here so the lit path is tested whatever the production literal says.
   BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 

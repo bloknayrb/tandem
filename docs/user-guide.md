@@ -70,7 +70,7 @@ When text is selected, a floating popup appears with two parts:
 - **Highlight swatches** — One-click highlighting in 4 colors (yellow, green, blue, pink), plus a "no highlight" swatch that clears an existing highlight.
 - **Annotate** — Opens a small composer anchored to the selection. Type your text, then choose the audience:
   - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
-  - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button reads **Send to Claude**. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
+  - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The outbound choice reads **Claude** (the commit button reads **Add**). `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
 The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
@@ -100,7 +100,7 @@ Hover over a heading and a small chevron appears to its left. Click it to collap
 
 - **In the document:** Undo/Redo, Cut/Copy/Paste, **Paste as Raw Text** (`Ctrl+Shift+V`), and Select All. Right-clicking a link gives Open / Copy / Edit / Remove Link; right-clicking inside a table gives row and column submenus plus Merge Cells, Split Cell, and Delete Table. With text selected, three more items appear: **Ask AI about selection…**, **Comment to AI…**, and **Private Note…**. (On macOS, plain text keeps the native menu so Look Up and Services still work.)
 - **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer / Show in File Manager (macOS / Windows / Linux).
-- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button, the annotate popup and this menu item all read **Send to Claude**.
+- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button and this menu item read **Send to Claude**; the annotate popup's outbound choice reads **Claude**.
 
 Right-clicking empty app chrome — rails, panel padding, the status bar — deliberately does nothing.
 
@@ -354,7 +354,7 @@ A private note to yourself. Notes are never sent to the AI — it cannot read th
 
 ### Creating Annotations
 
-Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or the send button (an outbound comment — it reads **Send to Claude**).
+Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or the **Claude** choice (an outbound comment).
 
 ### Editing Annotations
 
@@ -495,13 +495,13 @@ Tandem can use a model running on your own computer to answer chat instead of Cl
 
 **What you need.** A model server on this computer that offers the OpenAI-compatible chat API and supports tool calling, such as Ollama, LM Studio or llama.cpp, with a model loaded. Tandem does not download models. Tandem recommends no model: use any local model; results depend on the model, and smaller models answer less reliably.
 
-**Adding one.** In Settings → **Models**, choose **Add model**. Ollama and LM Studio come with their usual address filled in; for llama.cpp or another server, enter its address and port. Enter the model's name exactly as your server lists it. The address must be on this computer (127.0.0.1, localhost or [::1]). A model is used only when it is switched **On**: with one On, that one is used; with more than one On, the one marked **Default**. In the browser version, open Tandem at its 127.0.0.1 address to change models: a `localhost` page cannot.
+**Adding one.** In Settings → **Models**, choose **Add model**. Ollama and LM Studio come with their usual address filled in; for llama.cpp or another server, enter its address and port. Enter the model's name exactly as your server lists it. The address must be on this computer (127.0.0.1, localhost or [::1]). A model is used only when it is switched **On**: the one marked **Default** is used; with none marked, a sole model that is On is used. In the browser version, open Tandem at its 127.0.0.1 address to change models: a `localhost` page cannot.
 
-**Choosing it for chat.** Under **Who answers your chat**, choose **Local model**; after you add your first local model, Tandem also offers **Use it for chat**. If no local model can be used (none On, several On and none marked Default, or your Default is an older cloud model), Settings says so under that choice and your messages get a note saying what to fix: turn a local model On and mark it Default, or set chat back to Claude. A local model needs an open document to answer.
+**Choosing it for chat.** Under **Who answers your chat**, choose **Local model**; after you add your first local model, Tandem also offers **Use it for chat**. If no local model can be used (none On, several On and none marked Default, your Default switched Off or an older cloud model, or its Endpoint missing or not accepted), Settings says so under that choice and your messages get a note saying what to fix: turn a local model On and mark it Default, or set chat back to Claude. A local model needs an open document to answer.
 
 **What Claude still sees.** While a local model answers chat, Tandem stops handing Claude your chat messages and the changes you make. A Claude session that is already connected can still read your document and finish the step it is on. Choose **Claude** to switch back: comments and notes you sent meanwhile then reach Claude; chat messages from that time do not.
 
-**Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments, reply in threads it started and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
+**Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments, reply in comment threads that Claude or a local model started (never in your own comments) and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
 
 **What is sent.** For a local model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.
 

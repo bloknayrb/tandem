@@ -18,8 +18,7 @@ import type { AddressInfo } from "node:net";
  * reads: `data: {json}` lines carrying `choices[0].delta.content`, a final
  * frame with `finish_reason: "stop"`, then `data: [DONE]`.
  * `tests/scripts/e2e-local-model-stub.test.ts` drives the real client against
- * this stub in `check`, so the two cannot drift apart unnoticed while the
- * specs that use it are skipped dark.
+ * this stub in `check`, so the two cannot drift apart unnoticed.
  */
 
 export type StubMode = { kind: "reply"; text: string } | { kind: "status"; code: number };

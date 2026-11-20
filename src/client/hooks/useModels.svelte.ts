@@ -42,7 +42,7 @@ import {
  *    non-Svelte ProseMirror decoration path (`annotation.ts`);
  *  - mutators, all optimistic-then-reconcile.
  *
- * **Dark guarantee (`BYO_MODELS_ENABLED=false`, until M4).** `loadFromServer` is
+ * **Dark guarantee (with `BYO_MODELS_ENABLED` false; on since 0.32).** `loadFromServer` is
  * flag-gated → a dark boot fetches nothing and `_models` stays `[]`. But the
  * agent LABEL must NOT read the empty store while dark: users who configured a
  * model under v0.13.x (before `BYO_MODELS_ENABLED` existed) carry it in
@@ -297,8 +297,7 @@ type WriteOutcome = "committed" | "reconciled" | "rolledback";
 // Trade-off: a mutation issued while a prior one is still network-pending no
 // longer applies instantly — it queues behind the prior mutation's full
 // round-trip. Acceptable for a Settings-style CRUD surface (discrete
-// checkbox/save actions, never per-keystroke) that is also unreached at runtime
-// today (`BYO_MODELS_ENABLED=false`).
+// checkbox/save actions, never per-keystroke).
 let _writeQueue: Promise<void> = Promise.resolve();
 
 /**

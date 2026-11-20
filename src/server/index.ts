@@ -747,7 +747,7 @@ async function main() {
   // read a cold cache and resolve nothing until the next write. Gated on the SAME flag as the collaborator: while
   // dark, `start()` early-returns before `wire()` (collaborator.ts) so nothing
   // reads the cache — priming would be wasted boot-time disk I/O and would break
-  // byte-identical-when-dark. At M4 both light up together, preserving the
+  // byte-identical-when-dark. With the flag on (since 0.32) both are live, preserving the
   // "prime before wire" ordering. Awaited (like the session/doc restores above).
   if (BYO_MODELS_ENABLED) {
     try {
@@ -791,7 +791,7 @@ async function main() {
     }
   }
 
-  // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
+  // Wire the local-model collaborator (#1123 M1.2). On since 0.32; a no-op while
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
 

@@ -33,8 +33,8 @@ let { text, author, placeholder = "" }: Props = $props();
  * content that can come from outside the project, so this text is exactly as
  * untrusted as the user's.
  *
- * `"claude"` also covers local-model replies when #1123 M4 arms — the collaborator
- * writes with the same author value, so nothing here needs to change then.
+ * `"claude"` also covers local-model replies (on since 0.32) — the collaborator
+ * writes with the same author value, so nothing here needed to change.
  *
  * **Known asymmetry: `author` tracks who OWNS the annotation, not who wrote the
  * current text.** `tandem_editAnnotation` has no author gate and spreads the

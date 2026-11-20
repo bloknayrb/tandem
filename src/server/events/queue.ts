@@ -621,11 +621,10 @@ function heldLifecycleEvent(event: TandemEvent): boolean {
  * an advisory `alreadyPushed` hint only — nothing may suppress on it.
  *
  * "Subscribed consumer" is deliberately not "SSE consumer": `subscribe` is also
- * how the in-process local-model collaborator attaches (local-model/collaborator.ts,
- * dark behind BYO_MODELS_ENABLED). If that flag is ever flipped, an enabled
- * collaborator holds a permanent subscription with no external consumer attached,
- * and `pushEvent`'s gate above would stamp every comment — so the gate needs to
- * count external subscribers only, not `subscribers.size`.
+ * how the in-process local-model collaborator attaches (local-model/collaborator.ts;
+ * BYO_MODELS_ENABLED is on since 0.32). An enabled collaborator holds a permanent subscription with no external consumer attached,
+ * and `pushEvent`'s gate above would stamp every comment if it counted
+ * `subscribers.size` — so it counts external subscribers only.
  *
  * Counting the right SUBSCRIBERS is only half of it: the event must also have
  * been forwarded (#1823 item 7). In SOLO the fan-out skips every external
