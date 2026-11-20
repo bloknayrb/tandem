@@ -12,7 +12,8 @@
  * The REAL chat-answerer store runs with `fetch` held; the models list is a pose.
  */
 
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
@@ -218,5 +219,91 @@ describe("R4: S1 and S2 in every list state", () => {
     const view = mount();
     expect(view.queryByTestId("models-load-error")).toBeNull();
     expectIntro(view);
+  });
+});
+
+describe("A4: each row control is named with its model (ADR-039 item 27)", () => {
+  const named: ModelRegistryEntry = {
+    id: "n1",
+    provider: "local-ollama",
+    displayName: "Qwen coder",
+    modelId: "qwen2.5:14b",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+  const blank: ModelRegistryEntry = {
+    id: "b1",
+    provider: "local-lmstudio",
+    displayName: "   ",
+    modelId: "llama3.1:8b",
+    endpoint: "http://127.0.0.1:1234",
+    enabled: false,
+  };
+
+  it("a named entry and a blank-named one (by its model ID): each name starts with the visible word", async () => {
+    pose = { models: [named, blank], defaultModelId: "n1" };
+    const v = mount();
+    // Exact names; the visible words are unchanged.
+    expect(v.getByRole("radio", { name: "Default: Qwen coder" })).toBe(
+      v.getByTestId("model-default-n1"),
+    );
+    expect(v.getByRole("radio", { name: "Default: llama3.1:8b" })).toBe(
+      v.getByTestId("model-default-b1"),
+    );
+    expect(v.getByRole("checkbox", { name: "On: Qwen coder" })).toBe(
+      v.getByTestId("model-toggle-n1"),
+    );
+    expect(v.getByRole("checkbox", { name: "Off: llama3.1:8b" })).toBe(
+      v.getByTestId("model-toggle-b1"),
+    );
+    expect(v.getByRole("button", { name: "Edit Qwen coder" })).toBe(
+      v.getByTestId("model-edit-btn-n1"),
+    );
+    expect(v.getByRole("button", { name: "Edit llama3.1:8b" })).toBe(
+      v.getByTestId("model-edit-btn-b1"),
+    );
+    expect(v.getByRole("button", { name: "Delete Qwen coder" })).toBe(
+      v.getByTestId("model-delete-btn-n1"),
+    );
+    expect(v.getByRole("button", { name: "Delete llama3.1:8b" })).toBe(
+      v.getByTestId("model-delete-btn-b1"),
+    );
+    expect(v.getByTestId("model-edit-btn-n1").textContent?.trim()).toBe("Edit");
+    expect(v.getByTestId("model-delete-btn-b1").textContent?.trim()).toBe("Delete");
+    expect(v.getByTestId("model-toggle-b1").closest("label")?.textContent?.trim()).toBe("Off");
+    // The Default label keeps its title.
+    expect(v.getByTestId("model-default-n1").closest("label")?.getAttribute("title")).toBe(
+      "Use as the default model",
+    );
+
+    await fireEvent.click(v.getByTestId("model-delete-btn-b1"));
+    expect(v.getByRole("button", { name: "Confirm deleting llama3.1:8b" })).toBe(
+      v.getByTestId("model-delete-confirm-b1"),
+    );
+    expect(v.getByRole("button", { name: "Cancel deleting llama3.1:8b" })).toBe(
+      v.getByTestId("model-delete-cancel-b1"),
+    );
+    expect(v.getByTestId("model-delete-cancel-b1").textContent?.trim()).toBe("Cancel");
+  });
+
+  it("an entry with every name blank keeps the bare visible word, never a dangling one", async () => {
+    pose = {
+      models: [{ ...named, id: " ", displayName: "", modelId: "  " }],
+      defaultModelId: null,
+    };
+    const v = mount();
+    // Looked up by exact attribute (testing-library trims the queried id).
+    const byId = (id: string) =>
+      [...v.container.querySelectorAll<HTMLElement>("[data-testid]")].find(
+        (el) => el.getAttribute("data-testid") === id,
+      );
+    expect(byId("model-edit-btn- ")?.getAttribute("aria-label")).toBe("Edit");
+    expect(byId("model-default- ")?.getAttribute("aria-label")).toBe("Default");
+    expect(byId("model-toggle- ")?.getAttribute("aria-label")).toBe("On");
+    expect(byId("model-delete-btn- ")?.getAttribute("aria-label")).toBe("Delete");
+    byId("model-delete-btn- ")?.click();
+    await tick();
+    expect(byId("model-delete-confirm- ")?.getAttribute("aria-label")).toBe("Confirm");
+    expect(byId("model-delete-cancel- ")?.getAttribute("aria-label")).toBe("Cancel");
   });
 });

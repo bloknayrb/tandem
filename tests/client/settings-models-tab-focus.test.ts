@@ -673,3 +673,54 @@ describe("review round 1: catch, display order, the Confirm latch, settled seque
     expect(active()).toBe(deleteA);
   });
 });
+
+describe("carry-overs from #2491's merge review", () => {
+  it("the Confirm latch is cleared after a rollback: a second Confirm on the same row sends again", async () => {
+    modelsPose.models = [local("a"), local("b")];
+    const v = mount();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-a"));
+    await settle();
+    harness.writes.release("rollback");
+    await settle();
+    expect(v.el("model-row-a")).not.toBeNull();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-a"));
+    await settle();
+    expect(harness.calls.deleteModel).toBe(2);
+  });
+
+  it("the Confirm latch is per row: Confirm on row b while row a's delete is pending sends b's", async () => {
+    modelsPose.models = [local("a"), local("b"), local("c")];
+    const v = mount();
+    await fireEvent.click(v.must("model-delete-btn-a"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-a"));
+    await settle();
+    expect(harness.writes.pendingCount).toBe(1);
+    await fireEvent.click(v.must("model-delete-btn-b"));
+    await tick();
+    await fireEvent.click(v.must("model-delete-confirm-b"));
+    await settle();
+    expect(harness.calls.deleteModel).toBe(2);
+  });
+
+  it("Cancel during a pending Add from the empty state, then the add THROWS: the empty state's button (the stale path in catch)", async () => {
+    const v = mount();
+    await openAddFrom(v, v.must("model-add-btn"));
+    await fillAndSave(v);
+    await settle();
+    expect(v.el("models-empty-state")).toBeNull();
+    await fireEvent.click(v.getByRole("button", { name: "Cancel" }));
+    await tick();
+    expect(active()?.textContent?.trim()).toBe("+ Add model");
+
+    harness.writes.release("throw");
+    await settle();
+    expect(v.el("models-empty-state")).not.toBeNull();
+    expect(active()).toBe(v.must("model-add-btn"));
+    expect(v.must("model-add-btn").textContent?.trim()).toBe("Add your first model");
+  });
+});

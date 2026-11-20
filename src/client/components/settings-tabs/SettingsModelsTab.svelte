@@ -11,7 +11,12 @@ import { createRadioGroup } from "../../hooks/useRadioGroup.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
 import { MCP_BASE_URL } from "../../utils/backend-ports";
 import { disabledControlStyle } from "../../utils/colors";
-import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../utils/local-model-copy";
+import {
+  LOCAL_REQUEST_LINE,
+  LOCAL_SERVERS_LINE,
+  modelRowName,
+  rowControlName,
+} from "../../utils/local-model-copy";
 import LiveRegion from "../LiveRegion.svelte";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -610,6 +615,7 @@ async function cancelDelete(id: string) {
       <button
         type="button"
         role="radio"
+        class="answerer-radio"
         data-testid={`chat-answerer-${value}`}
         aria-checked={checked}
         aria-disabled={answererUnavailable}
@@ -617,11 +623,7 @@ async function cancelDelete(id: string) {
         tabindex={answererRg.tabIndexFor(value)}
         onfocus={() => (focusOverride = value)}
         onclick={() => void selectAnswerer(value)}
-        style="padding: 4px var(--tandem-space-3); font-size: 13px; border: none; background: {checked
-          ? 'var(--tandem-accent)'
-          : 'var(--tandem-surface)'}; color: {checked
-          ? 'var(--tandem-accent-fg)'
-          : 'var(--tandem-fg)'}; cursor: {answererUnavailable
+        style="padding: 4px var(--tandem-space-3); font-size: 13px; border: none; cursor: {answererUnavailable
           ? 'not-allowed'
           : 'pointer'}; opacity: {answererUnavailable && !checked ? 0.6 : 1};"
       >
@@ -787,6 +789,7 @@ async function cancelDelete(id: string) {
             <div style="display: flex; flex-direction: column; gap: 4px;">
               {#each bucket as entry, i (entry.id)}
                 {@const unusableProvider = !isLocalProvider(entry.provider)}
+                {@const rowName = modelRowName(entry)}
                 {@const reasonId = `model-unavailable-${provider}-${i}`}
                 {@const rowDescribedBy = unusableProvider
                   ? `${reasonId} models-own-window-msg`
@@ -833,6 +836,7 @@ async function cancelDelete(id: string) {
                       type="radio"
                       name="default-model"
                       data-testid={`model-default-${entry.id}`}
+                      aria-label={rowControlName("Default", rowName, ": ")}
                       value={entry.id}
                       checked={models.defaultModelId === entry.id}
                       disabled={readOnly}
@@ -852,6 +856,7 @@ async function cancelDelete(id: string) {
                     <input
                       type="checkbox"
                       data-testid={`model-toggle-${entry.id}`}
+                      aria-label={rowControlName(entry.enabled ? "On" : "Off", rowName, ": ")}
                       checked={entry.enabled}
                       disabled={readOnly}
                       aria-disabled={access.blocked || unusableProvider}
@@ -867,6 +872,7 @@ async function cancelDelete(id: string) {
                   <button
                     type="button"
                     data-testid={`model-edit-btn-${entry.id}`}
+                    aria-label={rowControlName(unusableProvider ? "View" : "Edit", rowName)}
                     disabled={readOnly}
                     aria-disabled={access.blocked}
                     aria-describedby="models-own-window-msg"
@@ -879,6 +885,7 @@ async function cancelDelete(id: string) {
                     <button
                       type="button"
                       data-testid={`model-delete-confirm-${entry.id}`}
+                      aria-label={rowControlName("Confirm", rowName === "" ? "" : `deleting ${rowName}`)}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
                       aria-describedby="models-own-window-msg"
@@ -890,6 +897,7 @@ async function cancelDelete(id: string) {
                     <button
                       type="button"
                       data-testid={`model-delete-cancel-${entry.id}`}
+                      aria-label={rowControlName("Cancel", rowName === "" ? "" : `deleting ${rowName}`)}
                       onclick={() => cancelDelete(entry.id)}
                       style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;"
                     >
@@ -899,6 +907,7 @@ async function cancelDelete(id: string) {
                     <button
                       type="button"
                       data-testid={`model-delete-btn-${entry.id}`}
+                      aria-label={rowControlName("Delete", rowName)}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
                       aria-describedby="models-own-window-msg"
@@ -1054,3 +1063,36 @@ async function cancelDelete(id: string) {
     onSave={handleSave}
   />
 {/if}
+
+<style>
+  /* "Who answers your chat" (#1123, ADR-039 item 27). The fill moved here from
+     the inline style, so forced colours can restyle the checked radio: an
+     inline background beats any rule. */
+  .answerer-radio {
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+  }
+  .answerer-radio[aria-checked="true"] {
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+  }
+  /* Inset: the group's `overflow: hidden` would clip a ring drawn outside. */
+  .answerer-radio:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
+  }
+  /* Accent on accent is 1:1; the checked radio's ring takes its text colour. */
+  .answerer-radio[aria-checked="true"]:focus-visible {
+    outline-color: var(--tandem-accent-fg);
+  }
+  @media (forced-colors: active) {
+    .answerer-radio[aria-checked="true"] {
+      forced-color-adjust: none;
+      background: Highlight;
+      color: HighlightText;
+    }
+    .answerer-radio[aria-checked="true"]:focus-visible {
+      outline-color: HighlightText;
+    }
+  }
+</style>

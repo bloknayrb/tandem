@@ -724,6 +724,159 @@ describe("ModelEditModal — A1's focus is moved in onMount, never an $effect (s
     expect(mounts[0]).toContain('[data-testid="model-edit-unavailable-close"]');
     expect(mounts[0]).toMatch(/\.focus\(\)/);
     const effects = [...src.matchAll(/^\$effect(?:\.pre)?\(/gm)].map((m) => block(m.index ?? 0));
-    for (const e of effects) expect(e).not.toMatch(/\.focus\(/);
+    expect(effects.length).toBeGreaterThan(0);
+    // Every call an $effect makes is on this list, so one that reaches focus
+    // through a helper of this file fails here, not only a direct `.focus(`.
+    const ALLOWED = new Set([
+      "$effect",
+      "addEventListener",
+      "removeEventListener",
+      "closest",
+      "contains",
+      "trapTab",
+      "preventDefault",
+      // Closing moves focus (the parent's A2), and must; an $effect calling it
+      // would still be caught by the behaviour cases, which never close.
+      "onCancel",
+      // The stranded-focus Escape branch: is another modal open above?
+      "querySelectorAll",
+      "from",
+      "some",
+    ]);
+    const KEYWORDS = new Set(["if", "return", "for", "while", "switch", "function"]);
+    for (const e of effects) {
+      expect(e).not.toMatch(/\.focus\s*(\?\.)?\(/);
+      const calls = [...e.matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)]
+        .map((m) => m[1])
+        .filter((name) => !KEYWORDS.has(name));
+      for (const name of calls) expect(ALLOWED.has(name), `$effect calls ${name}()`).toBe(true);
+    }
+    // And every `.focus(` in the script sits inside the onMount block.
+    const script = src.slice(0, src.indexOf("</script>"));
+    const focusCalls = [...script.matchAll(/\.focus\s*(\?\.)?\(/g)].length;
+    expect([...mounts[0].matchAll(/\.focus\s*(\?\.)?\(/g)].length).toBe(focusCalls);
+  });
+});
+
+describe("ModelEditModal — Escape with focus stranded on the page (carried item 4)", () => {
+  const LOCAL: ModelRegistryEntry = {
+    id: "e-1",
+    provider: "local-ollama",
+    displayName: "Mine",
+    modelId: "m",
+    endpoint: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+  for (const [mode, entry] of [
+    ["Add", undefined],
+    ["Edit", LOCAL],
+  ] as const) {
+    it(`${mode}: Escape with focus on <body> cancels once, and claims the key`, () => {
+      const onCancel = vi.fn();
+      render(ModelEditModal, { props: { ...(entry ? { entry } : {}), onCancel, onSave: vi.fn() } });
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+      const ev = escape();
+      document.body.dispatchEvent(ev);
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      // Claimed, so a listener after it (or a later Escape owner) leaves it.
+      expect(ev.defaultPrevented).toBe(true);
+    });
+  }
+
+  it("Escape with focus inside still cancels once, never twice", () => {
+    const onCancel = vi.fn();
+    const v = render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    v.getByTestId("model-edit-provider").dispatchEvent(escape());
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("another modal open above it owns that Escape: nothing is cancelled here", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const above = document.createElement("div");
+    above.setAttribute("role", "dialog");
+    above.setAttribute("aria-modal", "true");
+    document.body.appendChild(above);
+    try {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.dispatchEvent(escape());
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      above.remove();
+    }
+  });
+
+  it("an Escape already handled (defaultPrevented) or mid-composition is left alone", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    (document.activeElement as HTMLElement | null)?.blur();
+    const handled = escape();
+    handled.preventDefault();
+    document.body.dispatchEvent(handled);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, isComposing: true }),
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("ModelEditModal — the stranded-Escape branch inside Settings' own dialog", () => {
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+  it("an aria-modal ANCESTOR (Settings) is not a modal above: Escape on <body> cancels once", () => {
+    const outer = document.createElement("div");
+    outer.setAttribute("role", "dialog");
+    outer.setAttribute("aria-modal", "true");
+    document.body.appendChild(outer);
+    try {
+      const onCancel = vi.fn();
+      render(ModelEditModal, { target: outer, props: { onCancel, onSave: vi.fn() } });
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+      document.body.dispatchEvent(escape());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      outer.remove();
+    }
+  });
+
+  it("an inert modal elsewhere does not block it", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const wrap = document.createElement("div");
+    wrap.setAttribute("inert", "");
+    const dead = document.createElement("div");
+    dead.setAttribute("role", "dialog");
+    dead.setAttribute("aria-modal", "true");
+    wrap.appendChild(dead);
+    document.body.appendChild(wrap);
+    try {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.dispatchEvent(escape());
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    } finally {
+      wrap.remove();
+    }
+  });
+
+  it("with focus on a control outside every modal, the branch leaves Escape alone", () => {
+    const onCancel = vi.fn();
+    render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      outside.focus();
+      expect(document.activeElement).toBe(outside);
+      outside.dispatchEvent(escape());
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      outside.remove();
+    }
   });
 });
