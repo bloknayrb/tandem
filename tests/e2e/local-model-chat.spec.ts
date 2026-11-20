@@ -122,7 +122,8 @@ test.afterAll(async () => {
       await cleanupAllOpenDocuments(mcp);
       await mcp.close();
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // beforeAll may have failed before the directory existed.
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -205,7 +206,11 @@ test("while chat is set to the local model, Claude is handed nothing", async ({ 
   const data = await inbox();
   expect(data.summary).toBe(LOCAL_PERIOD_STATUS_LINE);
   expect(data.localModelAnswersChat).toBe(true);
-  expect(data.chatMessages.filter((m) => m.text?.includes(text))).toEqual([]);
+  // Nothing at all, not merely "not this text": chat was cleared in
+  // beforeEach, so a build that handed the message over reworded, wrapped or
+  // as a user action would show here.
+  expect(data.chatMessages).toEqual([]);
+  expect(data.userActions).toEqual([]);
 });
 
 test("a comment made while chat is set to the local model says it waits for Claude", async ({
@@ -291,4 +296,6 @@ test("a failed run names its cause", async ({ page }) => {
     .locator("[data-testid='toast-container'] [role='alert']")
     .filter({ hasText: RUN_FAILURE_NOT_FOUND });
   await expect(alerts).toHaveCount(1);
+  // Exactly the text, not a substring of something longer.
+  await expect(alerts.locator(".msg")).toHaveText(RUN_FAILURE_NOT_FOUND);
 });
