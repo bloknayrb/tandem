@@ -1078,6 +1078,28 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
     },
   );
 
+  it.each([
+    ["http", `http://${TAURI_HOSTNAME}`],
+    ["https", `https://${TAURI_HOSTNAME}`],
+    ["tauri://", TAURI_LINUX_ORIGIN],
+  ])(
+    "an npm-shaped server refuses the desktop WebView's origin (%s) on both GETs (#1123 item 31)",
+    async (_label, origin) => {
+      await boot({ desktop: false });
+      await postSetting(own, true);
+      await send(port, API_MODELS, {
+        origin: own,
+        contentType: JSON_CT,
+        body: modelsBody(fileWith(localModel)),
+      });
+      for (const route of [API_MODELS_LOCAL_SETTINGS, API_MODELS]) {
+        const res = await send(port, route, { method: "GET", origin });
+        expectOwnWindowRefusal(res);
+        expect(res.text).not.toContain(localModel.endpoint);
+      }
+    },
+  );
+
   it("a cross-site Sec-Fetch-Site with no Origin is refused on both GETs", async () => {
     await boot();
     for (const route of [API_MODELS_LOCAL_SETTINGS, API_MODELS]) {
