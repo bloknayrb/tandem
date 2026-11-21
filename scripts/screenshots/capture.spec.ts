@@ -580,16 +580,42 @@ async function selectFirstParagraph(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-/** Open Settings and land on the AI Assistant tab (id `claude-code`). */
-async function openSettingsClaudeCodeTab(page: Page): Promise<Locator> {
+/**
+ * Open Settings and land on the tab whose id is `tabId` (the AI Assistant tab
+ * is `claude-code`), asserting it is the current one.
+ */
+async function openSettingsTab(page: Page, tabId: string): Promise<Locator> {
   await openSettingsViaBrandMenu(page);
-  const modal = page.locator("[data-testid='settings-modal']");
+  const modal = page.getByTestId("settings-modal");
   await expect(modal).toBeVisible({ timeout: 3_000 });
   // Below 860px the nav sidebar collapses into an inert drawer; open it first.
-  const hamburger = page.locator("[data-testid='settings-modal-narrow-hamburger']");
+  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
   if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
-  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  const tab = page.getByTestId(`settings-modal-tab-${tabId}`);
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-current", "page");
   return modal;
+}
+
+/**
+ * The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so a
+ * control the shot is meant to show must sit inside the visible body, not
+ * merely be rendered.
+ */
+async function expectInsideSettingsBody(page: Page, target: Locator): Promise<void> {
+  const bodyBox = await page.getByTestId("settings-modal-content").boundingBox();
+  const targetBox = await target.boundingBox();
+  if (!bodyBox || !targetBox) throw new Error("settings body or target has no box");
+  expect(targetBox.y + targetBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+}
+
+/** Dismiss every toast; each click must take one away, so a stuck toast fails fast. */
+async function dismissAllToasts(page: Page): Promise<void> {
+  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
+  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
+    await dismiss.first().click();
+    await expect(dismiss).toHaveCount(n - 1);
+  }
 }
 
 // ── Captures ─────────────────────────────────────────────────────────────────
@@ -877,7 +903,7 @@ test("07-toast-notification", async ({ page }) => {
   await openWelcome();
   await loadEditor(page);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
     timeout: 5_000,
   });
@@ -941,12 +967,7 @@ test("09-settings-modal", async ({ page }) => {
   // backdrop's top edge and read as part of Settings.
   await suppressTutorialCard(page);
   await loadEditor(page);
-  const modal = await openSettingsClaudeCodeTab(page);
-  await expect(modal).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("settings-modal-tab-claude-code")).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  const modal = await openSettingsTab(page, "claude-code");
   await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
     timeout: 5_000,
@@ -994,7 +1015,7 @@ test("11-margin-annotations", async ({ page }) => {
   await setRailVisible(page, "left", false);
   await setRailVisible(page, "right", false);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   const marginToggle = page.locator("[data-testid='settings-modal-margin-view-toggle'] input");
   if (!(await marginToggle.isChecked())) await marginToggle.click();
   await expect(marginToggle).toBeChecked();
@@ -1141,7 +1162,7 @@ test("13-setup-wizard", async ({ page }) => {
   await openWelcome();
   await loadEditor(page);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   await page.getByTestId("settings-modal-open-integration-wizard").click();
 
   const wizard = page.getByTestId("integration-wizard");
@@ -1473,14 +1494,10 @@ test("21-activity-tray", async ({ page }) => {
 
   // Clear the transient pops so they are not stacked over the tray. Dismissing
   // a pop leaves its tray entry, which is the point of the tray.
-  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
-  await expect(dismiss).not.toHaveCount(0, { timeout: 5_000 });
-  // Each click must take a toast away; one that does not fails here rather
-  // than spinning until the test timeout.
-  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
-    await dismiss.first().click();
-    await expect(dismiss).toHaveCount(n - 1);
-  }
+  await expect(page.locator("[data-testid^='toast-dismiss-']")).not.toHaveCount(0, {
+    timeout: 5_000,
+  });
+  await dismissAllToasts(page);
 
   const pill = page.getByTestId("activity-pill");
   await pill.click();
@@ -1541,31 +1558,16 @@ test("22-settings-notifications", async ({ page, context, baseURL }) => {
   await suppressTutorialCard(page);
   await loadEditor(page);
 
-  await openSettingsViaBrandMenu(page);
-  const modal = page.getByTestId("settings-modal");
-  await expect(modal).toBeVisible({ timeout: 3_000 });
-  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
-  if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
-  await page.getByTestId("settings-modal-tab-notifications").click();
-  await expect(page.getByTestId("settings-modal-tab-notifications")).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await openSettingsTab(page, "notifications");
   await expect(page.getByTestId("notifications-permission-status")).toHaveText(
     "This browser allows Tandem's notifications.",
   );
   await expect(page.getByTestId("notifications-enable-toggle")).toBeVisible();
   await expect(page.getByTestId("notifications-sound-select")).toBeVisible();
 
-  // The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so
-  // the last control must be inside the visible body, not merely rendered.
-  const body = page.getByTestId("settings-modal-content");
   const lastControl = page.getByTestId("notifications-test-button");
   await lastControl.scrollIntoViewIfNeeded();
-  const bodyBox = await body.boundingBox();
-  const lastBox = await lastControl.boundingBox();
-  if (!bodyBox || !lastBox) throw new Error("settings body or test button has no box");
-  expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+  await expectInsideSettingsBody(page, lastControl);
   await page.waitForTimeout(300);
 
   await page.evaluate(() => document.fonts.ready);
@@ -1619,11 +1621,7 @@ function localModelsFile(endpoint: string): ModelsFile {
  */
 async function clearToasts(page: Page): Promise<void> {
   await expectOnlyAllowanceNotices(page);
-  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
-  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
-    await dismiss.first().click();
-    await expect(dismiss).toHaveCount(n - 1);
-  }
+  await dismissAllToasts(page);
   await expect(page.locator("[data-testid='toast-container'] [role='alert']")).toHaveCount(0);
 }
 
@@ -1638,16 +1636,7 @@ test("23-settings-models", async ({ page }) => {
     await suppressTutorialCard(page);
     await loadEditor(page);
 
-    await openSettingsViaBrandMenu(page);
-    const modal = page.getByTestId("settings-modal");
-    await expect(modal).toBeVisible({ timeout: 3_000 });
-    const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
-    if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
-    await page.getByTestId("settings-modal-tab-models").click();
-    await expect(page.getByTestId("settings-modal-tab-models")).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await openSettingsTab(page, "models");
     await expect(page.getByTestId("chat-answerer-section")).toBeVisible();
     // The answerer read has settled: the radio is checked and not "Checking…".
     const claude = page.getByTestId("chat-answerer-claude");
@@ -1656,13 +1645,7 @@ test("23-settings-models", async ({ page }) => {
     const row = page.getByTestId(`model-row-${LOCAL_MODEL_ID}`);
     await expect(row).toContainText(LOCAL_MODEL_NAME);
     await expect(page.getByTestId(`model-default-${LOCAL_MODEL_ID}`)).toBeVisible();
-
-    // The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so
-    // the row must sit inside the visible body, not merely be rendered.
-    const bodyBox = await page.getByTestId("settings-modal-content").boundingBox();
-    const rowBox = await row.boundingBox();
-    if (!bodyBox || !rowBox) throw new Error("settings body or model row has no box");
-    expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+    await expectInsideSettingsBody(page, row);
 
     await clearToasts(page);
     await blurActiveElement(page);
