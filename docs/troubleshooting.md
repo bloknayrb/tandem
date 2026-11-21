@@ -8,6 +8,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 - **Setup and connection:** [Quick diagnostic](#quick-diagnostic) · [Windows SmartScreen warning](#windows-smartscreen-warning) · ["MCP failed to connect"](#claude-code-says-mcp-failed-to-connect) · [Connected but tools fail](#mcp-shows-connected-but-tandem-tools-fail) · [Claude doesn't know Tandem](#claude-doesnt-seem-to-know-what-tandem-is) · [Tandem can't start Claude on Windows](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal) · ["Set up Claude Code" when it is installed](#tandem-says-set-up-claude-code-but-claude-code-is-already-installed) · [Port already in use](#port-already-in-use) · [`TANDEM_BIND_HOST` refused](#tandem_bind_host-is-not-supported-in-this-version)
 - **Claude isn't reacting:** [A message or comment got no response](#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) · [No hello from Tandem's Claude](#tandems-claude-didnt-say-hello) · [Channel shim fails to start](#channel-shim-fails-to-start) · [Plugin install: "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory) · [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127) · [Plugin tools missing: Node.js not found](#plugin-tools-missing-nodejs-not-found) · [Claude Desktop: failed to spawn](#failed-to-spawn-process-no-such-file-or-directory-claude-desktop) · [Plugin install fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https) · [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version)
+- **Local models:** [A local model doesn't answer](#a-local-model-doesnt-answer)
 - **Editor and documents:** [Server unavailable / lost connection](#editor-shows-server-unavailable-or-weve-lost-the-connection-to-the-tandem-server) · [Empty editor](#empty-editor-with-no-document) · [A link won't open](#a-link-in-the-document-wont-open) · [Double-clicking a file does nothing](#double-clicking-a-file-does-nothing) · [Settings are read-only](#settings-say-they-are-read-only) · ["May not have finished updating"](#tandem-may-not-have-finished-updating) · [A document will not open](#a-document-will-not-open--a-tab-did-not-come-back) · [Recovering a previous version](#recovering-a-previous-version-of-a-document)
 - **Resetting and reporting:** [Reset session state](#reset-session-state) · [Reading server logs](#reading-server-logs) · [Sharing diagnostics](#sharing-diagnostics)
 
@@ -15,14 +16,18 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 `tandem doctor` (or `npm run doctor` from a source checkout) checks the most common setup issues at once:
 
-- Node.js ≥ 22.12.0 installed
+- Node.js ≥ 22.12.0 installed, and whether it has the latest Node security fix (a warning only: below 22.23.4, 24.22.1 or 26.12.1 on those lines; this matters for the npm install, since the desktop app ships its own Node)
+- macOS: whether Tandem is running from a translocated copy (an app opened straight from Downloads), which would make the configs it writes point at a temporary path
 - A project `.mcp.json`, if you have one, is valid and has a `tandem` entry (a `tandem-channel` entry is optional, because the channel shim is opt-in)
 - `~/.claude.json` MCP registration (when present)
 - Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale
 - The Node toolchain the MCP connection depends on
 - **Claude Code is installed *and startable*** — on Windows these are different questions, and an `npm install -g` install passes the first while failing the second (see [below](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal))
+- Whether the Tandem plugin is installed alongside a config entry (the tools would appear twice)
+- `integrations.json` readable
 - No stale global `tandem-editor` shadowing the version you meant to run
 - Ports `3478` ([Hocuspocus](glossary.md#hocuspocus) WebSocket) and `3479` (MCP HTTP) listening
+- The licence state, once the server answers (no row while licensing ships dark)
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
@@ -69,7 +74,7 @@ If you restart the server while Claude Code is open, run `/mcp` inside Claude Co
 `/mcp` showing `tandem ✔ connected` proves the config entry resolved at session start — a tool call is the first *real* round-trip, so it's the call that surfaces a dead or stale server. In likelihood order:
 
 1. **The server isn't running anymore.** The connection state is cached from session start. Launch Tandem (or `tandem` in a terminal), then `/mcp` to reconnect.
-2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `mcpServers.tandem.url` points at the wrong place. Re-run the in-app integration wizard or `tandem setup --apply`.
+2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `tandem` entry points at the wrong place: `mcpServers.tandem.url` in a direct HTTP entry, or `mcpServers.tandem.env.TANDEM_URL` in the bridge entry Tandem has written since v0.31.0. Re-run the in-app integration wizard or `tandem setup --apply`.
 3. **Stale [auth token](glossary.md#auth-token).** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
 4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them (with only the desktop app installed, run it as `npx tandem-editor --uninstall-scrub`).
 
@@ -209,6 +214,7 @@ If you close that dialog, Settings → Network → **Restart server** does the s
 
 First, read the status bar's AI label — it says who is attached:
 
+- **Chat: your local model** (or **Your local model can't answer**) — chat is set to a local model, so your chat messages go to it and never to Claude, then or later. Switch back in **Settings → Models → Who answers your chat**, then send the message again. If the local model is the one not answering, see [A local model doesn't answer](#a-local-model-doesnt-answer).
 - **Tandem's Claude** — the Claude session Tandem started for you is running, and Tandem wakes it when you send a message. It works in the background, so a reply can take a while; "Tandem's Claude is working…" means it is mid-turn; if you sent something during that turn, Tandem wakes it again when the turn ends. If the hover text says Tandem **hasn't seen it connect**, nothing has connected to Tandem's tools yet. A working session can briefly look like this, but if it stays that way, check that your Claude Code config still has Tandem's MCP entry. The dot is **green** only when Tandem has matched a live connection to its own Claude; otherwise it is a **hollow ring**, and the hover text says Tandem can't confirm which connection is its Claude. With the Tandem plugin installed, Tandem can make that match when the connection reports which Claude session it belongs to (not yet confirmed on every setup). With the plain config entry that `tandem setup` writes it can't, because that connection doesn't say which Claude session it belongs to, so the ring is the normal look there and doesn't mean anything is broken.
 - **· 2 sessions** after the label is how many MCP connections Tandem can see are still there: ones holding their connection open, or that used Tandem in the last minute. A session that just closed can still count for about a minute, a frozen client stays counted until its connection drops, and one Claude connected both through the plugin and through the `tandem setup` entry counts twice. Clients on the newest MCP protocol revision aren't counted at all. The hover text repeats the number. With Tandem's Claude running and a hollow ring, the count tells you whether anything live has connected: if no count is shown, nothing has.
 - **AI attached** — *something else* is connected: a Claude Code session you started, Claude Desktop, or another MCP client. Tandem can't wake it. The rest of this section is about that case. With a **hollow ring** instead of a green dot, Tandem can't see that it's still there: usually a session that closed without disconnecting, which Tandem forgets about 30–35 minutes after it was last used. When the pill is also offering to set up or restart Claude, it says **AI not connected** instead. An MCP client that never holds its connection open can also look like this between calls.
@@ -267,13 +273,39 @@ Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude p
 
 ## Tandem's Claude didn't say hello
 
-On a first run (and once on the first run of v1.0) [Tandem's own Claude](glossary.md#tandems-claude) greets you in the chat panel after setup. If nothing arrives within about a minute, the chat panel says **Tandem's Claude hasn't said hello**. The two usual causes:
+On a first run (and once on the first run of v1.0) [Tandem's own Claude](glossary.md#tandems-claude) greets you in the chat panel after setup. If nothing arrives within about a minute, the chat panel says **Tandem's Claude hasn't said hello**. The usual causes:
 
 - **Claude Code isn't signed in.** Tandem's Claude is Claude Code running in the background, and it can't answer until you sign in. Open a terminal, run `claude` and sign in, then click the note's button (**Check Claude sign-in** or **Restart Tandem's Claude**).
 - **It isn't allowed to use Tandem's tools.** It runs without a window, so it cannot ask you to approve a tool the way an interactive session does. Tandem pre-approves its reading, commenting and chat tools and starts it in Claude Code's auto mode, so this should be rare; a tool it still isn't allowed to use is refused. Open a terminal in the same folder, run `claude`, ask it to use one of Tandem's tools (for example "check the Tandem inbox"), and choose to always allow Tandem's tools. Then click **Restart Tandem's Claude**.
+- **Chat is set to a local model.** While it is, Tandem does not start its own Claude, so there is no hello. Set **Who answers your chat** back to Claude in Settings → Models.
 - **Your Claude Code is older than auto mode.** Tandem starts its Claude with `--permission-mode auto`, which a Claude Code release from before auto mode existed refuses, so Tandem's Claude never starts. Update Claude Code (`claude update`), then click **Restart Tandem's Claude**. A Claude you start yourself in a terminal is unaffected.
 
 If Claude wasn't signed in, the hello is tried again on the start after you sign in. Otherwise it is sent once and not repeated: after a tool-permission fix Claude works normally but does not say hello again, which is expected. In Solo mode it waits: Tandem's Claude only speaks when spoken to there, so the hello comes on the first start after you switch to Tandem mode.
+
+## A local model doesn't answer
+
+Local models are set up in **Settings → Models**; the [user guide](user-guide.md#local-models) covers the setup. When one can't answer, Tandem says why, in a notice, in the chat or in the add-model window. Find the message you saw:
+
+| Message (start) | What it means | What to do |
+|---|---|---|
+| "Your saved local models did not answer, because none of them was marked Default." | More than one local model is On and none is marked Default, so Tandem won't guess. | Mark one as **Default** in Settings → Models. |
+| "Your local model did not answer, because its Endpoint was not accepted." | The Endpoint is not a plain `http://` address on this computer. Tandem only talks to `127.0.0.1`, `localhost` or `[::1]`, with no user name or password. | Edit the model's Endpoint, for example `http://127.0.0.1:11434` for a default Ollama. |
+| "The Endpoint must start with http:// and name this computer…" or "The Endpoint is not a complete address." | The add-model window won't save that address, for the same reason. | Fix the address, including the port number. |
+| "Your local model did not answer, because it had no Endpoint saved." | The model has no Endpoint. | Edit the model and add one. |
+| "No local model could answer this message." | Chat is set to a local model, but none is On and marked Default. | Add or turn on a local model and mark it Default, or set **Who answers your chat** back to Claude and send the message again. |
+| "The local model could not answer this message, because no document was open for it." | A local model works on the open document. | Open the document, then send the message again. |
+| "Tandem's request to your local model's server did not complete." | Nothing answered at the Endpoint: usually the model server isn't running. | Start the server (Ollama, LM Studio, llama.cpp…), then check the Endpoint. |
+| "Your local model's server could not find the model or address Tandem asked for." | The Model ID or the Endpoint's path is wrong, or the model isn't downloaded. | Check the model is downloaded, then check its Model ID and Endpoint. |
+| "Your local model's server refused Tandem's request." | Usually a model that can't call tools. Tandem needs tool calling. | Use a model that supports tool calling, or set chat back to Claude. |
+| "Your local model's server refused access to Tandem." | The server wants an API key. Tandem sends none to a local server. | Turn the key requirement off in the server's own settings. |
+| "Your local model's server reported an error" or "…sent a reply Tandem could not read." | The server failed, or what answered isn't the model server. | Read the server's own log; check the Endpoint is the server's address. |
+| "Your local model's reply grew too large, so Tandem stopped it." | The reply passed Tandem's size limit. | Send the message again, or try another model. |
+| "The local model stopped before finishing (it reached its step limit)" or "(it ran out of time)". | The model kept calling tools, or took too long. | Ask again, more narrowly, or try another model. |
+| "The local model stopped without replying: it tried to comment on or change the document…" | Local models don't comment or edit in Solo mode, or when **Let local models comment and suggest changes** is off. | Ask for an answer in chat, or switch to Tandem mode and turn that setting on. |
+| "Your local model produced no reply." | The model finished without writing anything. | Ask again, or try another model. |
+| "Local-model settings can only be changed in Tandem's own window." | Settings → Models was opened from a page Tandem doesn't count as its own window (for example `localhost` instead of `127.0.0.1`). | Open Tandem at the `http://127.0.0.1` address it printed, or use the desktop app. |
+
+Where a run failed partway, any comments the local model already added stay. A chat message sent while chat was set to a local model is never handed to Claude afterwards, so after switching back to Claude, send it again.
 
 ## Channel shim fails to start
 

@@ -59,8 +59,8 @@ start: the LAN bind ships dark behind `LAN_BIND_ENABLED` in `src/shared/constant
 ([ADR-056](docs/decisions.md#adr-056-the-non-loopback-bind-ships-dark)). See
 [docs/security.md](docs/security.md) for the full network posture.
 
-**The Vite page is not "Tandem's own window".** The saved model settings (`POST /api/models` and
-`POST /api/models/local-settings`) can be changed only from the desktop app or from the page the
+**The Vite page is not "Tandem's own window".** The saved model settings (`POST /api/models`,
+`POST /api/models/local-settings` and `POST /api/models/chat-answerer`) can be changed only from the desktop app or from the page the
 server itself serves on `:3479` (#2404). The dev client on `:5173` is neither, so the server needs
 to be told that this one page may: `TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173`.
 `npm run dev:standalone` sets it for the server it starts; `npm run dev:server` on its own does
@@ -87,9 +87,9 @@ a `dev:server` restart and then `/mcp` in Claude Code.
 | `npm run dev:standalone` | Vite (:5173) + server watcher (Hocuspocus :3478, MCP HTTP :3479) |
 | `npm run dev:server` | Backend only |
 | `npm run dev` / `npm run dev:client` | Vite only |
-| `npm run build` | typecheck + vite build + font-asset check + tsup |
-| `cargo tauri dev` | The desktop shell |
-| `cargo tauri dev --features ui-inspector` | Desktop shell + the element picker (see below) |
+| `npm run build` | typecheck + client build (`scripts/build-client.mjs`, not a bare `vite build`) + font-asset check + tsup + third-party notices |
+| `npm run dev:tauri` | The desktop shell: downloads the bundled Node sidecar, builds `tandem-reaper`, then runs `cargo tauri dev` |
+| `cargo tauri dev --features ui-inspector` | Desktop shell + the element picker (see below); run `npm run dev:tauri` once first so the sidecar and reaper exist |
 | `npm run doctor` | Diagnose ports, Node version, MCP config, server health |
 
 See [docs/cli.md](docs/cli.md#npm-run-scripts-source-checkouts-only) for the full list of npm

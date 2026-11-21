@@ -20,6 +20,9 @@ once connected. Back to the [docs hub](../README.md).
   the connection from the editor's side.
 - [CLI → `tandem setup`](../cli.md#tandem-setup) and [`tandem doctor`](../cli.md#tandem-doctor)
   cover the scripted setup and the self-check for npm installs.
+- [User guide → Local models](../user-guide.md#local-models) answers "can a model running on my
+  computer (Ollama, LM Studio, llama.cpp) answer chat instead?" It is set up in Settings → Models,
+  not over MCP, and while it answers chat Claude is handed nothing.
 - [Configuration → Binding and authentication](../configuration.md#binding-and-authentication)
   lists the environment variables for ports and tokens; most people never need it.
 

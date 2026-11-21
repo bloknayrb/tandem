@@ -34,7 +34,7 @@ When all three are ticked the strip says "You're ready!" and closes itself a few
 
 ![The getting-started checklist above the welcome document](screenshots/08-onboarding-tutorial.png)
 
-**On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item. After you set up Claude in the wizard, Tandem may offer an optional window to add a [local model](#local-models).
+**On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item. The wizard's **More integrations** section also has an **AI models** row ("Set up a local AI model, such as Ollama, LM Studio or llama.cpp") whose **Set up** button opens Settings → Models. If the wizard opened by itself on a new install and you connected Claude Code or Claude Desktop, Tandem offers once, afterwards, an optional window to add a [local model](#local-models).
 
 ![The integration wizard listing each Claude client it found, with the settings file it will write to](screenshots/13-setup-wizard.png)
 
@@ -100,7 +100,7 @@ Hover over a heading and a small chevron appears to its left. Click it to collap
 
 - **In the document:** Undo/Redo, Cut/Copy/Paste, **Paste as Raw Text** (`Ctrl+Shift+V`), and Select All. Right-clicking a link gives Open / Copy / Edit / Remove Link; right-clicking inside a table gives row and column submenus plus Merge Cells, Split Cell, and Delete Table. With text selected, three more items appear: **Ask AI about selection…**, **Comment to AI…**, and **Private Note…**. (On macOS, plain text keeps the native menu so Look Up and Services still work.)
 - **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer / Show in File Manager (macOS / Windows / Linux).
-- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button and this menu item read **Send to Claude**; the annotate popup's outbound choice reads **Claude**.
+- **On an annotation card** (side panel or margin): Accept, Dismiss, **Resolve** (your own comments), Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). Each item appears only where it applies: Accept is left out while a suggestion [can't be applied](#one-at-a-time), and Remove is left out for a comment of yours that has replies, so the card's **Delete thread?** two-step is the only way to delete a conversation (see [Your own comments](#your-own-comments)). The card's own button and this menu item read **Send to Claude**; the annotate popup's outbound choice reads **Claude**.
 
 Right-clicking empty app chrome — rails, panel padding, the status bar — deliberately does nothing.
 
@@ -120,7 +120,7 @@ The right panel toggles between two views. Toggle the panel itself with `Alt+Shi
 
 Either rail can be resized by dragging the thin strip between it and the document. The strip is also keyboard-operable: tab to it and use the arrow keys.
 
-**Annotations** — Lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text, the annotation content, author badge, and timestamp. Bulk **Accept All** / **Dismiss All** buttons appear when multiple annotations are pending. When filters are active, bulk actions only affect the filtered subset.
+**Annotations** — Lists all annotations with filtering by type, author, and status. The author chips are **Anyone**, **AI** (Claude's annotations and a local model's), **You** and **Imported**; the status chips are **Any status**, **Pending**, **Accepted** and **Dismissed/resolved**. Each card shows a preview of the annotated text, the annotation content, author badge, and timestamp. Bulk **Accept All** / **Dismiss All** buttons appear when multiple annotations are pending. When filters are active, bulk actions only affect the filtered subset.
 
 **Chat** — Freeform messaging with your AI. See the [Chat](#chat) section for details.
 
@@ -137,6 +137,7 @@ The floating pill at the bottom-left shows the following — it stays faint unti
 - **Held count** — In Solo mode, how many of your comments and replies are being withheld.
 - **AI connection** — Who is attached. **Tandem's Claude** means the Claude session Tandem started for you is running; Tandem wakes it when you send a message, and it shows "Tandem's Claude is working…" while it is mid-turn. **AI attached** means something else is connected — a Claude Code session you started, Claude Desktop, or another MCP client — which sees your messages only when it checks in, unless it set up notifications. **AI not connected** means nothing is. Beside **Tandem's Claude**, a **green dot** means Tandem has matched a live connection to its own Claude, and a **hollow ring** means it can't confirm which connection that is (with the plain config entry `tandem setup` writes, the ring is the normal look). Beside **AI attached**, a green dot means a live session is connected, and a hollow ring usually means a session that closed without disconnecting. **· 2 sessions** after the label counts the connections Tandem can see. It's an estimate: a session that just closed still counts for about a minute, one Claude connected two ways counts twice, and clients on the newest MCP protocol revision aren't counted. [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) has the details. If Tandem's own Claude has stopped while something else is attached, a separate **Tandem's Claude** button says why (not running, needs sign-in, or can't start) and offers the fix (it leaves any Claude you started yourself alone).
 - **Tandem's Claude standby** — When Tandem's Claude isn't running by your choice, the pill says so instead of reporting a fault: **Tandem's Claude is off** (you turned it off, or chose **Off** in Settings), **Tandem's Claude hasn't started** (it is set to wait until you click Start), or **Tandem's Claude stopped (idle)** (it stopped after the idle time you chose; its conversation resumes when it starts again). In these states — unless you are in Solo or another AI is connected — the pill is a **Start Tandem's Claude** button: click it and the pill shows **Starting Claude…** until it is running. Sending a chat message also starts it — see [Tandem's Claude in chat](#tandems-claude-in-chat).
+- **Local model answering chat** — While chat is set to a [local model](#local-models), the AI label reads **Chat: your local model**, or **Your local model can't answer** when no local model can be used (see Settings → Models). In Solo mode they read **Solo · chat: your local model** and **Solo · your local model can't answer**.
 - **Working-folder pill** — Appears when the AI's working directory has drifted from the document you have open.
 
 Your display name is set in **Settings → Collaboration**. The Solo / Tandem toggle (`Ctrl+Shift+M`) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
@@ -169,7 +170,7 @@ In the desktop app, a dot on the logo means an update is ready; opening Settings
 
 ### Help Modal
 
-Press `?` (or `Ctrl+/`) at any time, or choose **Keyboard Shortcuts** from the brand menu, to open the keyboard shortcuts reference. Press `?` or `Esc` to close it.
+Press `?` (or `Ctrl+/`) at any time, or choose **Keyboard Shortcuts** from the brand menu, to open the keyboard shortcuts reference. Press `?` or `Esc` to close it. It lists most shortcuts with your current bindings, but not all of them: the command palette (`Ctrl+Shift+P`), **Comment on selection** (`Ctrl+Alt+M`) and the **New tab menu** (`Ctrl+T`) appear only in **Settings → Shortcuts**, and a few fixed keys (such as `Ctrl+Shift+V`, `Alt+Left` / `Alt+Right`, `F2` and zoom) appear only in [Keyboard Shortcuts](#keyboard-shortcuts) below.
 
 ![The Keyboard Shortcuts reference, with shortcuts grouped under Editor, View, Annotations, Navigation, Document and Other; the list scrolls for more](screenshots/20-help-modal.png)
 
@@ -346,6 +347,8 @@ Dashed underline on the annotated text. Comments are the shared channel: you cre
 
 The AI's comments may carry a **replacement suggestion** (`suggestedText`) — a proposed text change. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically. Suggestions are AI-only — your own comments are plain text; if you want a rewrite, ask for one in the comment and the AI responds with a suggestion you can accept.
 
+If you reply to one of the AI's comments asking for different wording, the AI's answer in that thread can carry a refined replacement. That reply shows its own **Accept replacement** button, on the side panel card and on margin cards alike; it replaces the comment's original passage with the reply's text.
+
 ### Note
 
 A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it.
@@ -366,7 +369,16 @@ Click **Save** to apply or **Cancel** to discard. Edited cards show "(edited)" w
 
 ### One at a Time
 
-Each annotation card in the side panel has **Accept** and **Dismiss** buttons. Accepting a comment with replacement text applies the text change. Accepting other annotations simply marks them as resolved.
+Each of the AI's annotation cards in the side panel has **Accept** and **Dismiss** buttons. Accepting a comment with replacement text applies the text change. Accepting other annotations simply marks them as resolved.
+
+If the passage a suggestion was written against has since changed, its **Accept** (and a reply's **Accept replacement**) is shown disabled with "The text this suggestion was written against has changed, so it can't be applied." `Ctrl+Enter` and **Accept All** refuse it too. Dismiss it, or reply and ask for a fresh suggestion.
+
+### Your own comments
+
+A comment you wrote has no Accept or Dismiss, because there is nothing to apply. Instead it offers:
+
+- **Resolve** — closes the comment and keeps its replies. It moves to the resolved list (the **Dismissed/resolved** status filter), where **Undo** reopens it. In the margin view the bubble leaves and a brief "Comment resolved." toast carries the Undo. Undo works only until the page reloads; after that a resolved comment can still be removed, but not reopened. Resolving tells your AI nothing, so a comment you resolve before your AI has read it never reaches it.
+- **Remove** — deletes the comment and its whole thread, the AI's replies included, with no undo. On a comment that has replies, the first click turns the button into **Delete thread?** and a second click within a few seconds deletes it; Escape, or moving focus away, cancels. A comment with no replies is removed with one click. Your resolved comments keep **Remove** in the resolved list.
 
 ### Undo
 
@@ -435,6 +447,8 @@ Type in the input box and press `Enter` to send. Messages go to your AI via the 
 
 A line under your latest message shows where it is: **waiting for your AI to pick it up** (after a few seconds, with how long it has waited; after two minutes it says **still waiting**), then **your AI has your message**, then **your AI is working on it** once it has said it is starting. The line goes away when the answer arrives, or after ten minutes either way.
 
+While chat is set to a [local model](#local-models), the line reads **Sent to your local model**, then **Your local model is working on this…**. If no answer comes it says **Your local model stopped without answering.**, or **Tandem restarted while your local model was working on this.** if Tandem restarted mid-answer.
+
 ### Tandem's Claude in Chat
 
 **Tandem's Claude** is a Claude Code session that Tandem runs in the background so it can answer your chat and comments. When Tandem is set up to run one, the chat panel's header has a button for it:
@@ -442,13 +456,13 @@ A line under your latest message shows where it is: **waiting for your AI to pic
 - **Turn off Tandem's Claude** while it is running. It stays off — including the next time Tandem starts — until you start it again.
 - **Start Tandem's Claude** while it is off, waiting for its first Start, or stopped after being idle. Its conversation resumes where it left off.
 
-You don't have to press Start before writing, though. Sending a chat message — or replying to one of Claude's comments — while Tandem's Claude is stopped starts it to answer you (unless another AI is connected, which answers instead). While it starts, the line under your message reads "Starting Tandem's Claude… it will answer when it's ready", or "Claude is resuming… it will answer when it's back" if it had stopped for being idle. If it can't start, the line says "Tandem's Claude couldn't start, so your message hasn't been answered yet." and offers the fix, such as starting it again or checking your Claude sign-in.
+You don't have to press Start before writing, though. Sending a chat message — or replying to one of Claude's comments — while Tandem's Claude is stopped starts it to answer you (unless another AI is connected, which answers instead, or chat is set to a [local model](#local-models), which answers instead and never starts Tandem's Claude). While it starts, the line under your message reads "Starting Tandem's Claude… it will answer when it's ready", or "Claude is resuming… it will answer when it's back" if it had stopped for being idle. If it can't start, the line says "Tandem's Claude couldn't start, so your message hasn't been answered yet." and offers the fix, such as starting it again or checking your Claude sign-in.
 
 When to start it, and whether it stops after a stretch of idle time, are set in [Settings → AI Assistant](#ai-assistant-settings).
 
 **The first hello.** The first time Tandem's Claude starts on a new install, it says hello in the chat: a few sentences on what it can do here, and that it waits to be asked. If no hello arrives within about a minute, the chat shows "Tandem's Claude hasn't said hello", with the two usual causes: Claude Code isn't signed in (run `claude` in a terminal to sign in), or Claude isn't allowed to use Tandem's tools. A button offers to restart Tandem's Claude, or the relevant fix, once you've sorted that out. [Troubleshooting → Tandem's Claude didn't say hello](troubleshooting.md#tandems-claude-didnt-say-hello) has the details.
 
-**No Claude Code yet?** If nothing Tandem can wake is answering your chat — for example, you have only Claude Desktop connected — the chat panel offers: "Answers here can come from Tandem's own Claude, as you send them. It isn't set up yet." It appears on an empty chat, or once a message has been left waiting. **Set up…** opens the setup wizard to install and connect Claude Code; **Not now** hides the offer until Tandem next starts. It never installs anything by itself, and it stays hidden while you are in Solo.
+**No Claude Code yet?** If nothing Tandem can wake is answering your chat — for example, you have only Claude Desktop connected — the chat panel offers: "Answers here can come from Tandem's own Claude, as you send them. It isn't set up yet." It appears on an empty chat, or once a message has been left waiting. **Set up…** opens the setup wizard to install and connect Claude Code; **Not now** hides the offer until Tandem next starts. It never installs anything by itself, and it stays hidden while you are in Solo or while chat is set to a local model.
 
 ### Text Anchors
 
@@ -466,7 +480,7 @@ A reply counts as read only once you've seen it in the Tandem window you're usin
 
 ### Reply Notifications
 
-When your AI replies in chat and Tandem isn't the window you're using, Tandem shows a notification, plays a sound and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. While you're using Tandem, each reply plays the sound and nothing else, at most once every 2 seconds. Several replies in quick succession count as one.
+When your AI replies in chat (or in the thread of a comment you wrote) and Tandem isn't the window you're using, Tandem shows a notification, plays a sound and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. While you're using Tandem, each reply plays the sound and nothing else, at most once every 2 seconds. Several replies in quick succession count as one.
 
 While you're away, you get at most one notification and one sound every 30 seconds. Replies that arrive during those 30 seconds are held back and announced together when the 30 seconds end, unless you've come back to Tandem or read them in another Tandem window by then.
 
@@ -478,10 +492,10 @@ The "working on it" message your AI sends before starting longer work doesn't no
 
 ![Settings open on the Notifications tab: the browser's permission status, Show a notification, the notification content, the tab-title count, the sound and volume, and Send a test notification](screenshots/22-settings-notifications.png)
 
-Change any of this under **Settings → Notifications**:
+Change any of this under **Settings → Notifications**, in its **When Claude replies** section:
 
 - **Show a notification** — on by default. In the browser, notifications also need your browser's permission. Tandem asks only when you click **Allow notifications** in this tab, or turn the setting on. With it off, you still hear the sound, at the same limit of once every 30 seconds while you're away.
-- **Notification content** — what the notification says: *Generic* ("Claude replied"), *Document name* (the default, "Claude replied in report.md"), or *Message preview* (adds the start of the reply). Notifications can appear on your lock screen, so the reply text is off unless you choose it.
+- **Notification content** — what the notification says: *Generic* ("Claude replied"), *Document name* (the default, "Claude replied in report.md"), or *Message preview* (adds the start of the reply). Notifications can appear on your lock screen, so the reply text is off unless you choose it. A reply from a [local model](#local-models) reads "Your local model replied" (or "Your local model sent N replies"), never the model's name, and a batch mixing both reads "N new replies".
 - **Flash the taskbar icon until you switch to Tandem** (desktop) / **Show the unread count in the tab title** (browser).
 - **I keep Tandem visible beside other apps** — off by default. When it's on, replies count as read whenever Tandem is open on screen with chat showing, even behind other windows, and Tandem treats that window as the one you're using: you hear the sound but get no notification, flash or title count while it's on screen.
 - **Sound** — Chime, Bell, Pop, Ping or None, with a **Preview** button and a volume slider.
@@ -495,15 +509,27 @@ Tandem can use a model running on your own computer to answer chat instead of Cl
 
 **What you need.** A model server on this computer that offers the OpenAI-compatible chat API and supports tool calling, such as Ollama, LM Studio or llama.cpp, with a model loaded. Tandem does not download models. Tandem recommends no model: use any local model; results depend on the model, and smaller models answer less reliably.
 
-**Adding one.** In Settings → **Models**, choose **Add model**. Ollama and LM Studio come with their usual address filled in; for llama.cpp or another server, enter its address and port. In **Model ID**, enter the model's name exactly as your server lists it. The address must be on this computer (127.0.0.1, localhost or [::1]). A model is used only when it is switched **On**: the one marked **Default** is used, and if it is switched Off no model is used, even when another is On; with none marked, a sole model that is On is used. In the browser version, open Tandem at its 127.0.0.1 address to change models: a `localhost` page cannot.
+**Adding one.** In Settings → **Models**, choose **+ Add model** (**Add your first model** while the list is empty). Ollama and LM Studio come with their usual address filled in; for llama.cpp or another server, enter its address and port. In **Model ID**, enter the model's name exactly as your server lists it. The address must be on this computer (127.0.0.1, localhost or [::1]). A model is used only when it is switched **On**: the one marked **Default** is used, and if it is switched Off no model is used, even when another is On; with none marked, a sole model that is On is used. In the browser version, open Tandem at its 127.0.0.1 address to change models: a `localhost` page cannot. A cloud model (Anthropic, OpenAI or Gemini) saved by an earlier version stays in the list marked "This provider can't be used in Tandem."; you can view or delete it.
+
+![Settings open on the Models tab, listing one local model switched On and marked Default, with the Who answers your chat choice below it](screenshots/23-settings-models.png)
+
+*Settings → Models: your local models, which one is the Default, and who answers your chat.*
 
 **Choosing it for chat.** Under **Who answers your chat**, choose **Local model**; after you add your first local model, Tandem also offers **Use it for chat**. If no local model can be used (none On, several On and none marked Default, your Default switched Off or an older cloud model, or its Endpoint missing or not accepted), Settings says so under that choice and your messages get a note saying what to fix: turn a local model On and mark it Default, or set chat back to Claude. A local model needs an open document to answer.
+
+While chat is set to a local model, the title bar shows a chip with the model's name ("Local model" if it has none); click it to open Settings → Models. The status bar's AI label reads **Chat: your local model** (see [Status Bar](#status-bar)).
+
+![The title bar showing a chip that names the local model answering chat](screenshots/24-titlebar-model-chip.png)
+
+*The title-bar chip shows which local model is answering your chat.*
 
 **What Claude still sees.** While a local model answers chat, Tandem stops handing Claude your chat messages and the changes you make. Tandem only stops handing them over: a Claude session that is already connected can still read your document and its comments (the local model's included) if it asks, and finish the step it is on. Choose **Claude** to switch back. A comment you sent to Claude meanwhile (and a note only if you sent it to Claude) waits for Claude: it is delivered when Claude next looks, once chat is back on Claude, Solo mode is off, the document is open and a Claude session is running; Tandem does not start a Claude for it in every case. Chat messages from that time are not handed to Claude afterwards, though a Claude session with file access on this computer can still read Tandem's own files.
 
 **Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments (its card shows the model's name), reply in comment threads that Claude or a local model started (never in your own comments) and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
 
 **What is sent.** For a local model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.
+
+**Notices about your settings.** Tandem tells you when a request from outside its own window switches local-model commenting on or changes the model that answers chat, and when it finds at start-up that those settings changed while it wasn't running. Some changes are not detected ([security.md](security.md#open-findings), #2410). If an earlier version saved a local model, Tandem names it once, the first time this version starts.
 
 **LM Studio.** Tandem sends no API token, so an LM Studio server set to require one cannot be used.
 
@@ -528,7 +554,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **AI Assistant** | **Selection Sensitivity**, **Show floating selection toolbar**, the margin annotation view, **Claude working directory**, **Tandem's Claude** (when it starts and how long it runs), **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), and the integration wizard — see [AI Assistant settings](#ai-assistant-settings) below |
 | **Models** | Your local models, who answers your chat, and whether local models may comment and suggest changes: see [Local models](#local-models) |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
-| **License** | License status — this version of Tandem doesn't require a license — and a field to activate a key you've been sent |
+| **License** | License status — this version of Tandem doesn't require a license — a field to activate a key you've been sent, a **Buy a license** link, and, once a license is installed, **Remove license**, which asks first and deletes it from this device only |
 | **About** | **View Documentation**, version details, **Copy Diagnostics**, and **Open Log Folder** (desktop app only) |
 
 ### Editor settings
@@ -572,7 +598,7 @@ If your settings were saved by a newer version of Tandem, a banner at the top of
 
 ## Keyboard Shortcuts
 
-Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Twenty app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — including text formatting, undo/redo, heading levels, find, tab switching and `?` itself — are fixed. The defaults are listed below.
+Press `?` to open the in-app shortcuts reference at any time. It shows your current bindings, though it leaves a few shortcuts out (see [Help Modal](#help-modal)); **Settings → Shortcuts** lists every remappable one. Twenty app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — including text formatting, undo/redo, heading levels, find, tab switching and `?` itself — are fixed. The defaults are listed below.
 
 ### Editor
 
@@ -580,8 +606,10 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 |----------|--------|
 | `Ctrl+B` | Bold |
 | `Ctrl+I` | Italic |
+| `Ctrl+E` | Inline code |
+| `Ctrl+Shift+B` | Blockquote |
 | `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
+| `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
 | `Ctrl+S` | Save document |
 | `Ctrl+Shift+S` | Save As (e.g. promote a scratchpad to a file) |
 | `Ctrl+Alt+1`–`Ctrl+Alt+6` | Heading 1–6 |

@@ -40,16 +40,23 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
+import { MODELS_SCHEMA_VERSION, type ModelsFile } from "../../src/shared/models/contract";
 import {
   cleanupAllOpenDocuments,
+  expectOnlyAllowanceNotices,
   McpTestClient,
   openAnnotatePopup,
+  openChat,
   openSettingsViaBrandMenu,
+  resetLocalModelState,
+  seedModels,
   selectTextStable,
   setRailVisible,
+  setServerAnswerer,
   submitAnnotation,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { type StubModel, startStubModel } from "../../tests/e2e/local-model-stub";
 import { E2E_MCP_PORT } from "../test-ports";
 import {
   type AccountRedactionPlan,
@@ -1566,4 +1573,157 @@ test("22-settings-notifications", async ({ page, context, baseURL }) => {
     path: path.join(screenshotsDir, "22-settings-notifications.png"),
     fullPage: false,
   });
+});
+
+// ── Local models (slots 23 and 24) ───────────────────────────────────────────
+//
+// These two run LAST on purpose. `resetLocalModelState` also clears chat, and a
+// local-model settings write raises a startup notice the server replays to every
+// page that connects afterwards, so any step placed after them would photograph
+// that notice. The registry, the chat answerer and the commenting switch are
+// server state, reset from Node before and after each step.
+//
+// The names are neutral on purpose: Tandem recommends no model (ADR-039 P2), so
+// neither the display name nor the model id may name a real one. Constant names
+// avoid the `…Text` suffix, which `tests/scripts/screenshot-anchors.test.ts`
+// reads as a welcome.md anchor.
+
+const LOCAL_MODEL_ID = "screenshot-local-model";
+const LOCAL_MODEL_NAME = "My local model";
+const CHAT_PROMPT = "Can you sum up the sample content section in one sentence?";
+const STUB_REPLY =
+  "The team met both Q2 goals a month early, but the dashboard slipped from Q3 to Q4 after a May API redesign.";
+
+function localModelsFile(endpoint: string): ModelsFile {
+  return {
+    schemaVersion: MODELS_SCHEMA_VERSION,
+    models: [
+      {
+        id: LOCAL_MODEL_ID,
+        provider: "local-ollama",
+        displayName: LOCAL_MODEL_NAME,
+        modelId: "my-model",
+        endpoint,
+        enabled: true,
+      },
+    ],
+    defaultModelId: LOCAL_MODEL_ID,
+  };
+}
+
+/**
+ * Dismiss every toast, then prove none is left. A settings write from this
+ * page is admitted through the development allowance, which announces it; those
+ * notices are expected (`expectOnlyAllowanceNotices` refuses anything else) but
+ * do not belong in the picture.
+ */
+async function clearToasts(page: Page): Promise<void> {
+  await expectOnlyAllowanceNotices(page);
+  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
+  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
+    await dismiss.first().click();
+    await expect(dismiss).toHaveCount(n - 1);
+  }
+  await expect(page.locator("[data-testid='toast-container'] [role='alert']")).toHaveCount(0);
+}
+
+test("23-settings-models", async ({ page }) => {
+  await resetLocalModelState("screenshots-23");
+  try {
+    // The Endpoint is not displayed, and nothing calls the model while chat
+    // stays with Claude, so the discard port is enough (as settings-models.spec).
+    await seedModels(localModelsFile("http://127.0.0.1:9"));
+    await openWelcome();
+    // A full-viewport shot: the getting-started strip would read as part of Settings.
+    await suppressTutorialCard(page);
+    await loadEditor(page);
+
+    await openSettingsViaBrandMenu(page);
+    const modal = page.getByTestId("settings-modal");
+    await expect(modal).toBeVisible({ timeout: 3_000 });
+    const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
+    if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
+    await page.getByTestId("settings-modal-tab-models").click();
+    await expect(page.getByTestId("settings-modal-tab-models")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(page.getByTestId("chat-answerer-section")).toBeVisible();
+    // The answerer read has settled: the radio is checked and not "Checking…".
+    const claude = page.getByTestId("chat-answerer-claude");
+    await expect(claude).toHaveAttribute("aria-checked", "true");
+    await expect(claude).toHaveAttribute("aria-disabled", "false");
+    const row = page.getByTestId(`model-row-${LOCAL_MODEL_ID}`);
+    await expect(row).toContainText(LOCAL_MODEL_NAME);
+    await expect(page.getByTestId(`model-default-${LOCAL_MODEL_ID}`)).toBeVisible();
+
+    // The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so
+    // the row must sit inside the visible body, not merely be rendered.
+    const bodyBox = await page.getByTestId("settings-modal-content").boundingBox();
+    const rowBox = await row.boundingBox();
+    if (!bodyBox || !rowBox) throw new Error("settings body or model row has no box");
+    expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+
+    await clearToasts(page);
+    await blurActiveElement(page);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({
+      path: path.join(screenshotsDir, "23-settings-models.png"),
+      fullPage: false,
+    });
+  } finally {
+    await resetLocalModelState("screenshots-23");
+  }
+});
+
+test("24-titlebar-model-chip", async ({ page }) => {
+  let stub: StubModel | undefined;
+  await resetLocalModelState("screenshots-24");
+  try {
+    // A real loopback server, because the model call is the backend's, not the
+    // page's. It starts in a 503 mode, so it is told to reply first.
+    stub = await startStubModel();
+    stub.setMode({ kind: "reply", text: STUB_REPLY });
+    await seedModels(localModelsFile(stub.url));
+    await setServerAnswerer("local");
+    await openWelcome();
+    await suppressTutorialCard(page);
+    await loadEditor(page);
+
+    const chip = page.getByTestId("titlebar-default-model");
+    await expect(chip).toContainText(LOCAL_MODEL_NAME, { timeout: 10_000 });
+    // The pill's label follows configuration only, so this proves the setting
+    // is usable, not that the stub answered (the reply below proves that).
+    await expect(page.getByTestId("status-ai-indicator")).toContainText("Chat: your local model");
+
+    await openChat(page);
+    await page.getByTestId("chat-composer-input").fill(CHAT_PROMPT);
+    await page.getByTestId("chat-send-btn").click();
+    const reply = page
+      .locator("[data-testid='chat-panel'] .chat-bubble")
+      .filter({ hasText: STUB_REPLY })
+      .last();
+    await expect(reply).toBeVisible({ timeout: 15_000 });
+    // Upper-cased by CSS, so the text node is compared, not the rendered text.
+    await expect
+      .poll(async () =>
+        (await reply.locator("[data-testid^='chat-author-']").textContent())?.trim(),
+      )
+      .toBe(LOCAL_MODEL_NAME);
+
+    await clearToasts(page);
+    await blurActiveElement(page);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({
+      path: path.join(screenshotsDir, "24-titlebar-model-chip.png"),
+      fullPage: false,
+    });
+  } finally {
+    // Reset before the stub goes: a registry left pointing at a closed port
+    // would answer the next run's first read with a failure notice.
+    await resetLocalModelState("screenshots-24");
+    await stub?.close();
+  }
 });

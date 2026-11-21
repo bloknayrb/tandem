@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
+### Changed
+
+- **The documentation and screenshots match 0.32.** The README, the [user guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md), the troubleshooting guide (a new section for a local model that doesn't answer), the CLI, configuration, data-locations, integrations and MCP tool references, the glossary, and the welcome document now describe local models, resolving your own comments, the Claude Code bridge entry and the newer doctor checks. Every screenshot is recaptured, and two new ones show Settings → Models and the title-bar chip that names your local model. The README's Cowork link now points at Anthropic's Cowork article rather than an unrelated announcement.
+- **The bundled skill is now version 41.** It no longer says a file with an unrecognized extension opens as plain text: Tandem refuses to open such a file. It reaches plugin users when the plugin moves to this release.
+
 ## [0.32.0] - 2026-11-20
 
 ### What's New

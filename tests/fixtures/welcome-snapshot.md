@@ -4,9 +4,9 @@ Tandem lets you work on documents with an AI — by default Claude, but any MCP-
 
 ## Getting Started
 
-> The checklist at the top of the window lists three things to try here: review an annotation, ask Claude something, and make an edit. Each one ticks itself off when you do it, and you can dismiss it at any time. For a full walkthrough of all features, see the [User Guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md) (opens in your browser).
+> The checklist at the top of the window lists three things to try here: respond to a comment from Claude, ask Claude something, and make an edit. Each one ticks itself off when you do it, and you can dismiss it at any time. For a full walkthrough of all features, see the [User Guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md) (opens in your browser).
 
-Once Claude Code is connected (Settings → AI Assistant), the desktop app starts its own Claude for you. A Claude Code session you start yourself, from any folder, works too — your Tandem tools are configured for you. Both you and your AI can see and edit this document at the same time. Your AI's cursor appears as a soft blue highlight on the paragraph being read, and a typing indicator shows when it's writing.
+Once Claude Code is connected (Settings → AI Assistant), the desktop app starts its own Claude for you. (It doesn't while you have a local model answering your chat.) A Claude Code session you start yourself, from any folder, works too — your Tandem tools are configured for you. Both you and your AI can see and edit this document at the same time. Your AI's cursor appears as a soft blue highlight on the paragraph being read, and a typing indicator shows when it's writing.
 
 ## Annotations
 
@@ -43,7 +43,7 @@ Tandem is built for keyboard-first work:
 - **Outline panel** — navigate by heading. To focus, collapse a whole section with the arrow beside its heading in the document.
 - **Keyboard shortcuts** — press ? to see them all, or open Settings (Ctrl+,) and use the Shortcuts tab to remap most of them (text formatting, undo/redo and tab jumps are fixed).
 
-Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click writes Claude Code's connection settings, no API key needed. Restart Claude Code to pick them up, then type `/mcp` to verify — or just ask Claude to open a document. (Support for additional model providers is on the way.)
+Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click writes Claude Code's connection settings, no API key needed. Restart Claude Code to pick them up, then type `/mcp` to verify — or just ask Claude to open a document. You can also have a model running on your own computer answer your chat: add it in Settings → Models.
 
 ## Sample Content
 

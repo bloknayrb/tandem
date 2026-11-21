@@ -2,7 +2,7 @@
 
 [Home](README.md) › [Using Tandem](maps/using-tandem.md)
 
-_Last updated: 2026-10-20_
+_Last updated: 2026-11-21_
 
 > **Markdown-first; Word support shelved ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** `.docx` support is out of the live build for now because it wasn't reliable enough for serious work, and the SuperDoc engine evaluation ([ADR-052](decisions.md)) was shelved after its spike came back NO-GO. The positioning below still names the `.docx` review loop as part of the moat; read that as the direction Word support would return to, not as something a current release offers. Tandem today is a Markdown, plain-text and HTML editor.
 
@@ -28,7 +28,7 @@ Tandem's core differentiator is that AI suggestions are **first-class data objec
 
 - **Addressable** — stored in a Y.Map with a unique ID
 - **Typed** — highlight, comment, or note; comments carry an optional replacement suggestion. Notes are user-private and are never surfaced to the AI (ADR-027).
-- **Attributable** — author field tracks who created it (Claude or user)
+- **Attributable** — author field tracks who created it (the user, Claude, an imported Word comment, or — from v0.32.0 — a local model, shown by the name you gave it)
 - **Resolvable** — user accepts or dismisses each one individually
 - **Queryable** — user can ask the AI about a specific annotation by replying to it
 - **Persistent** — survives server restarts via session persistence

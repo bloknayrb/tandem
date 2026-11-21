@@ -18,7 +18,8 @@ it sends anywhere. Back to the [docs hub](../README.md).
   [an empty editor](../troubleshooting.md#empty-editor-with-no-document),
   [a document will not open](../troubleshooting.md#a-document-will-not-open--a-tab-did-not-come-back),
   [double-clicking a file does nothing](../troubleshooting.md#double-clicking-a-file-does-nothing),
-  [settings are read-only](../troubleshooting.md#settings-say-they-are-read-only) and
+  [settings are read-only](../troubleshooting.md#settings-say-they-are-read-only),
+  [a local model doesn't answer](../troubleshooting.md#a-local-model-doesnt-answer) and
   [the Windows SmartScreen warning](../troubleshooting.md#windows-smartscreen-warning).
 - [Recovering a previous version of a document](../troubleshooting.md#recovering-a-previous-version-of-a-document)
   answers "Tandem changed my file; can I get the old one back?"
