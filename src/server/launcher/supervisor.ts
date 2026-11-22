@@ -390,14 +390,33 @@ interface SupervisorOpts {
  * import each other, so ownership maps its `WakeCause` onto it (3b-2b1c-a). Goes into
  * a log line only; it carries no session or document id.
  */
-export type StartOrWakeCause = "document" | "message" | "solo-release";
+export type StartOrWakeCause = "document" | "message" | "solo-release" | "user-annotation";
 /** The causes a log line may name; anything else is logged as `other`, so a
  *  caller that forwards an arbitrary string cannot put it in the log. */
 const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "document",
   "message",
   "solo-release",
+  "user-annotation",
 ]);
+
+/**
+ * The events ownership adds to the standby watch (#2358 PR 3b-2b2; Bryan,
+ * 2026-11-17: "Yes, a comment starts it" and "Yes, any thread reply"): a new
+ * user comment, with or without a suggestion, and any user thread reply.
+ * Never a highlight, and never a synthetic wake (the Solo release and the
+ * switch back carry no document). The caller has already applied the Solo
+ * gate, `hideFromAI`, the licence and the local period
+ * (`wasForwardedExternally`), and notes never reach a forwarded event. This
+ * answers only "might the user be asking Claude for something"; whether it is
+ * Tandem's Claude's work is the waiting decision's, asked by the pass.
+ */
+function isOwnershipStartEvent(event: TandemEvent): boolean {
+  if (event.type === "annotation:created") {
+    return event.payload.annotationType === "comment" && Boolean(event.documentId);
+  }
+  return event.type === "annotation:reply" && event.payload.replyAuthor === "user";
+}
 
 /** An error's constructor name only, for the 3b-2a log lines: a decision
  *  supplied by another module may throw a message carrying a document or
@@ -1770,7 +1789,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Claude that kept crashing, and a message start must not leave the
       // breaker tripped under a running child either (a later crash would then
       // get no restart and no diagnosis). Start, which resets it, is the way.
-      if (standby === undefined || breakerTripped || !isStartWorthy(event) || anotherAiOn()) {
+      if (standby === undefined || breakerTripped) return;
+      if (!isStartWorthy(event) || anotherAiOn()) {
+        // The widened arm (#2358 PR 3b-2b2), flag on only: what today's rule
+        // declines is handed to start-or-wake, which drops it at Off or a
+        // licence refusal and starts or wakes only for work waiting for
+        // Tandem's Claude, whether or not another AI is on (design §8.3,
+        // §8.4). Flag off this returns exactly as master did.
+        if (ownershipEnabled() && isOwnershipStartEvent(event)) startOrWake("user-annotation");
         return;
       }
       wakeOwedAcrossSpawns = true;

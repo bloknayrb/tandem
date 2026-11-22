@@ -2886,3 +2886,175 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(children).toHaveLength(2);
   });
 });
+
+// --- #2358 PR 3b-2b2: the widened arm ---------------------------------------
+
+describe("3b-2b2: a new user comment or any user thread reply asks start-or-wake", () => {
+  function commentEvent(annotationType = "comment", documentId: string | null = "d1") {
+    eventSeq++;
+    return {
+      id: `evt_${eventSeq}`,
+      type: "annotation:created",
+      timestamp: Date.now(),
+      ...(documentId === null ? {} : { documentId }),
+      payload: {
+        annotationId: `ann_${eventSeq}`,
+        annotationType,
+        content: "look",
+        textSnippet: "x",
+      },
+    } as TandemEvent;
+  }
+  function replyEvt(parentAuthor: "user" | "claude", replyAuthor: "user" | "claude" = "user") {
+    eventSeq++;
+    return {
+      id: `evt_${eventSeq}`,
+      type: "annotation:reply",
+      timestamp: Date.now(),
+      documentId: "d1",
+      payload: {
+        annotationId: `ann_${eventSeq}`,
+        replyId: `rep_${eventSeq}`,
+        replyText: "and this?",
+        replyAuthor,
+        textSnippet: "x",
+        parentAuthor,
+      },
+    } as TandemEvent;
+  }
+  const queuedLines = () =>
+    (logText().match(/Start-or-wake queued \(user-annotation\)/g) ?? []).length;
+
+  it("W1: idle-stopped, work waiting, a user comment: one resumed spawn whose first turn is the wake", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(queuedLines()).toBe(1);
+  });
+
+  it("W2: another AI attached: still one spawn (whether or not another AI is on)", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W3: nothing waiting for Tandem's Claude (e.g. the comment is on a document another session holds): asked, no spawn", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(1);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W4: a user reply on the user's own comment (not Claude's thread): one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W5: a user reply on Claude's thread with another AI on (today's arm declines): one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(replyEvt("claude"));
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W6: not asked for a highlight, a synthetic wake (no document), a Claude reply or a chat beside another AI", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    const seen: number[] = [];
+    for (const e of [
+      commentEvent("highlight"),
+      commentEvent("comment", null),
+      replyEvt("user", "claude"),
+      chatEvent(),
+    ]) {
+      h.emit(e);
+      await lockBarrier(h);
+      seen.push(waiting.calls);
+    }
+    expect(seen).toEqual([0, 0, 0, 0]);
+    expect(waiting.calls).toBe(0);
+    expect(queuedLines()).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W7: Off: nothing asked, no spawn, the mode stays off", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    h.emit(commentEvent());
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    expect(await savedStartMode()).toBe("off");
+  });
+
+  it("W8: the licence refuses: nothing asked, no spawn", async () => {
+    const lic = licenceDouble();
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, aiRefusal: lic.fn });
+    lic.refusing = true;
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W9: flag off: a user comment does exactly what master does (nothing)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    const logged = errSpy.mock.calls.length;
+    h.emit(commentEvent());
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    expect(errSpy.mock.calls.length).toBe(logged);
+  });
+
+  it("W10, the presence gate decided: before the first Start (on-click, never started, not present) a waiting comment starts Tandem's Claude ('Yes, even before my first Start')", async () => {
+    await updateLauncherSettings(baseDir, { startMode: "on-click" }, null);
+    const waiting = waitingDouble(true);
+    const h = makeSupervisor({ workWaiting: waiting.fn });
+    await h.sup.start();
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(1);
+    await settle();
+    expect(children).toHaveLength(1);
+  });
+
+  it("W11: a burst of comments is one pass and one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    for (let i = 0; i < 5; i++) h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+  });
+});

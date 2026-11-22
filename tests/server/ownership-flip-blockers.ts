@@ -639,18 +639,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The presence gate 3b-2a deferred is not decided (its amendment, item 5: the pass 'does " +
-      "not consult presence ... gating starts on presence is 3b-2b's'). `startOrWakeStep` has no " +
-      "presence check, and after the claimable piece the decision can be true while Tandem's " +
-      "Claude is not present. Design §8.4's 'started if present' and the 2026-11-19 pick 'Yes, " +
-      "even before my first Start' (picked from options) pull in different directions for a " +
-      "claimable comment.",
-    closedBy:
-      "3b-2b2 (the standby arm that delivers claimable comments), which decides it with a test " +
-      "each way.",
-  },
-  {
-    gap:
       "A session still open whose live stream dropped and that stayed quiet past its grace has " +
       "lapsed and stays lapsed while registered, so it does not count as another session, and " +
       "another session's departure starts or wakes Tandem's Claude beside it (3b-2b1c; how often " +

@@ -420,7 +420,8 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     // member) are their declarations, the pass's own wake of a live child,
     // and the public seam. Since 3b-2b1c-a, `startOrWake` is called from
     // outside the supervisor (ownership's forward, through the sink
-    // `index.ts` sets), never inside it, so this list is unchanged.
+    // `index.ts` sets). Since 3b-2b2 it is also called inside it, once, by
+    // the standby watch's widened arm.
     const sites = sitesIn(SUPERVISOR, (node) => {
       if (ts.isIdentifier(node) && (node.text === "startOrWake" || node.text === "requestWake")) {
         const p = node.parent;
@@ -446,6 +447,9 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
         "requestWake:.requestWake", // activeTurnDelivery?.requestWake()
         "spawnOnce:requestWake<member>", // requestWake: requestWakeOnSpawn
         "startOrWake:startOrWake<decl>",
+        // 3b-2b2: the standby watch's widened arm hands a user comment or
+        // thread reply to startOrWake, which consults decideRefusal() first.
+        "setStandby:startOrWake",
         "startOrWakeStep:requestWake", // the pass wakes a live child
       ].sort(),
     );
