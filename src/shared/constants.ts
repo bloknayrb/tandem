@@ -235,18 +235,6 @@ export function extensionsFor(docxOn: boolean): ReadonlySet<string> {
 export const CLIENT_EXTENSIONS: ReadonlySet<string> = extensionsFor(DOCX_ENABLED);
 
 /**
- * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto
- * Y.XmlText. The client Tiptap schema MUST register a mark for every name here:
- * y-prosemirror's sync (`createTextNodesFromYText`) calls `schema.mark(name)` for
- * each delta attribute and, on an UNREGISTERED mark, its catch deletes the whole
- * offending Y.XmlText and propagates the deletion to disk — silent content loss,
- * not a crash. So this list is the contract the editor schema is tested against
- * (`tests/client/editor-schema-marks.test.ts`). Lives in shared (not docx-html)
- * so the client guard imports the real source rather than a drift-prone copy.
- * The markdown path (`mdast-ydoc.ts`) emits a different set (its core + the
- * `rawMarkdown` mark, already client-registered).
- */
-/**
  * Delta-attribute key for an inline run holding verbatim markdown source
  * (footnoteReference, linkReference, imageReference, inline image, inline html).
  * MUST byte-match the Tiptap `RawMarkdownMark` name (`raw-markdown.ts`) or
@@ -256,7 +244,8 @@ export const RAW_MARKDOWN_MARK = "rawMarkdown";
 
 /**
  * Delta-attribute key for a `.docx` footnote reference marker. MUST byte-match the
- * client `FootnoteRefMark` name (`footnote-ref.ts`) and the key `docx-html.ts` writes.
+ * client `FootnoteRefMark` name (`footnote-ref.ts`) and the key `docx-html.ts` writes —
+ * a one-char drift is silent XmlText deletion.
  */
 export const FOOTNOTE_REF_MARK = "footnote-ref";
 
@@ -278,6 +267,18 @@ export const NON_INCLUSIVE_MARKS: ReadonlySet<string> = new Set([
   FOOTNOTE_REF_MARK,
 ]);
 
+/**
+ * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto
+ * Y.XmlText. The client Tiptap schema MUST register a mark for every name here:
+ * y-prosemirror's sync (`createTextNodesFromYText`) calls `schema.mark(name)` for
+ * each delta attribute and, on an UNREGISTERED mark, its catch deletes the whole
+ * offending Y.XmlText and propagates the deletion to disk — silent content loss,
+ * not a crash. So this list is the contract the editor schema is tested against
+ * (`tests/client/editor-schema-marks.test.ts`). Lives in shared (not docx-html)
+ * so the client guard imports the real source rather than a drift-prone copy.
+ * The markdown path (`mdast-ydoc.ts`) emits a different set (its core + the
+ * `rawMarkdown` mark, already client-registered).
+ */
 export const DOCX_INLINE_MARKS = [
   "bold",
   "italic",
@@ -287,11 +288,8 @@ export const DOCX_INLINE_MARKS = [
   "underline",
   "superscript",
   "subscript",
-  // Footnote reference marker (#1123 Tier-A #3). Carries `{ id, kind }` on the
-  // verbatim `[N]` text mammoth renders, so export can emit a real
-  // `<w:footnoteReference>`. The literal "footnote-ref" MUST byte-match the
-  // delta-attribute key `docx-html.ts` writes AND the client `Mark.create`
-  // name (`footnote-ref.ts`) — a one-char drift is silent XmlText deletion.
+  // Footnote reference marker (#1123 Tier-A #3): `{ id, kind }` on mammoth's
+  // verbatim `[N]`, so export can emit a real `<w:footnoteReference>`.
   FOOTNOTE_REF_MARK,
 ] as const;
 

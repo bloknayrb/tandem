@@ -2,15 +2,14 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { exportYDocToDocx } from "../../src/server/file-io/docx-export.js";
 import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText, replaceFlatRangeInElement } from "../../src/server/mcp/document-model.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { FOOTNOTE_REF_MARK, RAW_MARKDOWN_MARK } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
+import { clearOpenDocs, setupMarkdownDoc } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
@@ -28,18 +27,9 @@ import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 let client: Client;
 let close: (() => Promise<void>) | undefined;
-const registered: string[] = [];
 let seq = 0;
 
-function setupMd(md: string): Y.Doc {
-  const id = `edit-marks-${++seq}`;
-  const ydoc = getOrCreateDocument(id);
-  withInternal(ydoc, () => loadMarkdown(ydoc, md));
-  addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
-  setActiveDocId(id);
-  registered.push(id);
-  return ydoc;
-}
+const setupMd = (md: string): Y.Doc => setupMarkdownDoc(`edit-marks-${++seq}`, md);
 
 async function edit(from: number, to: number, newText: string) {
   const res = parseResult(
@@ -73,7 +63,7 @@ describe("tandem_edit mark inheritance (#1823)", () => {
   });
 
   afterEach(async () => {
-    for (const id of registered.splice(0)) removeDoc(id);
+    clearOpenDocs();
     await close?.();
     close = undefined;
   });
@@ -108,7 +98,7 @@ describe("tandem_edit mark inheritance (#1823)", () => {
     it("KNOWN EXCEPTION: the seam between two adjacent raw runs stays raw", async () => {
       // Every raw run carries an equal `{}`, so Yjs and ProseMirror alike read
       // `[^1][^2]` as ONE run and an insert at the seam is inside it. Closing this
-      // would need a per-run attribute; documented in NON_INCLUSIVE_MARKS' rule.
+      // would need a per-run attribute; documented at `resolvePointInsertMarks`.
       const md = "see[^1][^2] after\n\n[^1]: one\n\n[^2]: two\n";
       const out = await insertAfter(setupMd(md), "see[^1]", "*x*");
       expect(out).toContain("see[^1]*x*[^2] after");

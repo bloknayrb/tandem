@@ -4,17 +4,13 @@ import type { Mark } from "@tiptap/pm/model";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
-import { loadMarkdown } from "../../src/server/file-io/markdown";
 import {
   getElementTextLength,
   resolvePointInsertMarks,
   resolveReplacementMarks,
 } from "../../src/server/mcp/document-model";
-import {
-  FOOTNOTE_REF_MARK,
-  NON_INCLUSIVE_MARKS,
-  RAW_MARKDOWN_MARK,
-} from "../../src/shared/constants";
+import { NON_INCLUSIVE_MARKS, RAW_MARKDOWN_MARK } from "../../src/shared/constants";
+import { makeMarkdownDoc } from "../helpers/ydoc-factory";
 
 /**
  * #1823: `tandem_edit`, Accept and typing give new text the same marks.
@@ -52,8 +48,7 @@ const names = (marks: readonly Mark[] | null | undefined): string[] =>
   (marks ?? []).map((m) => m.type.name).sort();
 
 function setup(md: string) {
-  const ydoc = new Y.Doc();
-  loadMarkdown(ydoc, md);
+  const ydoc = makeMarkdownDoc(md);
   const editor = mount(ydoc);
   const para = ydoc.getXmlFragment("default").get(0) as Y.XmlElement;
   // A first-block paragraph's content starts at PM position 1, and a hardBreak is
@@ -61,6 +56,7 @@ function setup(md: string) {
   return { ydoc, editor, para, len: getElementTextLength(para) };
 }
 
+// Keep each fixture's first paragraph short: the replacement check is O(n²) in it.
 const FIXTURES: Array<[string, string]> = [
   ["raw run mid-paragraph", "see[^1] after\n\n[^1]: n\n"],
   ["raw run at block start and end", "[^1] mid [^2]\n\n[^1]: a\n\n[^2]: b\n"],
@@ -77,8 +73,6 @@ describe("tandem_edit marks match the editor's (#1823)", () => {
       .map((t) => t.name)
       .sort();
     expect(nonInclusive).toEqual([...NON_INCLUSIVE_MARKS].sort());
-    expect(editor.schema.marks[RAW_MARKDOWN_MARK]?.spec.inclusive).toBe(false);
-    expect(editor.schema.marks[FOOTNOTE_REF_MARK]?.spec.inclusive).toBe(false);
   });
 
   for (const [label, md] of FIXTURES) {
@@ -105,7 +99,7 @@ describe("tandem_edit marks match the editor's (#1823)", () => {
   }
 
   it("typing at a raw run's edge stays out of it; typing inside stays in", () => {
-    const { ydoc, editor, para } = setup("see[^1] after\n\n[^1]: n\n");
+    const { editor, para } = setup("see[^1] after\n\n[^1]: n\n");
     const rawOf = (text: string) =>
       (
         (para.get(0) as Y.XmlText).toDelta() as Array<{
@@ -119,6 +113,5 @@ describe("tandem_edit marks match the editor's (#1823)", () => {
     expect(rawOf("Q")).toHaveLength(0);
     editor.view.dispatch(editor.state.tr.insertText("Z", 6));
     expect(rawOf("Z")).toHaveLength(1);
-    expect(ydoc.getXmlFragment("default").length).toBeGreaterThan(0);
   });
 });
