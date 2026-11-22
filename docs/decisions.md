@@ -3808,6 +3808,12 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 - **Judged by** `tests/server/launcher/supervisor-presence.test.ts`, "3b-2b1b-R0, R0.5, closed": 3b-2b1b-R0's sequence now ends with the re-check's line, no local hold, and no pass for a later chat; it fails without the re-check. The start pass's `isAlive()` term loses its only behavioural witness (no known state is decided by it alone now) and stays as a defensive re-check; the comments that pointed to R0.5 say so.
 - **Flip-blocker row closed:** "A crash restart can hold itself beside a live child".
 
+**Amended 2026-11-22 (#2358, the plan's flip gates (b) and (c)) — the E2E client throws on a refusal, and the bundle probe's refusal is pinned by behaviour.** Tests and the probe script only; nothing in `src` changes.
+- **Gate (b).** `McpTestClient.callTool` (`tests/e2e/helpers.ts`) now throws on Tandem's `{ error: true, code, message }` text envelope as it already did on `isError`, so a refused setup write (a flag-on `NOT_DOC_OWNER`) fails the spec. The one spec that sends a call meant to be refused, `margin-view.spec.ts`' "PR2: Claude cannot make a note bubble expose replies (ADR-027)", now asserts the refusal (`rejects.toThrow(/INVALID_ARGUMENT/)`) before its reply-count check. The full E2E suite was run locally against the built bundle.
+- **Gate (c).** `probeRefusal` (`scripts/ci/ownership-bundle-probe.mjs`) is exported and driven against a stub `/mcp` server in `tests/scripts/ownership-flag-on-wiring.test.ts`: refused by the second session it answers OK for `on` and a mismatch for `off`, accepted the reverse, and its writes come from two sessions, the second initialized under its own Claude session id. A probe that judged its own write twice fails a row. The source pins stay.
+- **Flip-blocker rows closed:** the E2E error-envelope row and the `probeRefusal` regex row.
+- **Also in this change (not ownership):** `supervisor-turn-delivery.test.ts`' "cancels a crash restart that is only scheduled" used a 150 ms restart backoff, which a loaded Windows runner outran before `updateSettings` landed (vitest-windows on #2520); it now uses 2 s and asserts the Off standby before waiting.
+
 **Cross-references:** #2358, design v5 (`docs/spikes/multi-session-ownership/README.md`), the plan (`docs/plans/2358-ownership.md`), ADR-011, ADR-040 and ADR-053 (the flag pattern), ADR-045, ADR-049, ADR-051, ADR-056, #1906, #1952.
 
 ## ADR-055: Cowork Setup Ships Dark

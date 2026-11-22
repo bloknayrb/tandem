@@ -99,11 +99,21 @@ export class McpTestClient {
     const content = result.content as Array<{ type: string; text?: string }>;
     const textItem = content?.find((c) => c.type === "text");
     if (textItem?.text) {
+      let parsed: unknown;
       try {
-        return JSON.parse(textItem.text);
+        parsed = JSON.parse(textItem.text);
       } catch {
         return textItem.text;
       }
+      // A tool with no outputSchema returns its `mcpError` envelope with
+      // `isError` unset, as JSON text `{ error: true, code, message }`. Throw
+      // on it as on `isError`, so a refused setup write (a flag-on
+      // NOT_DOC_OWNER, say) fails the spec instead of letting it carry on
+      // (#2358 flip-blocker row, the plan's gate (b)).
+      if (isErrorEnvelopeText(parsed)) {
+        throw new Error(`MCP tool "${name}" failed: ${parsed.code}: ${parsed.message}`);
+      }
+      return parsed;
     }
     return result;
   }
@@ -114,6 +124,18 @@ export class McpTestClient {
       this.connected = false;
     }
   }
+}
+
+/** Tandem's `mcpError` JSON envelope: `{ error: true, code, message, ... }`. */
+function isErrorEnvelopeText(
+  value: unknown,
+): value is { error: true; code: string; message: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { error?: unknown }).error === true &&
+    typeof (value as { code?: unknown }).code === "string"
+  );
 }
 
 /** Create a temp directory and copy fixture files into it. */
@@ -478,9 +500,9 @@ type StatusData = {
  */
 export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void> {
   try {
-    // McpTestClient.callTool throws on SDK-level errors but returns the parsed
-    // envelope on success. Server errors still come through as `{ error: true, ... }`
-    // in the envelope — the `error === false` narrow picks the success arm.
+    // McpTestClient.callTool throws on SDK-level errors and on Tandem's
+    // `{ error: true, ... }` envelope, and returns the parsed envelope on
+    // success; the `error === false` narrow is kept for the type.
     const status = (await mcp.callTool("tandem_status")) as ToolResponse<StatusData>;
     const docs = status.error === false ? (status.data.openDocuments ?? []) : [];
     await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));

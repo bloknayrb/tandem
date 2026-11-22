@@ -301,19 +301,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The E2E `McpTestClient.callTool` does not throw on an error envelope (the plan's flip row, " +
-      "gate (b)): a NOT_DOC_OWNER on a spec's setup write is returned, not thrown, so a flag-on " +
-      "spec carries on.",
-    closedBy: "A change to tests/e2e/helpers.ts that makes it throw.",
-  },
-  {
-    gap:
-      "`ownership-bundle-probe.mjs`'s `probeRefusal` is pinned by regex alone (the plan's flip " +
-      "row, gate (c)).",
-    closedBy: "A pin by behaviour.",
-  },
-  {
-    gap:
       "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
       "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
       "default rule after a lapse or a user open, a take-back, its own tandem_open while " +

@@ -467,10 +467,14 @@ test("PR2: Claude cannot make a note bubble expose replies (ADR-027)", async ({ 
   // the bubble's reply-count attribute MUST remain "0". Use expect.poll — a
   // thrown rAF / coordsAtPos NaN must surface as test failure, not a silent
   // pass via setTimeout.
-  await mcp.callTool("tandem_annotationReply", {
-    annotationId: noteId as string,
-    text: "this reply must never surface",
-  });
+  // `callTool` throws on the refusal envelope (#2358 flip-blocker row, gate
+  // (b)), so the refusal itself is asserted too.
+  await expect(
+    mcp.callTool("tandem_annotationReply", {
+      annotationId: noteId as string,
+      text: "this reply must never surface",
+    }),
+  ).rejects.toThrow(/INVALID_ARGUMENT/);
 
   await expect
     .poll(async () => await bubble.getAttribute("data-margin-bubble-reply-count"), {
