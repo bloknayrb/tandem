@@ -442,7 +442,7 @@ describe("exportAnnotations", () => {
     loadHtml("<p>Hello world test content</p>");
 
     const result = exportAnnotations(doc, [
-      { ...makeAnnotation({ id: "h", type: "comment", range: range(0, 5), content: "healthy" }) },
+      makeAnnotation({ id: "h", type: "comment", range: range(0, 5), content: "healthy" }),
       {
         ...makeAnnotation({ id: "d", type: "comment", range: range(6, 11), content: "drifted" }),
         anchor: "degraded",
@@ -463,14 +463,6 @@ describe("exportAnnotations", () => {
     expect(lines[itemOf("world") + 2]).toBe(anchorLines[0]);
     expect(lines[itemOf("test") + 2]).toBe(anchorLines[1]);
     expect(lines[itemOf("Hello") + 2]).not.toContain("Anchor:");
-  });
-
-  it("emits no Anchor line when no item carries a verdict", () => {
-    loadHtml("<p>Hello world test content</p>");
-    const result = exportAnnotations(doc, [
-      makeAnnotation({ id: "c1", type: "comment", range: range(0, 5), content: "fine" }),
-    ]);
-    expect(result).not.toContain("Anchor:");
   });
 
   it("generates markdown grouped by type", () => {

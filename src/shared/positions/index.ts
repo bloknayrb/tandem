@@ -16,6 +16,8 @@ export type {
 } from "./types.js";
 
 export {
+  ANCHOR_VERDICTS,
+  isAnchorVerdict,
   toFlatOffset,
   toPmPos,
   toSerializedRelPos,

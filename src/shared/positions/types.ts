@@ -201,7 +201,17 @@ export type RefreshResult = {
 
 /**
  * The two {@link RefreshResult} kinds a Claude-facing read reports as an
- * annotation's `anchor` (#1764): `tandem_getAnnotations` and
- * `tandem_exportAnnotations` (#1823). The other kinds are routine.
+ * annotation's `anchor` (#1764, #1823). The others are routine: `updated`
+ * follows any edit and `repaired` any reload, so reporting them would bury
+ * the signal. One list, so the output schema, the guard and the type agree.
  */
-export type AnchorVerdict = Extract<RefreshResult["kind"], "degraded" | "failed">;
+export const ANCHOR_VERDICTS = [
+  "degraded",
+  "failed",
+] as const satisfies readonly RefreshResult["kind"][];
+export type AnchorVerdict = (typeof ANCHOR_VERDICTS)[number];
+
+/** Whether a refresh kind is one of the two {@link ANCHOR_VERDICTS}. */
+export function isAnchorVerdict(kind: RefreshResult["kind"]): kind is AnchorVerdict {
+  return (ANCHOR_VERDICTS as readonly string[]).includes(kind);
+}

@@ -176,6 +176,46 @@ function setMode(mode: "solo" | "tandem") {
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode));
 }
 
+/** A fresh temp document path for a sidecar-writing export. */
+function uniqueDocPath(prefix = "tandem-export"): string {
+  return join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+}
+
+// Every sidecar a spec registers is removed after it, whichever describe ran.
+afterEach(async () => {
+  for (const f of sidecarTempFiles.splice(0)) await fs.rm(f, { force: true });
+});
+
+/** The single paragraph's Y.XmlText. */
+function paragraphText(ydoc: Y.Doc): Y.XmlText {
+  return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
+}
+
+/**
+ * Delete and re-insert "world" (offsets 6–11): every anchor on it collapses
+ * while its text still matches its snapshot — the spurious collapse #1764
+ * reports as `degraded`.
+ */
+function collapseWorld(ydoc: Y.Doc): void {
+  withInternal(ydoc, () => {
+    const xt = paragraphText(ydoc);
+    xt.delete(6, 5);
+    xt.insert(6, "world");
+  });
+}
+
+/** The reload shape: content replaced with identical text, so every relRange is dead (`repaired`). */
+function rebuildIdentical(ydoc: Y.Doc): void {
+  const text = extractText(ydoc);
+  withInternal(ydoc, () => {
+    const fragment = ydoc.getXmlFragment("default");
+    fragment.delete(0, fragment.length);
+    const el = new Y.XmlElement("paragraph");
+    fragment.insert(0, [el]);
+    el.insert(0, [new Y.XmlText(text)]);
+  });
+}
+
 describe("MCP tool integration — document tools", () => {
   it("tandem_getTextContent returns text for open document", async () => {
     setupDoc("mcp-doc-1", "Hello world");
@@ -1109,16 +1149,6 @@ describe("MCP tool integration — author authority (#1770)", () => {
 });
 
 describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)", () => {
-  afterEach(async () => {
-    for (const f of sidecarTempFiles.splice(0)) {
-      await fs.rm(f, { force: true });
-    }
-  });
-
-  function uniqueDocPath(): string {
-    return join(tmpdir(), `tandem-export-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
-  }
-
   it("writes a JSON sidecar next to the document and omits notes (ADR-027)", async () => {
     const docPath = uniqueDocPath();
     const sidecarPath = `${docPath}.annotations.json`;
@@ -2979,11 +3009,6 @@ describe("checkInbox stamps the pull path", () => {
  * any reload, so emitting those would bury the one signal this exists for.
  */
 describe("MCP tool integration — anchor degradation on tandem_getAnnotations (#1764)", () => {
-  /** The single paragraph's Y.XmlText. */
-  function paragraphText(ydoc: Y.Doc): Y.XmlText {
-    return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
-  }
-
   async function annotations(): Promise<Array<Record<string, unknown>>> {
     const parsed = parseResult(
       await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
@@ -3018,15 +3043,7 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
       arguments: { from: 6, to: 11, text: "on world" },
     });
 
-    // The reload shape: content replaced with identical text, so every
-    // relRange is dead and every stored range is exactly right.
-    withInternal(ydoc, () => {
-      const fragment = ydoc.getXmlFragment("default");
-      fragment.delete(0, fragment.length);
-      const el = new Y.XmlElement("paragraph");
-      fragment.insert(0, [el]);
-      el.insert(0, [new Y.XmlText("Hello world test")]);
-    });
+    rebuildIdentical(ydoc);
 
     const anns = await annotations();
     expect(anns).toHaveLength(1);
@@ -3044,14 +3061,7 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
       arguments: { from: 6, to: 11, text: "on world" },
     });
 
-    // Delete and re-insert "world": both of that record's anchors resolve onto
-    // one offset while its annotated text is still present and still matches
-    // its snapshot — the spurious collapse #1764 refuses to persist.
-    withInternal(ydoc, () => {
-      const xt = paragraphText(ydoc);
-      xt.delete(6, 5);
-      xt.insert(6, "world");
-    });
+    collapseWorld(ydoc);
 
     const anns = await annotations();
     expect(anns).toHaveLength(2);
@@ -3071,14 +3081,6 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
  */
 describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#1823)", () => {
   const TEXT = "Hello world test";
-
-  afterEach(async () => {
-    for (const f of sidecarTempFiles.splice(0)) await fs.rm(f, { force: true });
-  });
-
-  function paragraphText(ydoc: Y.Doc): Y.XmlText {
-    return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
-  }
 
   /**
    * A raw record with a live `relRange` and a `textSnapshot` — the two things
@@ -3110,15 +3112,6 @@ describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#
     );
   }
 
-  /** Delete and re-insert "world": every anchor on it collapses, its text still matches. */
-  function collapseWorld(ydoc: Y.Doc): void {
-    withInternal(ydoc, () => {
-      const xt = paragraphText(ydoc);
-      xt.delete(6, 5);
-      xt.insert(6, "world");
-    });
-  }
-
   async function exportJson(args: Record<string, unknown> = {}) {
     const parsed = parseResult(
       await client.callTool({
@@ -3144,12 +3137,8 @@ describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#
     return parsed.data as { markdown: string; writtenPath?: string };
   }
 
-  function uniqueDocPath(): string {
-    return join(tmpdir(), `tandem-anchor-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
-  }
-
   it("carries anchor: degraded in the JSON response and the sidecar, only on that record", async () => {
-    const docPath = uniqueDocPath();
+    const docPath = uniqueDocPath("tandem-anchor");
     sidecarTempFiles.push(`${docPath}.annotations.json`);
     const ydoc = setupDocAtPath("export-anchor-json", TEXT, docPath);
     seed(ydoc, "on-hello", 0, 5, {});
@@ -3172,7 +3161,7 @@ describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#
   });
 
   it("writes one Anchor line, under the degraded item, in the markdown and its sidecar", async () => {
-    const docPath = uniqueDocPath();
+    const docPath = uniqueDocPath("tandem-anchor");
     sidecarTempFiles.push(`${docPath}.annotations.md`);
     const ydoc = setupDocAtPath("export-anchor-md", TEXT, docPath);
     seed(ydoc, "on-hello", 0, 5, {});
@@ -3215,7 +3204,7 @@ describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#
   });
 
   it("keeps degraded private, note and Solo-held records out, and their replies", async () => {
-    const docPath = uniqueDocPath();
+    const docPath = uniqueDocPath("tandem-anchor");
     sidecarTempFiles.push(`${docPath}.annotations.json`, `${docPath}.annotations.md`);
     const ydoc = setupDocAtPath("export-anchor-privacy", TEXT, docPath);
     seed(ydoc, "claude-world", 6, 11, {});
@@ -3273,14 +3262,7 @@ describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#
     expect(afterEdit.annotations).toHaveLength(1);
     expect(afterEdit.annotations[0]).not.toHaveProperty("anchor");
 
-    const current = extractText(ydoc);
-    withInternal(ydoc, () => {
-      const fragment = ydoc.getXmlFragment("default");
-      fragment.delete(0, fragment.length);
-      const el = new Y.XmlElement("paragraph");
-      fragment.insert(0, [el]);
-      el.insert(0, [new Y.XmlText(current)]);
-    });
+    rebuildIdentical(ydoc);
     const afterRebuild = await exportJson();
     expect(afterRebuild.annotations).toHaveLength(1);
     expect(afterRebuild.annotations[0]).not.toHaveProperty("anchor");

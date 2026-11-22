@@ -204,16 +204,10 @@ const LOCAL_MODEL_LABEL = "Local model";
 export type ExportAnnotation = Annotation &
   LocalModelMark & {
     replies?: readonly (AnnotationReply & LocalModelMark)[];
-    /** The caller's refresh verdict, present only when degraded or failed (#1823). */
     anchor?: AnchorVerdict;
   };
 
-/**
- * The line an item carries when its anchor cannot be trusted (#1823), worded
- * for the person the sidecar is shared with. "Degraded" stays hedged ("may"):
- * in the collapse arm the stored range still holds its text and only the live
- * anchor is lost, while in the mint arms the stored range no longer matches.
- */
+/** The `Anchor:` line for an untrustworthy anchor (#1823); "may" because degraded is not always wrong. */
 const ANCHOR_LABEL: Record<AnchorVerdict, string> = {
   degraded:
     "Degraded — the quoted text is from the last position the server trusted and may no longer be what this was written about",

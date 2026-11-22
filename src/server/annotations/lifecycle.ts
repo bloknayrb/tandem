@@ -96,6 +96,7 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
+import { isAnchorVerdict } from "../../shared/positions/index.js";
 import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type {
   AgentIdentity,
@@ -1562,10 +1563,7 @@ export function addUserReply(
  */
 function screenSuggestionSpan(ann: Annotation, ydoc: Y.Doc): SuggestionRangeCause | null {
   const refreshed = refreshRange(ann, ydoc);
-  const live =
-    refreshed.kind === "degraded" || refreshed.kind === "failed"
-      ? ann.range
-      : refreshed.annotation.range;
+  const live = isAnchorVerdict(refreshed.kind) ? ann.range : refreshed.annotation.range;
   const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
     rejectHeadingOverlap: true,
     rejectHeadingInterior: true,
