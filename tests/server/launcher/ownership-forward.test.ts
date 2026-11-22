@@ -476,8 +476,14 @@ let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
 const sink = vi.fn((cause: "document" | "message") => supRef?.startOrWake?.(cause));
+const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
+/** The passes the lapse's re-ask may own (3b-2b2): at most one, and only when
+ *  it was forwarded (no other session connected). It finds what the row
+ *  finds; a row that wakes nothing still writes nothing. */
+const departurePasses = () => (departureSink.mock.calls.length > 0 ? 1 : 0);
 /** Every cause the observer was told. */
 let causes: WakeCause[] = [];
+let departures = 0;
 
 function register(ownerId: string): void {
   view.push({ ownerId, openStreams: 0 });
@@ -639,7 +645,9 @@ beforeEach(() => {
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
   setWaitingProbe(documentWaiting);
-  setStartOrWakeSink(sink);
+  // The lapse's re-ask (3b-2b2) forwards as "departure", counted apart so
+  // these rows keep counting the forward they were written for.
+  setStartOrWakeSink((cause) => (cause === "departure" ? departureSink(cause) : sink(cause)));
   setOpenDocumentIdsSource(() => getOpenDocs().keys());
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
@@ -650,8 +658,12 @@ beforeEach(() => {
   setGraceMsForTests(GRACE);
   supRef = null;
   sink.mockClear();
+  departureSink.mockClear();
   causes = [];
-  setWakeObserverForTests((cause) => causes.push(cause));
+  // "departure" (the lapse's re-ask, 3b-2b2) is recorded apart, so these
+  // rows keep counting the forward they were written for.
+  departures = 0;
+  setWakeObserverForTests((cause) => (cause === "departure" ? departures++ : causes.push(cause)));
   stepFive = [];
   setCompositeObserverForTests((step, documentId) => {
     if (step === "wake") stepFive.push(documentId);
@@ -683,9 +695,9 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink.mock.calls).toEqual([["document"]]);
   });
 
-  it("R1.4: every cause, with no other session registered and no admit: 'document' for each but user-open and message-owner", () => {
+  it("R1.4: every cause, with no other session registered and no admit: 'document' for each but user-open, message-owner and departure (its own name)", () => {
     // A Record over WakeCause: a new member of the union fails to compile here.
-    const expected: Record<WakeCause, "document" | null> = {
+    const expected: Record<WakeCause, "document" | "departure" | null> = {
       "user-open": null,
       lapse: "document",
       "take-back": "document",
@@ -696,17 +708,30 @@ describe("R1: ownership's startOrWake, called directly", () => {
       "reply-claim": "document",
       "post-claim": "document",
       "message-owner": null,
+      departure: "departure",
     };
-    for (const [cause, forward] of Object.entries(expected) as [WakeCause, "document" | null][]) {
+    for (const [cause, forward] of Object.entries(expected) as [
+      WakeCause,
+      "document" | "departure" | null,
+    ][]) {
       sink.mockClear();
+      departureSink.mockClear();
       causes = [];
+      departures = 0;
       startOrWake(cause);
+      if (forward === "departure") {
+        // Counted apart (3b-2b2): its own observer counter and sink spy.
+        expect(departures, cause).toBe(1);
+        expect(departureSink.mock.calls, cause).toEqual([["departure"]]);
+        expect(sink, cause).not.toHaveBeenCalled();
+        continue;
+      }
       expect(causes, cause).toEqual([cause]);
       expect(sink.mock.calls, cause).toEqual(forward === null ? [] : [[forward]]);
     }
     // Every OwnershipChangeCause is a key above (the type check is the proof).
     const _all: OwnershipChangeCause[] = Object.keys(expected).filter(
-      (k) => k !== "message-owner",
+      (k) => k !== "message-owner" && k !== "departure",
     ) as OwnershipChangeCause[];
     expect(_all).toHaveLength(9);
   });
@@ -839,7 +864,10 @@ describe("the decision table: A lapses", () => {
     });
   }
 
-  it("A5 (regression row; A9 is the reachability witness): presence false at the lapse: D goes unowned, nothing; tandemWorkWaiting() is true afterwards (claimable)", async () => {
+  // Since 3b-2b2's departure re-ask: the lapse's own forward still does
+  // nothing (the document went to nobody), but A was the last other session,
+  // so the re-ask finds D's comment claimable and wakes Tandem's Claude once.
+  it("A5 (presence false at the lapse; since 3b-2b2 the re-ask wakes for the claimable comment): D goes unowned, the lapse forwards nothing, the departure wakes once", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d } = worldA();
@@ -850,9 +878,10 @@ describe("the decision table: A lapses", () => {
     reachedStepFive(d.id);
     expect(causes).toEqual([]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
     expect(tandemWorkWaiting()).toBe(true);
   });
 
@@ -898,7 +927,7 @@ describe("the decision table: A lapses", () => {
       expect(sink).not.toHaveBeenCalled();
       await lockBarrier(h);
       expect(c1.stdin.writes).toHaveLength(writes);
-      expect(passes(h)).toBe(0);
+      expect(passes(h)).toBe(departurePasses());
     });
   }
 
@@ -916,7 +945,7 @@ describe("the decision table: A lapses", () => {
       expect(sink).not.toHaveBeenCalled();
       await lockBarrier(h);
       expect(c1.stdin.writes).toHaveLength(writes);
-      expect(passes(h)).toBe(0);
+      expect(passes(h)).toBe(departurePasses());
     });
   }
 
@@ -1440,7 +1469,7 @@ describe("the message forward (PR b)", () => {
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(passes(h)).toBe(departurePasses());
   });
 
   it("M3 (anchor M1): the message classed local-period after the close: nothing; the observer told message-owner", async () => {
@@ -1457,10 +1486,10 @@ describe("the message forward (PR b)", () => {
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(passes(h)).toBe(departurePasses());
   });
 
-  it("M10 (anchor M1): D re-added open and unowned before the lapse, so the message follows D and nobody holds D: nothing; tandemWorkWaiting() is true (claimable)", async () => {
+  it("M10 (anchor M1): D re-added open and unowned before the lapse, so the message follows D and nobody holds D: the message forward refuses it; since 3b-2b2 the departure re-ask wakes once (claimable)", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d, m } = await worldB();
@@ -1472,13 +1501,14 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(causes).toEqual(["message-owner"]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
     expect(tandemWorkWaiting()).toBe(true);
   });
 
-  it("M11 (anchor M1): M10 plus a doc-less unread user message Tandem's Claude owns by presence: nothing (the admit asks only the changed message)", async () => {
+  it("M11 (anchor M1): M10 plus a doc-less unread user message Tandem's Claude owns by presence: the message forward still refuses (its admit asks only the changed message); the departure re-ask wakes once", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { m } = await worldB();
@@ -1489,9 +1519,10 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(causes).toEqual(["message-owner"]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
   });
 
   describe("M4 to M6: a close forwards nothing (pick 1)", () => {
@@ -1627,6 +1658,111 @@ describe("the message forward (PR b)", () => {
     expect(reOwe.mock.calls.flat(2).sort()).toEqual([m1, m2].sort());
     expect(ownershipLines()).toEqual([FORWARD_FAILED]);
     expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+  });
+});
+
+// --- #2358 PR 3b-2b2: the departure re-ask (the claimable row) --------------
+
+describe("3b-2b2: the re-ask when a session stops counting", () => {
+  it("D1 (positive): a claimable comment on E while B is connected; B lapses: the re-ask wakes once", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    expect(getDocOwner(e.id)).toBeUndefined();
+    expect(tandemWorkWaiting()).toBe(false); // B counts: claimable work is not Tandem's Claude's
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
+  });
+
+  it("D1's anchor: C still connected when B lapses: nothing forwarded, nothing written", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    register(C);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("D2, two sessions going away together: A holds D with a waiting comment, B connected; both lapse in one grace: one wake, at the second", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { d } = worldA();
+    register(B);
+    const writes = c1.stdin.writes.length;
+    dropStream(A);
+    dropStream(B);
+    advance(GRACE + 1);
+    expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+    // A's own forward and A's re-ask were dropped while B still counted.
+    expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
+  });
+
+  it("D3, idle-stopped: B lapses with a claimable comment waiting: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    lapse(B);
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  for (const withB of [false, true]) {
+    it(`D5, the widened arm through the real decision: idle-stopped, a claimable user comment on E${withB ? ", B connected: no spawn" : ", no other session: one spawn"}`, async () => {
+      const { h } = await idleStopped();
+      if (withB) register(B);
+      const e = mkDoc("e");
+      const c = comment(e.ydoc, key("ce"));
+      h.emit({
+        id: `evt_${c}`,
+        type: "annotation:created",
+        timestamp: Date.now(),
+        documentId: e.id,
+        payload: { annotationId: c, annotationType: "comment", content: "look", textSnippet: "x" },
+      } as TandemEvent);
+      await lockBarrier(h);
+      await settle();
+      if (withB) {
+        expect(children).toHaveLength(1);
+      } else {
+        await childN(2);
+        await settle();
+        expect(children).toHaveLength(2);
+      }
+    });
+  }
+
+  it("D4, flag off: B lapses with a claimable comment waiting: nothing forwarded, nothing written", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
   });

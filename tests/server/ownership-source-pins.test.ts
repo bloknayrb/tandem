@@ -1005,7 +1005,7 @@ describe("the supervisor's start-or-wake is wired from ownership, requestWake is
     expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
   });
 
-  it("startOrWake outside the supervisor is index.ts's one sink call and ownership.ts's own function: its definition and two bare calls", () => {
+  it("startOrWake outside the supervisor is index.ts's one sink call and ownership.ts's own function: its definition and three bare calls", () => {
     expect(filesMentioning("startOrWake", [SUPERVISOR])).toEqual([
       "src/server/index.ts",
       OWNERSHIP,
@@ -1024,7 +1024,8 @@ describe("the supervisor's start-or-wake is wired from ownership, requestWake is
     // Every site is a bare call or the definition: followed by `(` (so never
     // a destructured name or a reference passed on) and not preceded by `.`
     // or `[` (so never a member or bracket access, `?.` included).
-    expect(sites).toHaveLength(3);
+    // 3b-2b2 added the lapse's re-ask, the third bare call.
+    expect(sites).toHaveLength(4);
     for (const site of sites) {
       expect(site.next).toBe("(");
       expect([".", "["]).not.toContain(site.prev);
@@ -1037,6 +1038,7 @@ describe("the supervisor's start-or-wake is wired from ownership, requestWake is
       'startOrWake("message-owner", change === undefined ? undefined : admit);',
     );
     expect(text).toMatch(/\bstartOrWake\(cause\);/);
+    expect(text).toContain('startOrWake("departure");');
   });
 });
 
@@ -1083,7 +1085,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message") => void = () => {};',
+      'let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
