@@ -445,16 +445,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "After a local-model period, a start Tandem's Claude owes for its own work is handled at " +
-      "the user's switch back as today's held message start: it is not started while another AI " +
-      "is attached. Bryan decided on 2026-11-17 (picked from options: 'Yes, unless Claude is " +
-      "Off') that it starts whether or not another AI is on, unless Claude is Off. The behaviour " +
-      "is still built as today's.",
-    closedBy:
-      "The local-period start PR (piece 36) builds the decided behaviour, with a test pinning it.",
-  },
-  {
-    gap:
       "A crash restart can hold itself beside a live child: planAndSpawn " +
       "(src/server/launcher/supervisor.ts) does not re-check `child` between buildPlan's await " +
       "and two holds, so its first local-period hold can run, and its Off hold (holdInStandby) " +
@@ -633,16 +623,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "3b-2b2's boot quiet period or 'written since boot' condition, extended to a lapse in " +
       "that window, with a test of each.",
-  },
-  {
-    gap:
-      "At the user's switch back from a local-model period, a start-or-wake start the period " +
-      "held runs as today's held message start, without asking again whether anything is still " +
-      "waiting. Bryan picked 'Yes, only if still waiting (Recommended)' (picked from options, " +
-      "2026-11-17).",
-    closedBy:
-      "The local-period start PR (piece 36), with a test where the work is gone by the switch " +
-      "back. It closes together with the row 'After a local-model period...' or says why not.",
   },
   {
     gap:
