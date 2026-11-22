@@ -199,18 +199,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A poll's claim through chat with outcome 'changed' (setDocOwner ran but the caller does " +
-      "not hold the document after it: only a re-entrant lapse, which needs the detached cap " +
-      "to lapse the claimant inside its own claim) is handled by code that excludes the " +
-      "document's chat from the stamp and retires the entries the poll created, so the message " +
-      "stays unread, undelivered and unregistered for its new owner; but no test reaches that " +
-      "outcome on chat (the chat owners PR, R4.4; review round 1, item 20).",
-    closedBy:
-      "A test that drives a re-entrant lapse through the cap inside a chat claim, or a seam " +
-      "that forces the outcome, showing the message reachable by its new owner.",
-  },
-  {
-    gap:
       "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
       "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead. " +
       "A channel-reply final reply handles its message (an unmapped shim session can answer a " +

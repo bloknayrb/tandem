@@ -3814,6 +3814,8 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 - **Flip-blocker rows closed:** the E2E error-envelope row and the `probeRefusal` regex row.
 - **Also in this change (not ownership):** `supervisor-turn-delivery.test.ts`' "cancels a crash restart that is only scheduled" used a 150 ms restart backoff, which a loaded Windows runner outran before `updateSettings` landed (vitest-windows on #2520); it now uses 2 s and asserts the Off standby before waiting.
 
+**Amended 2026-11-22 (#2358, the chat claim's `"changed"` outcome is tested).** Still dark. A test seam, `setPollClaimAppliedForTests` (`src/server/sessions/ownership.ts`), runs right after a poll claim's `setDocOwner`, the one point where a re-entrant lapse through the detached cap can move the document away; nothing in `src` sets it, and `resetOwnershipForTests` clears it. `tests/server/ownership-chat.test.ts`' "R4.4: a chat claim whose change leaves the document with someone else" (cursor and cursor-less) moves the document to B there: A's response carries the message, the message stays unread, undelivered and unregistered, A does not own it, and B's next poll is handed it. Both cases fail when the inbox treats `"changed"` as `"held"`. The seam stands in for the cap, as the row's closer allowed ("or a seam that forces the outcome"); the cap itself is not driven. **Flip-blocker row closed:** "A poll's claim through chat with outcome 'changed' ...".
+
 **Cross-references:** #2358, design v5 (`docs/spikes/multi-session-ownership/README.md`), the plan (`docs/plans/2358-ownership.md`), ADR-011, ADR-040 and ADR-053 (the flag pattern), ADR-045, ADR-049, ADR-051, ADR-056, #1906, #1952.
 
 ## ADR-055: Cowork Setup Ships Dark
