@@ -2263,7 +2263,9 @@ describe("3b-2a R2: startOrWake", () => {
       h.sup.startOrWake?.("document");
       await lockBarrier(h);
       expect(children).toHaveLength(1);
-      expect(logText()).toMatch(/not starting Claude \(message\)/);
+      // Held as Tandem's Claude's own work, not as a chat's start (piece 36).
+      expect(logText()).toMatch(/not starting Claude \(work\)/);
+      expect(logText()).not.toMatch(/not starting Claude \(message\)/);
     });
 
     it("positive twin: no local period, something waiting, no child: one spawn", async () => {
@@ -2273,7 +2275,7 @@ describe("3b-2a R2: startOrWake", () => {
       h.sup.startOrWake?.("document");
       await lockBarrier(h);
       await childN(2);
-      expect(logText()).not.toMatch(/not starting Claude \(message\)/);
+      expect(logText()).not.toMatch(/not starting Claude \((message|work)\)/);
     });
 
     it("a live child: nothing written", async () => {
@@ -2287,6 +2289,151 @@ describe("3b-2a R2: startOrWake", () => {
       await lockBarrier(h);
       expect(waiting.calls).toBe(1);
       expect(c.stdin.writes).toHaveLength(1);
+    });
+  });
+
+  // #2358 piece 36: the user's switch back runs a start held for Tandem's
+  // Claude's own work only if something is still waiting (Bryan, 2026-11-17:
+  // "Yes, only if still waiting"), whether or not another AI is attached
+  // ("Yes, unless Claude is Off"), and never when Off.
+  describe("piece 36: the switch back and a start held for waiting work", () => {
+    /** Idle-stopped, the local period on, one start-or-wake held as work. */
+    async function heldForWork(extra: ExtraOpts & { waiting: () => boolean }) {
+      const lp = localDouble();
+      const waiting = waitingDouble(extra.waiting);
+      const { h } = await idleStopped({ ...extra, workWaiting: waiting.fn, localPeriod: lp.opts });
+      lp.held = true;
+      lp.switchTo({ to: "local" });
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/not starting Claude \(work\)/);
+      const asked = waiting.calls;
+      return { h, lp, waiting, asked };
+    }
+
+    async function switchBack(
+      h: ReturnType<typeof makeSupervisor>,
+      lp: ReturnType<typeof localDouble>,
+      asked = true,
+    ) {
+      lp.held = false;
+      lp.switchTo({ to: "claude", asked });
+      await lockBarrier(h);
+      await settle();
+    }
+
+    it("still waiting, another AI attached: one resumed spawn whose first turn is the wake", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({
+        waiting: () => true,
+        otherAiAttached: () => true,
+      });
+      await switchBack(h, lp);
+      const c2 = await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+      expect(waiting.calls).toBe(asked + 1);
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(logText()).toMatch(/answered by Claude again — starting Claude for waiting work/);
+    });
+
+    it("twin, no other AI: one spawn", async () => {
+      const { h, lp } = await heldForWork({ waiting: () => true });
+      await switchBack(h, lp);
+      await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+    });
+
+    it("the work is gone by the switch back: asked again, no spawn, the not-starting line", async () => {
+      let still = true;
+      const { h, lp, waiting, asked } = await heldForWork({
+        waiting: () => still,
+        otherAiAttached: () => true,
+      });
+      still = false;
+      await switchBack(h, lp);
+      expect(waiting.calls).toBe(asked + 1);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/nothing is waiting for Claude, not starting it/);
+      // Still startable by the user's next chat, as any idle standby.
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "idle" });
+    });
+
+    it("the waiting decision throws at the switch back: read as nothing waiting, no spawn", async () => {
+      let boom = false;
+      const { h, lp } = await heldForWork({
+        waiting: () => {
+          if (boom) throw new Error("waiting boom doc_secret");
+          return true;
+        },
+      });
+      boom = true;
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/The waiting decision threw \(read as nothing waiting\)/);
+      expect(logText()).toMatch(/nothing is waiting for Claude, not starting it/);
+      expect(logText()).not.toMatch(/doc_secret/);
+    });
+
+    it("Off during the period: no spawn, and waiting is not asked again", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await h.sup.updateSettings({ startMode: "off" });
+      await settle();
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
+    });
+
+    it("source pin: every local-period hold in the respawn path records the kind it was given", async () => {
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync(
+        new URL("../../../src/server/launcher/supervisor.ts", import.meta.url),
+        "utf8",
+      );
+      // A hold recorded as a literal "message" would send a held work start
+      // through the chat rule at the switch back (piece 36).
+      expect(src).not.toMatch(/holdForLocalPeriod\("message"\)/);
+      expect(src.match(/holdForLocalPeriod\(heldAs\)/g)).toHaveLength(4);
+    });
+
+    it("an unasked switch back: no spawn, and waiting is not asked again", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await switchBack(h, lp, false);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+    });
+
+    it("a chat's held start, another AI attached by the switch back: nothing (today's rule); with work also held: one spawn", async () => {
+      for (const alsoWork of [false, true]) {
+        const lp = localDouble();
+        const waiting = waitingDouble(true);
+        let otherAi = false;
+        const { h } = await idleStopped({
+          workWaiting: waiting.fn,
+          localPeriod: lp.opts,
+          otherAiAttached: () => otherAi,
+        });
+        const before = children.length;
+        lp.held = true;
+        lp.switchTo({ to: "local" });
+        h.emit(chatEvent());
+        await lockBarrier(h);
+        if (alsoWork) h.sup.startOrWake?.("document");
+        await lockBarrier(h);
+        expect(children).toHaveLength(before);
+        expect(logText()).toMatch(/not starting Claude \(message\)/);
+        otherAi = true;
+        await switchBack(h, lp);
+        if (alsoWork) {
+          await childN(before + 1);
+          await settle();
+        }
+        expect(children).toHaveLength(alsoWork ? before + 1 : before);
+        await h.sup.stop();
+      }
     });
   });
 
