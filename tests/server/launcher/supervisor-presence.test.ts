@@ -2637,8 +2637,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
 
   // The two "queued between" cases cannot fail on a single guard term's
   // removal (#2458's table): the chat's pass declines on `standby ===
-  // undefined`. The case for the pass's `isAlive()` term is "3b-2b1b-R0,
-  // R0.5" in the enclosing "3b-2b1a R3" describe.
+  // undefined`. The pass's `isAlive()` term has no case of its own since
+  // the child re-check in `planAndSpawn` removed the one known state it alone
+  // decided ("3b-2b1b-R0, R0.5, closed"); it stays as a defensive re-check.
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
     it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);
@@ -2707,8 +2708,8 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
   it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds the standby cleared", async () => {
     // Q stops at `standby === undefined` (P's spawn cleared it), before
     // `isAlive()` is read: removing `isAlive()` alone fails nothing here;
-    // removing the guard does. The case that `isAlive()` alone decides is
-    // "3b-2b1b-R0, R0.5" below.
+    // removing the guard does. No known state is decided by `isAlive()` alone
+    // since "3b-2b1b-R0, R0.5, closed" below.
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     onSpawn = () => {
@@ -2729,16 +2730,19 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(wakes(c2)).toBe(1);
   });
 
-  it("3b-2b1b-R0, R0.5: a standby set beside a live child; the chat's pass declines on isAlive() alone", async () => {
-    // The state the start pass's `isAlive()` re-check alone decides: a standby
-    // set while a child is live (the brief argued none exists; the plan review
-    // found this one, so R0.5 is this case rather than a source pin). A crash
+  it("3b-2b1b-R0, R0.5, closed: the crash restart no longer holds itself beside a live child (planAndSpawn re-checks `child`)", async () => {
+    // Since the flip-blocker row "A crash restart can hold itself beside a
+    // live child" closed: the sequence below used to leave an
+    // `awaiting-start` standby and an armed standby watch beside B. Now the
+    // restart sees B after its reads and does not spawn or hold.
+    // It was the state the start pass's `isAlive()` re-check alone decided: a
+    // standby set while a child is live. A crash
     // restart (unlocked) waits on its settings read; the user's Start is
     // refused by the licence (`respawn` throws before `stopInternal`, so the
     // stop epoch does not move); licence activation spawns B under the lock; a
     // local period begins; the restart resumes past `planAndSpawn`'s epoch and
-    // stop re-checks, which do not look at `child`, and holds itself, setting
-    // `awaiting-start` beside B. The switch back finds B alive and leaves the
+    // stop re-checks, and (before the fix, which looked at no `child`) held
+    // itself, setting `awaiting-start` beside B. The switch back finds B alive and leaves the
     // standby. A chat is then accepted by the standby watch and its pass must
     // decline: without `isAlive()` it stops B and starts a third child.
     //
@@ -2787,14 +2791,14 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     lp.held = true;
     lp.switchTo({ to: "local" });
     releaseRead();
-    // The restart held itself beside B (its log line), which is the state.
     await until(
-      () => /not starting Claude \(crash\) until it is answered by Claude again/.test(logText()),
-      "the restart's local hold",
+      () => /A Claude started while building the spawn plan — not spawning/.test(logText()),
+      "the restart's child re-check",
+    );
+    expect(logText()).not.toMatch(
+      /not starting Claude \(crash\) until it is answered by Claude again/,
     );
     expect(children).toHaveLength(2);
-    // B is alive, so the switch back clears the held start and leaves the
-    // standby (`status()` does not show a standby while a child runs).
     lp.held = false;
     lp.switchTo({ to: "claude", asked: true });
     await settle();
@@ -2802,8 +2806,8 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     h.emit(chatEvent());
     await lockBarrier(h);
     await settle();
-    // The positive anchor: the standby watch accepted the chat and its pass ran.
-    expect(passes(h)).toBe(before + 1);
+    // No standby was set beside B, so the watch is not armed: no pass at all.
+    expect(passes(h)).toBe(before);
     expect(messageStartLines()).toBe(0);
     expect(children).toHaveLength(2);
     expect(b.killed).toBe(false);
