@@ -2399,6 +2399,14 @@ describe("3b-2a R2: startOrWake", () => {
       expect(src.match(/holdForLocalPeriod\(heldAs\)/g)).toHaveLength(4);
     });
 
+    it("Off written to the settings file during the period (not through Turn off): the switch back's own read refuses", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await updateLauncherSettings(baseDir, { startMode: "off" }, null);
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+    });
+
     it("an unasked switch back: no spawn, and waiting is not asked again", async () => {
       const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
       await switchBack(h, lp, false);
