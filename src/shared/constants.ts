@@ -246,6 +246,38 @@ export const CLIENT_EXTENSIONS: ReadonlySet<string> = extensionsFor(DOCX_ENABLED
  * The markdown path (`mdast-ydoc.ts`) emits a different set (its core + the
  * `rawMarkdown` mark, already client-registered).
  */
+/**
+ * Delta-attribute key for an inline run holding verbatim markdown source
+ * (footnoteReference, linkReference, imageReference, inline image, inline html).
+ * MUST byte-match the Tiptap `RawMarkdownMark` name (`raw-markdown.ts`) or
+ * y-prosemirror drops the run.
+ */
+export const RAW_MARKDOWN_MARK = "rawMarkdown";
+
+/**
+ * Delta-attribute key for a `.docx` footnote reference marker. MUST byte-match the
+ * client `FootnoteRefMark` name (`footnote-ref.ts`) and the key `docx-html.ts` writes.
+ */
+export const FOOTNOTE_REF_MARK = "footnote-ref";
+
+/**
+ * Marks that new text does NOT pick up at their edge (#1823): the ProseMirror
+ * `inclusive: false` set. Each one is a whole construct (verbatim markdown source, a
+ * footnote reference), so text an edit or a keystroke puts beside one must stay
+ * plain — a `rawMarkdown` run is emitted unescaped on save, so inheriting it would
+ * turn the new text's `*` and `[` into markdown syntax.
+ *
+ * Server and client MUST agree: `tandem_edit` (`mcp/document-model.ts`) applies PM's
+ * mark rules with this set, and the editor's `RawMarkdownMark` / `FootnoteRefMark`
+ * declare `inclusive: false`, so typing, Accept and `tandem_edit` format alike.
+ * `tests/client/edit-mark-parity.test.ts` fails if either side drifts. Links and
+ * `code` stay inclusive, as Tiptap configures them.
+ */
+export const NON_INCLUSIVE_MARKS: ReadonlySet<string> = new Set([
+  RAW_MARKDOWN_MARK,
+  FOOTNOTE_REF_MARK,
+]);
+
 export const DOCX_INLINE_MARKS = [
   "bold",
   "italic",
@@ -260,7 +292,7 @@ export const DOCX_INLINE_MARKS = [
   // `<w:footnoteReference>`. The literal "footnote-ref" MUST byte-match the
   // delta-attribute key `docx-html.ts` writes AND the client `Mark.create`
   // name (`footnote-ref.ts`) — a one-char drift is silent XmlText deletion.
-  "footnote-ref",
+  FOOTNOTE_REF_MARK,
 ] as const;
 
 // DEFAULT_FONT_BY_EXTENSION removed as a #887 follow-up: seeded defaults

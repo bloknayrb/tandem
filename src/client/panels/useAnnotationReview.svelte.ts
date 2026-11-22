@@ -123,8 +123,11 @@ function canRestoreBlockBoundary(editor: TiptapEditor, pos: number): boolean {
 /**
  * The marks spanning a range, as JSON, for `literalInlineContent` to stamp.
  *
- * `marksAcross` returns null when the endpoints disagree, which is the right
- * answer: a replacement straddling a bold boundary should not pick a side.
+ * `marksAcross` takes the marks of the first replaced character, dropping a
+ * non-inclusive mark (`rawMarkdown`, `footnote-ref`) that the character at `to`
+ * does not continue; it is null only when nothing follows `from` in its block. The
+ * server's `tandem_edit` applies the same rule (`resolveReplacementMarks`, #1823),
+ * so Accept and a direct edit of the same text format alike.
  */
 function marksAcrossRange(
   editor: TiptapEditor,

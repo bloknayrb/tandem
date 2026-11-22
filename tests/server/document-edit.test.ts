@@ -6,6 +6,7 @@ import {
   getOrCreateXmlText,
   mergeInlineTail,
   replaceFlatRangeInElement,
+  resolveReplacementMarks,
 } from "../../src/server/mcp/document-model.js";
 import { off } from "../helpers/positions.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
@@ -36,6 +37,12 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
   }
 
   if (startPos.elementIndex !== endPos.elementIndex) {
+    const joinMarks = resolveReplacementMarks(
+      fragment.get(startPos.elementIndex) as Y.XmlElement,
+      startPos.textOffset,
+      fragment.get(endPos.elementIndex) as Y.XmlElement,
+      endPos.textOffset,
+    );
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
       replaceFlatRangeInElement(
@@ -55,7 +62,7 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
 
       if (newText.length > 0) {
         const joinAt = startPos.textOffset;
-        replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+        replaceFlatRangeInElement(startNode, joinAt, joinAt, newText, joinMarks);
       }
       mergeInlineTail(startNode, endNode);
 

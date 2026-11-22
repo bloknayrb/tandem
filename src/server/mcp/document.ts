@@ -62,6 +62,7 @@ import {
   getHeadingPrefixLength,
   mergeInlineTail,
   replaceFlatRangeInElement,
+  resolveReplacementMarks,
 } from "./document-model.js";
 // Document service (state management)
 import type { SkipCode } from "./document-service.js";
@@ -1127,6 +1128,16 @@ export function registerDocumentTools(server: McpServer): void {
                   });
                 }
 
+                // #1823: the new text's marks come from the replaced span, resolved
+                // here while it is intact — the join in step 4 is a point insert and
+                // would otherwise read whatever sits left of the trimmed start.
+                const joinMarks = resolveReplacementMarks(
+                  startNode,
+                  startPos.textOffset,
+                  endNode,
+                  endPos.textOffset,
+                );
+
                 withMcp(r.doc, () => {
                   // Cross-element edit, both ends top-level. Each textblock may hold
                   // multiple Y.XmlText children split by sibling hardBreaks, so
@@ -1156,7 +1167,7 @@ export function registerDocumentTools(server: McpServer): void {
                   //    need to re-walk it.
                   if (newText.length > 0) {
                     const joinAt = startPos.textOffset;
-                    replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+                    replaceFlatRangeInElement(startNode, joinAt, joinAt, newText, joinMarks);
                   }
                   mergeInlineTail(startNode, tailNode);
 

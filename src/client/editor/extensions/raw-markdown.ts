@@ -20,6 +20,12 @@ import { Mark } from "@tiptap/core";
 export const RawMarkdownMark = Mark.create({
   name: "rawMarkdown",
 
+  // A raw run is one verbatim construct (`[^1]`, `<br>`), emitted unescaped on
+  // save — text typed or accepted at its edge must not join it, or its `*` and `[`
+  // become markdown syntax. `NON_INCLUSIVE_MARKS` (shared/constants.ts) holds the
+  // server's `tandem_edit` to the same rule (#1823); keep the two in step.
+  inclusive: false,
+
   // Exclude nothing special; it coexists with other marks but the source it
   // carries already encodes its own formatting.
   parseHTML() {

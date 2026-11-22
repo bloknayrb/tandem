@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The documentation and screenshots match 0.32.** The README, the [user guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md), the troubleshooting guide (a new section for a local model that doesn't answer), the CLI, configuration, data-locations, integrations and MCP tool references, the glossary, and the welcome document now describe local models, resolving your own comments, the Claude Code bridge entry and the newer doctor checks. Every screenshot is recaptured, and two new ones show Settings → Models and the title-bar chip that names your local model. The README's Cowork link now points at Anthropic's Cowork article rather than an unrelated announcement.
 - **The bundled skill is now version 41.** It no longer says a file with an unrecognized extension opens as plain text: Tandem refuses to open such a file. It reaches plugin users when the plugin moves to this release.
 
+### Fixed
+
+- **Claude's edits next to a footnote reference no longer turn into markdown syntax (#1823).** Text Claude put right after raw markdown source the editor shows verbatim, such as a footnote reference `[^1]`, became part of that source. So `*x*` was saved as emphasis rather than as the characters `*x*`. Typing there in the editor, or accepting a suggestion, did the same. New text beside such a run now stays plain and is escaped on save. Text typed *inside* the run still joins it. Claude's edits now also format their new text the way the editor does: rewording a whole bold word or a link's text keeps it bold, or linked, where before the formatting was lost.
+
 ## [0.32.0] - 2026-11-20
 
 ### What's New
