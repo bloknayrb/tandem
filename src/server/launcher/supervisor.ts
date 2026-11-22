@@ -390,7 +390,12 @@ interface SupervisorOpts {
  * import each other, so ownership maps its `WakeCause` onto it (3b-2b1c-a). Goes into
  * a log line only; it carries no session or document id.
  */
-export type StartOrWakeCause = "document" | "message" | "solo-release" | "user-annotation";
+export type StartOrWakeCause =
+  | "document"
+  | "message"
+  | "solo-release"
+  | "user-annotation"
+  | "departure";
 /** The causes a log line may name; anything else is logged as `other`, so a
  *  caller that forwards an arbitrary string cannot put it in the log. */
 const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
@@ -398,6 +403,7 @@ const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "message",
   "solo-release",
   "user-annotation",
+  "departure",
 ]);
 
 /**

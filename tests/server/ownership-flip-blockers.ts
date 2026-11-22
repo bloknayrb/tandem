@@ -553,28 +553,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A user's comment on an open document nobody holds counts as waiting for Tandem's Claude " +
-      "while no other session is connected (3b-2b1b-claimable; Bryan picked 'Yes, unless another " +
-      "session is open (Recommended)' and 'Yes, even before my first Start', picked from options, " +
-      "2026-11-19). By the review session's reading, chat that follows such a document and user " +
-      "replies on its Claude-facing threads count the same way. Nothing asks the decision when " +
-      "such work appears or when the other session goes: it changes no owner, so step 5 does " +
-      "not run; and where a change does make such chat claimable (a lapse releasing a message " +
-      "on an open document nobody holds), the message forward runs and refuses it (3b-2b1c-b: " +
-      "claimable chat is not admitted). A gone session also counts for its grace when a holder " +
-      "departs (3b-2b1c): with two sessions gone together the first one's waiting work is " +
-      "skipped and nothing asks again unless the second held waiting work; it reaches Claude at " +
-      "its next look or start. Bryan picked 'Yes, fine until the later piece (Recommended)', " +
-      "picked from options, 2026-11-19.",
-    closedBy:
-      "3b-2b2's widened start arm asking the decision, with a test where such a comment starts a " +
-      "stopped Tandem's Claude with no other session connected and does not with one connected; " +
-      "and when the last other session stops counting (its grace ends, or its transport is " +
-      "reaped) the decision is asked again, with a test; and a test of two sessions going away " +
-      "together.",
-  },
-  {
-    gap:
       "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
       "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
       "for a while after it stops claimable work does not count (about two minutes if its " +
