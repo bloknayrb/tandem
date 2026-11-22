@@ -165,7 +165,7 @@ Prints usage and exits.
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Fatal error. Stack trace logged to stderr. Also: an unknown subcommand; `tandem doctor` when any check failed; `tandem setup --apply` when every target's write failed, when no `--target` value was recognised, or when both `--with-channel-shim` and `--without-channel-shim` were given; and `tandem activate` / `tandem deactivate` when the running Tandem refused. |
+| `1` | Fatal error. Stack trace logged to stderr. Also: an unknown subcommand; `tandem doctor` when any check failed; `tandem setup --apply` when every target's write failed, when no `--target` value was recognised, when both `--with-channel-shim` and `--without-channel-shim` were given, or when `--with-channel-shim` is given and `dist/channel/index.js` is missing; `tandem activate` when no key was given or the key could not be read or verified; and `tandem activate` / `tandem deactivate` when the running Tandem refused or the local write or removal failed. |
 | `2` | `tandem doctor` only — the diagnostic itself crashed, so no verdict was reached. Distinct from `1` on purpose: `1` means "checks ran and something is wrong", `2` means "nothing was established". |
 
 **`tandem rotate-token` on a refusal.** If the running server rejects the rotation — most often a 403, because `/api` is loopback-only for non-GET methods — the CLI restores the *previous* token to disk, leaves every MCP config untouched, and exits `0`: nothing changed, so nothing needs recovering. It exits `1` only in the narrower case where that rollback itself failed; the token file then holds a value the server will not accept, and the stderr message prints the old token's fingerprint so you can put it back by hand.

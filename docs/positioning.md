@@ -28,7 +28,7 @@ Tandem's core differentiator is that AI suggestions are **first-class data objec
 
 - **Addressable** — stored in a Y.Map with a unique ID
 - **Typed** — highlight, comment, or note; comments carry an optional replacement suggestion. Notes are user-private and are never surfaced to the AI (ADR-027).
-- **Attributable** — author field tracks who created it (the user, Claude, an imported Word comment, or — from v0.32.0 — a local model, shown by the name you gave it)
+- **Attributable** — the author field tracks who created it (the user or Claude; Word-comment imports, which ship dark, carry their own), and from v0.32.0 a local model's comments also record which model wrote them, shown by the name you gave it
 - **Resolvable** — user accepts or dismisses each one individually
 - **Queryable** — user can ask the AI about a specific annotation by replying to it
 - **Persistent** — survives server restarts via session persistence
