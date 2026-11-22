@@ -4,6 +4,7 @@
 
 import mammoth from "mammoth";
 import * as Y from "yjs";
+import type { AnchorVerdict } from "../../shared/positions/index.js";
 import type {
   Annotation,
   AnnotationReply,
@@ -201,7 +202,24 @@ const LOCAL_MODEL_LABEL = "Local model";
  * caller's local-model mark when it set one.
  */
 export type ExportAnnotation = Annotation &
-  LocalModelMark & { replies?: readonly (AnnotationReply & LocalModelMark)[] };
+  LocalModelMark & {
+    replies?: readonly (AnnotationReply & LocalModelMark)[];
+    /** The caller's refresh verdict, present only when degraded or failed (#1823). */
+    anchor?: AnchorVerdict;
+  };
+
+/**
+ * The line an item carries when its anchor cannot be trusted (#1823), worded
+ * for the person the sidecar is shared with. "Degraded" stays hedged ("may"):
+ * in the collapse arm the stored range still holds its text and only the live
+ * anchor is lost, while in the mint arms the stored range no longer matches.
+ */
+const ANCHOR_LABEL: Record<AnchorVerdict, string> = {
+  degraded:
+    "Degraded — the quoted text is from the last position the server trusted and may no longer be what this was written about",
+  failed:
+    "Failed — the anchor came out inverted, so its position can't be trusted; the quoted text is from the last stored range and may be wrong",
+};
 
 const STATUS_LABEL: Record<AnnotationStatus, string> = {
   pending: "Pending",
@@ -253,7 +271,8 @@ function foldLineBreaks(text: string): string {
  *   coordinate system as `ann.range` (heading prefixes included), and the same
  *   text the JSON `textSnippet` uses (#2112, Critical Rule 5), with its line
  *   breaks folded to spaces ({@link foldLineBreaks}).
- * - Each item lists its status (#2113).
+ * - Each item lists its status (#2113), and an `Anchor:` line when the caller
+ *   marked its anchor degraded or failed (#1823).
  * - Replies render only when the caller attached them (#2113). They must
  *   already have passed `channelVisibleReplies` and `hideFromAI`. The exporter
  *   re-checks the ADR-027 halves visible on the records it receives (the parent
@@ -311,6 +330,7 @@ export function exportAnnotations(doc: Y.Doc, annotations: readonly ExportAnnota
 
       lines.push(`- **"${truncated}"** (${exportAuthorLabel(ann)})`);
       lines.push(`  - Status: ${STATUS_LABEL[ann.status]}`);
+      if (ann.anchor !== undefined) lines.push(`  - Anchor: ${ANCHOR_LABEL[ann.anchor]}`);
 
       // Continuation lines indented like the replies below, so a multi-line
       // value stays nested under its item.

@@ -198,3 +198,10 @@ export type RefreshResult = {
   kind: "ok" | "updated" | "attached" | "repaired" | "degraded" | "failed";
   annotation: import("../types.js").Annotation;
 };
+
+/**
+ * The two {@link RefreshResult} kinds a Claude-facing read reports as an
+ * annotation's `anchor` (#1764): `tandem_getAnnotations` and
+ * `tandem_exportAnnotations` (#1823). The other kinds are routine.
+ */
+export type AnchorVerdict = Extract<RefreshResult["kind"], "degraded" | "failed">;

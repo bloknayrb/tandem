@@ -1,5 +1,6 @@
 export type {
   AnchoredRangeResult,
+  AnchorVerdict,
   DocumentRange,
   ElementPosition,
   FlatOffset,

@@ -4,7 +4,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import type { RangeValidation } from "../../shared/positions/index.js";
+import type {
+  AnchorVerdict,
+  RangeValidation,
+  RefreshResult,
+} from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
@@ -430,6 +434,51 @@ export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Ann
 
 export { refreshAllRanges, refreshRange } from "../positions.js";
 
+/**
+ * Map each refreshed record to the anchor verdict a Claude-facing read
+ * reports for it, for `tandem_getAnnotations` and `tandem_exportAnnotations`
+ * alike, so the two cannot drift on which kinds surface.
+ *
+ * Only the two DEGRADATION verdicts surface: `updated` fires for every
+ * annotation past any edit, `attached` on a pre-relRange record's first
+ * refresh, and `repaired` for the whole collection after any reload —
+ * emitting them buries the one signal #1764 asks for.
+ *
+ * **Keyed by the record OBJECT, never by `id` (#1823).** `collectAnnotations`
+ * does not check that a stored `id` matches its map key, so two entries could
+ * share an `id`; an id-keyed map would then hand one record (say a comment)
+ * the other's verdict (say a private note's) — one bit about a note, in a
+ * response and in a shared sidecar. The callers' filters keep the very objects
+ * `listAnnotationsRefreshed` returned, so an object key looks up exactly the
+ * refresh that produced the record. Look up BEFORE any copy
+ * (`withLocalModelMark` returns a new object when the mark applies).
+ */
+function anchorVerdicts(
+  refreshed: readonly RefreshResult[],
+): (ann: Annotation) => AnchorVerdict | undefined {
+  const kinds = new Map<Annotation, RefreshResult["kind"]>(
+    refreshed.map((r) => [r.annotation, r.kind]),
+  );
+  return (ann) => {
+    const kind = kinds.get(ann);
+    return kind === "degraded" || kind === "failed" ? kind : undefined;
+  };
+}
+
+/**
+ * The record with its computed `anchor` verdict, if any. Nothing to strip
+ * first: records reach here through `collectAnnotations`, whose
+ * `sanitizeAnnotation` is a strict allowlist with no `anchor` entry, so a key a
+ * client stored under that name never survives the read. Keep it off that
+ * allowlist, or a stored value would read as a verdict on a healthy record.
+ */
+function withAnchorVerdict<T extends object>(
+  record: T,
+  verdict: AnchorVerdict | undefined,
+): T & { anchor?: AnchorVerdict } {
+  return verdict ? { ...record, anchor: verdict } : record;
+}
+
 export function registerAnnotationTools(server: McpServer): void {
   // `tandem_getAnnotations`' output shape, decided once per registration
   // (#2465; the local-model mark, #1123 item 31 F1): with local-period records
@@ -574,15 +623,10 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        // #1764: `listAnnotationsRefreshed` now returns tagged refresh
-        // results. Keep the id → kind map beside the filter chain rather
-        // than threading the tag through every `.filter`, and emit only the
-        // two DEGRADATION verdicts below (`updated` fires for every
-        // annotation past any edit, `attached` on a pre-relRange record's
-        // first refresh, and `repaired` for the whole collection after any
-        // reload — emitting them buries the one signal #1764 asks for).
+        // #1764: the refresh verdicts, read back per record by
+        // `withAnchorVerdict` after the filters (see `anchorVerdicts`).
         const refreshed = store.listAnnotationsRefreshed();
-        const kindById = new Map(refreshed.map((r) => [r.annotation.id, r.kind]));
+        const verdictOf = anchorVerdicts(refreshed);
         let results = refreshed.map((r) => r.annotation);
         if (author) results = results.filter((a) => a.author === author);
         if (type) results = results.filter((a) => a.type === type);
@@ -617,10 +661,8 @@ export function registerAnnotationTools(server: McpServer): void {
         // The trailing Solo filter hides a user's own reply on a Claude comment
         // (the parent survives the annotation-level filter; the reply must not).
         const annotationsWithReplies = results.map((ann) => {
-          const kind = kindById.get(ann.id);
           return {
-            ...withLocalModelMark(ann),
-            ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
+            ...withAnchorVerdict(withLocalModelMark(ann), verdictOf(ann)),
             replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
               .filter((r) => !hideFromAI(r, modeState))
               .map(withLocalModelMark),
@@ -873,7 +915,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export the annotations you can see as a review summary (markdown by default, listing each item's status and its visible replies, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user's annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.",
+    'Export the annotations you can see as a review summary (markdown by default, listing each item\'s status and its visible replies, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user\'s annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. An item whose position can no longer be trusted carries anchor: "degraded" or "failed", as in tandem_getAnnotations (an Anchor line in the markdown). writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.',
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
@@ -907,7 +949,11 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        const annotations = store.listAnnotationsRefreshed().map((r) => r.annotation);
+        // #1823 item 4: the same anchor verdicts `tandem_getAnnotations`
+        // reports, read back only for records in `exportable` below.
+        const refreshed = store.listAnnotationsRefreshed();
+        const verdictOf = anchorVerdicts(refreshed);
+        const annotations = refreshed.map((r) => r.annotation);
         // #1619/#1710: notes AND every record whose stored `audience` is not
         // outbound are user-private (ADR-027) — excluded from exports, with the
         // same predicate the channel and `tandem_getAnnotations` use. Notes are
@@ -968,7 +1014,7 @@ export function registerAnnotationTools(server: McpServer): void {
         // markdown is handed copies without any stored `byLocalModel` key, so
         // it labels nothing "Local model".
         const enriched = exportable.map((ann) => ({
-          ...withLocalModelMark(ann),
+          ...withAnchorVerdict(withLocalModelMark(ann), verdictOf(ann)),
           // ADR-027 + #1000: comment-only + `private`-stripped (see
           // tandem_getAnnotations / channelVisibleReplies).
           //

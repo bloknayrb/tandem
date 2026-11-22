@@ -896,6 +896,8 @@ The markdown lists each item's status (pending, accepted or dismissed), quotes i
 
 Once local models are on (from v0.32.0), a `claude`-authored record or reply the user's local model wrote carries `byLocalModel: true` in the JSON (derived as in `tandem_getAnnotations`), and the markdown labels it "Local model" instead of "Assistant" — never the model's display name. While local models are off, neither appears.
 
+An item whose CRDT anchor is untrustworthy carries the same `anchor` field as in `tandem_getAnnotations` ([#1823](https://github.com/bloknayrb/tandem/issues/1823)): `"degraded"` or `"failed"` in the JSON (response and sidecar), and an `Anchor: Degraded — …` or `Anchor: Failed — …` line under the item's status in the markdown. The quoted text and `textSnippet` then come from the last range the server trusted (for `failed`, the last one stored), so they may no longer be what the comment was written about. It is absent on every healthy refresh, so its absence is the normal case. It is computed only for the records already in the export, after the privacy and Solo filters, and never for replies.
+
 The sidecar and the response carry `heldFromExport` and `privateExcluded` as **two separate floors** — the first counts what the Solo hold withheld, the second what ADR-027's audience gate withheld before it (#1619/#1710) — and both are absent when zero. Neither count appears in the markdown text.
 
 **Errors:** `INVALID_PATH` — `outputPath` is relative, carries a UNC / extended-length / device-namespace prefix, contains a colon in the filename (NTFS alternate data stream), or names a file whose suffix is not `.annotations.md` / `.annotations.json` matching `format`. `FILE_NOT_FOUND` — the destination directory does not exist.
@@ -909,7 +911,7 @@ With `writeToDisk`, both forms also carry `writtenPath`, the absolute path of th
 
 **Returns (json):**
 ```json
-{ "annotations": [ { ...annotation, "textSnippet": "..." } ], "count": 5 }
+{ "annotations": [ { ...annotation, "textSnippet": "...", "anchor": "degraded" } ], "count": 5 }
 ```
 
 ---
