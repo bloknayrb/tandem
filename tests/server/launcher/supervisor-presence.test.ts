@@ -1053,15 +1053,20 @@ describe("R2.6: a throwing stopAndSpawn records spawn-failed when nothing else d
     const h = makeSupervisor();
     await boundFreshRun(h);
     vi.stubEnv("TANDEM_REAPER_PATH", path.join(tmpRoot, "no-such-reaper"));
-    // Nor under the working directory: `reaperPath` falls back to
-    // `<cwd>/reaper/target/release/`, which a developer's build fills (as in
-    // owner-handle-spawn.test.ts).
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(tmpRoot);
+    // Nor at any fallback `reaperPath` probes (beside node, Tauri's binaries/,
+    // `<cwd>/reaper/target/release/`), which a developer's build can fill —
+    // the `hideReaper()` shape from supervisor-turn-delivery.test.ts.
+    const realExistsSync = fs.existsSync;
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) =>
+        path.basename(String(p)).startsWith("tandem-reaper") ? false : realExistsSync(p),
+      );
     try {
       await expect(h.sup.relaunch()).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
       expect(h.sup.status().lastError).toBe("binary-not-found");
     } finally {
-      cwd.mockRestore();
+      exists.mockRestore();
     }
   });
 
