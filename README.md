@@ -21,7 +21,7 @@ So I built Tandem. I tell Claude to pull something up in Tandem, and then I just
 
 It started with reports, but it isn't really about reports. If you're copying text back and forth between a chat window and the document you're writing, that's what this is for.
 
-One thing you need, though: an AI client running on your own computer, plus the subscription behind it. [Claude Code](https://claude.com/claude-code) is the default, and a Claude Pro or Max subscription includes it. Clients connect over [MCP](https://modelcontextprotocol.io), an open standard for letting an AI reach tools and files, so you can use others too. [Install](#install) below covers the setup, which is a wizard rather than a config file. Without a client connected, Tandem is still a local editor (open, edit, save) and nothing more.
+One thing you need, though: an AI client running on your own computer, plus the subscription behind it. [Claude Code](https://claude.com/claude-code) is the default, and a Claude Pro or Max subscription includes it. Clients connect over [MCP](https://modelcontextprotocol.io), an open standard for letting an AI reach tools and files, so you can use others too. [Install](#install) below covers the setup, which is a wizard rather than a config file. Without a client connected, Tandem is still a local editor (open, edit, save). From v0.32.0 there's one other option: a model running on your own computer can answer your chat, with no client or subscription, once you add it in **Settings → Models**. How well that works depends on the model.
 
 <p align="center">
   <img src="docs/screenshots/01-editor-overview.png" alt="The Tandem editor with a document open on the left and a panel of AI annotation cards on the right" width="820">
@@ -90,6 +90,7 @@ Either way, the rest is the same:
 - Suggestions shown as word-level diffs, so you can see exactly which words change.
 - Optional smart typography (curly quotes, em dashes) and a spellcheck toggle, in Settings (`Ctrl+,`).
 - Light, dark and warm themes.
+- Local models (Settings → Models): any model served on your computer by Ollama, LM Studio, llama.cpp or another OpenAI-compatible server with tool calling can read your document and answer your chat. Letting it comment and suggest changes is a separate, experimental switch that starts off. [The user guide](docs/user-guide.md#local-models) covers setup.
 - Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to dismiss.
 
 <details>
@@ -102,7 +103,7 @@ Either way, the rest is the same:
 *Annotations from the AI. Comments and suggestions appear as cards. For a replacement you see your current text and the proposed wording together, so you can accept the change, dismiss it, or reply to ask for something different.*
 
 <p align="center">
-  <img src="docs/screenshots/02-chat-sidebar.png" alt="The chat panel showing a question from the user and a reply from the AI assistant about the document" width="460">
+  <img src="docs/screenshots/02-chat-sidebar.png" alt="The chat panel showing a question from the user and a reply from Claude about the document" width="460">
 </p>
 
 *The chat panel. Ask a question about the document and the AI answers in place. It can read the file directly, so there's nothing to copy and paste.*
@@ -213,7 +214,7 @@ Without any of them nothing breaks and nothing is lost: your messages and commen
 
 ## Cowork
 
-[Cowork](https://www.anthropic.com/news/claude-code-on-the-web) is Claude Desktop's local agent mode, where Claude runs in an isolated VM on your machine. **Tandem's Cowork setup is not in this version, and Cowork is not a supported surface.** Earlier versions had an "Enable Cowork" control in the Windows desktop app; it is gone, because the connection it set up was never verified against how the desktop app now runs its server.
+[Cowork](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) is Claude Desktop's agent mode, where Claude works through tasks in an isolated environment of its own. **Tandem's Cowork setup is not in this version, and Cowork is not a supported surface.** Earlier versions had an "Enable Cowork" control in the Windows desktop app; it is gone, because the connection it set up was never verified against how the desktop app now runs its server.
 
 If you turned Cowork on in an earlier version, the update leaves what it wrote in place (the Tandem entries in your Cowork workspaces, and the firewall rule if one was added) but no longer maintains it. Uninstalling the desktop app removes the entries. [docs/data-locations.md](docs/data-locations.md#if-you-enabled-cowork-in-an-earlier-version) says exactly what is left and how to remove it.
 
@@ -226,6 +227,6 @@ Building Tandem, running it from source, the git hooks, and the checks to run be
 
 Three layers: the editor (Tiptap inside a Tauri desktop app or a browser), the Tandem server (Hocuspocus on port 3478 for collaborative edits and an MCP HTTP server on port 3479 for AI tool calls), and the AI client (Claude Code, or any other MCP-capable client). The full file map and data flows are in [docs/architecture.md](docs/architecture.md). Tandem is built on [Tiptap](https://tiptap.dev) and [ProseMirror](https://prosemirror.net) for the editor, [Yjs](https://yjs.dev) and [Hocuspocus](https://github.com/ueberdosis/hocuspocus) for CRDT sync, [Tauri 2](https://v2.tauri.app) for the desktop shell, and [Svelte 5](https://svelte.dev) for the UI.
 
-How hand-started Claude Code sessions get real-time updates is covered for everyone in [Real-time updates](#real-time-updates) above; [ADR-047](docs/decisions.md#adr-047-claude-code-push-transport-activation) and [ADR-049](docs/decisions.md) have the design history.
+How hand-started Claude Code sessions get real-time updates is covered for everyone in [Real-time updates](#real-time-updates) above; [ADR-047](docs/decisions.md#adr-047-claude-code-push-transport-activation) and [ADR-049](docs/decisions.md#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames) have the design history.
 
 </details>

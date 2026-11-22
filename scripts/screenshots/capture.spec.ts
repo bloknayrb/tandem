@@ -40,16 +40,23 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
+import { MODELS_SCHEMA_VERSION, type ModelsFile } from "../../src/shared/models/contract";
 import {
   cleanupAllOpenDocuments,
+  expectOnlyAllowanceNotices,
   McpTestClient,
   openAnnotatePopup,
+  openChat,
   openSettingsViaBrandMenu,
+  resetLocalModelState,
+  seedModels,
   selectTextStable,
   setRailVisible,
+  setServerAnswerer,
   submitAnnotation,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { type StubModel, startStubModel } from "../../tests/e2e/local-model-stub";
 import { E2E_MCP_PORT } from "../test-ports";
 import {
   type AccountRedactionPlan,
@@ -573,16 +580,42 @@ async function selectFirstParagraph(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-/** Open Settings and land on the AI Assistant tab (id `claude-code`). */
-async function openSettingsClaudeCodeTab(page: Page): Promise<Locator> {
+/**
+ * Open Settings and land on the tab whose id is `tabId` (the AI Assistant tab
+ * is `claude-code`), asserting it is the current one.
+ */
+async function openSettingsTab(page: Page, tabId: string): Promise<Locator> {
   await openSettingsViaBrandMenu(page);
-  const modal = page.locator("[data-testid='settings-modal']");
+  const modal = page.getByTestId("settings-modal");
   await expect(modal).toBeVisible({ timeout: 3_000 });
   // Below 860px the nav sidebar collapses into an inert drawer; open it first.
-  const hamburger = page.locator("[data-testid='settings-modal-narrow-hamburger']");
+  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
   if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
-  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  const tab = page.getByTestId(`settings-modal-tab-${tabId}`);
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-current", "page");
   return modal;
+}
+
+/**
+ * The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so a
+ * control the shot is meant to show must sit inside the visible body, not
+ * merely be rendered.
+ */
+async function expectInsideSettingsBody(page: Page, target: Locator): Promise<void> {
+  const bodyBox = await page.getByTestId("settings-modal-content").boundingBox();
+  const targetBox = await target.boundingBox();
+  if (!bodyBox || !targetBox) throw new Error("settings body or target has no box");
+  expect(targetBox.y + targetBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+}
+
+/** Dismiss every toast; each click must take one away, so a stuck toast fails fast. */
+async function dismissAllToasts(page: Page): Promise<void> {
+  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
+  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
+    await dismiss.first().click();
+    await expect(dismiss).toHaveCount(n - 1);
+  }
 }
 
 // ── Captures ─────────────────────────────────────────────────────────────────
@@ -870,7 +903,7 @@ test("07-toast-notification", async ({ page }) => {
   await openWelcome();
   await loadEditor(page);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
     timeout: 5_000,
   });
@@ -934,12 +967,7 @@ test("09-settings-modal", async ({ page }) => {
   // backdrop's top edge and read as part of Settings.
   await suppressTutorialCard(page);
   await loadEditor(page);
-  const modal = await openSettingsClaudeCodeTab(page);
-  await expect(modal).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByTestId("settings-modal-tab-claude-code")).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  const modal = await openSettingsTab(page, "claude-code");
   await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
     timeout: 5_000,
@@ -987,7 +1015,7 @@ test("11-margin-annotations", async ({ page }) => {
   await setRailVisible(page, "left", false);
   await setRailVisible(page, "right", false);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   const marginToggle = page.locator("[data-testid='settings-modal-margin-view-toggle'] input");
   if (!(await marginToggle.isChecked())) await marginToggle.click();
   await expect(marginToggle).toBeChecked();
@@ -1134,7 +1162,7 @@ test("13-setup-wizard", async ({ page }) => {
   await openWelcome();
   await loadEditor(page);
 
-  await openSettingsClaudeCodeTab(page);
+  await openSettingsTab(page, "claude-code");
   await page.getByTestId("settings-modal-open-integration-wizard").click();
 
   const wizard = page.getByTestId("integration-wizard");
@@ -1466,14 +1494,10 @@ test("21-activity-tray", async ({ page }) => {
 
   // Clear the transient pops so they are not stacked over the tray. Dismissing
   // a pop leaves its tray entry, which is the point of the tray.
-  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
-  await expect(dismiss).not.toHaveCount(0, { timeout: 5_000 });
-  // Each click must take a toast away; one that does not fails here rather
-  // than spinning until the test timeout.
-  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
-    await dismiss.first().click();
-    await expect(dismiss).toHaveCount(n - 1);
-  }
+  await expect(page.locator("[data-testid^='toast-dismiss-']")).not.toHaveCount(0, {
+    timeout: 5_000,
+  });
+  await dismissAllToasts(page);
 
   const pill = page.getByTestId("activity-pill");
   await pill.click();
@@ -1534,31 +1558,16 @@ test("22-settings-notifications", async ({ page, context, baseURL }) => {
   await suppressTutorialCard(page);
   await loadEditor(page);
 
-  await openSettingsViaBrandMenu(page);
-  const modal = page.getByTestId("settings-modal");
-  await expect(modal).toBeVisible({ timeout: 3_000 });
-  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
-  if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
-  await page.getByTestId("settings-modal-tab-notifications").click();
-  await expect(page.getByTestId("settings-modal-tab-notifications")).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await openSettingsTab(page, "notifications");
   await expect(page.getByTestId("notifications-permission-status")).toHaveText(
     "This browser allows Tandem's notifications.",
   );
   await expect(page.getByTestId("notifications-enable-toggle")).toBeVisible();
   await expect(page.getByTestId("notifications-sound-select")).toBeVisible();
 
-  // The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so
-  // the last control must be inside the visible body, not merely rendered.
-  const body = page.getByTestId("settings-modal-content");
   const lastControl = page.getByTestId("notifications-test-button");
   await lastControl.scrollIntoViewIfNeeded();
-  const bodyBox = await body.boundingBox();
-  const lastBox = await lastControl.boundingBox();
-  if (!bodyBox || !lastBox) throw new Error("settings body or test button has no box");
-  expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+  await expectInsideSettingsBody(page, lastControl);
   await page.waitForTimeout(300);
 
   await page.evaluate(() => document.fonts.ready);
@@ -1566,4 +1575,138 @@ test("22-settings-notifications", async ({ page, context, baseURL }) => {
     path: path.join(screenshotsDir, "22-settings-notifications.png"),
     fullPage: false,
   });
+});
+
+// ── Local models (slots 23 and 24) ───────────────────────────────────────────
+//
+// These two run LAST on purpose. `resetLocalModelState` also clears chat, and a
+// local-model settings write raises a startup notice the server replays to every
+// page that connects afterwards, so any step placed after them would photograph
+// that notice. The registry, the chat answerer and the commenting switch are
+// server state, reset from Node before and after each step.
+//
+// The names are neutral on purpose: Tandem recommends no model (ADR-039 P2), so
+// neither the display name nor the model id may name a real one. Constant names
+// avoid the `…Text` suffix, which `tests/scripts/screenshot-anchors.test.ts`
+// reads as a welcome.md anchor.
+
+const LOCAL_MODEL_ID = "screenshot-local-model";
+const LOCAL_MODEL_NAME = "My local model";
+const CHAT_PROMPT = "Can you sum up the sample content section in one sentence?";
+const STUB_REPLY =
+  "The team met both Q2 goals a month early, but the dashboard slipped from Q3 to Q4 after a May API redesign.";
+
+function localModelsFile(endpoint: string): ModelsFile {
+  return {
+    schemaVersion: MODELS_SCHEMA_VERSION,
+    models: [
+      {
+        id: LOCAL_MODEL_ID,
+        provider: "local-ollama",
+        displayName: LOCAL_MODEL_NAME,
+        modelId: "my-model",
+        endpoint,
+        enabled: true,
+      },
+    ],
+    defaultModelId: LOCAL_MODEL_ID,
+  };
+}
+
+/**
+ * Dismiss every toast, then prove none is left. A settings write from this
+ * page is admitted through the development allowance, which announces it; those
+ * notices are expected (`expectOnlyAllowanceNotices` refuses anything else) but
+ * do not belong in the picture.
+ */
+async function clearToasts(page: Page): Promise<void> {
+  await expectOnlyAllowanceNotices(page);
+  await dismissAllToasts(page);
+  await expect(page.locator("[data-testid='toast-container'] [role='alert']")).toHaveCount(0);
+}
+
+test("23-settings-models", async ({ page }) => {
+  await resetLocalModelState("screenshots-23");
+  try {
+    // The Endpoint is not displayed, and nothing calls the model while chat
+    // stays with Claude, so the discard port is enough (as settings-models.spec).
+    await seedModels(localModelsFile("http://127.0.0.1:9"));
+    await openWelcome();
+    // A full-viewport shot: the getting-started strip would read as part of Settings.
+    await suppressTutorialCard(page);
+    await loadEditor(page);
+
+    await openSettingsTab(page, "models");
+    await expect(page.getByTestId("chat-answerer-section")).toBeVisible();
+    // The answerer read has settled: the radio is checked and not "Checking…".
+    const claude = page.getByTestId("chat-answerer-claude");
+    await expect(claude).toHaveAttribute("aria-checked", "true");
+    await expect(claude).toHaveAttribute("aria-disabled", "false");
+    const row = page.getByTestId(`model-row-${LOCAL_MODEL_ID}`);
+    await expect(row).toContainText(LOCAL_MODEL_NAME);
+    await expect(page.getByTestId(`model-default-${LOCAL_MODEL_ID}`)).toBeVisible();
+    await expectInsideSettingsBody(page, row);
+
+    await clearToasts(page);
+    await blurActiveElement(page);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({
+      path: path.join(screenshotsDir, "23-settings-models.png"),
+      fullPage: false,
+    });
+  } finally {
+    await resetLocalModelState("screenshots-23");
+  }
+});
+
+test("24-titlebar-model-chip", async ({ page }) => {
+  let stub: StubModel | undefined;
+  await resetLocalModelState("screenshots-24");
+  try {
+    // A real loopback server, because the model call is the backend's, not the
+    // page's. It starts in a 503 mode, so it is told to reply first.
+    stub = await startStubModel();
+    stub.setMode({ kind: "reply", text: STUB_REPLY });
+    await seedModels(localModelsFile(stub.url));
+    await setServerAnswerer("local");
+    await openWelcome();
+    await suppressTutorialCard(page);
+    await loadEditor(page);
+
+    const chip = page.getByTestId("titlebar-default-model");
+    await expect(chip).toContainText(LOCAL_MODEL_NAME, { timeout: 10_000 });
+    // The pill's label follows configuration only, so this proves the setting
+    // is usable, not that the stub answered (the reply below proves that).
+    await expect(page.getByTestId("status-ai-indicator")).toContainText("Chat: your local model");
+
+    await openChat(page);
+    await page.getByTestId("chat-composer-input").fill(CHAT_PROMPT);
+    await page.getByTestId("chat-send-btn").click();
+    const reply = page
+      .locator("[data-testid='chat-panel'] .chat-bubble")
+      .filter({ hasText: STUB_REPLY })
+      .last();
+    await expect(reply).toBeVisible({ timeout: 15_000 });
+    // Upper-cased by CSS, so the text node is compared, not the rendered text.
+    await expect
+      .poll(async () =>
+        (await reply.locator("[data-testid^='chat-author-']").textContent())?.trim(),
+      )
+      .toBe(LOCAL_MODEL_NAME);
+
+    await clearToasts(page);
+    await blurActiveElement(page);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({
+      path: path.join(screenshotsDir, "24-titlebar-model-chip.png"),
+      fullPage: false,
+    });
+  } finally {
+    // Reset before the stub goes: a registry left pointing at a closed port
+    // would answer the next run's first read with a failure notice.
+    await resetLocalModelState("screenshots-24");
+    await stub?.close();
+  }
 });

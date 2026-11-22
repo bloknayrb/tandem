@@ -98,8 +98,8 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied): `EACCES`, or on Windows `EPERM` from `open`, which is how a folder you can read but not write, or a file you cannot read, fails there. `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer these with it. |
 | `READ_ONLY` | The document is read-only, so the mutation was refused: `tandem_edit`, `tandem_editList`, `tandem_appendContent`, `tandem_applyChanges`, `tandem_restoreBackup` and `tandem_rename`. `tandem_save` instead succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
-| `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
-| `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
+| `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:345`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
+| `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:336`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
 | `LICENSE_REQUIRED` | Tandem is unlicensed, so its AI features are off (#1521). No individual tool returns it: the `/mcp` transport refuses the session itself, as a JSON-RPC error with code `-32003` whose `data` is `{ error: "LICENSE_REQUIRED", kind, purchaseUrl? }` -- `kind` is `unlicensed` or `unverifiable`, and `purchaseUrl` appears only on `unlicensed`. A session already open is closed by its next request. `tandem_reply` can carry it too, as defence in depth. The editor itself is never refused. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
@@ -110,7 +110,7 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 | `ALREADY_EXISTS` | `tandem_rename`'s destination name is already taken by a file in that directory. |
 | `PATH_REJECTED` | `tandem_rename`'s destination path failed its path-safety checks (see that tool's notes). |
 | `RENAME_IN_PROGRESS` | `tandem_rename` was called while a save of that document was in progress. Retry. |
-| `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1427`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
+| `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1914`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
 | `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code, including a raw errno from the filesystem, which arrives in `details.errorCode`. Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required (including `tandem_open`'s `filePath`), or used a UNC / extended-length / device-namespace prefix -- or the document has no on-disk location to act on: `tandem_applyChanges` or `tandem_restoreBackup` on an upload or scratchpad. |
 | `NOT_OWNED` | `tandem_editAnnotation` or `tandem_annotationReply` was aimed at an annotation Claude did not author. Authority over a user's own card belongs to the user; answer it with `tandem_reply` or a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770)). |
@@ -119,7 +119,7 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 | `ANNOTATION_RESOLVED` | The annotation is already accepted or dismissed, so `tandem_resolveAnnotation`, `tandem_editAnnotation` and `tandem_annotationReply` refuse it. `tandem_resolveAnnotation` sent this as `ANNOTATION_NOT_PENDING` until #1823; that code is gone. |
 | `ACCEPT_REFUSED` | `tandem_resolveAnnotation({ action: "accept" })` on Claude's own annotation, or on one carrying `suggestedText`. Accept is the user's decision; `dismiss` withdraws instead (#1770). |
 | `SEARCH_BUSY` | `tandem_search` with `regex: true` was called while its worker queue -- one search running plus three waiting -- was already full. Retry. |
-| `INTERNAL_ERROR` | The universal boundary code: a handler threw something no arm translated and `withErrorBoundary` flattened it (`src/server/mcp/response.ts:118`). The message reads `<toolName> failed: ...`. Any tool can return it. It is also the `never`-exhaustiveness arm on `tandem_resolveAnnotation` and `tandem_removeAnnotation`, reachable only if a lifecycle outcome is added without being handled -- which is a compile error first, so that message should never be seen. |
+| `INTERNAL_ERROR` | The universal boundary code: a handler threw something no arm translated and `withErrorBoundary` flattened it (`src/server/mcp/response.ts:206`). The message reads `<toolName> failed: ...`. Any tool can return it. It is also the `never`-exhaustiveness arm on `tandem_resolveAnnotation` and `tandem_removeAnnotation`, reachable only if a lifecycle outcome is added without being handled -- which is a compile error first, so that message should never be seen. |
 
 `INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
@@ -136,7 +136,7 @@ All MCP tools use **flat text offsets** -- the same positions you'd get from the
 
 Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The editor uses ProseMirror positions internally (which differ), but you never need to know that -- MCP tools handle the conversion.
 
-**Offsets are UTF-16 code units, not characters.** They index a JavaScript string, so anything outside the Basic Multilingual Plane -- emoji, many CJK extension characters, musical symbols -- occupies **two** units, not one. That is why an offset falling between the two halves of a surrogate pair is rejected with `INVALID_RANGE` and `details.reason: "surrogate"` (`src/server/positions.ts:172-192`). Counting characters by eye, or with anything that counts Unicode scalar values, undercounts a document containing them -- another reason to take offsets from `tandem_resolveRange` or `tandem_search` rather than deriving them.
+**Offsets are UTF-16 code units, not characters.** They index a JavaScript string, so anything outside the Basic Multilingual Plane -- emoji, many CJK extension characters, musical symbols -- occupies **two** units, not one. That is why an offset falling between the two halves of a surrogate pair is rejected with `INVALID_RANGE` and `details.reason: "surrogate"` (`splitsSurrogatePair` and its use in `src/server/positions.ts:383-390`). Counting characters by eye, or with anything that counts Unicode scalar values, undercounts a document containing them -- another reason to take offsets from `tandem_resolveRange` or `tandem_search` rather than deriving them.
 
 **Important:** Edit ranges that overlap heading markup (e.g., targeting offset 0-1 which is `# `) are rejected with `INVALID_RANGE`. Always target the text content, not the markdown prefix. **The exclusive end is not exclusive here:** a `to` equal to the first character of a heading prefix still resolves into the heading block. On `"para\n## Head\nnext"`, `[0,5)` is rejected with `INVALID_RANGE` even though `to` is exclusive, and `[0,4)` is accepted.
 
@@ -192,7 +192,7 @@ tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 
 **Notes:**
 - Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`. `.docx` is refused while it ships dark, with a message saying Word files aren't supported in this version ([ADR-053](decisions.md#adr-053-docx-ships-dark)); with `.docx` enabled it is editable but written back only on an explicit save (auto-save skips it). `.md`/`.txt` auto-save; **`.html`/`.htm` open read-only (#1798)** — they are in neither save set, so nothing can write them back, and opening them editable meant edits that looked accepted and then vanished on tab close. Annotating an `.html` still works. `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`; a `.markdown` keeps its own extension on save.
-- **Nothing is launched.** Browser auto-open was removed in #477 (`src/cli/start.ts`), and no code path from this tool shows or focuses the desktop window -- `show_main_window` (`src-tauri/src/lib.rs:805`) is reached only from startup, the tray and app menu, a second-instance launch, and macOS's own file-open event. The document appears as a new tab in an editor that is already open. If none is, open one yourself: the desktop app, or the URL `tandem` prints on startup -- `http://127.0.0.1:3479` in a normal install, or `http://127.0.0.1:5173` when you are running the Vite dev server.
+- **Nothing is launched.** Browser auto-open was removed in #477 (`src/cli/start.ts`), and no code path from this tool shows or focuses the desktop window -- `show_main_window` (`src-tauri/src/lib.rs:869`) is reached only from startup, the tray and app menu, a second-instance launch, and macOS's own file-open event. The document appears as a new tab in an editor that is already open. If none is, open one yourself: the desktop app, or the URL `tandem` prints on startup -- `http://127.0.0.1:3479` in a normal install, or `http://127.0.0.1:5173` when you are running the Vite dev server.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. A document that is read-only because the *user* asked for it (View Changelog, an explicit `readOnly` open) still reloads unconditionally — but a `.html`, read-only only because its format cannot be written back, gets the banner like any other dirty document (#1798). Its Y.Doc is the only copy of those edits, so reloading over them would destroy them.
@@ -728,6 +728,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 
 `byLocalModel: true` is present on an annotation or reply **only once local models are on** (`BYO_MODELS_ENABLED`, from v0.32.0), and only on a `claude`-authored record the user's local model wrote (its `agentIdentity` stamp, which is itself never sent). It is a hint, not proof: anything that can write to the editor can add or remove the stamp (#1123, ADR-039 item 31).
 
+`resolvedBy` (`"user"` or `"claude"`; absent means the user) records who resolved a record. `acceptedReplyId` and `priorSuggestedText` (#2360) are present only while a record stays accepted through a reply's proposal: `acceptedReplyId` names the reply whose replacement was applied, and `priorSuggestedText` holds the record's own `suggestedText` from before (`null` when it had none), which an Undo gives back.
+
 ---
 
 ### tandem_resolveAnnotation
@@ -743,7 +745,7 @@ Claude's own work is the user's decision and is refused here** (#1770).
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "status": "dismissed" }
+{ "id": "ann_1710936000000_a1b2c3", "status": "dismissed", "documentId": "report-a1b2c3" }
 ```
 
 **Who may accept.** Accepting is the act of agreeing to a proposal, and the only
@@ -780,7 +782,7 @@ Delete an annotation and its whole reply thread permanently. Prefer `tandem_reso
 
 **Returns:**
 ```json
-{ "removed": true, "id": "ann_1710936000000_a1b2c3" }
+{ "removed": true, "id": "ann_1710936000000_a1b2c3", "documentId": "report-a1b2c3" }
 ```
 
 ---
@@ -799,11 +801,11 @@ Edit the content of an annotation Claude authored. Only pending annotations can 
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "suggestedText": "replacement text if set", "editedAt": 1710936500000 }
+{ "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "suggestedText": "replacement text if set", "editedAt": 1710936500000, "documentId": "report-a1b2c3" }
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), `NOT_OWNED` (the annotation was
-authored by the user), error if annotation not found or not pending. `newText` additionally
+authored by the user), `NOT_FOUND` (annotation not found), `ANNOTATION_RESOLVED` (annotation no longer pending). `newText` additionally
 carries Critical Rule 6's heading screen (#1626): a replacement is refused with
 `INVALID_ARGUMENT` when the annotation's **live** span overlaps heading markup — including in its
 interior, which the plain-comment arm legally allows at creation — or when that span no longer
@@ -842,7 +844,7 @@ Reply to a thread on an annotation Claude authored. Only works on pending annota
 
 **Returns:**
 ```json
-{ "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3" }
+{ "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3", "documentId": "report-a1b2c3" }
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight, or a private note / private comment, the reply text or `suggestedText` is over the length limit, or a `suggestedText` was sent on a parent whose live span overlaps heading markup -- arms of one code in `describeReplyWriteRefusal`). `NOT_OWNED` and the ADR-027 refusals are answered *ahead* of the heading check, which is the runtime order: the range layer never speaks about a record Claude was not allowed to touch.
@@ -902,6 +904,8 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 ```json
 { "markdown": "# Document Review\n\n## Highlights\n...", "count": 5 }
 ```
+
+With `writeToDisk`, both forms also carry `writtenPath`, the absolute path of the sidecar that was written.
 
 **Returns (json):**
 ```json
@@ -1177,7 +1181,7 @@ Check for user actions you haven't acknowledged yet -- new comments, chat messag
 - An operation that has been running for 20 seconds no longer keeps its unowned document out of every session's scope.
 - **`ownership.changed`** (the change-notice PR, ADR-054's change-notice amendment): `ownership` also carries `changed: [{ documentId, change: "gained" | "lost", cause }]`, always present (`[]` when there is nothing to report). Each entry is a change to which documents this session holds since the last poll that returned it, oldest first, with `cause` one of eight past-tense facts: `"your write claimed it"`, `"a poll of yours claimed it"`, `"a chat reply of yours claimed it"` (since the chat owners PR), `"a chat post of yours claimed it"` (since the posts PR), `"you opened or created it"`, `"another session took it"`, `"its tab was closed"` and `"Tandem stopped counting this session as attached"`. `holding` is the truth; `changed` only explains it and may be incomplete (after a restart, after a response lost once it returned, past the most recent 100 entries, when queueing a change failed, and when the session's record was deleted and created again). One list per session, shared by every connection or agent polling as it, drained by the first poll that returns it, cursor or not; a poll naming a `documentId` reports changes on every document. A poll's own claims appear in its own response. Nothing about it is in the cursor. When the session lost a document to another session's open or a tab close and does not hold it now, the `summary` ends with one sentence of facts naming it (`You stopped holding notes.md (another session took it).`), with no instruction; `hasNew` is unchanged by it.
 
-**`localModelAnswersChat`** (#1123, ADR-039 part A2): present, and `true`, only while Tandem chat is set to be answered by a local model on the user's computer (from v0.32.0; a server with local models off never declares it). The poll then returns a fixed status line as its `summary`, `hasNew: false` and empty buckets and `activity`, and the cursor as passed (the start cursor if the one passed cannot be read); `ownership` is omitted. It stamps nothing: nothing is acknowledged, marked delivered or read, numbered or claimed, so everything owed before the poll is still owed after it. A later poll stops carrying the field once chat is answered by Claude again.
+**`localModelAnswersChat`** (#1123, ADR-039 part A2): present, and `true`, only while Tandem chat is set to be answered by a local model on the user's computer (from v0.32.0; a server with local models off never declares it). The poll then returns a fixed status line as its `summary` (`LOCAL_PERIOD_STATUS_LINE` in `src/server/mcp/awareness.ts`: "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem. …"), `hasNew: false` and empty buckets and `activity`, and the cursor as passed (the start cursor if the one passed cannot be read); `ownership` is omitted. It stamps nothing: nothing is acknowledged, marked delivered or read, numbered or claimed, so everything owed before the poll is still owed after it. A later poll stops carrying the field once chat is answered by Claude again. On the first polls after that, a user chat message that was owed to Claude when chat was switched to the local model is handed over as usual, and the `summary` says so in one sentence: "Chat message <id> was sent before Tandem chat was switched to a local model" (or "Chat messages <id>, <id> were …"; when an id is not plain enough to quote, "Some of the chat messages in this poll were sent before …"). Chat sent while the local model answered is never handed to Claude.
 
 **Delivery contract (#2064, #2294).** Pass back the `cursor` each poll returns; start with `"start"`. The cursor is opaque: never build or edit one.
 - **Items repeat until acknowledged.** An item is returned on every poll until the caller passes a cursor from a response that held it — that next poll IS the acknowledgement. A response lost in transit (a dropped connection, a crash, a bridge reconnect) is recovered by polling again with the same cursor, which returns the same items. Before, the server marked items delivered before the response left, so a lost response lost them for the life of the process.
@@ -1205,7 +1209,7 @@ On a default poll a background document that produced nothing on its last pass, 
 - `chatMessages`: *user* messages from the ChatPanel sidebar you have not acknowledged (without a cursor: the *unread* ones, which returning stamps read). Each entry has `id`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent), `anchor` (a text selection the user attached) and `replyTo`. **There is no `author` field** — the stored `ChatMessage` carries one, but it is used as the filter (`author === "user"`) and then dropped, along with `read` and `agentIdentity` (the "Bucket 3" chat block in `tandem_checkInbox`, `src/server/mcp/awareness.ts`; the output schema omits it too — `inboxChatMessageSchema` in `src/server/mcp/output-schemas.ts`). Every entry is a user message by construction.
 - `activity.cursor` here is the same **flat text offset** (UTF-16 code units) as `tandem_getActivity`'s, the same system `activity.selectedText` beside it is sliced from. Only a document change triggers a write, but the last one (at the `TYPING_DEBOUNCE` typing-clear) publishes the caret's live position — so a caret move can be reflected without any edit. A remote edit refreshes the offset in place, leaving `isTyping` and `lastEdit` alone — in the mounted editor only, 200 ms debounced, so a background tab or an immediate read still carries the pre-edit offset. Use it as a proximity hint rather than a range endpoint.
 - `activity.selectedText` is the **most recent non-empty selection**, not necessarily the current one, and `activity.selectionAt` (#1624) is the epoch-ms timestamp of the record it was sliced from — `null` whenever `selectedText` is null, and also when the record carries no numeric timestamp, so `selectionAt: null` does not mean there is no selection. The two come from `Y_MAP_SELECTION`, a different record from the one `cursor`/`isTyping`/`lastEdit` are read from, so the halves of `activity` have independent ages. The editor writes the record after a **150 ms debounce, not the selection dwell** (1 s by default, configurable 500–3000 ms) that gates the `chat:message` selection; a selection made by clicking an annotation card or a chat anchor counts. While the document is the active editor tab, it is **cleared** (a collapsed record, so `selectedText: null`) when the selection collapses — a click, an arrow key, typing — or when a remote edit deletes the selected text. It is **not cleared** when focus leaves the editor, e.g. into the chat panel. **`selectionAt` is when the user last made the selection (#1991):** in the active editor tab, a remote edit that shifts the selected span **or changes its length** updates `from`/`to` and `selectedText` without re-stamping the time. **Only the active tab's editor maintains the record** (it is mounted under `{#key activeTab.id}`), so the editor also stores a fingerprint of the selected text in the server's flat projection, and the inbox reports `selectedText` only while the text at the recorded offsets still matches it (#1997). For a background tab, or a document no browser is showing, an edit that moves or rewrites the selected text therefore makes both `selectedText` and `selectionAt` `null` rather than slicing stale offsets. They also read `null` in the active tab in three cases the mounted editor does not re-record: an edit that rewrites the span in place without moving either end, a change that moves flat offsets but not editor positions (a heading level change, or a paragraph above the selection turned into a heading, shifts the flat text by the prefix), and the ~150 ms between an edit that shifts the span and the editor's debounced re-record. A record saved by an older build carries no fingerprint and reads `null` until the user selects again.
-- The audience exclusion on `userActions` / `userResponses` is **silent on the wire**: unlike `tandem_getAnnotations` and `tandem_exportAnnotations`, this tool emits no `privateExcluded` (or `notesExcluded`) counter — `checkInboxOutputShape` declares none (`src/server/mcp/output-schemas.ts:274-298`). Withheld records simply do not appear.
+- The audience exclusion on `userActions` / `userResponses` is **silent on the wire**: unlike `tandem_getAnnotations` and `tandem_exportAnnotations`, this tool emits no `privateExcluded` (or `notesExcluded`) counter — `checkInboxOutputShape` declares none (`src/server/mcp/output-schemas.ts:407-453`). Withheld records simply do not appear.
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 - `modeProvenance`: who last wrote the mode key (`client` + an opaque connection tag, `server` + origin tag, `restore`, or `unknown`), when, and what the key read at that moment; `null` before any write is observed. It names the last transaction that *touched* the key, so under a lost concurrent tie it is not necessarily the writer of the reported `mode` -- compare `modeProvenance.value` against `mode`.
 
@@ -1307,7 +1311,7 @@ In addition to MCP tools, the server exposes REST endpoints on the same port (:3
 
 ### Route index
 
-Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the **six** mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md). It was nine until `save`, `convert` and `apply-changes` each gained `assertOriginAllowlisted` (`src/server/mcp/routes/save.ts`, `convert.ts`, `apply-changes.ts`) to close a simple-request CSRF. Of the six, `rotate-token` is the only one carrying a second layer — it requires a parsed JSON body, which is positive proof a preflight passed; the other five have one layer, not two. `open` and `rotate-token` must **not** be given the origin gate: the Tauri sidecar and the CLI call them without an `Origin` header, and that gate fails closed on a missing one. **Both path-wide controls are `/api`'s alone:** on `/mcp`, `authMiddleware` is mounted but `enforceLoopbackMutation` is **not**, so a token-holding LAN peer reaches every mutating MCP tool below without a loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906). **The non-loopback bind ships dark** ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)), so in a release every "non-loopback caller" on this page is unreachable from another machine; the scrubbing and gates are described as they stand, for the re-enable.
+Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), `src/server/models/api-routes.ts` (`registerModelsRoutes`) and `src/server/integrations/api-routes.ts` (`registerIntegrationsRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the **six** mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md). It was nine until `save`, `convert` and `apply-changes` each gained `assertOriginAllowlisted` (`src/server/mcp/routes/save.ts`, `convert.ts`, `apply-changes.ts`) to close a simple-request CSRF. Of the six, `rotate-token` is the only one carrying a second layer — it requires a parsed JSON body, which is positive proof a preflight passed; the other five have one layer, not two. `open` and `rotate-token` must **not** be given the origin gate: the Tauri sidecar and the CLI call them without an `Origin` header, and that gate fails closed on a missing one. **Both path-wide controls are `/api`'s alone:** on `/mcp`, `authMiddleware` is mounted but `enforceLoopbackMutation` is **not**, so a token-holding LAN peer reaches every mutating MCP tool below without a loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906). **The non-loopback bind ships dark** ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)), so in a release every "non-loopback caller" on this page is unreachable from another machine; the scrubbing and gates are described as they stand, for the re-enable.
 
 | Route | Purpose | Gate beyond the path-wide controls |
 |---|---|---|
@@ -1323,19 +1327,29 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
 | `POST /api/rename` | Rename an on-disk file. | origin + loopback |
 | `POST /api/upload` | Open uploaded content (no disk path). | **one layer** |
-| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback |
+| `POST /api/scratchpad` | New scratchpad tab. | origin + loopback |
 | `POST /api/convert` | Convert `.docx` to Markdown. | origin (no loopback assert — the path-wide one covers it) |
 | `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin |
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
 | `POST /api/document/reload` | Reload the document from disk. | origin + loopback |
 | `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback; list scrubs paths |
 | `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback |
+| `POST /api/read-only-file/resolve` | Answer the read-only-file prompt (#2273): `overwrite` (POSIX only) or `dismiss`, naming the prompt's `documentId` and `detectedAt`. | origin + loopback |
 | `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** |
 | `POST /api/remove-annotation` | Delete an annotation. | **one layer** |
 | `POST /api/store/reclaim-lock` | Reclaim the annotation-store lock. | origin + loopback |
 | `GET /api/sessions` · `POST /api/sessions/delete` · `POST /api/sessions/clear` | Session management. | origin + loopback; list scrubs paths |
-| `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
+| `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:47`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
+| `GET/POST /api/integrations` · `GET /api/integrations/existing` · `GET /api/integrations/first-run-needed` | The setup wizard's saved integrations, the Tandem entries it found in clients' configs, and whether the wizard should open (with the apply nonce). | `POST`: origin + loopback, rotates the nonce; `existing` scrubs `env`/`headers` |
+| `POST /api/integrations/apply` | Write the saved integrations into the clients' configs. | origin + loopback + nonce + mutex |
+| `POST /api/integrations/walkthrough-confirm` | The v1.0 setup walkthrough's **Keep this setup** (#2198, from the next release; never pending before v1.0). | origin + loopback, a JSON body naming the server version; no nonce |
+| `POST/DELETE /api/integrations/secrets/:ref` | Store or remove an integration secret in the OS keychain. There is no read route. | origin + loopback |
+| `GET /api/integrations/claude-cli-status` · `POST /api/integrations/install-claude-code` | Whether Claude Code is installed; install it. | status: enum-only answer; install: origin + loopback + mutex, no nonce |
+| `GET/POST /api/models` | The models registry (Settings → Models), with an ETag. | POST: Tandem's own window only (exact `Origin`, `src/server/models/own-window.ts`, #2404); GET: own window only while local models are on, LAN-scrubbed |
+| `GET/POST /api/models/local-settings` | Whether local models may comment and suggest changes. | loopback; Tandem's own window only |
+| `GET/POST /api/models/chat-answerer` | Who answers chat (`claude` or `local`), and whether a local model would answer now. | loopback; Tandem's own window only |
+| `POST/DELETE /api/models/secrets/:ref` | Store or remove a model provider key in the OS keychain (service `tandem-models`). There is no read route. | origin + loopback |
 | `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce; relaunch, start-fresh and the deferred start answer 403 `LAUNCHER_UNLICENSED` (with the licence envelope) while Tandem is unlicensed |
 | `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` answers 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
 | `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express; refused 403 (JSON body) while unlicensed, and a live socket is closed `4403 LICENSE_REQUIRED` |
@@ -1352,7 +1366,7 @@ Returns app metadata for the client's About panel and version indicator. Sensiti
 ```json
 {
   "version": "0.22.1",
-  "toolCount": 33,
+  "toolCount": 28,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
   "storagePath": "C:\\Users\\user\\AppData\\Local\\tandem\\Data\\sessions",
@@ -1364,7 +1378,7 @@ Returns app metadata for the client's About panel and version indicator. Sensiti
 ```json
 {
   "version": "0.22.1",
-  "toolCount": 33,
+  "toolCount": 28,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
   "bindHost": "127.0.0.1",
@@ -1447,7 +1461,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 ### POST /api/scratchpad
 
-Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
+Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's **New scratchpad** option).
 
 **Request:** Body optional. When present it must be exactly `{ "content"?: string }` -- any other key is rejected.
 

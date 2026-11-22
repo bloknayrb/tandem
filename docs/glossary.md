@@ -89,13 +89,16 @@ What the AI pulls with `tandem_checkInbox`: your new chat messages, comments and
 accepts and dismissals since it last looked, plus the current mode. The inbox is the authority on
 what the AI has been told; every push route only nudges Claude to check it. See
 [Awareness tools](mcp-tools.md#awareness-tools) and
-[Polling remains authoritative](user-guide.md#polling-remains-authoritative).
+[Polling remains authoritative](user-guide.md#polling-remains-authoritative). During a
+[local period](#local-period) the inbox hands the AI nothing: it returns one line saying chat is
+answered elsewhere, and nothing it was owed is lost.
 
 ## Chat
 
 The conversation panel beside the document. There is one chat thread for the whole app, not one
-per document; each message records which document it was sent from. The AI answers with
-`tandem_reply`. Chat is never held in Solo mode. See [Chat](user-guide.md#chat) and
+per document; each message records which document it was sent from. Claude answers with
+`tandem_reply`, unless [who answers your chat](#who-answers-your-chat) is set to a local model.
+Chat is never held in Solo mode. See [Chat](user-guide.md#chat) and
 [ADR-048](decisions.md#adr-048-chat-stays-global-ctrl_room-scoped-not-document-scoped).
 
 ## Local-model collaborator
@@ -104,6 +107,32 @@ Letting a model on your computer (Ollama, LM Studio, llama.cpp or another OpenAI
 answer chat instead of Claude and, if you allow it, comment and suggest changes. On from v0.32.0,
 in Settings → **Models**. See [User guide → Local models](user-guide.md#local-models) and
 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11).
+
+## Who answers your chat
+
+The switch in Settings → **Models** that decides whether Claude or your local model answers the
+chat panel. It starts on Claude. While it is set to the local model, the title bar shows the
+model's name, the status pill reads "Chat: your local model", and Tandem's Claude is not started.
+See [Local models](user-guide.md#local-models).
+
+## Default model
+
+The local model marked **Default** in Settings → Models: the one that answers when chat is set to
+a local model. If none is marked and exactly one local model is On, that one is used; if several
+are On and none is marked, none answers and Tandem says why.
+
+## Endpoint
+
+The address of the model server a local model runs on, entered in Settings → Models. It must be a
+plain `http` address on this computer (`127.0.0.1`, `localhost` or `[::1]` and a port); Tandem
+sends your document's text only there.
+
+## Local period
+
+The time during which [who answers your chat](#who-answers-your-chat) is set to a local model.
+Throughout it, `tandem_checkInbox` hands Claude nothing and nothing wakes it; chat sent during it is
+never handed to Claude afterwards. Comments and replies written during it reach Claude once chat
+is switched back. See [Awareness tools](mcp-tools.md#awareness-tools).
 
 ## Scratchpad
 
@@ -152,7 +181,7 @@ own MCP session. See the [MCP tool reference](mcp-tools.md) and
 A Claude Code session that Tandem starts and runs in the background to answer your chat and
 comments. You can start or turn it off from the chat panel, and choose how it starts and whether
 it stops when idle under Settings → AI Assistant. It is woken by the [supervisor](#supervisor),
-so it needs no push setup. See [Tandem's Claude in chat](user-guide.md#tandems-claude-in-chat).
+so it needs no push setup. While chat is set to a local model, Tandem does not start it. See [Tandem's Claude in chat](user-guide.md#tandems-claude-in-chat).
 
 ## Supervisor
 
@@ -218,7 +247,8 @@ Built, merged and tested, but switched off in release builds by a constant in th
 cannot reach it. Docs that describe a dark feature describe the code, not something you can use
 today, and turning one on follows its ADR's checklist. These features ship dark:
 [.docx support](#docx-support), [Cowork setup](#cowork-setup), the
-[licensing gate](#licensing-gate) and the [LAN bind](#lan-bind). Licensing is inert at runtime;
+[licensing gate](#licensing-gate), the [LAN bind](#lan-bind) and
+[multi-session document ownership](#multi-session-document-ownership). Licensing is inert at runtime;
 the `.docx` and Cowork switches still clean up after earlier versions. Each one's ADR is listed under
 [Internals → Decisions by topic](maps/internals.md#decisions-by-topic).
 
@@ -232,7 +262,7 @@ read-only. See [Supported formats](user-guide.md#supported-formats) and
 
 ## Cowork setup
 
-Tandem's setup for Cowork, Claude Desktop's local agent mode. It ships dark and Cowork is not part
+Tandem's setup for Cowork, Claude Desktop's agent mode. It ships dark and Cowork is not part
 of v1.0. What an earlier version wrote stays until you uninstall. See [Cowork](../README.md#cowork),
 [data-locations](data-locations.md#if-you-enabled-cowork-in-an-earlier-version) and
 [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark).
@@ -250,6 +280,12 @@ Letting the server listen beyond this computer. It ships dark: Tandem binds to t
 only and refuses a non-loopback bind host. See [LAN exposure](configuration.md#lan-exposure),
 [Network posture](security.md#network-posture) and
 [ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark).
+
+## Multi-session document ownership
+
+Letting each open document belong to at most one AI session, so two Claude sessions don't write
+over each other. It ships dark: a release build creates no owners and refuses nothing for it. See
+[ADR-054](decisions.md#adr-054-multi-session-document-ownership--identity-and-shipping-dark).
 
 ## Hocuspocus
 

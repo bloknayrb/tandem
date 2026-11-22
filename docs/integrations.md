@@ -21,7 +21,7 @@ Client compatibility:
 
 | AI surface | Status |
 |---|---|
-| **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
+| **Claude Code** (local CLI) | Default. Validated. Real-time push through the self-armed watch, the plugin monitor or the opt-in channel shim (see [Real-time push](#real-time-push)); Tandem can also start and supervise its own Claude Code session. |
 | **Claude Desktop** (local app) | Supported on all three platforms — the wizard and `tandem setup --apply` write `claude_desktop_config.json` wherever Claude Desktop puts it (`%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/claude/`, plus the Microsoft Store's MSIX location). Request/response only — none of the push transports apply. **Cowork** (Claude Desktop's local agent mode) is not a supported surface in this version: Tandem's Cowork setup ships dark ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio as an MCP host, …) | Best-effort, MCP-contract-compatible, not validated. |
@@ -31,7 +31,7 @@ Client compatibility:
 
 Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md](mcp-tools.md).
 
-- **Document.** Open, switch, list, close and rename documents; read text content and outlines; edit text ranges; append content; save back to disk.
+- **Document.** Open, switch, list, close and rename documents; create scratchpads; read text content and outlines; edit text ranges; append content; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
 - **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes [ships dark](glossary.md#docx-support) with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
 - **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
