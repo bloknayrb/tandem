@@ -505,8 +505,14 @@ function mintOwnerHandle(): string {
   return `th_${randomBytes(24).toString("base64url")}`;
 }
 
-/** A start the local period held (#1123 A2, R4.1). */
-type HeldStart = "boot" | "crash" | "licence" | "message";
+/** A start the local period held (#1123 A2, R4.1). `work` is a start
+ * start-or-wake owed for Tandem's Claude's own work (#2358 piece 36), kept
+ * apart from a chat's `message` start because the switch back decides it by
+ * its own rule (`onLocalPeriodChange`). */
+type HeldStart = "boot" | "crash" | "licence" | "message" | "work";
+
+/** Which held kind a start for a message or for waiting work records. */
+type HeldAs = Extract<HeldStart, "message" | "work">;
 
 /** Exported for test only — the `"external"` argument below is the single line
  * standing between Solo mode and a leak, so it needs a test that exercises the
@@ -1902,9 +1908,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // `respawn` keeps it, and licence activation writes it (R2.6).
     wakeOwedAcrossSpawns = true;
     try {
+      // Held by a local period as `work`, not `message` (#2358 piece 36): the
+      // switch back decides it by its own rule.
       const result = await respawn(undefined, undefined, {
         clearSession: false,
         byMessage: true,
+        heldAs: "work",
       });
       if (!result.spawned) {
         console.error(`[Launcher] Could not start Claude for waiting work: ${result.why}`);
@@ -2661,15 +2670,41 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
         return;
       }
-      if (held.has("message") && standby !== undefined && !anotherAiOn()) {
+      // A start held for Tandem's Claude's own work (#2358 piece 36; Bryan,
+      // 2026-11-17: "Yes, unless Claude is Off", refined by "Yes, only if
+      // still waiting"): asked again here whether anything is still waiting,
+      // and started whether or not another AI is attached. Off, a user stop
+      // and a crash breaker were refused above; flag off nothing holds it.
+      // Asked only when it decides: a chat's own start below runs first when
+      // it may, and covers whatever is waiting.
+      const forMessage = held.has("message") && standby !== undefined && !anotherAiOn();
+      const askWork = !forMessage && held.has("work") && ownershipEnabled();
+      const workStillWaiting = askWork && workIsWaiting();
+      const forWork = workStillWaiting && standby !== undefined;
+      if (forMessage || forWork) {
         console.error(
-          "[Launcher] Tandem chat is answered by Claude again — starting Claude for the message",
+          forMessage
+            ? "[Launcher] Tandem chat is answered by Claude again — starting Claude for the message"
+            : "[Launcher] Tandem chat is answered by Claude again — starting Claude for waiting work",
         );
         try {
-          await respawn(undefined, undefined, { clearSession: false, byMessage: true });
+          await respawn(undefined, undefined, {
+            clearSession: false,
+            byMessage: true,
+            heldAs: forMessage ? "message" : "work",
+          });
         } catch (err) {
-          recordStartThrow(err, "Could not start Claude for the message");
+          recordStartThrow(
+            err,
+            forMessage
+              ? "Could not start Claude for the message"
+              : "Could not start Claude for waiting work",
+          );
         }
+      } else if (askWork && !workStillWaiting) {
+        console.error(
+          "[Launcher] Tandem chat is answered by Claude again — nothing is waiting for Claude, not starting it",
+        );
       }
     }).catch((err: unknown) => {
       console.error("[Launcher] Starting Claude at the switch back failed:", err);
@@ -3940,7 +3975,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function startInternal(
     epoch = stopEpoch,
     known?: LauncherSettings,
-    kind: Exclude<HeldStart, "message"> = "crash",
+    kind: Exclude<HeldStart, HeldAs> = "crash",
   ): Promise<void> {
     // Counted for `restartPending` (#2180). The restart timer nulls itself and
     // calls this synchronously, so no status poll lands between the two.
@@ -3957,7 +3992,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function planAndSpawn(
     epoch: number,
     known: LauncherSettings | undefined,
-    kind: Exclude<HeldStart, "message">,
+    kind: Exclude<HeldStart, HeldAs>,
   ): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
@@ -4214,7 +4249,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function respawn(
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
-    { clearSession, byMessage = false }: { clearSession: boolean; byMessage?: boolean },
+    {
+      clearSession,
+      byMessage = false,
+      heldAs = "message",
+    }: { clearSession: boolean; byMessage?: boolean; heldAs?: HeldAs },
   ): Promise<RespawnResult> {
     // Licence admission (#1521), at the very top — BEFORE `stopInternal`,
     // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
@@ -4242,7 +4281,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // that is exactly the window that used to offer a Restart button.
     setLaunching(launching + 1);
     try {
-      return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage);
+      return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage, heldAs);
     } finally {
       setLaunching(launching - 1);
     }
@@ -4262,8 +4301,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     opts: RelocateOpts | undefined,
     clearSession: boolean,
     byMessage: boolean,
+    heldAs: HeldAs,
   ): Promise<RespawnResult> {
-    const steps = stopAndSpawnSteps(cwdOverride, opts, clearSession, byMessage);
+    const steps = stopAndSpawnSteps(cwdOverride, opts, clearSession, byMessage, heldAs);
     if (!ownershipEnabled()) return steps;
     return steps.catch((err: unknown) => {
       if (child === null && lastError === undefined && restartTimer === null) {
@@ -4278,6 +4318,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     opts: RelocateOpts | undefined,
     clearSession: boolean,
     byMessage: boolean,
+    heldAs: HeldAs,
   ): Promise<RespawnResult> {
     // What a held message start must leave as it found (review item 15).
     const userStoppedBefore = userStopped;
@@ -4292,7 +4333,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // no watch across the awaits below. The user's own Start, Relaunch and
     // Start fresh, and a setup Apply, are honoured (R4.4).
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       return { spawned: false, why: "held-by-local-model" };
     }
     // A shutdown that begins anywhere in this relaunch (the stop's exit wait,
@@ -4356,7 +4397,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // cleared `wakeOwedAcrossSpawns`, and the gap watch armed above acts only
     // on events forwarded externally, which no event of the period is.
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       // Off stays Off: the stop flag and the gap watch go back to how this
       // start found them, so a held message start changes no state.
       userStopped = userStoppedBefore;
@@ -4381,7 +4422,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // And after that await (review N2), before the run files (#2358 PR 3a):
     // a held message start writes none and mints no owner handle.
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       // Off stays Off: the stop flag and the gap watch go back to how this
       // start found them, so a held message start changes no state.
       if (!wroteOnClick) {
@@ -4414,7 +4455,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // write made is discarded first, so a held start leaves nothing behind.
       if (byMessage && localHeld()) {
         run?.discard();
-        holdForLocalPeriod("message");
+        holdForLocalPeriod(heldAs);
         if (!wroteOnClick) {
           userStopped = userStoppedBefore;
           if (!gapWatchBefore) disarmGapWatch();
