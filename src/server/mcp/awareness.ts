@@ -561,6 +561,19 @@ export function handOverDocumentInbox(documentId: string): void {
   }
 }
 
+/**
+ * This server run's start, as the waiting rule's `writtenSince` (#2358, the
+ * restart row; Bryan's pick "Written since boot"): set when this module loads,
+ * which is at boot. Read only by the two waiting reads below, which only the
+ * ownership module's seams ask (flag on).
+ */
+let waitingWrittenSince = Date.now();
+
+/** Tests only: move the waiting rule's boot time (`undefined` turns it off). */
+export function setWaitingWrittenSinceForTests(at: number | undefined): void {
+  waitingWrittenSince = at ?? Number.NEGATIVE_INFINITY;
+}
+
 /** Fixed text: nothing from the error, no record and no document. */
 const DOCUMENT_WAITING_FAILED =
   "[Tandem] waiting could not be computed for a document; it is read as holding nothing waiting.";
@@ -615,6 +628,7 @@ export function documentWaiting(documentId: string): boolean {
           .versionsOf(kind, ledgerKey(documentId, id))
           .some((entry) => entry.acked && entry.editedAt >= editedAt),
       isLocalModelRecord,
+      writtenSince: waitingWrittenSince,
     });
   } catch {
     console.error(DOCUMENT_WAITING_FAILED);
@@ -2510,6 +2524,7 @@ export const ownershipChatSide = Object.freeze({
       rows,
       handled: settledChatIds(chatMap),
       isLocalPeriodChat,
+      writtenSince: waitingWrittenSince,
     });
   },
   /** The facts of the user row under `key`, or undefined. */

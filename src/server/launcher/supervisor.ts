@@ -390,14 +390,39 @@ interface SupervisorOpts {
  * import each other, so ownership maps its `WakeCause` onto it (3b-2b1c-a). Goes into
  * a log line only; it carries no session or document id.
  */
-export type StartOrWakeCause = "document" | "message" | "solo-release";
+export type StartOrWakeCause =
+  | "document"
+  | "message"
+  | "solo-release"
+  | "user-annotation"
+  | "departure";
 /** The causes a log line may name; anything else is logged as `other`, so a
  *  caller that forwards an arbitrary string cannot put it in the log. */
 const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "document",
   "message",
   "solo-release",
+  "user-annotation",
+  "departure",
 ]);
+
+/**
+ * The events ownership adds to the standby watch (#2358 PR 3b-2b2; Bryan,
+ * 2026-11-17: "Yes, a comment starts it" and "Yes, any thread reply"): a new
+ * user comment, with or without a suggestion, and any user thread reply.
+ * Never a highlight, and never a synthetic wake (the Solo release and the
+ * switch back carry no document). The caller has already applied the Solo
+ * gate, `hideFromAI`, the licence and the local period
+ * (`wasForwardedExternally`), and notes never reach a forwarded event. This
+ * answers only "might the user be asking Claude for something"; whether it is
+ * Tandem's Claude's work is the waiting decision's, asked by the pass.
+ */
+function isOwnershipStartEvent(event: TandemEvent): boolean {
+  if (event.type === "annotation:created") {
+    return event.payload.annotationType === "comment" && Boolean(event.documentId);
+  }
+  return event.type === "annotation:reply" && event.payload.replyAuthor === "user";
+}
 
 /** An error's constructor name only, for the 3b-2a log lines: a decision
  *  supplied by another module may throw a message carrying a document or
@@ -859,6 +884,16 @@ export interface Supervisor {
    * production path reaches until presence or the `tandem` record is wired.
    */
   startOrWake?(cause: StartOrWakeCause): void;
+  /**
+   * The own-spawn seam's two reads (#2358 PR 3b-2b3a), for ownership's
+   * `setOwnSpawnSource`, which `index.ts` does not call until 3b-2b4 (a
+   * source pin holds that). `ownSpawn`: the live child's spawn number and
+   * session id, null with no live child, flag off, or once its spawn is torn
+   * down. `isOwnChildSession`: whether any child of this supervisor ever used
+   * `sessionId`, case-folded. Optional for the same reason as `tandemPresence`.
+   */
+  ownSpawn?(): { n: number; sessionId: string } | null;
+  isOwnChildSession?(sessionId: string): boolean;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -1660,6 +1695,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return false;
   }
 
+  /** The own-spawn seam's spawn read (#2358 PR 3b-2b3a; see `Supervisor`). */
+  function ownSpawn(): { n: number; sessionId: string } | null {
+    const rec = latestRecord;
+    if (child === null || rec === null || rec.tornDown || currentSessionId === undefined) {
+      return null;
+    }
+    return { n: rec.n, sessionId: currentSessionId };
+  }
+
   /** Read the marker; any failure reads as not owed (see `greeting.ts`). In
    * Solo, or a mode that cannot be read, the greeting waits (and stays owed). */
   function greetingOwedNow(): boolean {
@@ -1770,7 +1814,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Claude that kept crashing, and a message start must not leave the
       // breaker tripped under a running child either (a later crash would then
       // get no restart and no diagnosis). Start, which resets it, is the way.
-      if (standby === undefined || breakerTripped || !isStartWorthy(event) || anotherAiOn()) {
+      if (standby === undefined || breakerTripped) return;
+      if (!isStartWorthy(event) || anotherAiOn()) {
+        // The widened arm (#2358 PR 3b-2b2), flag on only: what today's rule
+        // declines is handed to start-or-wake, which drops it at Off or a
+        // licence refusal and starts or wakes only for work waiting for
+        // Tandem's Claude, whether or not another AI is on (design §8.3,
+        // §8.4). Flag off this returns exactly as master did.
+        if (ownershipEnabled() && isOwnershipStartEvent(event)) startOrWake("user-annotation");
         return;
       }
       wakeOwedAcrossSpawns = true;
@@ -4029,6 +4080,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
+    // And `child` (#2358 flip-blocker row, 3b-2b1b-R0): a spawn that did not
+    // move the stop epoch (a licence resume, under the lock) can land during
+    // the reads above. Checked here, before the Off and local-period holds,
+    // so neither runs beside a live child: the local hold would set an
+    // `awaiting-start` standby and arm the standby watch beside it, and the
+    // Off hold would clear the wake owed across spawns and disarm the gap
+    // watch.
+    if (child !== null) {
+      console.error("[Launcher] A Claude started while building the spawn plan — not spawning");
+      return;
+    }
     // Off holds every non-user start (#2195) — boot, a crash restart, a
     // licence resume — so a Claude the user turned off never comes back on its
     // own. After the re-checks above, so a stop that passed through during the
@@ -5001,6 +5063,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     tandemPresence: () => presenceSeam,
     requestWake,
     startOrWake,
+    ownSpawn,
+    isOwnChildSession,
   };
 }
 

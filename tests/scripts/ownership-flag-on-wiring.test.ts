@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,6 +19,7 @@ import {
   judgeRefusal,
   EXIT_CANNOT_EVALUATE as PROBE_CANNOT,
   EXIT_OK as PROBE_OK,
+  probeRefusal,
   reservedPorts,
   rpcMessage,
   serverEnvFor,
@@ -465,6 +468,85 @@ describe("the probe's second, runtime anchor: a non-owner write (PR 1c, ownershi
     const refusalFn = PROBE.slice(PROBE.indexOf("async function probeRefusal("));
     expect(refusalFn).toMatch(/"tandem_scratchpad"/);
     expect(refusalFn).toMatch(/return judgeRefusal\(ownWrite, otherWrite, expect\);/);
+  });
+});
+
+describe("probeRefusal by behaviour (#2358 flip-blocker row, the plan's gate (c))", () => {
+  // A stub of Tandem's /mcp: two sessions, a scratchpad, then a write by each.
+  // `refuse` decides whether the second session's write is refused
+  // NOT_DOC_OWNER/held. The probe must open the document as the first session,
+  // write as it, then initialize a SECOND session under its own Claude session
+  // id and write as that one.
+  async function runAgainstStub(refuse: boolean, expectOn: "on" | "off") {
+    const seen: Array<{
+      session: string;
+      claude: string | undefined;
+      method: string;
+      tool?: string;
+    }> = [];
+    // "s1" is the session the probe opened before calling probeRefusal.
+    let sessions = 1;
+    const server = createServer((req: IncomingMessage, res) => {
+      let body = "";
+      req.on("data", (c) => {
+        body += c;
+      });
+      req.on("end", () => {
+        const msg = JSON.parse(body) as { id?: number; method: string; params?: { name?: string } };
+        const session = String(req.headers["mcp-session-id"] ?? "");
+        const claude = req.headers["x-claude-session-id"] as string | undefined;
+        seen.push({ session, claude, method: msg.method, tool: msg.params?.name });
+        const send = (result: unknown, headers: Record<string, string> = {}) => {
+          res.writeHead(200, { "content-type": "application/json", ...headers });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id ?? null, result }));
+        };
+        if (msg.method === "initialize") {
+          sessions += 1;
+          return send({}, { "mcp-session-id": `s${sessions}` });
+        }
+        if (msg.method !== "tools/call") return send({});
+        const env = (e: unknown) => ({ content: [{ type: "text", text: JSON.stringify(e) }] });
+        if (msg.params?.name === "tandem_scratchpad") {
+          return send(env({ error: false, data: { documentId: "doc1" } }));
+        }
+        if (session === "s1") return send(env({ error: false, data: {} }));
+        return send(
+          env(
+            refuse
+              ? { error: true, code: "NOT_DOC_OWNER", message: "held", details: { reason: "held" } }
+              : { error: false, data: {} },
+          ),
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const verdict = await probeRefusal(`http://127.0.0.1:${port}`, "s1", expectOn);
+      return { verdict, seen };
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }
+
+  it("refused by the second session, expecting on: OK; expecting off: a mismatch", async () => {
+    expect((await runAgainstStub(true, "on")).verdict.code).toBe(PROBE_OK);
+    expect((await runAgainstStub(true, "off")).verdict.code).toBe(EXIT_MISMATCH);
+  });
+
+  it("accepted from the second session, expecting off: OK; expecting on: a mismatch", async () => {
+    expect((await runAgainstStub(false, "off")).verdict.code).toBe(PROBE_OK);
+    expect((await runAgainstStub(false, "on")).verdict.code).toBe(EXIT_MISMATCH);
+  });
+
+  it("the writes come from two sessions, the second initialized under its own Claude session id", async () => {
+    const { seen } = await runAgainstStub(true, "on");
+    const writes = seen.filter((r) => r.tool === "tandem_appendContent");
+    expect(writes.map((w) => w.session)).toEqual(["s1", "s2"]);
+    const scratch = seen.filter((r) => r.tool === "tandem_scratchpad");
+    expect(scratch.map((w) => w.session)).toEqual(["s1"]);
+    const secondInit = seen.find((r) => r.method === "initialize");
+    expect(secondInit?.claude).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
 
