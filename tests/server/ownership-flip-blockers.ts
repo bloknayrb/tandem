@@ -49,6 +49,17 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
+      "The shipped skill (skills/tandem/SKILL.md) says wake frames on /api/events carry an id, " +
+      "a type and a timestamp. With ownership on, the stream also sends PR 4a's id-less " +
+      "`event: ownership-changed` / `data: {}` nudge, which the skill does not mention, so a " +
+      "session watching ?filter=wake as the skill describes is not told what it means.",
+    closedBy:
+      'A SKILL.md line saying an ownership-changed frame also means "call tandem_checkInbox", ' +
+      "with its frontmatter version bumped, landed with or before the flip (it reaches users, so " +
+      "not while dark).",
+  },
+  {
+    gap:
       "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
       "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
