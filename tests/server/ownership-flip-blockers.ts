@@ -162,14 +162,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A live acknowledger that never answers: since the posts PR an acknowledgement counts for " +
-      "nothing, so an acknowledged message is re-owed at any change of its owner, but while the " +
-      "acknowledger's record lives and owns the message (a doc-less or closed-document message, " +
-      "or Ruling 4's arm) nobody else is handed it, and the pickup row reads 'working'.",
-    closedBy: "PR 5's control on the message (Release from its pickup row).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -179,11 +171,13 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "After a tab close, chat stays with the closing holder even when the document is reopened " +
-      "and claimed by another session (R6.3); and a message whose per-message owner never " +
-      "answers reads 'still waiting' with the Claude Code offer, and a session started from " +
-      "that offer is not handed it (R8.2).",
-    closedBy: "PR 5's controls (Assign and Release of a document and of a message).",
+      "The user's controls exist only on the server (#2358 PR 5a, 5a-2: POST /api/ownership for " +
+      "a document and for a chat message): nothing in the editor reaches them yet, so a stuck " +
+      "claim, a live acknowledger that never answers, or chat a tab close left with its closing " +
+      "holder can be moved only by a local process calling the route.",
+    closedBy:
+      "PR 5b (the badge's Release and Assign, the Assign popover, the pickup row's Assign and " +
+      "Release of a message, the native menu's leaves).",
   },
   {
     gap:
