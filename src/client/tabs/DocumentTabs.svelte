@@ -35,13 +35,17 @@ interface Props {
   tabs: OpenTab[];
   activeTabId: string | null;
   onTabSwitch: (tabId: string) => void;
-  onTabClose: (tabId: string) => void;
+  /**
+   * Resolves `false` when the user cancelled a close confirm (the tab stays
+   * open). The confirm is asynchronous, so the answer arrives after an await.
+   */
+  onTabClose: (tabId: string) => void | boolean | Promise<boolean>;
   /** Close every tab to the left of the clicked live tab. */
-  onCloseToLeft?: (tabId: string) => void;
+  onCloseToLeft?: (tabId: string) => void | Promise<void>;
   /** Close every tab except the given one (tab context menu, #923 Phase 2). */
-  onCloseOthers?: (tabId: string) => void;
+  onCloseOthers?: (tabId: string) => void | Promise<void>;
   /** Close every tab to the right of the given one in display order. */
-  onCloseToRight?: (tabId: string) => void;
+  onCloseToRight?: (tabId: string) => void | Promise<void>;
   /** Target-aware save contract owned by App. */
   onSaveTarget?: (tabId: string, intent: "save" | "save-as") => void | Promise<void>;
   /** Target-aware source-view toggle; activates clicked inactive tabs first. */
@@ -141,10 +145,20 @@ $effect(() => {
   }
 });
 
-function guardedClose(tabId: string) {
+// A close the user CANCELS (an unsaved-content confirm answered "Cancel")
+// leaves the tab in the list, so the cleanup effect above never fires for it;
+// the id must come out here or that tab's X stays dead until reload. An
+// accepted close keeps its id until the server's broadcast removes the tab:
+// the set is what stops a double-click in that window from closing twice.
+async function guardedClose(tabId: string) {
   if (closingIds.has(tabId)) return;
   closingIds.add(tabId);
-  onTabClose(tabId);
+  try {
+    if ((await onTabClose(tabId)) === false) closingIds.delete(tabId);
+  } catch (err) {
+    closingIds.delete(tabId);
+    console.warn("[Tandem] tab close failed", err);
+  }
 }
 
 // ---- Native tab context menu (#923 Phase 2) -----------------------------
@@ -189,7 +203,7 @@ async function runTabAction(id: TabContextMenuActionId) {
   if (!tab || tab.ydoc !== ctxTabYdoc) return;
   switch (id) {
     case "ctx:tab:close":
-      guardedClose(tabId);
+      void guardedClose(tabId);
       return;
     case "ctx:tab:closeLeft":
       onCloseToLeft?.(tabId);

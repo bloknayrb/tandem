@@ -29,7 +29,7 @@
  * **In flight.** Entry-time checking alone is not enough, and this is the half
  * that is easy to miss: every consequential action here suspends and then
  * re-enters the bag. `relaunchHere` notifies and calls `afterLauncherAction()`
- * in a `finally` after several awaits AND a blocking `confirm()`;
+ * in a `finally` after several awaits AND an awaited confirm dialog;
  * `restoreBackupOfActiveDoc` notifies after two fetches and a confirm;
  * `showInFileManager` notifies after a dynamic import. So action bodies are
  * never handed the raw bag — they get a **revalidating facade** whose every
@@ -121,7 +121,7 @@ export interface ActionDeps {
    * Fired from the `finally` of `relaunchHere` / `startFreshConversation` — NOT
    * from the exported wrappers. The wrappers used to call it beside their
    * `void`-ed invocation, which runs the moment the async function suspends at
-   * its first `await`, i.e. before the blocking `confirm()`. That put the
+   * its first `await`, i.e. before the confirm dialog. That put the
    * staggered re-probes ahead of the mutation they were meant to observe, so a
    * user who read the dialog for a few seconds got two answers describing the
    * world before the relaunch. Keep it at the mutation.
@@ -141,7 +141,7 @@ export interface ActionDeps {
   openFindBarTabs: () => void;
   findNext: () => void;
   findPrev: () => void;
-  closeActiveTab: () => void;
+  closeActiveTab: () => void | Promise<void>;
   openFileDialog: () => void | Promise<void>;
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
@@ -340,7 +340,7 @@ function buildFacade(state: ExecutorState): ActionDeps {
       // most dangerous line in this module. `relaunchHere` reads
       // `getActiveDocumentPath()` and treats `null` not as absence but as a
       // second, distinct user intent: on the `cwdRequired: false` path a null
-      // cwd skips the guard, reaches a `confirm()` (a global the facade cannot
+      // cwd skips the guard, reaches a confirm dialog (a global the facade cannot
       // revalidate) naming a destination the user never chose, and on accept
       // POSTs a real relaunch that SIGTERMs Claude into the server's configured
       // directory — with every toast and the #1282 re-probe dropped. The drop

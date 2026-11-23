@@ -5,6 +5,7 @@ import * as Y from "yjs";
 import LiveRegion from "../../components/LiveRegion.svelte";
 import type { OpenTab } from "../../types.js";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
+import { confirmDialog } from "../../utils/confirm";
 import {
   type FindReplaceOptions,
   getFindState,
@@ -292,14 +293,21 @@ async function handleReplaceAll() {
   if (!ed || !query || isReplacing) return;
 
   const currentCount = matchCount;
+  // Up BEFORE the dialog: the confirm is awaited (an IPC round trip in the
+  // desktop app), so a second click must not open a second one.
+  isReplacing = true;
   if (currentCount > 500) {
-    const confirmed = window.confirm(
+    const confirmed = await confirmDialog(
       `Replace all ${currentCount} occurrences? This cannot be undone as a single action.`,
     );
-    if (!confirmed) return;
+    // The active document can switch or close while the dialog is open; never
+    // run the replace against a view the user was not asked about.
+    if (!confirmed || editor !== ed || ed.isDestroyed) {
+      isReplacing = false;
+      return;
+    }
   }
 
-  isReplacing = true;
   partialWarning = null;
   replaceProgress = { replaced: 0, total: currentCount };
 

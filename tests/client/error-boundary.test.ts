@@ -127,7 +127,9 @@ describe("ErrorBoundary", () => {
       await tick();
 
       expect(confirmSpy).toHaveBeenCalledOnce();
-      expect(reloadSpy).toHaveBeenCalledOnce();
+      // The confirm is awaited (confirmDialog), so the reload lands a
+      // microtask after the click.
+      await vi.waitFor(() => expect(reloadSpy).toHaveBeenCalledOnce());
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
@@ -161,6 +163,39 @@ describe("ErrorBoundary", () => {
       expect(reloadBtn).toBeTruthy();
       reloadBtn!.click();
       await tick();
+
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(reloadSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+      window.confirm = originalConfirm;
+    }
+  });
+  // In the desktop app `window.confirm` is async (tauri-plugin-dialog). Read
+  // as a value, the pending Promise was truthy and the page reloaded while the
+  // dialog was still opening, so Cancel did nothing.
+  it("Reload waits for an asynchronous (desktop) confirm, and its Cancel holds", async () => {
+    const originalLocation = window.location;
+    const reloadSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { reload: reloadSpy },
+    });
+    const originalConfirm = window.confirm;
+    const confirmSpy = vi.fn().mockResolvedValue(false);
+    window.confirm = confirmSpy as unknown as typeof window.confirm;
+
+    try {
+      const { container } = render(ErrorBoundaryHarness, {
+        props: { shouldThrow: true },
+      });
+      await tick();
+
+      container.querySelector<HTMLButtonElement>(RELOAD_SELECTOR)!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(confirmSpy).toHaveBeenCalledOnce();
       expect(reloadSpy).not.toHaveBeenCalled();

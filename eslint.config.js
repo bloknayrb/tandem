@@ -26,6 +26,34 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
 
+  // Confirm dialogs go through `confirmDialog` (src/client/utils/confirm.ts).
+  // The desktop app's dialog plugin replaces `window.confirm` with an async
+  // function, so `if (!confirm(msg)) return;` sees a truthy Promise and runs
+  // the guarded action before the user answers. `.svelte` files are outside
+  // eslint here; tests/client/no-raw-confirm.test.ts covers them.
+  {
+    files: ["src/client/**/*.ts"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        { name: "confirm", message: "Use confirmDialog from src/client/utils/confirm.ts." },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "window",
+          property: "confirm",
+          message: "Use confirmDialog from src/client/utils/confirm.ts.",
+        },
+        {
+          object: "globalThis",
+          property: "confirm",
+          message: "Use confirmDialog from src/client/utils/confirm.ts.",
+        },
+      ],
+    },
+  },
+
   // Project-wide rule overrides
   {
     rules: {

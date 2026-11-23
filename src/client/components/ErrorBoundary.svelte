@@ -12,6 +12,7 @@
  */
 import type { Snippet } from "svelte";
 import { reportError } from "../sentry";
+import { confirmDialog } from "../utils/confirm";
 import {
   ERROR_BOUNDARY_RECOVER_BTN_TESTID,
   ERROR_BOUNDARY_RELOAD_BTN_TESTID,
@@ -77,13 +78,14 @@ let errorSessionId = $state(0);
         <button
           data-testid={ERROR_BOUNDARY_RELOAD_BTN_TESTID}
           class="btn btn-secondary"
-          onclick={() => {
+          onclick={async () => {
             // The subtree's own beforeunload guard (useDocumentWorkspace.svelte.ts)
             // was torn down along with the rest of the children when this failed
             // snippet mounted, so it can no longer warn about unsynced or
             // uncommitted work. Ask here instead of reloading unconditionally.
+            // Awaited: in the desktop app the dialog resolves asynchronously.
             if (
-              window.confirm(
+              await confirmDialog(
                 "Reload will discard anything that hasn't finished syncing to the server. Continue?",
               )
             ) {

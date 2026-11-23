@@ -1,6 +1,7 @@
 <script lang="ts">
 import { API_APPLY_CHANGES } from "../../shared/api-paths";
 import type { Annotation } from "../../shared/types";
+import { confirmDialog } from "../utils/confirm";
 import { API_BASE } from "../utils/fileUpload";
 
 interface Props {
@@ -19,6 +20,9 @@ const disabled = $derived(accepted.length === 0 || applying);
 
 async function handleClick() {
   if (disabled || !documentId) return;
+  // Pinned before the awaited confirm, so the apply targets the document the
+  // user was asked about even if the active document changes meanwhile.
+  const targetDocumentId = documentId;
 
   let message = `Apply ${accepted.length} change(s) as tracked revisions?\n\nThe changes will appear as tracked revisions in Word — you can Accept or Reject each one individually.\n\nYour original file will be backed up.`;
 
@@ -26,14 +30,20 @@ async function handleClick() {
     message += `\n\n⚠ ${pending.length} annotation(s) are still pending review and will not be applied.`;
   }
 
-  if (!confirm(message)) return;
-
+  // `applying` goes up BEFORE the dialog: the confirm is awaited (in the
+  // desktop app it is an IPC round trip), so a second click while it is open
+  // would otherwise stack a second dialog and a second apply.
   applying = true;
+  if (!(await confirmDialog(message))) {
+    applying = false;
+    return;
+  }
+
   try {
     const res = await fetch(`${API_BASE}${API_APPLY_CHANGES}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId }),
+      body: JSON.stringify({ documentId: targetDocumentId }),
     });
     const body = await res.json().catch((parseErr: unknown) => {
       console.error("[ApplyChanges] Failed to parse response JSON:", parseErr);
