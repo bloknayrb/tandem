@@ -482,8 +482,11 @@ const handedByRecord = new Map<string, Set<string>>();
  * that moment. Taken once, by `captureCarriedOverChat` (flag on only), and
  * fixed for the run: nothing joins it later. A carried-over message is never
  * re-owed, never handed again and never given a per-message owner; a reply
- * naming one is accepted and sets no owner. Leaves only when its row is
- * deleted (`forgetChatMessageOwners`: Clear chat). Bounded by the restored
+ * naming one is accepted and sets no owner. Leaves when its row is deleted
+ * (`forgetChatMessageOwners`: Clear chat), or when the user Assigns it
+ * (#2358 PR 5a-2, Bryan's pick "Let Assign own them": `applyMessageControl`
+ * takes it out of this set in the same write that gives it its owner, so a
+ * message in this set never has an owner). Bounded by the restored
  * rows (at most the 200 the prune keeps). Empty while ownership is off.
  */
 const carriedOver = new Set<string>();
@@ -4320,9 +4323,8 @@ function wakeForMovedMessages(keys: readonly string[]): void {
  * `unknown-owner` are 404s; `owner-detached`, `follows-document` (the message
  * follows an open document, whose own Release and Assign move it), `answered`
  * (a final reply already answered it) and `not-controllable` (local-period
- * chat, which a local model answers, or a message carried over from before a
- * restart, which any session may take up and which is never given an owner)
- * are 409s.
+ * chat, which a local model answers) are 409s. A message carried over from
+ * before a restart may be Assigned ({@link controlCarriedOver}).
  */
 export type MessageControlOutcome =
   | "changed"
@@ -4379,8 +4381,9 @@ export function controlMessageOwner(
   if (!ownershipEnabled()) return "unknown-message";
   const facts = chatSide.message(key);
   if (facts === undefined) return "unknown-message";
-  if (facts.localPeriod || carriedOver.has(key)) return "not-controllable";
+  if (facts.localPeriod) return "not-controllable";
   if (handledKeysOrNone().has(key)) return "answered";
+  if (carriedOver.has(key)) return controlCarriedOver(key, action, ownerLabel);
   const standing = messageStanding(key, facts);
   const followsDocument =
     facts.documentId !== undefined &&
@@ -4406,18 +4409,59 @@ export function controlMessageOwner(
 }
 
 /**
+ * Release or Assign of a carried-over message (#2358 PR 5a-2; Bryan's pick
+ * "Let Assign own them", 2026-11-23). A carried-over message (a row the
+ * boot's restore brought back read and unhandled, the posts amendment's
+ * R0.1) has no owner and is handed to nobody; any session may take it up.
+ *
+ * - **Release** is a no-op (`unchanged`): it has no owner to drop.
+ * - **Assign** is the one way such a message gets an owner, an explicit,
+ *   narrow exception to R0.1's "never given an owner". It **ends the
+ *   message's carried-over status** in the same synchronous write that gives
+ *   it its owner ({@link applyMessageControl}), so the two never overlap: a
+ *   carried-over message still has no owner, everywhere. From then on it is an
+ *   ordinary message owned per message, origin `assign`: the chat handover
+ *   marks it unread, so its owner's next poll is handed it; every other
+ *   session is refused naming the owner, as for any per-message owner; its
+ *   owner's acknowledgement and final reply are judged as for any owned
+ *   message; its owner's lapse re-owes it and it then follows §7.1's table.
+ *   No message loss (nobody held it). It is not woken for: it was written
+ *   before this server run, and only work written in this run waits (Bryan's
+ *   "Written since boot", the restart row), so its owner picks it up at its
+ *   next poll. `unknown-owner`, `owner-detached` as for any message; never
+ *   `follows-document` (a carried-over message follows no document).
+ */
+function controlCarriedOver(
+  key: string,
+  action: OwnershipControlAction,
+  ownerLabel: string | undefined,
+): MessageControlOutcome {
+  if (action === "release") return "unchanged";
+  const target = ownerLabel === undefined ? undefined : recordByLabel(ownerLabel);
+  if (target === undefined) return "unknown-owner";
+  if (!canTakeNow(target)) return "owner-detached";
+  applyMessageControl(key, target.ownerId, undefined, true);
+  return "changed";
+}
+
+/**
  * The write of a message control (#2358 PR 5a-2), synchronous: the chat
  * handover (throws, changing nothing, if it fails), then the owner (`next`
  * undefined drops it; otherwise **overwrites** whatever owner the message
  * had, origin `assign`: the one exception to R3.3) and the message's loss
- * (`loss` undefined clears any), then step 5.
+ * (`loss` undefined clears any), then step 5. `endsCarriedOver` (an Assign
+ * of a carried-over message, {@link controlCarriedOver}) takes the message
+ * out of the carried-over set before it gets its owner: **the one writer
+ * that ends a message's carried-over status** other than its row's deletion.
  */
 function applyMessageControl(
   key: string,
   next: string | undefined,
   loss: { ownerId: string; cause: LossCause } | undefined,
+  endsCarriedOver = false,
 ): void {
   if (!reOweChat([key])) throw new Error(CONTROL_REOWE_FAILED);
+  if (endsCarriedOver && next !== undefined) carriedOver.delete(key);
   if (next === undefined) ownerByMessage.delete(key);
   else ownerByMessage.set(key, { ownerId: next, origin: "assign" });
   if (loss === undefined) lossByMessage.delete(key);

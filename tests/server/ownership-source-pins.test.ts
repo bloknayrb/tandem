@@ -1177,6 +1177,30 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
       'ownerByMessage.set(key, { ownerId: next, origin: "assign" });',
     );
   });
+
+  it("carried-over messages (Bryan's 'Let Assign own them', 2026-11-23): the check-and-set refuses one, and only the user's Assign ends the status before giving an owner", () => {
+    // The check-and-set refuses a carried-over message (the posts PR, R0.1).
+    expect(fnBody("setMessageOwner")).toContain(
+      "if (!ownershipEnabled() || ownerByMessage.has(key) || carriedOver.has(key)) return false;",
+    );
+    // Joined only at the boot's capture.
+    expect(text.match(/\bcarriedOver\.add\(/g)).toHaveLength(1);
+    expect(fnBody("captureCarriedOverChat")).toContain("carriedOver.add(key)");
+    // Left only with the row, or by the user's Assign, before its owner is written.
+    const deletes = [...text.matchAll(/\bcarriedOver\.delete\(/g)];
+    expect(deletes).toHaveLength(2);
+    expect(fnBody("forgetChatMessageOwners")).toContain("carriedOver.delete(key);");
+    const apply = fnBody("applyMessageControl");
+    const ends = apply.indexOf(
+      "if (endsCarriedOver && next !== undefined) carriedOver.delete(key);",
+    );
+    expect(ends).toBeGreaterThan(apply.indexOf("reOweChat([key])"));
+    expect(ends).toBeLessThan(apply.indexOf("ownerByMessage.set("));
+    // Only the carried-over control passes it.
+    expect(text.match(/applyMessageControl\([^)]*\btrue\)/g)).toEqual([
+      "applyMessageControl(key, target.ownerId, undefined, true)",
+    ]);
+  });
 });
 
 describe("waiting on a document (#2358 PR 3b-2b1b)", () => {

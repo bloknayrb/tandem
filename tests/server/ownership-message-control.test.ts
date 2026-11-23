@@ -541,16 +541,6 @@ describe("which messages the message control takes", () => {
     expect(messageOwner(m)?.ownerId).toBe(A);
   });
 
-  it("409 not-controllable for a carried-over message", async () => {
-    const m = userChat(key("m"));
-    captureCarriedOverChat(() => [m]);
-    expect(await assignMessage(m, B)).toMatchObject({
-      status: 409,
-      body: { error: "not-controllable" },
-    });
-    expect(messageOwner(m)).toBeUndefined();
-  });
-
   it("is synchronous: it answers while the message's document's queue is busy", async () => {
     const d = mkDoc("d");
     setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
@@ -657,6 +647,110 @@ describe("a document's Release or Assign moves the messages its close gave an ow
     expect(await freshPoll(B)).not.toContain(m);
     // Anyone else may claim D through the message.
     expect(await freshPoll(C)).toContain(m);
+  });
+});
+
+describe("a carried-over message (Bryan's pick 'Let Assign own them', 2026-11-23)", () => {
+  /** A restored row: read and unhandled at boot, taken as carried over. */
+  function carriedOverMessage(documentId?: string): string {
+    const m = userChat(key("m"), documentId);
+    withInternal(ctrl(), () => chatMap().set(m, { ...(row(m) as ChatMessage), read: true }));
+    captureCarriedOverChat(() => [m]);
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([m]);
+    return m;
+  }
+
+  it("before any control: handed to nobody, owned by nobody", async () => {
+    const m = carriedOverMessage();
+    expect(chatIds(await pollAs(A))).not.toContain(m);
+    expect(messageOwner(m)).toBeUndefined();
+  });
+
+  it("Assign gives it an owner and ends its carried-over status: owed to the owner, others refused naming it, its acknowledgement and final reply accepted", async () => {
+    const m = carriedOverMessage();
+    const res = await assignMessage(m, B);
+    expect(res).toEqual({ status: 200, body: { data: { changed: true } } });
+    expect(messageOwner(m)).toEqual({ ownerId: B, origin: "assign" });
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([]);
+    // Nobody held it, so no loss.
+    expect(messageLoss(m)).toBeUndefined();
+    // Owed: unread again, and the owner's poll is handed it; nobody else's is.
+    expect(row(m)?.read).toBe(false);
+    expect(await freshPoll(A)).not.toContain(m);
+    expect(await freshPoll(B)).toContain(m);
+    expect(await reply(A, m)).toMatchObject({
+      code: "NOT_DOC_OWNER",
+      details: { reason: "chat", holder: { label: labelOf(B) } },
+    });
+    expect((await reply(B, m, { inProgress: true })).error).toBe(false);
+    expect((await reply(B, m)).error).toBe(false);
+    // The final reply made B its answerer, as for any owned message.
+    expect(ownershipSnapshotForTests().chatAnswerers.find(([k]) => k === m)?.[1]).toBe(B);
+  });
+
+  it("Assign of one on an open document is allowed (it follows no document)", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const m = carriedOverMessage(d);
+    expect((await assignMessage(m, B)).body).toEqual({ data: { changed: true } });
+    expect(messageOwner(m)).toEqual({ ownerId: B, origin: "assign" });
+  });
+
+  it("Release of one is a no-op: it stays carried over, with no owner", async () => {
+    const m = carriedOverMessage();
+    expect(await releaseMessage(m)).toEqual({ status: 200, body: { data: { changed: false } } });
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([m]);
+    expect(messageOwner(m)).toBeUndefined();
+  });
+
+  it("unknown-owner and owner-detached leave it carried over", async () => {
+    const m = carriedOverMessage();
+    expect(
+      await control({ messageId: m, action: "assign", ownerLabel: "owner-zzzz" }),
+    ).toMatchObject({ status: 404, body: { error: "unknown-owner" } });
+    tandemPresent();
+    present = false;
+    expect(await assignMessage(m, TANDEM)).toMatchObject({
+      status: 409,
+      body: { error: "owner-detached" },
+    });
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([m]);
+  });
+
+  it("a failed re-owe leaves it carried over with no owner (500)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const m = carriedOverMessage();
+    setChatOwnershipFaultForTests((at) => {
+      if (at === "re-owe") throw new Error("fault");
+    });
+    expect((await assignMessage(m, B)).status).toBe(500);
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([m]);
+    expect(messageOwner(m)).toBeUndefined();
+  });
+
+  it("once Assigned it is ordinary: its owner's lapse re-owes it and another session may take it", async () => {
+    const m = carriedOverMessage();
+    await assignMessage(m, B);
+    lapseByGrace(B);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([]);
+    await takeByPoll(C, m);
+  });
+
+  it("no other writer gives one an owner: a poll, a reply and a tab close leave it ownerless", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const m = carriedOverMessage(d);
+    await pollAs(A);
+    expect((await reply(A, m, { inProgress: true })).error).toBe(false);
+    expect((await reply(A, m)).error).toBe(false);
+    const n = userChat(key("n"), d);
+    withInternal(ctrl(), () => chatMap().set(n, { ...(row(n) as ChatMessage), read: true }));
+    captureCarriedOverChat(() => [n]);
+    await closeByRoute(d);
+    const owners = ownershipSnapshotForTests().messageOwners.map(([k]) => k);
+    expect(owners).not.toContain(m);
+    expect(owners).not.toContain(n);
   });
 });
 

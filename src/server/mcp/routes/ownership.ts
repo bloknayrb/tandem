@@ -70,7 +70,8 @@ const ACTIONS: ReadonlySet<string> = new Set<OwnershipControlAction>(["release",
  * "follows-document"}` for a message that follows an open document (that
  * document's own Release and Assign move it); `409 {error: "answered"}` for a
  * message a final reply already answered; `409 {error: "not-controllable"}`
- * for local-period chat or a message carried over from before a restart. A
+ * for local-period chat (a message carried over from before a restart may be
+ * Assigned, which ends its carried-over status; its Release is a no-op). A
  * body naming both `documentId` and `messageId`, or neither, is a 400.
  */
 export async function handleOwnershipControl(req: Request, res: Response): Promise<void> {
