@@ -1816,7 +1816,10 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
  *   dropped (the flip-blocker row this closed): a message not handled is
  *   re-owed, and an acknowledgement's owner goes even when its message is
  *   handled (the chat side re-owes only what is not handled). Its record
- *   never lapses, so nothing else would drop them.
+ *   never lapses, so nothing else would drop them. Then the doc-less and
+ *   closed-document chat it held by presence alone, with no per-message
+ *   owner, is re-owed too (ownership design §7.2; 3b-2b4c), never a
+ *   carried-over or handled message.
  */
 export function noteTandemPresence(present: boolean): void {
   if (!ownershipEnabled()) return;
@@ -1843,13 +1846,41 @@ export function noteTandemPresence(present: boolean): void {
           logLimited("throw:noteTandemPresence", `[ownership] presence failed: ${errorText(err)}`),
       );
     }
+    // Read before the per-message owners go, so a message released below is
+    // not counted again here.
+    const presenceOnly = presenceOnlyChat();
     const handled = ownerByMessage.size > 0 ? handledKeysOrNone() : new Set<string>();
     releaseMessageOwners(
       TANDEM_OWNER_ID,
       (key, owner) =>
         owner.origin === "acknowledgement" || (!handled.has(key) && !carriedOver.has(key)),
     );
+    if (presenceOnly.length > 0) reOweChat(presenceOnly);
   });
+}
+
+/**
+ * The chat Tandem's Claude held by presence alone (#2358 PR 3b-2b4c;
+ * ownership design §7.2): each unhandled, non-local-period user message that
+ * is doc-less or on a closed document, has no per-message owner whose record
+ * exists, and was not carried over. Read once presence has ended, from the
+ * facts alone (`messageStanding` would no longer name Tandem's Claude).
+ * Never throws: a failed read re-owes nothing.
+ */
+function presenceOnlyChat(): string[] {
+  try {
+    return chatSide.unhandledKeys().filter((key) => {
+      if (carriedOver.has(key)) return false;
+      const own = ownerByMessage.get(key);
+      if (own && records.has(own.ownerId)) return false;
+      const facts = chatSide.message(key);
+      if (facts === undefined || facts.localPeriod) return false;
+      return facts.documentId === undefined || !facts.documentOpen;
+    });
+  } catch {
+    logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+    return [];
+  }
 }
 
 /**

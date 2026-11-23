@@ -532,16 +532,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
       "line.",
   },
-  {
-    gap:
-      "When Tandem's Claude stops being present (3b-2b4a), only its per-message chat owners are " +
-      "released and re-owed. Doc-less and closed-document chat it held by presence alone, with no " +
-      "per-message owner, is not re-owed as ownership design §7.2 asks, so a message it was " +
-      "handed but did not answer can stay read and unanswered for whoever owns it next.",
-    closedBy:
-      "A change that re-owes, when presence ends, the doc-less and closed-document chat Tandem's " +
-      "Claude held by presence alone, with a test.",
-  },
 ];
 
 /**

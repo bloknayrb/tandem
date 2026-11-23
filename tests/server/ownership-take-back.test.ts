@@ -46,9 +46,11 @@ import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
 import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
+  captureCarriedOverChat,
   forgetChatMessageOwners,
   getDocOwner,
   noteSoloReleased,
+  noteTandemPresence,
   noteTandemRunStart,
   noteTransportRegistered,
   ownershipSnapshotForTests,
@@ -429,6 +431,52 @@ describe("the Solo-release check (ownership design §8.3)", () => {
     setCtrlMode("tandem");
     expect(release()).toBe(200);
     expect(forwarded).toEqual(["solo-release"]);
+  });
+});
+
+describe("the end of presence: chat held by presence alone (ownership design §7.2; 3b-2b4c)", () => {
+  it("doc-less and closed-document chat handed but unanswered is owed to the next owner's fresh reader; handled and carried-over are not", async () => {
+    const carried = `${prefix}-co`;
+    withInternal(ctrl(), () =>
+      chatMap().set(carried, {
+        id: carried,
+        author: "user",
+        text: "carried over",
+        timestamp: clock++,
+        read: true,
+      }),
+    );
+    captureCarriedOverChat(() => [carried]);
+    // Answered first: a reply settles the earlier messages of its batch.
+    const answered = userChat(`${prefix}-h`);
+    const docless = userChat(`${prefix}-m`);
+    const onClosed = userChat(`${prefix}-cd`, `${prefix}-never-open`);
+    const tandem = reader(TANDEM);
+    expect(handed(await tandem.poll())).toEqual([docless, answered, onClosed].sort());
+    await tandem.poll(); // acknowledged
+    const reply = await as(TANDEM, "tandem_reply", { text: "done", replyTo: answered });
+    expect(reply.error, JSON.stringify(reply)).toBe(false);
+    // None of them has a per-message owner: Tandem's Claude held them by presence.
+    expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+
+    present = false;
+    noteTandemPresence(false);
+    expect(handed(await reader(A).poll())).toEqual([docless, onClosed].sort());
+    expect(chatMap().get(answered)).toMatchObject({ read: true });
+    expect(chatMap().get(carried)).toMatchObject({ read: true });
+  });
+
+  it("flag off: the end of presence marks nothing unread", async () => {
+    await close?.();
+    await buildWorld("");
+    const k = `${prefix}-m`;
+    withInternal(ctrl(), () =>
+      chatMap().set(k, { id: k, author: "user", text: "x", timestamp: clock++, read: true }),
+    );
+    present = false;
+    noteTandemPresence(false);
+    expect(chatMap().get(k)).toMatchObject({ read: true });
+    expect(ownershipSnapshotForTests().records).toEqual([]);
   });
 });
 
