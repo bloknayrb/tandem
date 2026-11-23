@@ -45,7 +45,7 @@ import {
   selectionMayBeHanded,
   wasOwedAtSwitch,
 } from "../models/local-period.js";
-import { greetingTransportBound, inboxOwnership } from "../sessions/ownership.js";
+import { inboxOwnership } from "../sessions/ownership.js";
 import {
   inboxExcludedAllNote,
   inboxExcludedNamedNote,
@@ -3679,6 +3679,12 @@ export function registerAwarenessTools(server: McpServer): void {
       // `withTypingPresence` runs this callback before its first `await`, so
       // nothing interleaves between the gate above and the writes below
       // (R5.1; pinned in tests/server/ownership-chat.test.ts).
+      // The greeting's transport fact (#2358 PR 3b-2c): with ownership on,
+      // whether the caller is on the transport bound to the current spawn,
+      // which decides the greeting instead of the session id. Off, absent, so
+      // the classifier is asked master's query. Pure, so read here.
+      const bound = inboxOwnership.greetingTransportBound(caller);
+      const boundFact = bound !== undefined ? { bound } : {};
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         // An accepted reply to a message is stamped with that message's
         // document, or none (R5.3); an accepted post with what its gate
@@ -3693,15 +3699,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // `withErrorBoundary` resolved it at entry (#2358): no handler reads
         // the request context itself.
         const sessionId = caller.claudeSessionId;
-        // Ownership on, the caller's transport decides instead (#2358 PR
-        // 3b-2c): bound to the current spawn or not. Off, absent.
-        const bound = greetingTransportBound(caller);
-        const greeting = isGreetingReply({
-          sessionId,
-          replyTo,
-          inProgress,
-          ...(bound !== undefined ? { bound } : {}),
-        });
+        const greeting = isGreetingReply({ sessionId, replyTo, inProgress, ...boundFact });
         const appended = appendClaudeChatMessage(text, {
           documentId: docId,
           replyTo,

@@ -3510,6 +3510,14 @@ function claimForReply(key: string, documentId: string, callerId: string): void 
  */
 export const inboxOwnership = Object.freeze({
   /**
+   * {@link greetingTransportBound}, for `tandem_reply` (#2358 PR 3b-2c):
+   * through this door because `awareness.ts` imports one name from this
+   * module. The caller is passed along unread.
+   */
+  greetingTransportBound(caller: { readonly ownerId?: string }): boolean | undefined {
+    return greetingTransportBound(caller);
+  },
+  /**
    * Whether `tandem_checkInbox` carries the `ownership` field. Read once at
    * the tool's registration; the handler keeps that answer for its own
    * backstop schema and for whether it emits the field, so a server never
