@@ -41,8 +41,8 @@
  * The delivery-rounds PR: whether delivery rounds are keyed by document and
  * by message (`keyedDeliveryRounds`, read through a seam by
  * `events/delivery-state.ts`; flag on keyed, flag off master's one global
- * round). Still to come, named by content as in the plan: the greeting by
- * bound transport (PR 3b-2).
+ * round). PR 3b-2c: the greeting by bound transport
+ * ({@link greetingTransportBound}).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -224,6 +224,25 @@ export interface OwnershipRefusal {
 export const TANDEM_OWNER_ID = "tandem";
 /** The one record a stdio-mode server answers every call as (ownership design §3.1 rule 4). */
 export const LOCAL_OWNER_ID = "local";
+
+/**
+ * The greeting's transport fact (#2358 PR 3b-2c; ownership design §7.3):
+ * whether a `tandem_reply` arrived on a transport bound to Tandem's Claude's
+ * current run. Undefined while ownership is off, so the greeting classifier
+ * keeps keying on the reply's session id, as on master. Flag on it is true
+ * only for an MCP caller on the `tandem` record, which rule 0 gives a
+ * transport only once its bind to the current spawn is confirmed, and which a
+ * spawn's teardown takes back from its bound transports
+ * (`noteOwnSpawnEnded`); a reply's session id never counts. A
+ * `/api/channel-reply` reply (`"channel"`) has no transport and is never the
+ * greeting. Writes nothing.
+ */
+export function greetingTransportBound(
+  caller: { readonly ownerId?: string } | "channel",
+): boolean | undefined {
+  if (!ownershipEnabled()) return undefined;
+  return caller !== "channel" && caller.ownerId === TANDEM_OWNER_ID;
+}
 
 /**
  * Claude Code's `clientInfo.name`. **Unverified**, like

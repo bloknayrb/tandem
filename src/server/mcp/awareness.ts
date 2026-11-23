@@ -45,7 +45,7 @@ import {
   selectionMayBeHanded,
   wasOwedAtSwitch,
 } from "../models/local-period.js";
-import { inboxOwnership } from "../sessions/ownership.js";
+import { greetingTransportBound, inboxOwnership } from "../sessions/ownership.js";
 import {
   inboxExcludedAllNote,
   inboxExcludedNamedNote,
@@ -653,17 +653,24 @@ export type ClaudeChatAppend = { ok: true; id: string } | { ok: false; refusal: 
  * supervisor must not reach the MCP layer; `index.ts` wires the two. A
  * throwing listener is logged and never fails the reply.
  */
-const tandemReplyListeners = new Set<(sessionId: string | undefined) => void>();
+type TandemReplyListener = (sessionId: string | undefined, bound?: boolean) => void;
+const tandemReplyListeners = new Set<TandemReplyListener>();
 
-export function onTandemReply(cb: (sessionId: string | undefined) => void): () => void {
+export function onTandemReply(cb: TandemReplyListener): () => void {
   tandemReplyListeners.add(cb);
   return () => tandemReplyListeners.delete(cb);
 }
 
-export function notifyTandemReply(sessionId: string | undefined): void {
+/**
+ * `bound` is the greeting's transport fact (#2358 PR 3b-2c;
+ * `greetingTransportBound`): passed only while ownership is on, so a dark
+ * listener is called exactly as before, with the session id alone.
+ */
+export function notifyTandemReply(sessionId: string | undefined, bound?: boolean): void {
   for (const cb of tandemReplyListeners) {
     try {
-      cb(sessionId);
+      if (bound === undefined) cb(sessionId);
+      else cb(sessionId, bound);
     } catch (err) {
       console.error("[Tandem] A chat listener failed:", err);
     }
@@ -3686,7 +3693,15 @@ export function registerAwarenessTools(server: McpServer): void {
         // `withErrorBoundary` resolved it at entry (#2358): no handler reads
         // the request context itself.
         const sessionId = caller.claudeSessionId;
-        const greeting = isGreetingReply({ sessionId, replyTo, inProgress });
+        // Ownership on, the caller's transport decides instead (#2358 PR
+        // 3b-2c): bound to the current spawn or not. Off, absent.
+        const bound = greetingTransportBound(caller);
+        const greeting = isGreetingReply({
+          sessionId,
+          replyTo,
+          inProgress,
+          ...(bound !== undefined ? { bound } : {}),
+        });
         const appended = appendClaudeChatMessage(text, {
           documentId: docId,
           replyTo,
@@ -3709,7 +3724,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // landed, with no `await` since the gate: a reply the licence refused
         // above claims nothing and sets no owner.
         if (gate.kind === "accepted") gate.apply(appended.id);
-        notifyTandemReply(sessionId);
+        notifyTandemReply(sessionId, bound);
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,
