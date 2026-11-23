@@ -519,6 +519,7 @@ let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false
 let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =
   () => {};
 let requestWakeSink: () => void = () => {};
+let ownershipFrameSink: () => void = () => {};
 let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
@@ -1213,6 +1214,8 @@ function releaseMessageOwners(
     ownerByMessage.delete(key);
     messageOwnerChanged({ key });
   }
+  // The `ownership` frame (3b-2d): once for the whole release, never per key.
+  if (frameOwedForMessages(dropped.map(([key]) => key))) sendOwnershipFrame();
 }
 
 const REOWE_RETRIES_SLOWED =
@@ -1618,10 +1621,11 @@ export function setDocOwner(
     }
     // Step 4, publishing (PR 5): no body yet.
     compositeObserver?.("publish", documentId);
-    // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b-2's.
-    // It asks `waitingAtDocumentChange`: the waiting probe, then the chat that
+    // Step 5 (ownership design §4.4). For Tandem's Claude it asks
+    // `waitingAtDocumentChange`: the waiting probe, then the chat that
     // follows this document (3b-2b1b-chat-step5). After the re-owe above, so
-    // chat the handover has just owed again counts.
+    // chat the handover has just owed again counts. For any other owner, or
+    // none, the `ownership` frame (3b-2d, `frameOwedAtDocumentChange`).
     compositeObserver?.("wake", documentId);
     if (
       next !== null &&
@@ -1631,6 +1635,8 @@ export function setDocOwner(
       waitingAtDocumentChange(documentId, next.ownerId)
     ) {
       startOrWake(cause);
+    } else if (frameOwedAtDocumentChange(documentId, previousId, next, cause, caller)) {
+      sendOwnershipFrame();
     }
   });
 }
@@ -1741,6 +1747,129 @@ export function setStartOrWakeSink(
  */
 export function setRequestWakeSink(sink: () => void): void {
   requestWakeSink = sink;
+}
+
+/**
+ * Where the `ownership` frame goes (#2358 PR 3b-2d; ownership design §4.4,
+ * §8.6, §8.7): `src/server/index.ts` sets a sink that calls the wake socket's
+ * `requestOwnershipFrame`, whose writer asks the licence at the moment it
+ * writes (Critical Rule 9), so the refusal is the wake socket's, as the
+ * supervisor's is for `requestWake`. Only stored; called only by a flag-on
+ * {@link sendOwnershipFrame}.
+ */
+export function setOwnershipFrameSink(sink: () => void): void {
+  ownershipFrameSink = sink;
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const FRAME_FAILED =
+  "[ownership] attached sessions could not be told that work changed hands; they reach it at their next poll.";
+
+/**
+ * Ask for the payload-free `ownership` frame on `/api/wake` (#2358 PR 3b-2d):
+ * outside any MCP request context (the sink arms a timer, which would
+ * otherwise carry the caller's), in its own catch, so the caller's change
+ * stands whatever the sink does. Unscoped until Phase 3 (ownership design
+ * §9.4): every armed session is woken, and only the one the work is for, or
+ * any that may claim it, finds it at its poll. Pull stays the backstop.
+ */
+function sendOwnershipFrame(): void {
+  try {
+    runOutsideMcpContext(() => ownershipFrameSink());
+  } catch {
+    logLimited("frame-failed", FRAME_FAILED);
+  }
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const FRAME_WAITING_FAILED =
+  "[ownership] whether work is waiting after a change of owner could not be read; no session was told.";
+
+/**
+ * Whether step 5 of {@link setDocOwner} sends the `ownership` frame (#2358 PR
+ * 3b-2d; ownership design §4.4): the change moved the document to a record
+ * that is not Tandem's Claude and is not the caller (its own poll, write,
+ * post, reply or take never wakes anyone), or left it unowned, and work is
+ * waiting on it ({@link workWaitingOnDocument}). Never for `take-back` (its own
+ * wake rule, ownership design §8.2) or `stale` (a reader's backstop, inside a
+ * check whose caller goes on to claim or refuse at once), and never when the
+ * holder stays the same. A change to Tandem's Claude is the forward's
+ * (`startOrWake`), never a frame. No licence term: refusal is the writer's,
+ * at the write.
+ */
+function frameOwedAtDocumentChange(
+  documentId: string,
+  previousId: string | undefined,
+  next: { ownerId: string } | null,
+  cause: OwnershipChangeCause,
+  caller: string | undefined,
+): boolean {
+  if (cause === "take-back" || cause === "stale") return false;
+  if (previousId === next?.ownerId) return false;
+  if (next !== null && (next.ownerId === TANDEM_OWNER_ID || caller === next.ownerId)) return false;
+  return workWaitingOnDocument(documentId, next?.ownerId);
+}
+
+/**
+ * Whether work waits on `documentId` for whoever holds it now, or for nobody
+ * (#2358 PR 3b-2d): the waiting probe (the production probe, `documentWaiting`,
+ * reads no owner: what a fresh reader would be handed, after every privacy
+ * gate, so a Solo-held comment is never waiting), then the chat that follows
+ * the document: a message a fresh reader would be handed, not carried over,
+ * on this document and with no per-message owner. Read after the change, so
+ * that chat's standing names the new holder, or the document's claim. Each
+ * half in its own catch, read as false with one fixed, rate-limited line.
+ */
+function workWaitingOnDocument(documentId: string, ownerId: string | undefined): boolean {
+  try {
+    if (waitingProbe(documentId, ownerId ?? "")) return true;
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  try {
+    for (const key of chatSide.owedToFreshReader()) {
+      if (carriedOver.has(key)) continue;
+      const facts = chatSide.message(key);
+      if (facts === undefined || facts.documentId !== documentId) continue;
+      const standing = messageStanding(key, facts);
+      if (standing.kind === "with-document") return true;
+      if (standing.kind === "owned" && !standing.perMessage) return true;
+    }
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  return false;
+}
+
+/**
+ * Whether messages whose per-message owner just went (a lapse, a deleted
+ * record, the re-owe retry, the end of presence) or that presence alone held
+ * leave work waiting for a session other than Tandem's Claude, or for nobody
+ * (#2358 PR 3b-2d; ownership design §4.4): one of `keys` a fresh reader would
+ * be handed, not carried over, whose standing now is another record's (it
+ * follows a document that record holds), the claim of an open unowned
+ * document, or claimable per message. A message now Tandem's Claude's is the
+ * message forward's (`messageOwnerChanged`), and a local-period one nobody's.
+ * A poll's undo of its own take (`dropChatOwners`) does not come here: that
+ * restores the state before the poll, whose caller is the one asking. Reads
+ * the fresh reader's set once. In its own catch: false, one fixed line.
+ */
+function frameOwedForMessages(keys: readonly string[]): boolean {
+  try {
+    const owed = new Set(chatSide.owedToFreshReader());
+    for (const key of keys) {
+      if (!owed.has(key) || carriedOver.has(key)) continue;
+      const facts = chatSide.message(key);
+      if (facts === undefined) continue;
+      const standing = messageStanding(key, facts);
+      if (standing.kind === "none") continue;
+      if (standing.kind === "owned" && standing.ownerId === TANDEM_OWNER_ID) continue;
+      return true;
+    }
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  return false;
 }
 
 const WAKE_FAILED =
@@ -1858,7 +1987,10 @@ export function noteTandemPresence(present: boolean): void {
       (key, owner) =>
         owner.origin === "acknowledgement" || (!handled.has(key) && !carriedOver.has(key)),
     );
-    if (presenceOnly.length > 0) reOweChat(presenceOnly);
+    // The `ownership` frame (3b-2d): chat held by presence alone is claimable now.
+    if (presenceOnly.length > 0 && reOweChat(presenceOnly) && frameOwedForMessages(presenceOnly)) {
+      sendOwnershipFrame();
+    }
   });
 }
 
@@ -3747,5 +3879,6 @@ export function resetOwnershipForTests(): void {
   wakeObserverForTests = undefined;
   startOrWakeSink = () => {};
   requestWakeSink = () => {};
+  ownershipFrameSink = () => {};
   graceMs = DEFAULT_GRACE_MS;
 }

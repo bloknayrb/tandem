@@ -174,13 +174,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A lapse to unowned wakes no session (the ownership frames are stubs, and 3b-2b1c-a's " +
-      "start-or-wake forwards only a document that goes to Tandem's Claude), so under " +
-      "inbox scope a user's next comment on that document waits until some session polls for " +
-      "an unrelated reason.",
+      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
+      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
+      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
+      "such a session waits for its next poll for a document that went unowned with work on it.",
     closedBy:
-      "PR 3b (presence, the ownership frames and the start rules of 3b-2b2; 3b-2b1c-a's " +
-      "start-or-wake does not cover a document that goes unowned).",
+      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
+      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
+      "have landed.",
   },
   {
     gap:

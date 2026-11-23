@@ -28,6 +28,7 @@ import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import { setDeliveryRoundSeam } from "./events/delivery-state.js";
 import { attachCtrlObservers } from "./events/queue.js";
+import { requestOwnershipFrame } from "./events/wake-socket.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
@@ -99,6 +100,7 @@ import {
   noteTandemRunStart,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
+  setOwnershipFrameSink,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
@@ -898,6 +900,12 @@ async function main() {
   // supervisor's `requestWake`, which asks the licence at its writer. Read at
   // call time like the sink above; only a flag-on `noteTandemRunStart` calls it.
   setRequestWakeSink(() => launcherSupervisor?.requestWake?.());
+  // The `ownership` frame on `/api/wake` (#2358 PR 3b-2d; ownership design
+  // §4.4, §8.6, §8.7): a change of owner that leaves work waiting for a
+  // session other than Tandem's Claude, or for nobody. The writer asks the
+  // licence when it writes. In stdio mode no wake socket is attached, so a
+  // request does nothing. Only a flag-on change of owner calls it.
+  setOwnershipFrameSink(requestOwnershipFrame);
   // The open documents, for the waiting decision's claimable work (#2358 PR
   // 3b-2b1b-claimable): an open document nobody holds counts for Tandem's
   // Claude while no other session is connected. Beside the probe for the same

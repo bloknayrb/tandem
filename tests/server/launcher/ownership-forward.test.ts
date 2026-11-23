@@ -1196,6 +1196,9 @@ describe("the decision table: A lapses", () => {
 
 const FORWARD_FAILED =
   "[ownership] a change of owner could not be passed on to Tandem's Claude; it may not have been started or woken.";
+/** The `ownership` frame's waiting read (#2358 PR 3b-2d). */
+const FRAME_WAITING_FAILED =
+  "[ownership] whether work is waiting after a change of owner could not be read; no session was told.";
 
 describe("other cases (PR a)", () => {
   it("R1.5: a throwing sink inside a lapse of two documents: both move, one fixed line, and no setDocOwner-failed line", () => {
@@ -1667,7 +1670,9 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m1)).toBeUndefined();
     expect(messageOwner(m2)).toBeUndefined();
     expect(reOwe.mock.calls.flat(2).sort()).toEqual([m1, m2].sort());
-    expect(ownershipLines()).toEqual([FORWARD_FAILED]);
+    // And, since #2358 PR 3b-2d, the release's frame check reads the same
+    // throwing member: its own fixed line, and no frame.
+    expect(ownershipLines()).toEqual([FORWARD_FAILED, FRAME_WAITING_FAILED]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);

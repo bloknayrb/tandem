@@ -596,12 +596,17 @@ describe("review gaps (#2371): behaviours a mutation could remove unnoticed", ()
     expect(getDocOwner("d")?.sinceSeq).toBe(7);
   });
 
-  it("step 5 asks whether items wait only for Tandem's Claude, not on its own change or a take-back", () => {
+  it("step 5 asks whether items wait, never on Tandem's Claude's own change or a take-back", () => {
+    // Since #2358 PR 3b-2d step 5 also asks for another record's gain made by
+    // someone else (the `ownership` frame), so d1 is asked, with its owner.
     const probe = vi.fn(() => false);
     setWaitingProbe(probe);
     setDocOwner("d1", { ownerId: "claude:a", kind: "claimed" }, "user-open");
+    expect(probe).toHaveBeenCalledExactlyOnceWith("d1", "claude:a");
+    probe.mockClear();
     setDocOwner("d2", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open", TANDEM_OWNER_ID);
     setDocOwner("d3", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
+    setDocOwner("d5", { ownerId: "claude:a", kind: "claimed" }, "claim", "claude:a");
     expect(probe).not.toHaveBeenCalled();
     setDocOwner("d4", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
     expect(probe).toHaveBeenCalledExactlyOnceWith("d4", TANDEM_OWNER_ID);
