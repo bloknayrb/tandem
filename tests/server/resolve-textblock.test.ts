@@ -197,10 +197,12 @@ describe("tandem_edit at depth (#1664 follow-on)", () => {
 
   it("edits inside a marked run exactly as it does at top level", () => {
     // Whatever tandem_edit's mark semantics are, depth must not change them.
-    // Both of these are the pre-existing top-level behaviour, asserted at depth.
-    expect(editText("- see **bold** here\n", "bold", "EDITED")).toBe("- see EDITED here\n");
-    expect(editText("- see **bold** here\n", "bol", "X")).toBe("- see X**d** here\n");
-    expect(editText("see **bold** here\n", "bol", "X")).toBe("see X**d** here\n");
+    // Since #1823 they are ProseMirror's `marksAcross` (Accept's rule): the new
+    // text takes the first replaced character's marks, so a reworded bold run
+    // stays bold. The top-level line pins the same answer without depth.
+    expect(editText("- see **bold** here\n", "bold", "EDITED")).toBe("- see **EDITED** here\n");
+    expect(editText("- see **bold** here\n", "bol", "X")).toBe("- see **Xd** here\n");
+    expect(editText("see **bold** here\n", "bol", "X")).toBe("see **Xd** here\n");
   });
 
   it("refuses a range spanning two list items, leaving the document untouched", () => {

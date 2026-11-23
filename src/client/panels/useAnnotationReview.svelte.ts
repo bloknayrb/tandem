@@ -123,8 +123,11 @@ function canRestoreBlockBoundary(editor: TiptapEditor, pos: number): boolean {
 /**
  * The marks spanning a range, as JSON, for `literalInlineContent` to stamp.
  *
- * `marksAcross` returns null when the endpoints disagree, which is the right
- * answer: a replacement straddling a bold boundary should not pick a side.
+ * `marksAcross` takes the marks of the first replaced character, dropping a
+ * non-inclusive mark (`rawMarkdown`, `footnote-ref`) that the character at `to`
+ * does not continue; it is null only when nothing follows `from` in its block. The
+ * server's `tandem_edit` applies the same rule (`resolveReplacementMarks`, #1823),
+ * so Accept and a direct edit of the same text format alike.
  */
 function marksAcrossRange(
   editor: TiptapEditor,
@@ -137,6 +140,24 @@ function marksAcrossRange(
       .resolve(from)
       .marksAcross(doc.resolve(to))
       ?.map((m) => m.toJSON());
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The marks of the first character of `[from, …)`, UNFILTERED — what Undo needs to
+ * put the replaced text back as it was (#1823). Not `marksAcrossRange`: that drops a
+ * non-inclusive mark (`rawMarkdown`, `footnote-ref`) the character past the range
+ * does not continue, which is right for NEW text and wrong for restoring the old —
+ * undoing an accept over exactly `[^1]` would bring the footnote back as plain,
+ * escaped text. Read before the accept deletes the span; undo uses it in place of
+ * the accepted text's marks.
+ */
+function marksAtRangeStart(editor: TiptapEditor, from: number): JSONContent["marks"] | undefined {
+  try {
+    const at = editor.state.doc.resolve(from);
+    return at.parent.maybeChild(at.index())?.marks.map((m) => m.toJSON());
   } catch {
     return undefined;
   }
@@ -363,6 +384,7 @@ export function applySuggestion(
   editor: TiptapEditor,
   ydoc: Y.Doc | null,
   format?: string,
+  onReplacedMarks?: (marks: JSONContent["marks"] | undefined) => void,
 ): boolean {
   if (ann.suggestedText === undefined) return false;
 
@@ -429,6 +451,7 @@ export function applySuggestion(
 
     const inCode = isCodeContext(editor, resolved.from);
     const marks = marksAcrossRange(editor, resolved.from, resolved.to);
+    onReplacedMarks?.(marksAtRangeStart(editor, resolved.from));
 
     // #1460: in a plaintext document a multi-line suggestion has to become
     // BLOCKS, not hard breaks.
@@ -594,6 +617,9 @@ export function useAnnotationReview({
   let recentlyResolved = $state(new Set<string>());
   const pendingRemovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastResolvedId: string | null = null;
+  // The replaced span's own marks per accepted id, for Undo (#1823; see
+  // `marksAtRangeStart`). In memory like `recentlyResolved`, which gates Undo.
+  const replacedMarks = new Map<string, JSONContent["marks"] | undefined>();
 
   // Cleanup timers on component destroy
   onDestroy(() => {
@@ -706,7 +732,13 @@ export function useAnnotationReview({
     // intact: a null editor is a FAILED apply, not a licence to publish
     // `accepted`. See `resolveAnnotation`'s own note below for why each write is
     // its own one-statement transaction.
-    if (!editor || !applySuggestion(ann, editor, y, getFormat?.())) {
+    let spanMarks: JSONContent["marks"] | undefined;
+    const applied =
+      !!editor &&
+      applySuggestion(ann, editor, y, getFormat?.(), (m) => {
+        spanMarks = m;
+      });
+    if (!applied) {
       withBrowser(y, () => map.set(id, revertedToPending(stored)));
       onApplyFailed?.(stored, editor ? "range" : "no-editor");
       return;
@@ -722,6 +754,7 @@ export function useAnnotationReview({
       map.set(id, { ...withoutReplyAccept(ann), ...provenance, status: "accepted" }),
     );
 
+    replacedMarks.set(id, spanMarks);
     lastResolvedId = id;
     recentlyResolved = new Set(recentlyResolved).add(id);
   }
@@ -807,6 +840,7 @@ export function useAnnotationReview({
       id,
       setTimeout(() => {
         pendingRemovalTimers.delete(id);
+        replacedMarks.delete(id);
         const next = new Set(recentlyResolved);
         next.delete(id);
         recentlyResolved = next;
@@ -815,6 +849,7 @@ export function useAnnotationReview({
   }
 
   function removeFromResolved(id: string) {
+    replacedMarks.delete(id);
     const timer = pendingRemovalTimers.get(id);
     if (timer) {
       clearTimeout(timer);
@@ -918,7 +953,9 @@ export function useAnnotationReview({
             inCode
               ? []
               : (plaintextRestoreBreaks(oldText, getFormat?.()) ?? ann.textSnapshotBreaks),
-            marksAcrossRange(editor, resolved.from, resolved.to),
+            replacedMarks.has(id)
+              ? replacedMarks.get(id)
+              : marksAcrossRange(editor, resolved.from, resolved.to),
           );
           // Checked BEFORE `restored.blocks`, because an opaque boundary produces
           // no `"block"` entries and would otherwise fall through to the inline

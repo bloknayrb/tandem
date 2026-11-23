@@ -8,7 +8,7 @@ import { Mark } from "@tiptap/core";
  * on save, so it round-trips byte-exact (#981 / ADR-042).
  *
  * The mark `name` MUST byte-match the server delta-attribute key
- * (`RAW_MARKDOWN_MARK` in `src/server/file-io/mdast-ydoc.ts`) or y-prosemirror
+ * (`RAW_MARKDOWN_MARK` in `src/shared/constants.ts`) or y-prosemirror
  * will drop it on the way to/from the Y.Doc.
  *
  * Renders `<span class="tandem-raw-md">` so the editor.css visibility toggle
@@ -19,6 +19,12 @@ import { Mark } from "@tiptap/core";
  */
 export const RawMarkdownMark = Mark.create({
   name: "rawMarkdown",
+
+  // A raw run is one verbatim construct (`[^1]`, `<br>`), emitted unescaped on
+  // save — text typed or accepted at its edge must not join it, or its `*` and `[`
+  // become markdown syntax. `NON_INCLUSIVE_MARKS` (shared/constants.ts) holds the
+  // server's `tandem_edit` to the same rule (#1823); keep the two in step.
+  inclusive: false,
 
   // Exclude nothing special; it coexists with other marks but the source it
   // carries already encodes its own formatting.

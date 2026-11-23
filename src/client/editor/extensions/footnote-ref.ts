@@ -7,7 +7,7 @@ import { Mark, mergeAttributes } from "@tiptap/core";
  * in Y_MAP_FOOTNOTE_BODIES, keyed by the same id).
  *
  * The mark `name` MUST byte-match the server delta-attribute key (the literal
- * "footnote-ref" in `DOCX_INLINE_MARKS` / `docx-html.ts`) or y-prosemirror's
+ * `FOOTNOTE_REF_MARK` in `src/shared/constants.ts`, which `docx-html.ts` writes) or y-prosemirror's
  * sync deletes the whole offending Y.XmlText — silent content loss, not a crash
  * (asserted by `tests/client/editor-schema-marks.test.ts`'s real-sync test).
  *
