@@ -21,7 +21,7 @@
  * chat post can get ({@link postRefusal}: a post names no message and may be
  * about an unowned document or about none, so it has forms of its own where
  * the document forms would be false for it); `unlinked` arrives with the shim's identity (PR 4),
- * `unbound-child` with the records around the handle (PR 3b-2), and the `released` and `assigned`
+ * `unbound-child` is here since PR 3b-2b3b (reached only once rule 0 routes, 3b-2b4), and the `released` and `assigned`
  * causes of `lost` with the controls (PR 5). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b-2; their copy is here
  * because the decision that produces them is.
@@ -225,6 +225,17 @@ const DEFAULTED =
   " This call named no documentId, so it targeted the active document. If you meant a document you hold, pass its documentId; offsets read from this document do not apply to another.";
 const LEAVE = "Leave this document.";
 
+/**
+ * `unbound-child` (ownership design §5.3, #2358 PR 3b-2b3b): a rule-0 child
+ * record on a document or message Tandem's Claude holds. It replaces every
+ * other row's copy for such a record. The document form is the design's
+ * text; the message form names the message and says not to reply.
+ */
+const UNBOUND_CHILD_WHY =
+  "This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so";
+export const UNBOUND_CHILD_DOCUMENT = `Tandem's Claude answers this document. ${UNBOUND_CHILD_WHY} leave this document unless the user assigns it to you from its tab.`;
+const UNBOUND_CHILD_MESSAGE = `Tandem's Claude answers this message. ${UNBOUND_CHILD_WHY} do not reply to it. Nothing was sent.`;
+
 function body(input: NotDocOwnerInput): string {
   const holder = holderPhrase(input.holder);
   // A Tandem's Claude that is not present holds nothing and takes nothing, so
@@ -261,11 +272,20 @@ function body(input: NotDocOwnerInput): string {
       return chatRefusalText("holder", input.holder);
     case "post":
       return postRefusalText({ reason: "post", holder: input.holder });
+    case "unbound-child":
+      return UNBOUND_CHILD_DOCUMENT;
   }
 }
 
 /** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6; `answered`, the posts PR, R2.2). */
-export type ChatRefusalWhy = "holder" | "busy" | "lost" | "local" | "not-present" | "answered";
+export type ChatRefusalWhy =
+  | "holder"
+  | "busy"
+  | "lost"
+  | "local"
+  | "not-present"
+  | "answered"
+  | "unbound-child";
 
 /**
  * The `chat` refusal's text (Ruling 15; ownership design §5.3): it refuses
@@ -291,6 +311,8 @@ function chatRefusalText(why: ChatRefusalWhy, holder: HolderView | null): string
       return CHAT_NOT_PRESENT;
     case "answered":
       return `${holderPhrase(holder)} already answered this. Do not answer it again.`;
+    case "unbound-child":
+      return UNBOUND_CHILD_MESSAGE;
   }
 }
 
@@ -303,7 +325,7 @@ const CHAT_BUSY =
 export interface ChatReplyRefusal {
   message: string;
   details: {
-    reason: "chat" | "not-present" | "answered";
+    reason: "chat" | "not-present" | "answered" | "unbound-child";
     holder: HolderView | null;
     documentId?: string;
   };
@@ -315,7 +337,7 @@ export interface ChatReplyRefusal {
  * message; never an owner id and never the message's text.
  */
 export function chatReplyRefusal(input: {
-  reason: "chat" | "not-present" | "answered";
+  reason: ChatReplyRefusal["details"]["reason"];
   holder: HolderView | null;
   why: ChatRefusalWhy;
   documentId?: string;
@@ -333,7 +355,14 @@ export function chatReplyRefusal(input: {
 }
 
 /** The reasons a chat post can be refused for (the posts PR, R1.7). */
-export type PostRefusalReason = "post" | "not-present" | "lost" | "held" | "claimed" | "default";
+export type PostRefusalReason =
+  | "post"
+  | "not-present"
+  | "lost"
+  | "held"
+  | "claimed"
+  | "default"
+  | "unbound-child";
 
 /**
  * The text of a refused chat post (the posts PR, R1.7; Ruling 15; design
@@ -370,6 +399,8 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
     }
     case "not-present":
       return "Tandem's Claude is turned off or stopped, so it cannot post to chat now. Nothing was sent. Do not retry.";
+    case "unbound-child":
+      return `${UNBOUND_CHILD_DOCUMENT} Nothing was sent.`;
     case "held":
       return `${holder} is working on this document. ${ONLY_THE_USER} ${POST_OUTLET}`;
     case "claimed":
