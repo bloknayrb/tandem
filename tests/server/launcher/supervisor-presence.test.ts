@@ -3419,3 +3419,98 @@ describe("the spawn-started event and the switch-on as index.ts wires it (#2358 
     expect(logText()).not.toMatch(/ownership|spawn-started/);
   });
 });
+
+// --- #2358 PR 3b-2e1: the failed-bind reason in status() -----------------------
+
+describe("3b-2e1: status() reports a failed bind (ownership design §8.7)", () => {
+  const bindFailedOf = (sup: Supervisor) => (sup.status() as { bindFailed?: unknown }).bindFailed;
+
+  it("a stub that never binds: absent inside its window, `bindFailed` once judged, on the running arm", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    advance(WINDOW - 1);
+    await settle();
+    expect(h.sup.status().running).toBe(true);
+    expect(bindFailedOf(h.sup)).toBeUndefined();
+    advance(1);
+    await settle();
+    expect(h.log).toEqual(["failed:window-expired"]);
+    expect(h.sup.status()).toMatchObject({ running: true, bindFailed: true });
+  });
+
+  it("a bound run reports nothing, before or after a crash-resume", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    const c2 = await crashToResumed(c1);
+    expect(await bind(c2)).toBe(true);
+    expect("bindFailed" in h.sup.status()).toBe(false);
+  });
+
+  it("a late bind after the judgement is a run start, and clears it", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    const creds = credentialsOf(c1);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    expect(await bind(c1, creds)).toBe(true);
+    expect(bindFailedOf(h.sup)).toBeUndefined();
+  });
+
+  it("a crash of an unbound spawn (site a) reports it, and it outlasts Off on the stopped arm, beside `standby`", async () => {
+    const h = makeSupervisor({ resumeConfirmMs: WINDOW / 10 });
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    advance(WINDOW / 10);
+    h.emit(annotationEvent());
+    advance(WINDOW / 10);
+    c2.exitWith(1, null);
+    await settle();
+    expect(h.log).toContain("failed:torn-down-unbound");
+    await h.sup.updateSettings({ startMode: "off" });
+    await until(() => !h.sup.status().running, "Off's stop");
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "off", bindFailed: true });
+  });
+
+  it("a `lastError` outranks it on the stopped arm, as it outranks `standby`", async () => {
+    let command: string | null = process.execPath;
+    const h = makeSupervisor({ resolveClaudeCommand: () => command });
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    command = null; // the crash restart finds no Claude Code to start
+    c1.exitWith(1, null);
+    await settle();
+    advance(1);
+    await until(() => h.sup.status().lastError === "cli-unusable", "cli-unusable");
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    command = process.execPath; // the lapse: the error clears, the reason shows again
+    expect(h.sup.status()).toMatchObject({ running: false, bindFailed: true });
+  });
+
+  it("flag off: a stub that never binds reports nothing, and a judgement made flag on is not reported once it is off", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const dark = makeSupervisor();
+    await dark.sup.startFresh(cwdDir);
+    await childN(1);
+    advance(WINDOW * 2);
+    await settle();
+    expect("bindFailed" in dark.sup.status()).toBe(false);
+    await dark.sup.stop();
+
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(2);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  });
+});

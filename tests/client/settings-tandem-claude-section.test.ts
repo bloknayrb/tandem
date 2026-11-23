@@ -324,3 +324,138 @@ describe("SettingsTandemClaudeSection — the launcher-absent hint (#1823)", () 
     ).toBe(shown);
   });
 });
+
+describe("SettingsTandemClaudeSection — the failed bind and the bound transports (#2358 PR 3b-2e1)", () => {
+  function statusIs(body: unknown): void {
+    const inner = fetchSpy.getMockImplementation() as
+      | ((url: RequestInfo | URL, init?: RequestInit) => Promise<Response>)
+      | undefined;
+    fetchSpy.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) =>
+      String(url) === `${API_BASE}${API_LAUNCHER_STATUS}` ? json(200, body) : inner?.(url, init),
+    );
+  }
+  const RUNNING = {
+    available: true,
+    running: true,
+    reaperPid: 1,
+    cwd: "/home/test",
+    sessionId: "<set>",
+    resuming: false,
+  };
+  const has = (container: HTMLElement, id: string) =>
+    container.querySelector(`[data-testid='${id}']`) !== null;
+
+  it("says Tandem's Claude couldn't connect its Tandem tools, and offers no Start, on a stopped status", async () => {
+    statusIs({ available: true, running: false, standby: "awaiting-start", bindFailed: true });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    const note = q(container, "settings-modal-tandem-claude-bind-failed");
+    expect(note.textContent).toContain("couldn't connect its Tandem tools");
+    expect(note.textContent).toContain("Starting it again won't fix this");
+    expect(note.querySelector("button")).toBeNull();
+  });
+
+  it("says it on a running status too", async () => {
+    statusIs({ ...RUNNING, bindFailed: true });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(true);
+  });
+
+  it("lists the bound transports by kind, one fixed label per row", async () => {
+    statusIs({ ...RUNNING, boundTransports: [{ kind: "bridge" }, { kind: "direct-http" }] });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    const list = q(container, "settings-modal-tandem-claude-bound-transports");
+    expect(list.textContent).toContain("by 2 connections");
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>(
+        "[data-testid='settings-modal-tandem-claude-bound-transport']",
+      ),
+    ];
+    expect(rows.map((r) => r.dataset.kind)).toEqual(["bridge", "direct-http"]);
+    expect(rows.map((r) => r.textContent?.trim())).toEqual([
+      "Through Tandem's bridge",
+      "Directly over HTTP",
+    ]);
+  });
+
+  it("drops a kind it does not know, and renders nothing a row carries beside its kind", async () => {
+    statusIs({
+      ...RUNNING,
+      boundTransports: [{ kind: "mystery" }, { kind: "bridge", ownerId: "claude:abc" }],
+    });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    const list = q(container, "settings-modal-tandem-claude-bound-transports");
+    expect(list.textContent).toContain("by one connection");
+    expect(list.textContent).not.toMatch(/mystery|claude:/);
+  });
+
+  it("a dark server's status (neither field) renders neither, as before", async () => {
+    statusIs({ ...RUNNING, attached: true });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(false);
+    expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(false);
+  });
+
+  it("names `tandem doctor` in a browser, and only the wizard on the desktop app, which ships no `tandem` command", async () => {
+    statusIs({ ...RUNNING, bindFailed: true });
+    const browser = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(q(browser.container, "settings-modal-tandem-claude-bind-failed").textContent).toContain(
+      "tandem doctor",
+    );
+    cleanup();
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    const desktop = render(SettingsTandemClaudeSection);
+    await flush();
+    const note = q(desktop.container, "settings-modal-tandem-claude-bind-failed");
+    expect(note.textContent).toContain("integration wizard");
+    expect(note.textContent).not.toContain("tandem doctor");
+  });
+
+  it("re-reads while a diagnosis is shown, so a bind that lands clears the warning without a remount", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      statusIs({ ...RUNNING, bindFailed: true });
+      const { container } = render(SettingsTandemClaudeSection);
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(true);
+      statusIs({ ...RUNNING, boundTransports: [{ kind: "bridge" }] });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(false);
+      expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a dark server's status is read once: no diagnosis, no re-read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      statusIs({ ...RUNNING });
+      render(SettingsTandemClaudeSection);
+      await vi.advanceTimersByTimeAsync(0);
+      const statusReads = () =>
+        fetchSpy.mock.calls.filter(([u]) => String(u) === `${API_BASE}${API_LAUNCHER_STATUS}`)
+          .length;
+      const first = statusReads();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(statusReads()).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the wizard's start-mode-only view renders neither", async () => {
+    statusIs({ ...RUNNING, bindFailed: true, boundTransports: [{ kind: "bridge" }] });
+    const { container } = render(SettingsTandemClaudeSection, { props: { startModeOnly: true } });
+    await flush();
+    expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(false);
+    expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(false);
+  });
+});

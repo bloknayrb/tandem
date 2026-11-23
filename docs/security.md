@@ -175,7 +175,11 @@ and presence traces of the person at the machine, scrubbed for the same reason a
 `delivery` and `sessionCount`. `standby` (#2195) is the same class and weaker than `busy`: an `idle`
 standby says no turn ran for the configured time. `startsOnMessage` (#2196) says, beside a standby,
 whether another AI session is attached — the same presence fact `/health`'s loopback-only
-`sessionCount` already gives. `GET /api/launcher/settings` refuses a
+`sessionCount` already gives. With multi-session ownership on (dark, #2358 PR 3b-2e1),
+`bindFailed` says Tandem's Claude's latest run never connected its Tandem tools, and
+`boundTransports` lists the connections bound to its run by kind alone (`bridge` or
+`direct-http`, never an id); both are loopback-only, and both sit inside the owners exposure
+Bryan filed for local pages (ownership design §11.3). `GET /api/launcher/settings` refuses a
 non-loopback caller by hand and has no origin gate: a browser sends no `Origin` on a same-origin
 GET (measured against Chromium, 2026-10-13), so the gate would refuse the npm build's own editor,
 and the read has no side effect for it to protect. For the same reason `GET /api/launcher/nonce`
