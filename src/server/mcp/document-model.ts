@@ -1,5 +1,6 @@
 import path from "path";
 import * as Y from "yjs";
+import { NON_INCLUSIVE_MARKS } from "../../shared/constants.js";
 import { FLAT_SEPARATOR, flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import {
   findXmlTextAtOffset,
@@ -615,7 +616,8 @@ type DeltaSegment = { insert: string | object; attributes?: Record<string, unkno
  * inline formatting and cloning XmlElement embeds (e.g. hardBreak) so attached nodes
  * aren't moved out of their source. Pass {} (not undefined) for attributes — Y.js
  * `insert(pos, str, undefined)` inherits formatting from the preceding character,
- * while `insert(pos, str, {})` terminates it. The single home for this invariant.
+ * while `insert(pos, str, {})` terminates it. `insertPlainTextAtOffset` keeps the same
+ * invariant with resolved marks (#1823).
  */
 export function insertDeltaSegments(
   target: Y.XmlText,
@@ -703,6 +705,94 @@ function directChildSpans(element: Y.XmlElement): ChildSpan[] {
   return spans;
 }
 
+/** A character's inline marks, as Yjs delta attributes (mark name → attrs). */
+export type InlineMarks = Record<string, unknown>;
+
+/**
+ * Marks of the inline character at element-relative flat `offset`, or `null` when no
+ * character sits there (past the end, or a negative offset). A hardBreak — or any
+ * other inline element — is a character with NO marks, never skipped: ProseMirror
+ * treats it as a node in its own right, and the rules below mirror PM.
+ */
+function marksOfCharAt(element: Y.XmlElement, offset: number): InlineMarks | null {
+  if (offset < 0) return null;
+  for (const s of directChildSpans(element)) {
+    if (offset < s.start || offset >= s.start + s.len) continue;
+    if (s.kind !== "text") return {};
+    let acc = s.start;
+    for (const seg of (s.child as Y.XmlText).toDelta() as DeltaSegment[]) {
+      const len = typeof seg.insert === "string" ? seg.insert.length : 1;
+      if (offset < acc + len) return seg.attributes ?? {};
+      acc += len;
+    }
+    return {};
+  }
+  return null;
+}
+
+/**
+ * Shallow value equality, as yjs `equalFlat`. Only NON_INCLUSIVE_MARKS values are
+ * compared — `rawMarkdown`'s per-run `{}` and `footnote-ref`'s primitive `{id, kind}`.
+ */
+function sameMarkValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return (
+    ka.length === kb.length &&
+    ka.every((k) => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k])
+  );
+}
+
+/** `marks` minus each non-inclusive mark that `other` does not carry with an equal value. */
+function dropNonInclusive(marks: InlineMarks, other: InlineMarks | null): InlineMarks {
+  const out: InlineMarks = {};
+  for (const [name, value] of Object.entries(marks)) {
+    if (NON_INCLUSIVE_MARKS.has(name) && !(other && sameMarkValue(value, other[name]))) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
+/**
+ * The marks a replacement of `[start, end)` gives its new text — ProseMirror's
+ * `$from.marksAcross($to)`, the rule the client's Accept path uses
+ * (`useAnnotationReview.svelte.ts`), so `tandem_edit` and Accept of the same text
+ * format alike (#1823). The first replaced character's marks, minus any
+ * non-inclusive mark the character at `end` does not continue. No first character
+ * (the range starts at the end of its block) → no marks, as `marksAcross` → null.
+ *
+ * Two elements, because a cross-block replace starts in one block and ends in
+ * another. MUST be computed BEFORE any delete: deleted characters drop out of
+ * `toDelta()`.
+ */
+export function resolveReplacementMarks(
+  startEl: Y.XmlElement,
+  startOffset: number,
+  endEl: Y.XmlElement,
+  endOffset: number,
+): InlineMarks {
+  const first = marksOfCharAt(startEl, startOffset);
+  if (first === null) return {};
+  return dropNonInclusive(first, marksOfCharAt(endEl, endOffset));
+}
+
+/**
+ * The marks a point insert at `offset` gives its new text — ProseMirror's
+ * `$pos.marks()`, the rule typing uses: the character to the left decides, the one
+ * to the right only at offset 0 (PM's `if (!main)` swap); a non-inclusive mark is
+ * kept only when the other side continues it. So an insert inside a raw run stays
+ * raw, while one at its edge is plain. Two adjacent raw runs carry equal `{}` and
+ * read as one run here, as they do in PM — an insert at their seam stays raw.
+ */
+export function resolvePointInsertMarks(element: Y.XmlElement, offset: number): InlineMarks {
+  const left = marksOfCharAt(element, offset - 1);
+  const right = marksOfCharAt(element, offset);
+  if (left) return dropNonInclusive(left, right);
+  return right ? dropNonInclusive(right, null) : {};
+}
+
 /**
  * Insert `text` at an element-relative flat `offset`, tolerating a boundary that
  * lands on a hardBreak. `findXmlTextAtOffset` returns null on a break gap, so fall
@@ -712,22 +802,28 @@ function directChildSpans(element: Y.XmlElement): ChildSpan[] {
  * `findXmlTextAtOffset` already resolved it; if empty, it also ends at `offset` and
  * the first fallback catches it. Last resort: splice a fresh Y.XmlText.
  *
- * The inserted text INHERITS the inline formatting open at `offset` — `Y.Text.insert`
- * with the attributes arg omitted copies the position's `currentAttributes`, whereas
- * an explicit `{}` would terminate it. This preserves the pre-#1206 `tandem_edit`
- * behavior (old path was a bare `textNode.insert(offset, newText)`): replacing text
- * inside a bold/italic run keeps the replacement in that run's formatting.
+ * The inserted text carries exactly `marks` (#1823) — never what Yjs happens to have
+ * open at the position, which would carry a `rawMarkdown` run onto new text and
+ * emit it unescaped on save. Each insert gets a FRESH object: yjs `insertText`
+ * writes a `null` into the object it is handed for every open key it lacks, which is
+ * also what terminates those formats.
  */
-function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: string): void {
+function insertPlainTextAtOffset(
+  element: Y.XmlElement,
+  offset: number,
+  text: string,
+  marks: InlineMarks,
+): void {
+  const attrs = { ...marks };
   const loc = findXmlTextAtOffset(element, offset);
   if (loc) {
-    loc.xmlText.insert(loc.offsetInXmlText, text);
+    loc.xmlText.insert(loc.offsetInXmlText, text, attrs);
     return;
   }
   const spans = directChildSpans(element);
   for (const s of spans) {
     if (s.kind === "text" && s.start + s.len === offset) {
-      (s.child as Y.XmlText).insert(s.len, text);
+      (s.child as Y.XmlText).insert(s.len, text, attrs);
       return;
     }
   }
@@ -742,7 +838,7 @@ function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: st
   }
   const t = new Y.XmlText();
   element.insert(childIndex, [t]);
-  t.insert(0, text); // fresh node: no open formatting to inherit, but stay consistent
+  t.insert(0, text, attrs);
 }
 
 /**
@@ -752,6 +848,10 @@ function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: st
  * raw offset), which corrupted or threw once a paragraph held more than one XmlText.
  * Deletes children back-to-front so `element.delete(index, 1)` on a break never
  * invalidates a not-yet-processed index.
+ *
+ * The new text's marks follow ProseMirror (#1823): `resolveReplacementMarks` for a
+ * replacement, `resolvePointInsertMarks` for a point insert — resolved before the
+ * delete, since deleted characters leave `toDelta()`.
  */
 export function replaceFlatRangeInElement(
   element: Y.XmlElement,
@@ -759,6 +859,18 @@ export function replaceFlatRangeInElement(
   to: number,
   newText: string,
 ): void {
+  const marks =
+    newText.length === 0
+      ? null
+      : to > from
+        ? resolveReplacementMarks(element, from, element, to)
+        : resolvePointInsertMarks(element, from);
+  deleteFlatRangeInElement(element, from, to);
+  if (marks) insertPlainTextAtOffset(element, from, newText, marks);
+}
+
+/** Delete the element-relative flat range `[from, to)`; see `replaceFlatRangeInElement`. */
+function deleteFlatRangeInElement(element: Y.XmlElement, from: number, to: number): void {
   if (to > from) {
     const spans = directChildSpans(element);
     for (let k = spans.length - 1; k >= 0; k--) {
@@ -773,13 +885,58 @@ export function replaceFlatRangeInElement(
       } else if (lo === s.start && hi === s.start + s.len) {
         element.delete(s.index, 1); // unexpected nested element, fully covered
       } else {
-        replaceFlatRangeInElement(s.child as Y.XmlElement, lo - s.start, hi - s.start, "");
+        deleteFlatRangeInElement(s.child as Y.XmlElement, lo - s.start, hi - s.start);
       }
     }
   }
-  if (newText.length > 0) {
-    insertPlainTextAtOffset(element, from, newText);
-  }
+}
+
+/**
+ * Replace a range whose ends lie in two different TOP-LEVEL textblocks of
+ * `fragment` — `[startOffset, end)` of block `startIndex` through `[0, endOffset)` of
+ * block `endIndex` — with `newText`, merging the two blocks: [start][newText][end].
+ * Each textblock may hold multiple Y.XmlText children split by sibling hardBreaks, so
+ * trims and the merge go through the multi-XmlText helpers (the old first-XmlText-only
+ * path dropped the tail's breaks and later runs). The caller owns the transaction.
+ *
+ * The new text takes the REPLACED span's marks (#1823), resolved before the first
+ * delete: the insert at the join is positionally a point insert, and point-insert
+ * rules there would read whatever sits left of the trimmed start.
+ */
+export function replaceFlatRangeAcrossBlocks(
+  fragment: Y.XmlFragment,
+  startIndex: number,
+  startOffset: number,
+  endIndex: number,
+  endOffset: number,
+  newText: string,
+): void {
+  const startNode = fragment.get(startIndex) as Y.XmlElement;
+  const marks = resolveReplacementMarks(
+    startNode,
+    startOffset,
+    fragment.get(endIndex) as Y.XmlElement,
+    endOffset,
+  );
+
+  // 1. Trim the start element's tail: delete [startOffset, end).
+  deleteFlatRangeInElement(startNode, startOffset, getElementTextLength(startNode));
+
+  // 2. Delete the whole in-between elements. One call: XmlFragment.delete takes a length.
+  const deleteCount = endIndex - startIndex - 1;
+  if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
+
+  // 3. Trim the end element's head: delete [0, endOffset).
+  const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
+  deleteFlatRangeInElement(tailNode, 0, endOffset);
+
+  // 4. Insert newText at the join, then fold the end element's surviving children onto
+  //    start. Step 1 left start exactly `startOffset` long and steps 2-3 don't touch it.
+  if (newText.length > 0) insertPlainTextAtOffset(startNode, startOffset, newText, marks);
+  mergeInlineTail(startNode, tailNode);
+
+  // 5. Remove the now-emptied end element.
+  fragment.delete(startIndex + 1, 1);
 }
 
 /** Append a fresh Y.XmlText to `target` carrying a copy of `source`'s delta. */

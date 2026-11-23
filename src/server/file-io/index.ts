@@ -530,6 +530,13 @@ const flushRefusedDirs = new Set<string>();
  * no `F_FULLFSYNC`), so APFS gets only part of this. The directory is NOT
  * fsynced: a lost rename leaves the complete previous file (or, for a file
  * being created, no file), never a torn one.
+ *
+ * Hard links are not preserved, by design (#1823). The rename gives the path a new
+ * inode, so another name hard-linked to the old file keeps the old content. Keeping
+ * the link would mean writing in place when `nlink > 1`, which gives up crash
+ * atomicity: a power loss mid-write tears the user's document. That is a worse
+ * failure than a stale second name. The rename likewise replaces a symlink at
+ * `filePath` with a regular file (see `existingMode`).
  */
 async function writeTempThenRename(
   filePath: string,

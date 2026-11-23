@@ -1,5 +1,6 @@
 import type { AlignType, ListItem, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
+import { RAW_MARKDOWN_MARK } from "../../shared/constants.js";
 import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
@@ -31,13 +32,8 @@ export const MARKDOWN_RAW_ATTR = "markdownRaw";
  * top of every Obsidian note.
  */
 export const FRONTMATTER_ATTR = "markdownFrontmatter";
-/**
- * Delta-attribute key for an inline run holding verbatim markdown source
- * (footnoteReference, linkReference, imageReference, inline image, inline html).
- * MUST byte-match the Tiptap `rawMarkdown` Mark name. Listed in ALL_MARKS so
- * `buildAttrs` emits it; read back in `deltaToPhrasingContent`.
- */
-const RAW_MARKDOWN_MARK = "rawMarkdown";
+// `RAW_MARKDOWN_MARK` (shared/constants.ts) is listed in ALL_MARKS so `buildAttrs`
+// emits it; read back in `deltaToPhrasingContent`.
 
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
