@@ -2,14 +2,124 @@
  * SSE endpoint handler for streaming TandemEvents to the channel shim.
  *
  * Mount as `GET /api/events` on the Express app.
+ *
+ * With multi-session ownership on (#2358 PR 4a, ships dark), each stream is
+ * narrowed by its `X-Claude-Session-Id` (`pushStreamAdmits`, ownership design
+ * §9.1), and every stream also gets the payload-free `ownership-changed`
+ * nudge ({@link requestOwnershipChangedEvent}), which is not an event.
  */
 
 import type { Request, Response } from "express";
+import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
-import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
+import {
+  isWakeWorthy,
+  OWNERSHIP_CHANGED_SSE_FRAME,
+  toWakeFrame,
+} from "../../shared/events/wake-scope.js";
 import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
+import { pushStreamAdmits } from "../sessions/ownership.js";
 import { replaySince, subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
+
+/** One open `/api/events` stream, for the `ownership-changed` writer. */
+interface LiveStream {
+  readonly res: Response;
+  /** Stop its keepalive and unsubscribe it (and forget it here). */
+  cleanup(): void;
+  /** End it as unlicensed, exactly as the subscription's `onRevoke` does. */
+  revoke(): void;
+}
+
+/** The open streams. Every one gets the `ownership-changed` nudge, mapped or not. */
+const liveStreams = new Set<LiveStream>();
+
+/**
+ * How long the `ownership-changed` writer gathers requests before it writes
+ * one frame (#2358 PR 4a): the same window, for the same reason, as the
+ * `/api/wake` `ownership` frame's (`OWNERSHIP_FRAME_COALESCE_MS` in
+ * `wake-socket.ts`). One change of hands can ask many times within a few
+ * milliseconds; the frame carries nothing, so one is enough.
+ */
+const OWNERSHIP_CHANGED_COALESCE_MS = 100;
+
+let ownershipChangedDelayMs = OWNERSHIP_CHANGED_COALESCE_MS;
+let ownershipChangedTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Tests only: the coalescing window (`undefined` restores the default). */
+export function setOwnershipChangedDelayForTests(ms: number | undefined): void {
+  ownershipChangedDelayMs = ms ?? OWNERSHIP_CHANGED_COALESCE_MS;
+}
+
+/**
+ * Ask for one payload-free `ownership-changed` frame on every open
+ * `/api/events` stream (#2358 PR 4a; ADR-054; ownership design §8.6, §9.1),
+ * mapped or not, so a session reached only by a push stream (the channel
+ * shim, the plugin monitor) is nudged to poll when work changes hands. Reached
+ * only through ownership's frame sink, which `src/server/index.ts` sets beside
+ * the `/api/wake` frame's and which only a flag-on change of owner calls, so
+ * a dark server never arms the timer. Requests within
+ * {@link OWNERSHIP_CHANGED_COALESCE_MS} of the first become one frame. Never
+ * throws.
+ */
+export function requestOwnershipChangedEvent(): void {
+  if (ownershipChangedTimer !== undefined || liveStreams.size === 0) return;
+  ownershipChangedTimer = setTimeout(() => {
+    ownershipChangedTimer = undefined;
+    writeOwnershipChangedEvent();
+  }, ownershipChangedDelayMs);
+  ownershipChangedTimer.unref?.();
+}
+
+/**
+ * The `ownership-changed` writer: an AI surface outside `pushEvent`
+ * (Critical Rule 9; ownership design §8.6), so it never inherits that
+ * function's revocation and asks the licence itself, at the moment it writes.
+ * A refusal ends every open stream exactly as the subscription's `onRevoke`
+ * does, and writes nothing; so does a decision that throws (the streams are
+ * then left open: nothing was decided). The frame is
+ * `OWNERSHIP_CHANGED_SSE_FRAME`: no `id:` line, so it never moves a
+ * consumer's `Last-Event-ID`, and an empty `data: {}`.
+ */
+function writeOwnershipChangedEvent(): void {
+  const streams = [...liveStreams];
+  if (streams.length === 0) return;
+  let refused: boolean;
+  try {
+    refused = aiRefusal() !== null;
+  } catch {
+    console.error("[SSE] The licence could not be read; no ownership-changed event was written.");
+    return;
+  }
+  if (refused) {
+    for (const stream of streams) stream.revoke();
+    return;
+  }
+  for (const stream of streams) {
+    try {
+      if (!stream.res.writableEnded) stream.res.write(OWNERSHIP_CHANGED_SSE_FRAME);
+    } catch (err) {
+      console.error(
+        "[SSE] Write failed, cleaning up subscriber:",
+        err instanceof Error ? err.message : err,
+      );
+      stream.cleanup();
+    }
+  }
+}
+
+/**
+ * Whether the stream whose `X-Claude-Session-Id` is `sessionId` gets `event`
+ * (ownership design §9.1). Always true while ownership is off.
+ */
+function streamAdmits(sessionId: string | undefined, event: TandemEvent): boolean {
+  return pushStreamAdmits(
+    sessionId,
+    event.type === "chat:message"
+      ? { documentId: event.documentId, chatMessageKey: event.payload.messageId }
+      : { documentId: event.documentId },
+  );
+}
 
 /**
  * Is this connection asking for the wake stream, the full one, or nonsense?
@@ -62,6 +172,9 @@ export function sseHandler(req: Request, res: Response): void {
     return;
   }
   const wakeMode = verdict === "wake";
+  // The stream's identity for ownership's narrowing (#2358 PR 4a): read once,
+  // mapped afresh for each event. Unused while ownership is off.
+  const sessionId = normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
   // SSE headers
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -80,6 +193,7 @@ export function sseHandler(req: Request, res: Response): void {
     const missed = replaySince(lastEventId);
     for (const event of missed) {
       if (wakeMode && !isWakeWorthy(event)) continue;
+      if (!streamAdmits(sessionId, event)) continue;
       writeEvent(res, event, wakeMode);
     }
   }
@@ -93,9 +207,11 @@ export function sseHandler(req: Request, res: Response): void {
   function cleanup(): void {
     clearInterval(keepalive);
     unsubscribe(onEvent);
+    liveStreams.delete(stream);
   }
   const onEvent = (event: TandemEvent) => {
     if (wakeMode && !isWakeWorthy(event)) return;
+    if (!streamAdmits(sessionId, event)) return;
     try {
       writeEvent(res, event, wakeMode);
     } catch (err) {
@@ -111,20 +227,24 @@ export function sseHandler(req: Request, res: Response): void {
   //
   // `onRevoke` (#1521): an event pushed while Tandem is unlicensed ends this
   // stream. The consumer's reconnect then meets the 403 above.
-  subscribe(onEvent, "external", {
-    onRevoke: () => {
-      cleanup();
-      try {
-        if (!res.writableEnded) res.end();
-      } catch (err) {
-        console.error(
-          "[SSE] Ending a revoked stream failed:",
-          err instanceof Error ? err.message : err,
-        );
-      }
-      console.error("[SSE] Stream ended: AI features are unlicensed");
-    },
-  });
+  //
+  // The same `revoke` ends the stream when the `ownership-changed` writer
+  // meets a refusal (#2358 PR 4a), which is outside `pushEvent`.
+  const revoke = (): void => {
+    cleanup();
+    try {
+      if (!res.writableEnded) res.end();
+    } catch (err) {
+      console.error(
+        "[SSE] Ending a revoked stream failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+    console.error("[SSE] Stream ended: AI features are unlicensed");
+  };
+  const stream: LiveStream = { res, cleanup, revoke };
+  subscribe(onEvent, "external", { onRevoke: revoke });
+  liveStreams.add(stream);
 
   // Keepalive to detect broken connections. The write MUST be guarded: on an
   // abruptly-closed socket (client SIGKILL / network drop, before req "close"

@@ -166,24 +166,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
-      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
-      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
-      "such a session waits for its next poll for a document that went unowned with work on it.",
-    closedBy:
-      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
-      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
-      "have landed.",
-  },
-  {
-    gap:
-      "Push paths (/api/events, /api/wake, the channel shim, the plugin monitor) still deliver " +
-      "every user chat:message to every consumer, so a session can be pushed chat it may not " +
-      "answer (the chat owners PR scoped the inbox and the reply, not pushes).",
-    closedBy: "PR 4 (push scope, design §9.1).",
-  },
-  {
-    gap:
       "A live acknowledger that never answers: since the posts PR an acknowledgement counts for " +
       "nothing, so an acknowledged message is re-owed at any change of its owner, but while the " +
       "acknowledger's record lives and owns the message (a doc-less or closed-document message, " +

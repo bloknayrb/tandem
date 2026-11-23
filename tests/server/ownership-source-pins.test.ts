@@ -1491,15 +1491,21 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
   // Unwired, the sink does nothing, so every unit test passes without the
   // wiring; `main()` cannot run in a unit test, so it is pinned from source.
   // `ownership-wake-frame.test.ts` wires the same expression against a real
-  // wake socket.
+  // wake socket, and `ownership-push-narrowing.test.ts` against a real
+  // `/api/events` stream (PR 4a).
   const OWNERSHIP = "src/server/sessions/ownership.ts";
   const index = SRC_FILES.get("src/server/index.ts") as string;
 
-  it("only index.ts sets it, once, to the wake socket's requestOwnershipFrame, before either branch", () => {
+  it("only index.ts sets it, once, to the wake socket's frame and the SSE nudge, before either branch", () => {
     expect(filesMentioning("setOwnershipFrameSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
-    const line = "  setOwnershipFrameSink(requestOwnershipFrame);";
-    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const line =
+      "  setOwnershipFrameSink(() => {\n" +
+      "    requestOwnershipFrame();\n" +
+      "    requestOwnershipChangedEvent();\n" +
+      "  });\n";
+    expect(index.split(line)).toHaveLength(2);
     expect(stripComments(index).match(/\bsetOwnershipFrameSink\b/g)).toHaveLength(2);
+    expect(stripComments(index).match(/\brequestOwnershipChangedEvent\b/g)).toHaveLength(2);
     const wired = index.indexOf(line);
     const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
     const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
