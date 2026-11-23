@@ -1319,8 +1319,8 @@ export async function startMcpServerHttp(
       sessionCount: getMcpClientCount,
       getSubscriberCount,
       getPushLiveness: getPushConsumerLiveness,
-      getDeliveryState: (externalConsumerCount) =>
-        getDeliveryState(Date.now(), externalConsumerCount),
+      getDeliveryState: (externalConsumerCount, now) =>
+        getDeliveryState(now ?? Date.now(), externalConsumerCount),
       // #1521: the one licence decision, read in a file that already imports it.
       aiRefused: () => aiRefusal() !== null,
       isShuttingDown,

@@ -35,8 +35,12 @@ export interface HealthHandlerDeps {
    * READ time. Its "something was attached" conjunct is checked when the event
    * is pushed and would otherwise never be checked again, which is how a
    * detached consumer turns into a `waitingMs` that climbs for days.
+   *
+   * `now` is the handler's own clock read, passed so `waitingMs` and the
+   * flag-on woken comparison below share one instant (#2358 PR 3b-2e2). A dep
+   * that ignores it reads its own clock, as before.
    */
-  getDeliveryState: (externalConsumerCount: number) => DeliveryState;
+  getDeliveryState: (externalConsumerCount: number, now?: number) => DeliveryState;
   /**
    * Does Tandem refuse the AI right now (#1521)? `aiRefusal() !== null`, wired
    * in the server. Maps an outstanding forward to `delivery.state:
@@ -195,7 +199,7 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // can never disagree within a single response — which is the exact
       // contradiction ("subscribers: 0" beside "awaiting-poll") this fixes.
       const now = Date.now();
-      const delivery = applyAiRefusal(deps.getDeliveryState(subscribers), deps.aiRefused);
+      const delivery = applyAiRefusal(deps.getDeliveryState(subscribers, now), deps.aiRefused);
       // Flag on only (#2358 PR 3b-2e2): a dark server sends the object as is.
       let keyed = false;
       try {
