@@ -198,3 +198,20 @@ export type RefreshResult = {
   kind: "ok" | "updated" | "attached" | "repaired" | "degraded" | "failed";
   annotation: import("../types.js").Annotation;
 };
+
+/**
+ * The two {@link RefreshResult} kinds a Claude-facing read reports as an
+ * annotation's `anchor` (#1764, #1823). The others are routine: `updated`
+ * follows any edit and `repaired` any reload, so reporting them would bury
+ * the signal. One list, so the output schema, the guard and the type agree.
+ */
+export const ANCHOR_VERDICTS = [
+  "degraded",
+  "failed",
+] as const satisfies readonly RefreshResult["kind"][];
+export type AnchorVerdict = (typeof ANCHOR_VERDICTS)[number];
+
+/** Whether a refresh kind is one of the two {@link ANCHOR_VERDICTS}. */
+export function isAnchorVerdict(kind: RefreshResult["kind"]): kind is AnchorVerdict {
+  return (ANCHOR_VERDICTS as readonly string[]).includes(kind);
+}

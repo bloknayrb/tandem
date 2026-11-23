@@ -4,7 +4,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import type { RangeValidation } from "../../shared/positions/index.js";
+import type {
+  AnchorVerdict,
+  RangeValidation,
+  RefreshResult,
+} from "../../shared/positions/index.js";
+import { isAnchorVerdict } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
@@ -430,6 +435,33 @@ export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Ann
 
 export { refreshAllRanges, refreshRange } from "../positions.js";
 
+/**
+ * The refreshed records, plus `anchorOf(record)`: `{ anchor }` for a record
+ * whose refresh was a {@link ANCHOR_VERDICTS} kind, `{}` otherwise. Shared by
+ * `tandem_getAnnotations` and `tandem_exportAnnotations` so they report the
+ * same verdicts. A stored `anchor` key never reaches here: `sanitizeAnnotation`
+ * is an allowlist without it.
+ *
+ * Keyed by record OBJECT, not `id`: stored ids are not checked against their
+ * map keys, so an id key could give a comment a private note's verdict. This
+ * holds only while the callers' filters pass the refreshed objects through
+ * uncopied, so look up before `withLocalModelMark`.
+ */
+function withAnchorVerdicts(refreshed: readonly RefreshResult[]): {
+  annotations: Annotation[];
+  anchorOf: (ann: Annotation) => { anchor?: AnchorVerdict };
+} {
+  const verdicts = new Map<Annotation, AnchorVerdict>();
+  for (const r of refreshed) if (isAnchorVerdict(r.kind)) verdicts.set(r.annotation, r.kind);
+  return {
+    annotations: refreshed.map((r) => r.annotation),
+    anchorOf: (ann) => {
+      const anchor = verdicts.get(ann);
+      return anchor ? { anchor } : {};
+    },
+  };
+}
+
 export function registerAnnotationTools(server: McpServer): void {
   // `tandem_getAnnotations`' output shape, decided once per registration
   // (#2465; the local-model mark, #1123 item 31 F1): with local-period records
@@ -574,16 +606,11 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        // #1764: `listAnnotationsRefreshed` now returns tagged refresh
-        // results. Keep the id → kind map beside the filter chain rather
-        // than threading the tag through every `.filter`, and emit only the
-        // two DEGRADATION verdicts below (`updated` fires for every
-        // annotation past any edit, `attached` on a pre-relRange record's
-        // first refresh, and `repaired` for the whole collection after any
-        // reload — emitting them buries the one signal #1764 asks for).
-        const refreshed = store.listAnnotationsRefreshed();
-        const kindById = new Map(refreshed.map((r) => [r.annotation.id, r.kind]));
-        let results = refreshed.map((r) => r.annotation);
+        // #1764: `anchorOf` reports degraded/failed refreshes after the filters.
+        const { annotations: refreshed, anchorOf } = withAnchorVerdicts(
+          store.listAnnotationsRefreshed(),
+        );
+        let results = refreshed;
         if (author) results = results.filter((a) => a.author === author);
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
@@ -617,10 +644,9 @@ export function registerAnnotationTools(server: McpServer): void {
         // The trailing Solo filter hides a user's own reply on a Claude comment
         // (the parent survives the annotation-level filter; the reply must not).
         const annotationsWithReplies = results.map((ann) => {
-          const kind = kindById.get(ann.id);
           return {
             ...withLocalModelMark(ann),
-            ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
+            ...anchorOf(ann),
             replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
               .filter((r) => !hideFromAI(r, modeState))
               .map(withLocalModelMark),
@@ -873,7 +899,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export the annotations you can see as a review summary (markdown by default, listing each item's status and its visible replies, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user's annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.",
+    'Export the annotations you can see as a review summary (markdown by default, listing each item\'s status and its visible replies, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user\'s annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. An item whose position can no longer be trusted carries anchor: "degraded" or "failed", as in tandem_getAnnotations (an Anchor line in the markdown). writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.',
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
@@ -907,7 +933,9 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        const annotations = store.listAnnotationsRefreshed().map((r) => r.annotation);
+        // #1823: `anchorOf` reports the same verdicts as tandem_getAnnotations,
+        // read only for records in `exportable` below.
+        const { annotations, anchorOf } = withAnchorVerdicts(store.listAnnotationsRefreshed());
         // #1619/#1710: notes AND every record whose stored `audience` is not
         // outbound are user-private (ADR-027) — excluded from exports, with the
         // same predicate the channel and `tandem_getAnnotations` use. Notes are
@@ -969,6 +997,7 @@ export function registerAnnotationTools(server: McpServer): void {
         // it labels nothing "Local model".
         const enriched = exportable.map((ann) => ({
           ...withLocalModelMark(ann),
+          ...anchorOf(ann),
           // ADR-027 + #1000: comment-only + `private`-stripped (see
           // tandem_getAnnotations / channelVisibleReplies).
           //
