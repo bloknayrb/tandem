@@ -326,11 +326,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), but a " +
+      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), and " +
+      "rule 0's records are computed (3b-2b3a), but the own-spawn seam is unset, so a " +
       "transport bound to the current spawn still sits on its `claude:<id>` record, not the " +
-      "`tandem` record, and there are no unbound-child records, no private records for other " +
-      "own-child ids, and no retirement or demotion at a spawn.",
-    closedBy: "PR 3b-2.",
+      "`tandem` record, no transport reaches an unbound-child or private record, and there is " +
+      "no retirement or demotion at a spawn.",
+    closedBy: "3b-2b3b and 3b-2b4's switch-on.",
   },
   {
     gap:
