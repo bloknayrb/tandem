@@ -279,6 +279,38 @@ describe("assignEnvelopeRows — indistinguishable twins, no ledger", () => {
   });
 });
 
+describe("assignEnvelopeRows — an own record whose snapshot contradicts the row", () => {
+  it("round 17: a foreign body stored as X never overwrites X, and X's replies are quarantined", () => {
+    // Live X: a private comment over "bravo". The old envelope holds K's body
+    // stored as X (K since deleted, no ledger): outbound, over "alpha", newer.
+    const liveX = annRecord({
+      id: "X",
+      author: "user",
+      type: "comment",
+      audience: "private",
+      content: "X body",
+      textSnapshot: "bravo",
+      timestamp: T_X,
+      rev: 1,
+    } as never);
+    const doc = liveDoc({ X: { ...liveX } });
+    const out = assign(doc, [
+      { ...liveX, audience: "outbound", content: "K body", textSnapshot: "alpha", rev: 6 } as never,
+    ]);
+    expect(out.rows.has("X")).toBe(false);
+    expect([...out.rows.keys()].every(isFreshKey)).toBe(true);
+    expect(out.quarantineIds.has("X")).toBe(true);
+  });
+
+  it("an own record whose snapshot merely went missing still merges onto X", () => {
+    const liveX = annRecord({ id: "X", content: "X body", timestamp: T_X, rev: 1 });
+    const doc = liveDoc({ X: { ...liveX } });
+    const out = assign(doc, [{ ...liveX, textSnapshot: "bravo", rev: 3 } as never]);
+    expect(out.rows.get("X")?.content).toBe("X body");
+    expect(out.quarantineIds.has("X")).toBe(false);
+  });
+});
+
 describe("assignEnvelopeRows — a row whose own record its tombstone beats", () => {
   it("targets its own id, where the tombstone deletes it, never a fresh key", () => {
     const doc = liveDoc({ X: { ...X, rev: 1 } });

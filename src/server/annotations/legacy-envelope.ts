@@ -291,8 +291,9 @@ export function assignEnvelopeRows(
   // Not claimed: an id that appears more than once in the file (an alias beside
   // its record) or that the ledger names (a repaired key or stale id).
   //
-  // A claim is AMBIGUOUS when another key is also compatible, unless the
-  // snapshot narrows the set to exactly the row's own id. An ambiguous claim
+  // A claim is AMBIGUOUS when the own record's snapshot contradicts the row's,
+  // or when another key is also compatible, unless the snapshot narrows the
+  // set to exactly the row's own id. An ambiguous claim
   // (round 16: key cycles of indistinguishable twins after a restart):
   //   - quarantines the id's replies, so a note-thread reply an older client
   //     filed under it never reaches Claude; and
@@ -308,7 +309,13 @@ export function assignEnvelopeRows(
     const loose = looseCands[index];
     if (idCount.get(row.id) !== 1 || ledgerIds.has(row.id) || !loose.includes(row.id)) return;
     const strict = strictCands[index];
-    const ambiguous = loose.length > 1 && !(strict.length === 1 && strict[0] === row.id);
+    // Ambiguous when the own record is only LOOSELY compatible (its snapshot
+    // contradicts the row's: weak evidence it is the same record; round 17), or
+    // when another key is also compatible and the snapshot does not narrow the
+    // set to the own id alone.
+    const ambiguous =
+      !strict.includes(row.id) ||
+      (loose.length > 1 && !(strict.length === 1 && strict[0] === row.id));
     if (ambiguous) {
       quarantineIds.add(row.id);
       const live = annMap.get(row.id) as { rev?: number; editedAt?: number } | undefined;

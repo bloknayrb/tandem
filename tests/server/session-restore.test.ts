@@ -51,7 +51,7 @@ vi.mock(import("../../src/server/documents/populate.js"), async (importOriginal)
 });
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
+import { type AnnotationDocV1, KEY_IDENTITY_FORMAT } from "../../src/server/annotations/schema.js";
 import {
   closeStore,
   createStore,
@@ -404,13 +404,14 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     filePath: string,
     annotations: AnnotationDocV1["annotations"],
     tombstones: AnnotationDocV1["tombstones"] = [],
+    meta: Partial<AnnotationDocV1["meta"]> = {},
   ): Promise<void> {
     const hash = docHash(filePath);
     const store = createStore(hash, { filePath });
     store.queueWrite(() => ({
       schemaVersion: 1,
       docHash: hash,
-      meta: { filePath, lastUpdated: Date.now() },
+      meta: { filePath, lastUpdated: Date.now(), ...meta },
       annotations,
       tombstones,
       replies: [],
@@ -1561,20 +1562,31 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     );
     // Accept replaces the stored span verbatim, so a suggestion written for
     // "BETA" must not be moved onto the session's "beta".
-    await seedEnvelope(resolved, [
-      {
-        id: "ann-W",
-        author: "claude",
-        type: "comment",
-        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
-        content: "Capitalize",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "BETA",
-        suggestedText: "BETA!",
-        rev: 2,
-      },
-    ]);
+    //
+    // The envelope is in the CURRENT format (`keyIdentity`), the one every
+    // envelope carries once written by this build: rows merge by id, which is
+    // what #1863 is about. An old-format envelope whose copy's snapshot
+    // contradicts the session's is duplicated rather than merged on its first
+    // load (`legacy-envelope.ts`), covered by `legacy-envelope.test.ts`.
+    await seedEnvelope(
+      resolved,
+      [
+        {
+          id: "ann-W",
+          author: "claude",
+          type: "comment",
+          range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+          content: "Capitalize",
+          status: "pending",
+          timestamp: 1700000000000,
+          textSnapshot: "BETA",
+          suggestedText: "BETA!",
+          rev: 2,
+        },
+      ],
+      [],
+      { keyIdentity: KEY_IDENTITY_FORMAT },
+    );
 
     const res = await openFromDisk(resolved);
     expect(res.kind).toBe("restored");
