@@ -88,7 +88,18 @@ export function makeAnnotationsObserver(deps: {
       // `audience === "outbound" && type !== "note"`. Everything below builds
       // its payload from `ann`, and the builders take `ChannelEligible` — so a
       // branch that forgets to narrow is a compile error, not a silent leak.
-      const ann = narrowForChannel(raw, {
+      //
+      // The record's identity is its map KEY: a record stored under K with a
+      // stale `id: X` is announced as K, the id Claude can act on. Ids play no
+      // part in the privacy predicates, so stamping before the narrow is safe.
+      const keyed =
+        typeof raw === "object" &&
+        raw !== null &&
+        typeof (raw as { id?: unknown }).id === "string" &&
+        (raw as { id: string }).id !== key
+          ? ({ ...(raw as object), id: key } as typeof raw)
+          : raw;
+      const ann = narrowForChannel(keyed, {
         onLossy: (event) => relaySanitizationEvent(docName, event),
         onRefused: (refusal, refused) => {
           // `isNoteworthyRefusal`, not a hand-written reason check. The first

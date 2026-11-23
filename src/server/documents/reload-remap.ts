@@ -104,10 +104,11 @@ import { diffLines } from "diff";
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { type DocumentRange, toFlatOffset } from "../../shared/positions/types.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
 import type { Annotation } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { reconcileAnnotationKeys } from "../annotations/key-identity.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { extractText, extractTextWithBreaks, type FlatBreak } from "../mcp/document-model.js";
 import {
@@ -465,13 +466,22 @@ function sanitizeFor(raw: unknown, hash: string): Annotation | null {
  * the same transaction as the content swap and before it — no await between.
  */
 export function captureRemapInput(ydoc: Y.Doc, filePath: string): RemapInput {
+  // Remap writes every record back under its key, so it is a repairing writer:
+  // reconcile first, so replies filed under a stale id are quarantined before
+  // any id is repaired, and `entry.raw` is the reconciled object. Inside the
+  // content-swap transaction this joins it and takes its server origin.
+  reconcileAnnotationKeys(ydoc);
   const { text: oldText, breaks: oldBreaks } = extractTextWithBreaks(ydoc);
   const entries = new Map<string, RemapEntry>();
   const hash = docHash(filePath);
   ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((raw, key) => {
-    const ann = sanitizeFor(raw, hash);
-    if (!ann || ann.id !== key) return;
-    entries.set(key, entryFor(raw, ann, ydoc, oldText));
+    // Identity is the map key: a record stored under K with a stale `id: X` is
+    // remapped as K (it used to be skipped, so it kept pre-reload coordinates
+    // under a dead anchor). Only `ann` is stamped; `raw` stays the live map
+    // value, because `applyRemap`'s `current === entry.raw` is a reference check.
+    const sanitized = key === "" ? null : sanitizeFor(raw, hash);
+    if (!sanitized) return;
+    entries.set(key, entryFor(raw, atMapKey(key, sanitized), ydoc, oldText));
   });
   return { oldText, oldBreaks, entries, filePath };
 }
@@ -514,8 +524,9 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
     }
     if (current === undefined || !sameAnchor(current, entry.raw)) continue;
     hash ??= docHash(input.filePath);
-    const ann = sanitizeFor(current, hash);
-    if (!ann || ann.id !== entry.id) continue;
+    const sanitized = sanitizeFor(current, hash);
+    if (!sanitized) continue;
+    const ann = atMapKey(entry.id, sanitized);
     map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
   return remap;
@@ -550,8 +561,9 @@ export function remapEnvelopeWins(
   let wrote = false;
   for (const id of ids) {
     const raw = map.get(id);
-    const ann = sanitizeFor(raw, hash);
-    if (!ann || ann.id !== id) continue;
+    const sanitized = sanitizeFor(raw, hash);
+    if (!sanitized) continue;
+    const ann = atMapKey(id, sanitized);
     const captured = remap.entries.get(id);
     const entry: RemapEntry =
       captured && sameAnchor(raw, captured.raw)

@@ -68,7 +68,7 @@
 
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
 import {
@@ -376,7 +376,7 @@ export function prepareExportComments(
   // makes stored ids converge on this allocator's 1, 2, 3… space, and therefore
   // what makes the collision reachable.
   const claimedWordIds = new Set<number>();
-  map.forEach((value) => {
+  map.forEach((value, key) => {
     const stored =
       typeof value === "object" && value !== null
         ? (value as { importSource?: { commentId?: unknown } }).importSource?.commentId
@@ -385,7 +385,7 @@ export function prepareExportComments(
       const claimed = reusableWordId(stored);
       if (claimed !== null) claimedWordIds.add(claimed);
     }
-    if (!isAnnotationShaped(value)) {
+    if (key === "" || !isAnnotationShaped(value)) {
       // A FOURTH drop, earlier and previously entirely silent (no log, no
       // counter): a durable record that lost or corrupted its id/content/range
       // is a real Word comment that will not be written. Counting it matters —
@@ -394,9 +394,15 @@ export function prepareExportComments(
       onSkip?.("malformed");
       return;
     }
-    const ann = sanitizeAnnotation(value, (event) => {
-      warn(`[docx-comment-export] sanitize rewrote ${event.id}: ${event.kind}`);
-    });
+    // Identity is the map key (`atMapKey`), so the export row, its replies and
+    // `reconcileImportCommentIds`' write all target the record's own key, never
+    // a record stored at its stale `value.id`. Stamped after sanitize.
+    const ann = atMapKey(
+      key,
+      sanitizeAnnotation(value, (event) => {
+        warn(`[docx-comment-export] sanitize rewrote ${event.id}: ${event.kind}`);
+      }),
+    );
     // ADR-027 gate — see module header. Import round-trips (author:"import" +
     // importSource) bypass the type/audience/status gates: they are file content
     // written back to their own .docx, Claude-invisible throughout. User notes/

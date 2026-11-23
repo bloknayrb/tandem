@@ -66,7 +66,7 @@
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
-import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
 import { contentHash } from "./doc-hash.js";
@@ -76,6 +76,7 @@ import {
   type AnnotationRecordV1,
   AnnotationReplyRecordSchemaV1,
   type AnnotationReplyRecordV1,
+  KEY_IDENTITY_FORMAT,
   SCHEMA_VERSION,
   type TombstoneRecordV1,
 } from "./schema.js";
@@ -186,12 +187,17 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
   let annDrops = 0;
   let replyDrops = 0;
 
+  // Each record is persisted under its MAP KEY (`atMapKey`): a record stored
+  // under key K with `id: X` reaches disk as K, never as X, so `loadAndMerge`
+  // (which keys file rows by id) cannot later land it on the record at X.
+  // `atMapKey` copies only when the ids differ; the fast path's raw object is
+  // never mutated. An empty key cannot be a valid envelope id, so it is dropped.
   const annotations: AnnotationRecordV1[] = [];
-  for (const value of annMap.values()) {
-    const rec = normalizeAnnotation(value, docHash);
-    if (rec) annotations.push(rec);
+  annMap.forEach((value, key) => {
+    const rec = key === "" ? null : normalizeAnnotation(value, docHash);
+    if (rec) annotations.push(atMapKey(key, rec));
     else annDrops++;
-  }
+  });
 
   const replies: AnnotationReplyRecordV1[] = [];
   for (const value of repMap.values()) {
@@ -217,11 +223,32 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
   return {
     schemaVersion: SCHEMA_VERSION,
     docHash,
-    meta: { filePath: meta.filePath, lastUpdated: Date.now(), contentHash: contentHashValue },
+    // `keyIdentity: 1` marks an envelope whose every row id is its map key.
+    // Additive meta (MetaSchema is `.passthrough()`), no schemaVersion bump. An
+    // older build that rewrites the file drops it, which falls back to the
+    // conservative old-format merge.
+    meta: {
+      filePath: meta.filePath,
+      lastUpdated: Date.now(),
+      contentHash: contentHashValue,
+      keyIdentity: KEY_IDENTITY_FORMAT,
+    },
     annotations,
     tombstones,
     replies,
   };
+}
+
+/**
+ * Queue a durable snapshot of `ctx`'s document now.
+ *
+ * For writers whose origin durable sync deliberately skips (`withInternal`,
+ * `withFileSync`) but whose write must still reach disk: the key-identity
+ * reconciler's reply quarantine and id repair (`key-identity.ts`).
+ */
+export function queueSnapshot(ctx: SyncContext): void {
+  const { store, ydoc, docHash, meta } = ctx;
+  store.queueWrite(() => snapshot(ydoc, docHash, meta));
 }
 
 // ---------------------------------------------------------------------------

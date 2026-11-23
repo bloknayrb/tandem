@@ -25,8 +25,12 @@ export interface HocuspocusLifecycle {
    */
   shouldKeepDocument(name: string): boolean;
 
-  /** A Y.Doc instance was replaced during `onLoadDocument`; rebind observers. */
-  onDocSwapped(docName: string, newDoc: Y.Doc): void;
+  /**
+   * A Y.Doc instance was replaced during `onLoadDocument`; rebind observers.
+   * `oldDoc` is the replaced instance when there was one, so per-doc state that
+   * must outlive the swap (the annotation key-identity ledger) can be copied.
+   */
+  onDocSwapped(docName: string, newDoc: Y.Doc, oldDoc?: Y.Doc): void;
 
   /**
    * A Y.Doc was evicted from the map. This is NOT the mirror of

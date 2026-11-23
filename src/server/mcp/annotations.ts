@@ -6,7 +6,7 @@ import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -17,6 +17,12 @@ import {
 } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import {
+  type ReconciledDoc,
+  reconcileAnnotationKeys,
+  reconciledRepliesMap,
+  reportKeyMismatch,
+} from "../annotations/key-identity.js";
 import {
   describeReplyWriteRefusal,
   describeSuggestionRangeRefusal,
@@ -213,7 +219,7 @@ function threadItemAnsweredBy(
   const store = getDocumentStore(documentId);
   if (!store) return null;
   if (hideFromAI(parent, readModeState())) return null;
-  const visible = channelVisibleReplies(parent, (id) => store.listReplies(id));
+  const visible = channelVisibleReplies(store.reconciled(), parent);
   for (let i = visible.length - 1; i >= 0; i--) {
     const reply = visible[i];
     if (reply.author === "user" && reply.heldInSolo !== true) {
@@ -240,21 +246,26 @@ function threadItemAnsweredBy(
  * This is the only copy of the author rule on the pull side: `file-io/docx.ts`
  * and `inbox-selection.ts`'s `replyWaits` restate the privacy half only,
  * because their input has already passed here.
- * `loadReplies` is a thunk so the replies Y.Map is only walked for comments.
+ * The replies Y.Map is only walked for a Claude-facing comment.
  * Every Claude egress (`tandem_getAnnotations`, `tandem_exportAnnotations`)
  * MUST route through this — never call `collectRepliesForAnnotation` /
  * `store.listReplies` directly for Claude-facing output.
  */
 export function channelVisibleReplies(
+  reconciled: ReconciledDoc,
   annotation: Annotation,
-  loadReplies: (annotationId: string) => AnnotationReply[],
 ): AnnotationReply[] {
   // #1619: the audience half, not just the type half. A stored
   // `{comment, audience: "private"}` parent is withheld from the channel and
   // must be withheld here too — this is the single reply gate every Claude
   // egress routes through, so `collectInboxUserReplies` inherits it.
   if (annotation.type !== "comment" || !isClaudeFacing(annotation)) return [];
-  return loadReplies(annotation.id).filter(
+  // The `ReconciledDoc` is required, not optional: it proves the document was
+  // reconciled in this same synchronous call, so replies an older client filed
+  // under a stale id are already quarantined. Replies load from the token's own
+  // document, so one document's token cannot vouch for another.
+  const repliesMap = reconciledRepliesMap(reconciled);
+  return collectRepliesForAnnotation(repliesMap, annotation.id).filter(
     (r) => (r.author === "user" || r.author === "claude") && replyPrivacyAllows(r),
   );
 }
@@ -413,16 +424,31 @@ export function hasAnnotationShape(value: unknown): value is Record<string, unkn
   );
 }
 
-/** Collect all annotations from the Y.Map as an array, skipping malformed entries.
- *  Applies sanitizeAnnotation() to normalize legacy shapes. */
+/**
+ * Collect all annotations from the Y.Map as an array, skipping malformed entries.
+ * Applies sanitizeAnnotation() to normalize legacy shapes.
+ *
+ * **Each record's identity is its map key** (`atMapKey`): a record stored under
+ * key K with `id: X` is returned with `id: K`, so every write a caller keys by
+ * `ann.id` lands on the record's own key, never on the record stored at X. An
+ * empty key is malformed (the envelope schema requires a non-empty id).
+ */
 export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Annotation[] {
+  // Reconcile before reading: any write a caller keys by a stamped id (refresh,
+  // overlay, re-anchor) then comes after the reply quarantine. A detached map
+  // (no doc) has nothing to expose. Inside an outer transaction the repair
+  // joins it and takes its (always server-side) origin.
+  if (map.doc) reconcileAnnotationKeys(map.doc);
   const result: Annotation[] = [];
   const onLossy = makeOnLossy(docHashKey);
   map.forEach((value, key) => {
-    if (hasAnnotationShape(value)) {
-      result.push(sanitizeAnnotation(value as unknown as Annotation, onLossy));
+    if (key !== "" && hasAnnotationShape(value)) {
+      // Stamp AFTER sanitize (see `atMapKey`): `onLossy` events name the stored id.
+      const ann = atMapKey(key, sanitizeAnnotation(value as unknown as Annotation, onLossy));
+      if (ann.id !== value.id) reportKeyMismatch(docHashKey, key, value.id as string);
+      result.push(ann);
     } else {
-      console.warn(`[Tandem] Skipping malformed annotation entry: ${key}`);
+      console.warn("[Tandem] Skipping malformed annotation entry: %s", key);
     }
   });
   return result;
@@ -616,12 +642,13 @@ export function registerAnnotationTools(server: McpServer): void {
         // gates so this read site can't drift from the export path / observer.
         // The trailing Solo filter hides a user's own reply on a Claude comment
         // (the parent survives the annotation-level filter; the reply must not).
+        const reconciled = store.reconciled();
         const annotationsWithReplies = results.map((ann) => {
           const kind = kindById.get(ann.id);
           return {
             ...withLocalModelMark(ann),
             ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
-            replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
+            replies: channelVisibleReplies(reconciled, ann)
               .filter((r) => !hideFromAI(r, modeState))
               .map(withLocalModelMark),
           };
@@ -967,6 +994,7 @@ export function registerAnnotationTools(server: McpServer): void {
         // returns each record as is, so the JSON is byte-identical, and the
         // markdown is handed copies without any stored `byLocalModel` key, so
         // it labels nothing "Local model".
+        const reconciled = store.reconciled();
         const enriched = exportable.map((ann) => ({
           ...withLocalModelMark(ann),
           // ADR-027 + #1000: comment-only + `private`-stripped (see
@@ -977,7 +1005,7 @@ export function registerAnnotationTools(server: McpServer): void {
           // a CLAUDE-authored comment survives the annotation-level filter above
           // (its parent isn't user-authored) and would leak. tandem_getAnnotations
           // chains both for the same reason.
-          replies: channelVisibleReplies(ann, (id) => store.listReplies(id))
+          replies: channelVisibleReplies(reconciled, ann)
             .filter((r) => !hideFromAI(r, modeState))
             .map(withLocalModelMark),
           textSnippet: fullText.slice(

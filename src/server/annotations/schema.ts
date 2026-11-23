@@ -26,6 +26,9 @@ import {
 import { logLegacyMigration, MIGRATE_TO_V1_DOC_HASH } from "./migration-log.js";
 import { migrateUp } from "./migrations/index.js";
 
+/** `meta.keyIdentity` value of an envelope whose every row id is its map key. */
+export const KEY_IDENTITY_FORMAT = 1 as const;
+
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
 export const SCHEMA_VERSION = 1 as const;
 
@@ -219,6 +222,11 @@ const MetaSchema = z
     // a renamed-but-byte-identical document. Optional so pre-#313 envelopes
     // (which lack it) still parse; recovery simply skips them.
     contentHash: z.string().optional(),
+    // Additive. `1` marks an envelope written by a `snapshot()` that persists
+    // each record under its Y.Map key, so every row id IS its key. Absent on
+    // older envelopes, whose rows may carry another record's id: `loadAndMerge`
+    // routes those through the old-format assignment pass instead.
+    keyIdentity: z.literal(KEY_IDENTITY_FORMAT).optional(),
   })
   .passthrough();
 
