@@ -126,7 +126,8 @@ let spawnEndedListener: ((boundMcpSessionIds: readonly string[]) => void) | unde
 /**
  * Ownership's teardown re-pointing (ownership design §3.3). Set only by
  * `setOwnSpawnSource` in `sessions/ownership.ts` while its seam is set, which
- * nothing in `src` does until 3b-2b4; unset, teardown is exactly 3a's.
+ * `index.ts`'s supervisor setup does (#2358 PR 3b-2b4a); unset, teardown is
+ * exactly 3a's.
  */
 export function setSpawnEndedListener(
   listener: ((boundMcpSessionIds: readonly string[]) => void) | undefined,

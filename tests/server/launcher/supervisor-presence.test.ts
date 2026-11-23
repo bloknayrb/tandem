@@ -1,7 +1,8 @@
 /**
  * Tandem's Claude's run state in the supervisor (#2358 PR 3b-1, ships dark):
  * the spawn record, the bind window and the failed-bind judgement (R1), and
- * presence with its announcements (R2). Computed, consumed by nothing yet.
+ * presence with its announcements (R2). Consumed by ownership through
+ * `index.ts` since #2358 PR 3b-2b4a; the last describe wires it the same way.
  *
  * `spawn` is mocked for the whole file (a `FakeChild` whose exit the test can
  * hold), as `supervisor-turn-delivery.test.ts` does; the run files are real,
@@ -59,6 +60,20 @@ import {
   judgeBind,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
+import {
+  getDocOwner,
+  noteOwnSpawnStarted,
+  noteTandemPresence,
+  noteTransportRegistered,
+  ownershipSnapshotForTests,
+  resetOwnershipForTests,
+  setOpenDocumentIdsSource,
+  setOwnSpawnSource,
+  setTandemPresenceSource,
+  setTransportView,
+  TANDEM_OWNER_ID,
+  type TransportViewEntry,
+} from "../../../src/server/sessions/ownership.js";
 import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
 
@@ -3063,7 +3078,7 @@ describe("3b-2b2: a new user comment or any user thread reply asks start-or-wake
   });
 });
 
-describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; not wired by index.ts)", () => {
+describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; wired by index.ts since 3b-2b4a)", () => {
   it("ownSpawn names the live child's spawn and id; a resumed spawn has the same id and a new number; isOwnChildSession folds case", async () => {
     const h = makeSupervisor();
     expect(h.sup.ownSpawn?.()).toBeNull();
@@ -3085,5 +3100,86 @@ describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; not wired by index.ts)",
     await h.sup.startFresh(cwdDir);
     await childN(1);
     expect(h.sup.ownSpawn?.()).toBeNull();
+  });
+});
+
+describe("the spawn-started event and the switch-on as index.ts wires it (#2358 PR 3b-2b4a)", () => {
+  let view: TransportViewEntry[];
+  beforeEach(() => {
+    view = [];
+    setTransportView(() => view);
+  });
+  afterEach(() => {
+    resetOwnershipForTests();
+    setOpenDocumentIdsSource(() => []);
+  });
+
+  /** `index.ts`'s wiring, against this supervisor. */
+  function wire(h: ReturnType<typeof makeSupervisor>): void {
+    setTandemPresenceSource(() => h.sup.tandemPresence?.().isPresent() === true);
+    h.seam.subscribe(noteTandemPresence);
+    h.seam.onSpawnStarted(noteOwnSpawnStarted);
+    setOwnSpawnSource(
+      () => h.sup.ownSpawn?.() ?? null,
+      (id) => h.sup.isOwnChildSession?.(id) === true,
+    );
+  }
+
+  it("spawn 1, then a resumed spawn 2 with the same id and a new number", async () => {
+    const h = makeSupervisor();
+    const seen: Array<{ n: number; sessionId: string }> = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    const c1 = await boundFreshRun(h);
+    const id = argAfter(c1, "--session-id") as string;
+    expect(seen).toEqual([{ n: 1, sessionId: id }]);
+    await crashToResumed(c1);
+    expect(seen).toEqual([
+      { n: 1, sessionId: id },
+      { n: 2, sessionId: id },
+    ]);
+  });
+
+  it("wired: presence gives an open document nobody holds to Tandem's Claude, and spawn 2 retires spawn 1's record", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    const stray: TransportViewEntry = { ownerId: "spawn:1", sessionId: "m-stray", openStreams: 0 };
+    view.push(stray);
+    noteTransportRegistered("spawn:1", { recordKind: "unbound-child" });
+    await crashToResumed(c1);
+    expect(stray.ownerId).toBe("private:m-stray");
+    expect(getDocOwner("doc")?.ownerId).toBe(TANDEM_OWNER_ID);
+  });
+
+  it("a throwing spawn-started subscriber is contained: the next one still hears it", async () => {
+    const h = makeSupervisor();
+    const seen: number[] = [];
+    h.seam.onSpawnStarted(() => {
+      throw new Error("boom");
+    });
+    h.seam.onSpawnStarted((s) => seen.push(s.n));
+    await boundFreshRun(h);
+    expect(seen).toEqual([1]);
+    expect(logText()).toMatch(/A spawn-started subscriber threw \(ignored\): Error: boom/);
+  });
+
+  it("flag off, wired as index.ts wires it: no event, no presence, nothing created", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    const seen: unknown[] = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    await settle();
+    expect(seen).toEqual([]);
+    expect(h.log).toEqual([]);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+    expect(ownershipSnapshotForTests().ownerByDoc).toEqual([]);
+    expect(logText()).not.toMatch(/ownership|spawn-started/);
   });
 });

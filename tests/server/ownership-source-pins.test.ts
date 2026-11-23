@@ -797,7 +797,7 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
     expect(queue).toContain("a claim made by an accepted chat post");
     expect(queue).toContain("cause\n * `post-claim`");
-    expect(queue).toContain("Seven run where they are");
+    expect(queue).toContain("Six run where they are");
   });
 });
 
@@ -1360,28 +1360,52 @@ describe("claimable work (#2358 PR 3b-2b1b-claimable)", () => {
   });
 });
 
-describe("the own-spawn seam is built and not set (#2358 PR 3b-2b3a; Bryan, 2026-11-23: build dark, switch on with 3b-2b4)", () => {
-  // 3b-2b4 deletes or rewrites this describe when it wires the seam together
-  // with presence's consumer.
-  it("no src file but ownership.ts names setOwnSpawnSource: index.ts leaves it unset", () => {
-    expect(filesMentioning("setOwnSpawnSource")).toEqual(["src/server/sessions/ownership.ts"]);
-    expect(stripComments(SRC_FILES.get("src/server/index.ts") as string)).not.toMatch(
-      /OwnSpawnSource/,
-    );
-  });
+describe("the switch-on: index.ts wires the own-spawn seam and presence's consumer once, inside the supervisor setup (#2358 PR 3b-2b4a; Bryan, 2026-11-23: build dark, switch on with 3b-2b4)", () => {
+  const INDEX = "src/server/index.ts";
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const SUPERVISOR = "src/server/launcher/supervisor.ts";
+  const index = stripComments(SRC_FILES.get(INDEX) as string);
+  const uses = (name: string) => index.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
+  // `startLauncherSupervisor`'s body between `createSupervisor({` and the
+  // `start()` call: suites that build a supervisor directly never reach it.
+  const setup = (() => {
+    const fn = index.slice(index.indexOf("async function startLauncherSupervisor("));
+    const from = fn.indexOf("launcherSupervisor = createSupervisor({");
+    const to = fn.indexOf("await launcherSupervisor.start();");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return fn.slice(from, to);
+  })();
 
-  it("retirement and demotion are called from nowhere yet, and only ownership listens for a spawn's end (#2358 PR 3b-2b3b)", () => {
-    // 3b-2b4 adds the supervisor's call when it wires the seam.
-    expect(filesMentioning("noteOwnSpawnStarted")).toEqual(["src/server/sessions/ownership.ts"]);
+  it.each([
+    ["setOwnSpawnSource", OWNERSHIP, 2],
+    ["setTandemPresenceSource", OWNERSHIP, 2],
+    ["noteOwnSpawnStarted", OWNERSHIP, 2],
+    ["noteTandemPresence", OWNERSHIP, 2],
+    ["onSpawnStarted", SUPERVISOR, 1],
+  ] as const)(
+    "%s is named only by its module and index.ts, whose one use sits in the setup",
+    (name, owner, inIndex) => {
+      expect(filesMentioning(name)).toEqual([INDEX, owner].sort());
+      // The import (for the ownership names), then exactly one use.
+      expect(uses(name)).toBe(inIndex);
+      expect(setup).toMatch(new RegExp(`\\b${name}\\b`));
+    },
+  );
+
+  it("only ownership listens for a spawn's end", () => {
     expect(filesMentioning("setSpawnEndedListener")).toEqual([
       "src/server/sessions/owner-handle-bind.ts",
-      "src/server/sessions/ownership.ts",
+      OWNERSHIP,
     ]);
   });
 
-  it("the supervisor's two seam reads are named only by the supervisor", () => {
-    expect(filesMentioning("ownSpawn")).toEqual(["src/server/launcher/supervisor.ts"]);
-    expect(filesMentioning("isOwnChildSession")).toEqual(["src/server/launcher/supervisor.ts"]);
+  it("the supervisor's two seam reads are named only by the supervisor and the setup", () => {
+    for (const name of ["ownSpawn", "isOwnChildSession"]) {
+      expect(filesMentioning(name), name).toEqual([INDEX, SUPERVISOR]);
+      expect(uses(name), name).toBe(1);
+      expect(setup, name).toMatch(new RegExp(`\\b${name}\\b`));
+    }
   });
 
   it("server.ts resolves the routed record after the bind is confirmed, from the bind outcome", () => {

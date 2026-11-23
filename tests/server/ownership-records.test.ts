@@ -826,6 +826,31 @@ describe("retirement, demotion and teardown re-pointing (#2358 PR 3b-2b3b)", () 
     expectNoDanglingOwners();
   });
 
+  it("a retired record's per-message chat is re-owed and follows the default rule (3b-2b3b review)", () => {
+    const reOwed: string[] = [];
+    setOwnershipChatSide({
+      handledKeys: () => new Set(),
+      messagesOn: () => [],
+      message: () => ({ documentOpen: false, localPeriod: false }),
+      reOwe: (keys) => reOwed.push(...keys),
+      settleCandidates: () => [],
+      addSettles: () => [],
+      owedToFreshReader: () => [],
+    });
+    transport("m1", "spawn:3", "unbound-child");
+    setTandemPresenceSource(() => false);
+    const out = { owners: [] as string[], handed: [] as string[] };
+    inboxOwnership.begin({ ownerId: "spawn:3" }, [], 0).commitChat(["chat-1"], ["chat-1"], out);
+    expect(out.owners).toEqual(["chat-1"]);
+    setTandemPresenceSource(() => true);
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+    expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+    expect(reOwed).toEqual(["chat-1"]);
+    // Doc-less with no per-message owner: Tandem's Claude's while present.
+    const tandem = inboxOwnership.begin({ ownerId: TANDEM_OWNER_ID }, [], 0);
+    expect(tandem.chatScopeOf("chat-1", undefined)).toBe("owns");
+  });
+
   it("with Tandem's Claude not present, the retired record's documents go unowned", () => {
     setTandemPresenceSource(() => false);
     transport("m1", "spawn:3", "unbound-child");

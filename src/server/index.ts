@@ -94,12 +94,16 @@ import {
   applyUserOpenDefaultToDocuments,
   forgetChatMessageOwners,
   keyedDeliveryRounds,
+  noteOwnSpawnStarted,
+  noteTandemPresence,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  setOwnSpawnSource,
   setStartOrWakeSink,
+  setTandemPresenceSource,
   setWaitingProbe,
   tandemWorkWaiting,
   undoClientChatWrites,
@@ -234,6 +238,19 @@ async function startLauncherSupervisor(): Promise<void> {
           : null;
       },
     });
+    // The switch-on (#2358 PR 3b-2b4a): ownership reads the supervisor's
+    // presence and own spawn, and hears each presence change and each spawn's
+    // start. Before `start()`, so the first spawn is heard. Flag off all of it
+    // is inert: the supervisor announces nothing and ownership returns at its
+    // flag check.
+    const sup = launcherSupervisor;
+    setTandemPresenceSource(() => launcherSupervisor?.tandemPresence?.().isPresent() === true);
+    sup.tandemPresence?.().subscribe(noteTandemPresence);
+    sup.tandemPresence?.().onSpawnStarted(noteOwnSpawnStarted);
+    setOwnSpawnSource(
+      () => sup.ownSpawn?.() ?? null,
+      (id) => sup.isOwnChildSession?.(id) === true,
+    );
     await launcherSupervisor.start();
   } catch (err) {
     launcherUnavailableReason = "spawn-failed";

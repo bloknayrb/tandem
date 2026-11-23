@@ -8,7 +8,7 @@
  * runs out first (below). With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
  *
- * **Not every ownership change is queued.** Seven run where they are, not at a
+ * **Not every ownership change is queued.** Six run where they are, not at a
  * turn of their own: a claim made by an accepted chat post (a `tandem_reply`
  * that names no message) naming an open, unowned document (cause
  * `post-claim`, the posts PR, R1.2: the same decision, so a post never waits
@@ -25,13 +25,12 @@
  * applied in `tandem_checkInbox`'s synchronous commit; on a document whose
  * operation has run past {@link docOpWaitLimitMs} it lands beside that
  * operation, the scope PR's stuck-write release), and
- * three that are synchronous by design: the tab-close point (`onDocumentClosed`), the user-open default
- * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
- * startup; it only
- * writes an entry where there is none, and writes nothing until Tandem's
- * Claude can be present, so PR 3b-2 must queue it), and the backstop that
+ * two that are synchronous by design: the tab-close point (`onDocumentClosed`) and the backstop that
  * clears an entry whose record no longer exists (`liveEntry`, which every
- * decision runs first).
+ * decision runs first). The user-open default (`applyUserOpenDefault`:
+ * `/api/open`, upload, scratchpad, `/api/convert`, startup) and presence's
+ * moves (`noteTandemPresence`) are queued (#2358 PR 3b-2b4a): each runs at
+ * once on an idle document, otherwise at its turn, re-checked there.
  *
  * **A leaf.** It imports nothing from the project.
  *

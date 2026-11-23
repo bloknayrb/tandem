@@ -620,8 +620,8 @@ async function openSession(
     onsessioninitialized: async (sessionId) => {
       // The bind fact (#2358 PR 3a, R3.9) was judged BEFORE the record is
       // resolved (in the POST handler). While rule 0 routes (#2358 PR
-      // 3b-2b3a: flag on and the own-spawn seam set, which nothing in `src`
-      // sets until 3b-2b4), the record is chosen only after the bind is
+      // 3b-2b3a: flag on and the own-spawn seam set, which `index.ts`'s
+      // supervisor setup does since 3b-2b4a), the record is chosen only after the bind is
       // confirmed below, so a candidate revoked at confirm never lands on
       // `tandem`. Otherwise the record is chosen here, as before.
       // Ownership (#2358, ADR-054): which record this transport belongs to.
