@@ -1715,11 +1715,18 @@ export function setDocOwner(
     // Handover gap (d) (#2358 PR 3b-2b5): when the wake is sent for a change
     // that owed items again, their delivery rounds open, so `/health` does
     // not read idle while they wait. Not for a change that re-owed nothing.
+    // A Release that leaves the holder the same record (Tandem's Claude's
+    // `assigned`, `claimed` or `opened` falling back to `default` while it is
+    // present) starts or wakes nothing (#2358 PR 5a; Bryan's pick "Skip the
+    // wake (Recommended)", 2026-11-23): only a change of holder is the user
+    // handing Tandem's Claude work. Scoped to `release`, so no other cause's
+    // forward changes; the frame below already skips a same-holder change.
     if (
       next !== null &&
       next.ownerId === TANDEM_OWNER_ID &&
       caller !== TANDEM_OWNER_ID &&
       cause !== "take-back" &&
+      !(cause === "release" && previousId === next.ownerId) &&
       waitingAtDocumentChange(documentId, next.ownerId)
     ) {
       if (startOrWake(cause) && leavesRecord) openOwedRounds([documentId], reOwed);
@@ -4014,15 +4021,17 @@ export function ownersList(): OwnerListing[] {
  *   while the document is unowned (ownership design §5.3). A no-op
  *   (`unchanged`) on an unowned document and where the default rule would
  *   leave the entry as it is (a `default` document while Tandem's Claude is
- *   present).
+ *   present). A Release of a document Tandem's Claude holds some other way,
+ *   while it is present, falls back to `default` with the same holder:
+ *   `changed`, but step 5 starts or wakes nothing and sends no frame, since
+ *   the holder did not change (Bryan's pick "Skip the wake (Recommended)").
  * - **Assign** gives the document to the live record carrying `ownerLabel`
  *   as `assigned`, recording a blocking `assigned` loss on the record it
  *   leaves. `unknown-owner` when no live record carries the label,
  *   `owner-detached` when it cannot take a document now
- *   ({@link canTakeNow}). A no-op only when that record already holds it as
- *   `assigned`; a holder that holds it some other way is upgraded to
- *   `assigned` (no handover, no notice: the holder is the same record), so
- *   Assign also pins a document against take-back and a `tandem_open` take.
+ *   ({@link canTakeNow}). A no-op (`unchanged`) when that record already
+ *   holds the document, whatever kind of hold it is (Bryan's pick "Do
+ *   nothing", 2026-11-23): Assign never rewrites the holder's own kind.
  *
  * `isOpen` is the registry's answer (this module never imports the
  * registry), asked at the turn: a document closed while the control waited
@@ -4075,7 +4084,9 @@ function applyControl(
   const target = ownerLabel === undefined ? undefined : recordByLabel(ownerLabel);
   if (target === undefined) return "unknown-owner";
   if (!canTakeNow(target)) return "owner-detached";
-  if (entry?.ownerId === target.ownerId && entry.kind === "assigned") return "unchanged";
+  // Bryan's pick "Do nothing" (2026-11-23): Assign to the session that
+  // already holds the document is a no-op whatever kind of hold it is.
+  if (entry?.ownerId === target.ownerId) return "unchanged";
   setDocOwner(documentId, { ownerId: target.ownerId, kind: "assigned" }, "assign");
   const after = ownerByDoc.get(documentId);
   if (after?.ownerId !== target.ownerId || after.kind !== "assigned") {

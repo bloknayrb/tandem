@@ -5,7 +5,9 @@
  *
  * Flag off, both paths answer exactly as an unknown `/api` path does. Flag
  * on: Release applies the default rule and records a blocking `released`
- * loss; Assign gives the document as `assigned` and records `assigned`; the
+ * loss; Assign gives the document as `assigned` and records `assigned`
+ * (Assign to the holder is a no-op; a Release that leaves Tandem's Claude the
+ * holder wakes nothing); the
  * no-op, `unknown-owner`, `owner-detached` and `busy` answers; the change
  * notices, read through the real `tandem_checkInbox`; the refusal copy a
  * released session gets on its next write; step 5's forward and frame; the
@@ -254,6 +256,42 @@ describe("flag on: Release", () => {
     expect(getDocOwner("noop-1")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
   });
 
+  it("a release that leaves Tandem's Claude the holder (assigned to default) starts or wakes nothing and sends no frame", async () => {
+    // Bryan's pick "Skip the wake (Recommended)" (2026-11-23): only a change
+    // of holder forwards or frames.
+    await boot("1");
+    attachTerminals();
+    setTandemPresenceSource(() => true);
+    setWaitingProbe(() => true);
+    const forwarded: string[] = [];
+    setStartOrWakeSink((cause) => forwarded.push(cause));
+    const causes: string[] = [];
+    setWakeObserverForTests((cause) => causes.push(cause));
+    const frames = vi.fn();
+    setOwnershipFrameSink(frames);
+    openDoc("rel-same");
+    setDocOwner("rel-same", { ownerId: A, kind: "opened" }, "take", A);
+    const assigned = await post({
+      documentId: "rel-same",
+      action: "assign",
+      ownerLabel: labelOf(TANDEM_OWNER_ID),
+    });
+    expect(assigned.json).toEqual({ data: { changed: true } });
+    expect(forwarded).toEqual(["document"]);
+    forwarded.length = 0;
+    causes.length = 0;
+    frames.mockClear();
+    const lossesBefore = losses();
+
+    const res = await post({ documentId: "rel-same", action: "release" });
+    expect(res.json).toEqual({ data: { changed: true } });
+    expect(getDocOwner("rel-same")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(causes).toEqual([]);
+    expect(forwarded).toEqual([]);
+    expect(frames).not.toHaveBeenCalled();
+    expect(losses()).toEqual(lossesBefore);
+  });
+
   it("the released session's next write is refused with the released copy, which never says the user chose it", async () => {
     await boot("1");
     const session = await initialize();
@@ -347,21 +385,41 @@ describe("flag on: Assign", () => {
     expect(getDocOwner("as-off")).toBeUndefined();
   });
 
-  it("no-op when the session already holds it as assigned; a holder that claimed it is pinned as assigned", async () => {
+  it("Assign to the session that already holds it is a no-op whatever kind of hold it is", async () => {
+    // Bryan's pick "Do nothing" (2026-11-23): never an upgrade to `assigned`.
     await boot("1");
     attachTerminals();
-    openDoc("as-2");
-    setDocOwner("as-2", { ownerId: A, kind: "claimed" }, "poll-claim", A);
+    setTandemPresenceSource(() => true);
+    setWaitingProbe(() => true);
+    const forwarded: string[] = [];
+    setStartOrWakeSink((cause) => forwarded.push(cause));
+    const frames = vi.fn();
+    setOwnershipFrameSink(frames);
+    const holds = [
+      ["as-claimed", A, "claimed"],
+      ["as-opened", A, "opened"],
+      ["as-assigned", A, "assigned"],
+      ["as-default", TANDEM_OWNER_ID, "default"],
+    ] as const;
+    for (const [id, ownerId, kind] of holds) {
+      openDoc(id);
+      setDocOwner(id, { ownerId, kind }, "presence");
+    }
+    // The setup's own step 5 (a `presence` change forwards) is not under test.
+    forwarded.length = 0;
+    frames.mockClear();
     const seenA = noticesOf(A).length;
+    const before = holds.map(([id]) => getDocOwner(id));
 
-    const pin = await post({ documentId: "as-2", action: "assign", ownerLabel: labelOf(A) });
-    expect(pin.json).toEqual({ data: { changed: true } });
-    expect(getDocOwner("as-2")).toMatchObject({ ownerId: A, kind: "assigned" });
+    for (const [id, ownerId] of holds) {
+      const res = await post({ documentId: id, action: "assign", ownerLabel: labelOf(ownerId) });
+      expect(res.json, id).toEqual({ data: { changed: false } });
+    }
+    expect(holds.map(([id]) => getDocOwner(id))).toEqual(before);
     expect(noticesOf(A).slice(seenA)).toEqual([]);
     expect(losses()).toEqual([]);
-
-    const again = await post({ documentId: "as-2", action: "assign", ownerLabel: labelOf(A) });
-    expect(again.json).toEqual({ data: { changed: false } });
+    expect(forwarded).toEqual([]);
+    expect(frames).not.toHaveBeenCalled();
   });
 
   it("an unknown label is 404 unknown-owner; a session in its grace is 409 owner-detached", async () => {

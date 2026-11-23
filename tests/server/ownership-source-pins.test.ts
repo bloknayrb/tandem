@@ -1265,8 +1265,11 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     );
     expect(text.indexOf("export function setDocOwner(")).toBeGreaterThanOrEqual(0);
     expect(setDocOwner).toMatch(
-      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
+      /cause !== "take-back" &&\s*!\(cause === "release" && previousId === next\.ownerId\) &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
     );
+    // A Release that leaves Tandem's Claude the holder forwards nothing
+    // (#2358 PR 5a, Bryan's "Skip the wake (Recommended)"); scoped to
+    // `release`, so no other cause's forward changes.
     expect(setDocOwner).not.toContain("waitingProbe(");
     // The re-owe precedes step 5.
     expect(setDocOwner.indexOf("reOweDocumentChat(documentId)")).toBeGreaterThanOrEqual(0);
