@@ -63,14 +63,19 @@ import {
 import {
   getDocOwner,
   noteOwnSpawnStarted,
+  noteSoloReleased,
   noteTandemPresence,
+  noteTandemRunStart,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
   setOpenDocumentIdsSource,
   setOwnSpawnSource,
+  setRequestWakeSink,
+  setStartOrWakeSink,
   setTandemPresenceSource,
   setTransportView,
+  setWaitingProbe,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
 } from "../../../src/server/sessions/ownership.js";
@@ -3114,16 +3119,90 @@ describe("the spawn-started event and the switch-on as index.ts wires it (#2358 
     setOpenDocumentIdsSource(() => []);
   });
 
-  /** `index.ts`'s wiring, against this supervisor. */
+  /** `index.ts`'s wiring, against this supervisor (3b-2b4b: the run start and both sinks too). */
   function wire(h: ReturnType<typeof makeSupervisor>): void {
     setTandemPresenceSource(() => h.sup.tandemPresence?.().isPresent() === true);
     h.seam.subscribe(noteTandemPresence);
     h.seam.onSpawnStarted(noteOwnSpawnStarted);
+    h.seam.onRunStart(noteTandemRunStart);
     setOwnSpawnSource(
       () => h.sup.ownSpawn?.() ?? null,
       (id) => h.sup.isOwnChildSession?.(id) === true,
     );
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    setRequestWakeSink(() => h.sup.requestWake?.());
   }
+
+  it("3b-2b4b: a run start with work waiting on a held document wakes the child once, after its first turn", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(wakes(c1)).toBe(0); // the bootstrap turn is in flight
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("3b-2b4b: the same run start with the licence refusing writes no wake", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    lic.refusing = true;
+    expect(await bind(c1)).toBe(true);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: nothing waiting at the run start, no wake", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: the Solo-release check starts a stopped Tandem's Claude for waiting work", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(waiting.calls).toBe(1);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(logText()).toContain("Work is waiting for Tandem's Claude (solo-release)");
+  });
+
+  it("3b-2b4b: the Solo-release check while Off, or with nothing waiting, starts nothing", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    const idle = waitingDouble(false);
+    const { h: h2 } = await idleStopped({ workWaiting: idle.fn });
+    setStartOrWakeSink((cause) => h2.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h2);
+    expect(idle.calls).toBe(1);
+    expect(children).toHaveLength(2);
+  });
 
   it("spawn 1, then a resumed spawn 2 with the same id and a new number", async () => {
     const h = makeSupervisor();

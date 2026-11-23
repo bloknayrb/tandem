@@ -479,7 +479,9 @@ let run = 0;
 let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
-const sink = vi.fn((cause: "document" | "message") => supRef?.startOrWake?.(cause));
+const sink = vi.fn((cause: "document" | "message" | "solo-release") =>
+  supRef?.startOrWake?.(cause),
+);
 const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
 /** The passes the lapse's re-ask may own (3b-2b2): at most one, and only when
  *  it was forwarded (no other session connected). It finds what the row

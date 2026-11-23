@@ -877,8 +877,9 @@ export interface Supervisor {
    * Wake a running Tandem's Claude for work that is its own (#2358 PR 3b-2a;
    * design §8.6). Ownership on only. Licence-refused, during a local-model
    * period, or with no live child, it writes and owes nothing. Never throws.
-   * Called by nothing in production yet (3b-2b wires it; a source pin holds
-   * that). Optional for the same reason as `tandemPresence`.
+   * Called from outside only by ownership's run-start wake, through the sink
+   * `index.ts` sets (#2358 PR 3b-2b4b; a source pin holds that). Optional for
+   * the same reason as `tandemPresence`.
    */
   requestWake?(): void;
   /**
@@ -2015,7 +2016,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *
    * It does NOT ask the waiting decision and is not Solo-gated: every caller
    * owes that screen first (design §8.5, where Solo protection lives). The
-   * start pass asks it before calling here; 3b-2b's take-back must too.
+   * start pass asks it before calling here; ownership's take-back asks
+   * `tandemWorkWaiting` (#2358 PR 3b-2b4b).
    */
   function requestWake(): void {
     try {

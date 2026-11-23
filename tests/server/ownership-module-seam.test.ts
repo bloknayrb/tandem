@@ -182,6 +182,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-presence.test.ts",
     "tests/server/ownership-records.test.ts",
+    "tests/server/ownership-take-back.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
     "tests/server/ownership-waiting-chat.test.ts",
@@ -213,7 +214,8 @@ describe("tests and the flag", () => {
     // run state flag on, with a dark case that builds its supervisor flag-off.
     // PR 3b-2b4a's one (`ownership-presence.test.ts`): presence's consumer
     // and the queued user-open default, with dark cases run with the seams
-    // wired.
+    // wired. PR 3b-2b4b's one (`ownership-take-back.test.ts`): take-back and
+    // the Solo-release check, with a dark case run with every seam wired.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/inbox-cursor.test.ts",
@@ -237,6 +239,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
       "tests/server/ownership-records.test.ts",
+      "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
@@ -276,6 +279,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
       "tests/server/ownership-records.test.ts",
+      "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",

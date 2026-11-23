@@ -131,16 +131,36 @@ const NOT_YOURS_WHY = "another session may be answering it, or a write on it is 
 const EMPTY_ACTIVITY =
   "its `activity` is empty because it is not yours to answer now, not because it could not be read";
 
+/**
+ * After a take-back (#2358 PR 3b-2b4b; Bryan, 2026-11-23: "Yes; tell it it
+ * was taken back (Recommended)"): the exclusion texts name each left-out
+ * document Tandem's Claude took back from this caller (a standing `taken
+ * back` loss), because {@link IF_ASKED} alone is still met by the request
+ * the caller acted on before. Re-taking stays allowed (`decideTake`); the
+ * sentence asks for a new request, as the `lost` refusal does. Empty: nothing.
+ */
+function takenBackNote(names: readonly string[], named = false): string {
+  if (names.length === 0) return "";
+  if (named) {
+    return " Tandem's Claude took this document back from you, so an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.";
+  }
+  const one = names.length === 1;
+  return ` Tandem's Claude took ${names.join(", ")} back from you, so an earlier request from the user does not count for ${one ? "it" : "them"}: call tandem_open on ${one ? "it" : "one of them"} only if the user asks you again after that.`;
+}
+
 /** A named poll of a document left out (a named poll's `activity` always describes that document). */
-export function inboxExcludedNamedNote(documentId: string): string {
-  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so no comments, thread replies or accept/dismiss responses on it were returned (${CHAT_SCOPED_ONE}); ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+export function inboxExcludedNamedNote(documentId: string, takenBack = false): string {
+  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so no comments, thread replies or accept/dismiss responses on it were returned (${CHAT_SCOPED_ONE}); ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}${takenBackNote(takenBack ? [documentId] : [], true)}`;
 }
 
 /** A default poll that read no document because every open one was left out. */
-export function inboxExcludedAllNote(activityExcluded: boolean): string {
+export function inboxExcludedAllNote(
+  activityExcluded: boolean,
+  takenBack: readonly string[] = [],
+): string {
   return (
     `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; ${CHAT_SCOPED_ANY}` +
-    `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+    `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}${takenBackNote(takenBack)}`
   );
 }
 
@@ -151,7 +171,11 @@ export const INBOX_EXCLUDED_NAMES_SHOWN = 5;
  * A default poll that read some documents and left others out: one sentence,
  * naming up to {@link INBOX_EXCLUDED_NAMES_SHOWN} of them and counting the rest.
  */
-export function inboxExcludedSomeNote(names: readonly string[], activityExcluded: boolean): string {
+export function inboxExcludedSomeNote(
+  names: readonly string[],
+  activityExcluded: boolean,
+  takenBack: readonly string[] = [],
+): string {
   const shown = names.slice(0, INBOX_EXCLUDED_NAMES_SHOWN);
   const more = names.length - shown.length;
   const list = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
@@ -159,12 +183,12 @@ export function inboxExcludedSomeNote(names: readonly string[], activityExcluded
   return (
     ` ${one ? "One open document is" : `${names.length} open documents are`} not yours to answer right now (another session may be answering ${one ? "it" : "them"}, or a write on ${one ? "it" : "one"} is still running), so no comments, thread replies or accept/dismiss responses on ${one ? "it" : "them"} were returned: ${list}. A chat message you answer can still be about ${one ? "it" : "one of them"}, and so can anything Tandem pushed to you.` +
     `${activityExcluded ? " The active document is one of them: its `activity` is empty because it is not yours to answer now, not because it could not be read." : ""}` +
-    ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+    ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}${takenBackNote(takenBack)}`
   );
 }
 
 /** The flag-on `ownership.notYours` field's description. */
-export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_SCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
+export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_SCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST} If Tandem's Claude took one back from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.`;
 
 /**
  * What each cause word of `ownership.changed` states (the change-notice PR,

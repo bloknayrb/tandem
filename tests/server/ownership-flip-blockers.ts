@@ -243,17 +243,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A take-back and the inbox's exclusion texts: after Tandem's Claude takes a document back " +
-      "('taken back'), the refusal tells the loser not to tandem_open it again unless the user asks " +
-      "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
-      "only 'only if the user asked you, in your own conversation', which the original request " +
-      "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
-      "Claude. Unreachable until Tandem's Claude can be present (PR 3b).",
-    closedBy:
-      "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
-  },
-  {
-    gap:
       "Output schemas across the flip: an MCP client caches tool output schemas from tools/list, " +
       "and the stdio bridge's re-initialize after a 404 never lists again, so a session (Claude " +
       "Desktop through the bridge, say) that lives across the upgrade from a dark build to the " +
@@ -420,14 +409,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
       "that filter would not close it: a comment answered only in chat is never handled by it.",
     closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
-  },
-  {
-    gap:
-      "An item a run of Tandem's Claude acknowledged, after which that run died, reads as not " +
-      "waiting (3b-2b1b, Ruling K), so nothing starts Claude for it: it is stranded. (An item " +
-      "handed but unacknowledged reads as waiting.)",
-    closedBy:
-      "3b-2b4 retiring Tandem's Claude's own document entries at each run start (a self re-owe).",
   },
   {
     gap:

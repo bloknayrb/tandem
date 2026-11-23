@@ -449,8 +449,8 @@ export interface ChatMessageFacts {
 /**
  * The chat side, as the ownership side may use it (the chat owners PR, R2.2).
  * **This module never reads the chat map or writes a CTRL row**: everything it
- * needs from chat comes through these seven members (the seventh,
- * `owedToFreshReader`, is #2358 PR 3b-2b1b-chat's), which `src/server/index.ts`
+ * needs from chat comes through these eight members (`owedToFreshReader` is
+ * #2358 PR 3b-2b1b-chat's, `unhandledKeys` 3b-2b4b's), which `src/server/index.ts`
  * wires once at boot (`setOwnershipChatSide`, pinned from source in
  * `tests/server/ownership-source-pins.test.ts`). Each is synchronous.
  */
@@ -466,6 +466,8 @@ export interface OwnershipChatSide {
   handledKeys(): ReadonlySet<string>;
   /** The keys of the user messages on `documentId` that are not handled and not local-period chat. */
   messagesOn(documentId: string): readonly string[];
+  /** The keys of every user message that is not handled and not local-period chat (#2358 PR 3b-2b4b). */
+  unhandledKeys(): readonly string[];
   /** The facts of the user row under `key`, or undefined when there is none (no row, or not a user row). */
   message(key: string): ChatMessageFacts | undefined;
   /**
@@ -496,6 +498,7 @@ export interface OwnershipChatSide {
 const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
   handledKeys: () => new Set<string>(),
   messagesOn: () => [],
+  unhandledKeys: () => [],
   message: () => undefined,
   reOwe: () => {},
   settleCandidates: () => [],
@@ -510,7 +513,9 @@ let presenceSource: () => boolean = () => false;
 let ownSpawnSource: (() => OwnSpawn | null) | undefined;
 let ownChildCheck: ((sessionId: string) => boolean) | undefined;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
-let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};
+let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =
+  () => {};
+let requestWakeSink: () => void = () => {};
 let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
@@ -1718,9 +1723,33 @@ export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
  * stored; called only by a flag-on `startOrWake`.
  */
 export function setStartOrWakeSink(
-  sink: (cause: "document" | "message" | "departure") => void,
+  sink: (cause: "document" | "message" | "departure" | "solo-release") => void,
 ): void {
   startOrWakeSink = sink;
+}
+
+/**
+ * Where a run start's wake goes (#2358 PR 3b-2b4b; ownership design §8.2,
+ * §8.6): `src/server/index.ts` sets a sink that calls the supervisor's
+ * `requestWake` through its `launcherSupervisor` reference, read at call time.
+ * The supervisor's writer asks the licence (`requestWakeOnSpawn`), so the
+ * refusal is the supervisor's (Critical Rule 9). Only stored; called only by
+ * a flag-on {@link noteTandemRunStart}.
+ */
+export function setRequestWakeSink(sink: () => void): void {
+  requestWakeSink = sink;
+}
+
+const WAKE_FAILED =
+  "[ownership] Tandem's Claude could not be woken for work it took back at its run start; it reaches the work at its next look.";
+
+/** The run start's wake, outside any MCP request context, in its own catch. */
+function wakeTandem(): void {
+  try {
+    runOutsideMcpContext(() => requestWakeSink());
+  } catch {
+    logLimited("wake-failed", WAKE_FAILED);
+  }
 }
 
 /**
@@ -1821,6 +1850,94 @@ export function noteTandemPresence(present: boolean): void {
         owner.origin === "acknowledgement" || (!handled.has(key) && !carriedOver.has(key)),
     );
   });
+}
+
+/**
+ * Take-back, the self re-owe and their wake, at each run start of Tandem's
+ * Claude (#2358 PR 3b-2b4b; ownership design §8.2 as ADR-054's 3b-1
+ * amendment moves it to the bind, D-own-1). `src/server/index.ts` subscribes
+ * it to the supervisor's run-start event, which follows presence's
+ * announcement in the same synchronous run.
+ *
+ * 1. **The self re-owe.** §6.3's retire step (`handOver`) over every document
+ *    Tandem's Claude already holds, and §6.5 over every unanswered user chat
+ *    message it owns (per message, by following a document it holds, or
+ *    doc-less or on a closed document while present), so a new run, often
+ *    with a fresh cursor, is owed what the previous run was handed and did not
+ *    answer. It may show again a comment answered only in chat (Bryan,
+ *    2026-11-23: "Accept the duplicates (Recommended)").
+ * 2. **Take-back.** Every open document that is unowned or `claimed` goes to
+ *    Tandem's Claude as `default`, cause `take-back`, at its turn in its
+ *    queue, re-checked there: still unowned or `claimed` by another record
+ *    (an `opened` or `assigned` one, or one a `tandem_open` queued ahead now
+ *    holds, is left alone), Tandem's Claude still present, and, when the
+ *    turn was deferred, still open. The loser records `taken back`.
+ * 3. **The wake.** After the synchronous part, if anything is waiting
+ *    (`tandemWorkWaiting`, which holds a Solo-held item back), the sink's
+ *    `requestWake`; a take-back that ran later, at a busy queue's turn, wakes
+ *    when its document's work is waiting. Step 5 forwards nothing for
+ *    `take-back` (`setDocOwner`), so this is its only wake.
+ */
+export function noteTandemRunStart(): void {
+  if (!ownershipEnabled()) return;
+  total("noteTandemRunStart", undefined, () => {
+    for (const documentId of heldDocumentIds(TANDEM_OWNER_ID)) handOver(documentId);
+    reOweTandemChat();
+    for (const documentId of [...openDocumentIds()]) {
+      if (!takeBackApplies(documentId)) continue;
+      let deferred = false;
+      runWhenDocIdle(
+        documentId,
+        () => {
+          if (!takeBackApplies(documentId) || !isTandemPresent()) return;
+          if (deferred && ![...openDocumentIds()].includes(documentId)) return;
+          setDocOwner(documentId, { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
+          if (deferred && waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) wakeTandem();
+        },
+        (err) => logLimited("throw:takeBack", `[ownership] take-back failed: ${errorText(err)}`),
+      );
+      deferred = true;
+    }
+    if (tandemWorkWaiting()) wakeTandem();
+  });
+}
+
+/** §6.5 over the unanswered chat Tandem's Claude owns (the self re-owe). Never throws. */
+function reOweTandemChat(): void {
+  try {
+    const keys = chatSide.unhandledKeys().filter((key) => {
+      if (carriedOver.has(key)) return false;
+      const facts = chatSide.message(key);
+      if (facts === undefined) return false;
+      const standing = messageStanding(key, facts);
+      return standing.kind === "owned" && standing.ownerId === TANDEM_OWNER_ID;
+    });
+    if (keys.length > 0) reOweChat(keys);
+  } catch {
+    logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+  }
+}
+
+/** Whether take-back moves `documentId` now: nobody holds it, or another record holds it `claimed`. */
+function takeBackApplies(documentId: string): boolean {
+  const entry = ownerByDoc.get(documentId);
+  return entry === undefined || (entry.kind === "claimed" && entry.ownerId !== TANDEM_OWNER_ID);
+}
+
+/**
+ * The Solo-release check (#2358 PR 3b-2b4b; ownership design §8.3 "Leaving
+ * Solo"): the release route verified the room reads Tandem, so work held in
+ * Solo may now be waiting. Forwarded to the supervisor's start-or-wake as
+ * `solo-release`; it drops the call while Off or refused by the licence, and
+ * its pass asks the whole waiting decision first. Flag off: nothing.
+ */
+export function noteSoloReleased(): void {
+  if (!ownershipEnabled()) return;
+  try {
+    runOutsideMcpContext(() => startOrWakeSink("solo-release"));
+  } catch {
+    logLimited("forward-failed", FORWARD_FAILED);
+  }
 }
 
 /**
@@ -2397,6 +2514,12 @@ export interface InboxPollScope {
    * gone or was created again (a new record never inherits). Never throws.
    */
   giveBack(batch: InboxChangeBatch): void;
+  /**
+   * Of `documentIds`, those Tandem's Claude took back from the caller, read
+   * live: a standing `taken back` loss (#2358 PR 3b-2b4b), for the exclusion
+   * texts. Empty for a caller with no record id, and while ownership is off.
+   */
+  takenBack(documentIds: readonly string[]): string[];
 }
 
 /** What a poll's `commitChat` changed, filled as it goes so a throw part-way still reports it. */
@@ -2429,6 +2552,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   changes: () => [],
   drainChanges: () => ({ notices: [] }),
   giveBack: () => {},
+  takenBack: () => [],
 });
 
 /** Which record each drained batch came from, so a give-back reaches only that record. */
@@ -2612,6 +2736,11 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         logLimited("notices-failed", NOTICES_FAILED);
       }
     },
+    takenBack: (documentIds) =>
+      documentIds.filter((id) => {
+        const loss = lossByDoc.get(id);
+        return callerId !== undefined && loss?.ownerId === callerId && loss.cause === "taken back";
+      }),
   };
   return scope;
 }
@@ -3576,5 +3705,6 @@ export function resetOwnershipForTests(): void {
   chatFaultForTests = undefined;
   wakeObserverForTests = undefined;
   startOrWakeSink = () => {};
+  requestWakeSink = () => {};
   graceMs = DEFAULT_GRACE_MS;
 }
