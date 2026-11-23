@@ -29,6 +29,7 @@ import {
 } from "../../../src/server/annotations/sync.js";
 import { extractText } from "../../../src/server/mcp/document-model.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
+import { withInternal } from "../../../src/shared/origins.js";
 import { annRecord, replyRecord } from "../../helpers/annotation-fixtures.js";
 import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
 import { makeDoc } from "../../helpers/ydoc-factory.js";
@@ -274,5 +275,49 @@ describe("recoverRenamedEnvelope — partially-readable source (#1791)", () => {
     expect(copies).toHaveLength(1);
     const parked = await fs.readFile(path.join(annotationsDir(), copies[0] as string), "utf-8");
     expect(parked).toContain("ann_future");
+  });
+});
+
+describe("recoverRenamedEnvelope — key identity (#2524)", () => {
+  it("never writes a doubtful row over a live record that wins on rev", async () => {
+    const body = "The quick brown fox jumps over the lazy dog.";
+    const oldPath = path.join(env.tmpRoot, "old-name.md");
+    // Old format: X's row carries another record's body at the same timestamp
+    // and a different snapshot, rev 1. The routing keeps it on X because the
+    // live copy (rev 3) would win, so the injection must not overwrite it.
+    const foreign = annRecord({ id: "X", content: "foreign", textSnapshot: "brown", rev: 1 });
+    await writeEnvelope(buildEnvelope(oldPath, body, { annotations: [foreign] }));
+    const doc = makeDoc(body);
+    const liveX = annRecord({ id: "X", content: "live X", textSnapshot: "quick", rev: 3 });
+    withInternal(doc, () => doc.getMap(Y_MAP_ANNOTATIONS).set("X", liveX));
+
+    const newPath = path.join(env.tmpRoot, "new-name.md");
+    expect(await recoverRenamedEnvelope(doc, docHash(newPath), newPath)).toBe(true);
+
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).get("X")).toMatchObject({ content: "live X", rev: 3 });
+  });
+
+  it("still injects a row onto an empty key or over an older live copy", async () => {
+    const body = "The quick brown fox jumps over the lazy dog.";
+    const oldPath = path.join(env.tmpRoot, "old-name.md");
+    await writeEnvelope(
+      buildEnvelope(oldPath, body, {
+        annotations: [
+          annRecord({ id: "A", content: "A file", rev: 4 }),
+          annRecord({ id: "B", content: "B file", timestamp: 1_700_000_900_000, rev: 2 }),
+        ],
+      }),
+    );
+    const doc = makeDoc(body);
+    withInternal(doc, () =>
+      doc.getMap(Y_MAP_ANNOTATIONS).set("A", annRecord({ id: "A", content: "A live", rev: 1 })),
+    );
+
+    const newPath = path.join(env.tmpRoot, "new-name.md");
+    expect(await recoverRenamedEnvelope(doc, docHash(newPath), newPath)).toBe(true);
+
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    expect(map.get("A")).toMatchObject({ content: "A file", rev: 4 });
+    expect(map.get("B")).toMatchObject({ content: "B file" });
   });
 });

@@ -1854,13 +1854,15 @@ describe("MCP tool integration — awareness tools", () => {
       const background = setupDoc("mcp-aw-replythrow-bg", "Background text");
       seedOpenComment(background, "u_replythrow_bg", "do not lose me");
       setupDoc("mcp-aw-replythrow-fg", "Foreground text");
-      const real = YDocStore.prototype.listReplies;
-      const spy = vi.spyOn(YDocStore.prototype, "listReplies").mockImplementation(function (
+      // The fault goes on `reconciled()`, the entry point of every Claude-facing
+      // reply read (the reply gate requires its token); `listReplies` is the raw
+      // accessor and is no longer on that path.
+      const real = YDocStore.prototype.reconciled;
+      const spy = vi.spyOn(YDocStore.prototype, "reconciled").mockImplementation(function (
         this: YDocStore,
-        id: string,
       ) {
         if (this.documentId === "mcp-aw-replythrow-bg") throw new Error("reply read failed");
-        return real.call(this, id);
+        return real.call(this);
       });
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       onTestFinished(() => err.mockRestore());
@@ -2998,6 +3000,64 @@ describe("checkInbox stamps the pull path", () => {
     const state = getDeliveryState(Date.now(), 1);
     expect(state.state).toBe("polled");
     expect(state.pollCount).toBe(1);
+  });
+});
+
+/**
+ * An annotation's identity is its Y.Map key. A note stored under key K with a
+ * stale `id: X`, beside the real comment X, used to collapse onto X: an older
+ * client filed the user's note-thread reply under X, non-private, and
+ * `tandem_getAnnotations` handed it to Claude in comment X's thread (ADR-027).
+ * REGRESSION: drives only the tool, an API that exists on master.
+ */
+describe("MCP tool integration — annotation key identity", () => {
+  it("REGRESSION: a note-thread reply filed under a stale id never reaches Claude", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const ydoc = setupDoc("key-identity-leak", "Hello world test");
+    withInternal(ydoc, () => {
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      map.set("X", {
+        id: "X",
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "the real comment at X",
+        status: "pending",
+        timestamp: 1_700_000_000_000,
+        rev: 1,
+      });
+      map.set("K", {
+        id: "X",
+        author: "user",
+        type: "note",
+        audience: "private",
+        range: { from: 6, to: 11 },
+        content: "a private note",
+        status: "pending",
+        timestamp: 1_700_000_500_000,
+        rev: 1,
+      });
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r-note", {
+        id: "r-note",
+        annotationId: "X",
+        author: "user",
+        text: "my private thought about the note",
+        timestamp: 1_700_000_600_000,
+      });
+    });
+
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+
+    expect(parsed.error).toBe(false);
+    expect(JSON.stringify(parsed.data)).not.toContain("my private thought about the note");
+    const ids = (parsed.data.annotations as Array<{ id: string }>).map((a) => a.id);
+    expect(ids).toEqual(["X"]);
   });
 });
 

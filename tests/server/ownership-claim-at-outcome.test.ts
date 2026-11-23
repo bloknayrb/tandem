@@ -883,6 +883,19 @@ describe("answered-once does not depend on the claim (R1.3b)", () => {
     expect(second.details?.reason).toBe("answered");
   });
 
+  it("a record stored under a stale id is answered on its own key's thread (#2524)", async () => {
+    const ydoc = setupDoc("d");
+    seed(ydoc, "X", { content: "X body", timestamp: 2000 });
+    // K's body carries X's id: an older client's write left the key and id apart.
+    seed(ydoc, "K", { id: "X" });
+    expect(addUserReply(ydoc, "K", "about K", () => {}).kind).toBe("ok");
+    const reply = { annotationId: "K", text: "answer", documentId: docId("d") };
+    expect((await as(A, "tandem_annotationReply", reply)).error).toBe(false);
+    const second = await as(B, "tandem_annotationReply", reply);
+    expect(second.code).toBe("NOT_DOC_OWNER");
+    expect(second.details?.reason).toBe("answered");
+  });
+
   it("a never-claims refusal and a throw record no answerer", async () => {
     setupDoc("d");
     const refused = heldWrite(A, "d", () => noClaim(mcpError("ANNOTATION_RESOLVED", "no")), {

@@ -23,7 +23,7 @@ import {
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { anchoredRange, refreshRange } from "../../src/server/positions.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withMcp, withReload } from "../../src/shared/origins.js";
 import { type DocumentRange, toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -582,6 +582,30 @@ describe("applyRemap — what it leaves alone", () => {
     expect(kindOf(doc, "a")).toBe("ok");
   });
 
+  it("an alias the swap left (stale id on a record) quarantines that id's user replies (#2524)", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    const seeded = seedOn(doc, "a", "bravo");
+    const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    withReload(doc, () =>
+      replies.set("r", {
+        id: "r",
+        annotationId: "X",
+        author: "user",
+        text: "hi",
+        timestamp: 1,
+        rev: 1,
+      }),
+    );
+    withReload(doc, () => {
+      const input = captureRemapInput(doc, FILE);
+      loadMarkdown(doc, "new\n\nalpha\n\nbravo\n");
+      annotationsOf(doc).set("a", { ...seeded, id: "X" });
+      applyRemap(doc, input);
+    });
+    expect(annotationsOf(doc).get("a")?.id).toBe("a");
+    expect(replies.get("r")).toMatchObject({ private: true });
+  });
+
   it("moves a point inside a replaced region to the edit point without stamping a snapshot", () => {
     const doc = makeMarkdownDoc("hello world\n");
     const point = anchoredRange(doc, toFlatOffset(3), toFlatOffset(3), undefined, {
@@ -655,6 +679,60 @@ describe("remapEnvelopeWins", () => {
   it("does nothing without a remap or ids", () => {
     const doc = new Y.Doc();
     expect(remapEnvelopeWins(doc, undefined, new Set(["a"]))).toBe(false);
+  });
+});
+
+/**
+ * A row the envelope merge placed at a FRESH key (`ann_rk_…`, a duplicate it
+ * could not match with certainty) was never captured, and its stored flat range
+ * predates the reload. It must never be anchored from those stale offsets.
+ */
+describe("remapEnvelopeWins — a fresh-key duplicate", () => {
+  const FRESH = "ann_rk_0123456789abcdef";
+
+  function duplicateAt(doc: Y.Doc, from: Annotation, extra: Partial<Annotation> = {}) {
+    withMcp(doc, () =>
+      annotationsOf(doc).set(FRESH, { ...from, id: FRESH, rev: 9, ...extra } as Annotation),
+    );
+  }
+
+  it("borrows the live-resolved twin's span when it holds the same anchor", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload);
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    expect(textOf(doc, FRESH)).toBe("bravo");
+    expect(kindOf(doc, FRESH)).toBe("ok");
+  });
+
+  it("is not anchored on the twin's text when its own snapshot disagrees", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload, { textSnapshot: "alpha" });
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    const dup = annotationsOf(doc).get(FRESH) as Annotation;
+    expect(dup.relRange).toBeUndefined();
+    expect(kindOf(doc, FRESH)).toBe("degraded");
+  });
+
+  it("with no twin, keeps its shifted range and gets no anchor of its own", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload, { relRange: undefined });
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    expect((annotationsOf(doc).get(FRESH) as Annotation).relRange).toBeUndefined();
   });
 });
 

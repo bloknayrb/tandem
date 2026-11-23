@@ -15,6 +15,7 @@ import {
   MODE_RELEASE_WAKE_ID_PREFIX,
 } from "../../shared/constants.js";
 import { makeHeldInSoloStampObserver } from "../annotations/held-in-solo.js";
+import { attachKeyIdentityObserver, reconcileAnnotationKeys } from "../annotations/key-identity.js";
 import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
@@ -733,7 +734,11 @@ export function getBufferedSelection(docName: string): BufferedSelection | undef
  * (selection buffering) — annotation and reply events are suppressed so
  * ephemeral scratch notes don't flood Claude's channel.
  */
-export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?: boolean }): void {
+export function attachObservers(
+  docName: string,
+  doc: Y.Doc,
+  opts?: { uploadDoc?: boolean; deferKeyScan?: boolean },
+): void {
   detachObservers(docName);
 
   const cleanups: Array<() => void> = [];
@@ -744,6 +749,13 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
       makeRepliesObserver({ docName, doc, pushEvent }),
     );
   }
+
+  // An annotation's identity is its map key: repair a record that arrives
+  // under a key differing from its stored id, and quarantine the replies filed
+  // under the stale id. Every origin but `internal`, including `null` (a
+  // session restore). The attach-time scan is deferred on a swap so it runs
+  // after the file-sync context is rebound and can persist (`reattachObservers`).
+  cleanups.push(attachKeyIdentityObserver(doc, { scan: !opts?.deferKeyScan }));
 
   // #1769: stamp `heldInSolo` server-side on user comments created/edited while
   // the room does not read Tandem. Attached for every doc (upload/scratchpad
@@ -780,8 +792,10 @@ export function reattachObservers(
   newDoc: Y.Doc,
   opts?: { uploadDoc?: boolean },
 ): void {
-  attachObservers(docName, newDoc, opts);
+  attachObservers(docName, newDoc, { ...opts, deferKeyScan: true });
   reattachFileSyncObserver(docName, newDoc);
+  // After the rebind, so a repair finds the new file-sync context and persists.
+  reconcileAnnotationKeys(newDoc);
 }
 
 // --- CTRL_ROOM observers (chat + document meta) ---

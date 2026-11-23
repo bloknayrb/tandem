@@ -442,6 +442,7 @@ const FAN_OUT = [
   "server/documents/autosave.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // The .docx ship-dark flag (ADR-053): open.ts asks it which extensions a build accepts.
+  "server/documents/open.ts -> server/annotations/key-identity.ts (value) x1",
   "server/documents/open.ts -> server/file-io/docx-flag.ts (value) x1",
   // #2400: the 8.3 short-name expansion `resolveAndValidatePath` runs after its
   // UNC screens. The only filesystem behaviour that change added.
@@ -476,6 +477,8 @@ const FAN_OUT = [
   // `sanitizeAnnotation` from `shared/sanitize.ts` directly, so the watcher's
   // old `-> mcp/annotations.ts` edge is gone rather than moved.
   "server/documents/reload-remap.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/reload-remap.ts -> server/annotations/key-identity.ts (value) x1",
+  "server/documents/reload-remap.ts -> server/annotations/legacy-envelope.ts (value) x1",
   "server/documents/reload-remap.ts -> server/annotations/migration-log.ts (value) x1",
   // One of FIVE edges out of documents/ that point back at mcp/, and the
   // reason this list is phrased as residue rather than as a contract. Count
