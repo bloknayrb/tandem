@@ -42,8 +42,8 @@ below still stand before v1.0 either way.
    landing 2026-11-23. Merged and live: 1b (#1952) and 2b (#2370, v0.31.0). **Still to
    build:**
    - **3b-2e**: 3b-2e1 (the failed-bind reason in `status()` and the Settings list of
-     bound transports) merged as #2534 on 2026-11-23. Left: 3b-2e2 (the stall banner)
-     and #2167's attribution. In progress (see In flight).
+     bound transports) merged as #2534 and 3b-2e2 (the stall banner) as #2536, both on
+     2026-11-23. Left: #2167's attribution.
    - **PR 4**: push scope and the shim's permit, plus 4a's `ownership-changed` push event.
    - **PR 5**: controls (routes, badge, popover, native menu, Assign and Release), the
      labels on `tandem_getAnnotations` and `tandem_listDocuments`, the pickup and stall
@@ -79,8 +79,8 @@ below still stand before v1.0 either way.
 A snapshot for whoever picks up next. It goes stale within days, so re-check open PRs
 before relying on it.
 
-- **Ownership 3b-2e2** (the stall banner's keyed-round wording) is being built in its own
-  session. 3b-2e1 (#2534) and #2535 (the mode-unknown observer re-asks at the first Tandem
+- **Ownership** is being built in its own session. 3b-2e1 (#2534), 3b-2e2 (#2536, the
+  stall banner) and #2535 (the mode-unknown observer re-asks at the first Tandem
   mode after a restart) merged the same day, as did #2532 (the stdio bridge cancels
   upstream every request it answers itself).
 - **#2517** (`tandem_edit`'s new text takes ProseMirror's marks; raw runs are
