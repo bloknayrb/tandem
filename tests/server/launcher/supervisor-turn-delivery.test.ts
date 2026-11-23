@@ -311,6 +311,19 @@ function logText(): string {
   return errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
 }
 
+/**
+ * `status()` without `bindFailed` (#2358 PR 3b-2e1), for the crash cases that
+ * pin a stopped shape exactly. Their stub children crash after a turn was
+ * written without ever binding, so in the ownership-flag-on job the supervisor
+ * rightly reports the failed bind beside the state each case pins; the field
+ * has its own tests in `supervisor-presence.test.ts`. Flag off it is never
+ * set, so this is the identity there.
+ */
+function stoppedStatusOf(sup: Supervisor): Omit<ReturnType<Supervisor["status"]>, "bindFailed"> {
+  const { bindFailed: _bindFailed, ...rest } = sup.status();
+  return rest;
+}
+
 /** Child 1 is fresh, its bootstrap turn answered, and an event wrote W1 (held). */
 async function freshChildWithHeldWake(sup: Supervisor, emit: (e: TandemEvent) => void) {
   await sup.startFresh(cwdDir);
@@ -1313,7 +1326,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(reads.count()).toBe(1);
     expect(occurrences("Restarting Claude in")).toBe(1);
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false });
   });
 
   it("a relaunch during a failing read leaves no stale error behind", async () => {
@@ -1335,7 +1348,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(sup.status().running).toBe(true);
     expect(children).toHaveLength(2);
     await sup.stop();
-    expect(sup.status()).toEqual({ running: false });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false });
   });
 
   it("a read that fails while a relaunch's own read is in flight schedules nothing", async () => {
@@ -1949,7 +1962,11 @@ describe("#2195 — the start mode holds boot back", () => {
     // Resumed with nothing owed, so it writes no turn and its idle clock starts
     // at spawn — and only an idle lifetime ends it.
     await waitFor(() => child2.killed, "the restarted child's idle stop");
-    expect(sup.status()).toEqual({ running: false, standby: "idle", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({
+      running: false,
+      standby: "idle",
+      startsOnMessage: true,
+    });
   });
 
   it("on-click holds only boot: a crash restart of a Claude the user started brings it back", async () => {
@@ -2065,7 +2082,7 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
     await sleep(2_300);
     await settle();
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("cancels a crash restart suspended in its plan read", async () => {
@@ -2084,7 +2101,7 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
       reads.restore();
     }
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("a crash restart while off never starts Claude, even if the off came first in the file only", async () => {
@@ -2097,7 +2114,7 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
     await sleep(50);
     await settle();
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("licence activation does not bring back a Claude the user turned off", async () => {
@@ -2767,7 +2784,7 @@ describe("#2196 — a message starts a Claude that is stopped by choice", () => 
     expect(sup.status()).toMatchObject({ running: false, lastError: "circuit-open" });
     // The user turns it off. Nothing promises that a chat starts it…
     await sup.updateSettings({ startMode: "off" });
-    expect(sup.status()).toEqual({ running: false, standby: "off" });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off" });
     // …and a chat does not.
     const before = children.length;
     emit(chatEvent());

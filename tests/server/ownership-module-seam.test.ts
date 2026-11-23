@@ -164,6 +164,9 @@ describe("tests and the flag", () => {
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
+    // PR 3b-2e1: the Settings list of bound transports through the real
+    // server, booted flag on and (its dark row) flag off, through `boot(flag)`.
+    "tests/server/ownership-bound-transports.test.ts",
     "tests/server/ownership-change-notices-http.test.ts",
     "tests/server/ownership-change-notices.test.ts",
     "tests/server/ownership-chat-client-undo.test.ts",
@@ -179,6 +182,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
+    "tests/server/ownership-mode-known.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-posts.test.ts",
@@ -246,6 +250,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // The mode-unknown observer: flag on, with a dark row that writes the
+      // mode and swaps CTRL_ROOM flag off.
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
@@ -297,6 +304,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",

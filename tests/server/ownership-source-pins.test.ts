@@ -1103,7 +1103,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =',
+      'let startOrWakeSink: (\n  cause: "document" | "message" | "departure" | "solo-release" | "mode-known",\n) => void =',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
@@ -1517,5 +1517,19 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
     // Step 5, a release of per-message owners, and the end of presence.
     expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(3);
+  });
+});
+
+describe("the mode observer's ask is replayed after the supervisor starts (#2358, the restart question)", () => {
+  it("startLauncherSupervisor calls the replay once, right after `start()` resolves, inside its try", () => {
+    const src = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(src.match(/replayModeKnownAfterSupervisorStart\(\);/g)).toHaveLength(1);
+    expect(src).toMatch(
+      /await launcherSupervisor\.start\(\);\s*replayModeKnownAfterSupervisorStart\(\);\s*\} catch/,
+    );
+    expect(filesMentioning("replayModeKnownAfterSupervisorStart").sort()).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
   });
 });

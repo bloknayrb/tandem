@@ -399,6 +399,7 @@ export type StartOrWakeCause =
   | "document"
   | "message"
   | "solo-release"
+  | "mode-known"
   | "user-annotation"
   | "departure";
 /** The causes a log line may name; anything else is logged as `other`, so a
@@ -407,6 +408,7 @@ const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "document",
   "message",
   "solo-release",
+  "mode-known",
   "user-annotation",
   "departure",
 ]);
@@ -969,9 +971,15 @@ export type SupervisorStatus =
       /** The LAST spawn rejected the saved `workingDirectory` (#1822 item 4a)
        * — see `LauncherStatus`. */
       workingDirectoryIgnored?: WorkingDirectoryIgnored;
+      /** Tandem's Claude's latest run failed to bind (#2358 PR 3b-2e1,
+       * ownership design §3.3, §8.7) — see `LauncherStatus`. Flag on only. */
+      bindFailed?: true;
     }
   | {
       running: true;
+      /** Tandem's Claude's latest run failed to bind (#2358 PR 3b-2e1,
+       * ownership design §3.3, §8.7) — see `LauncherStatus`. Flag on only. */
+      bindFailed?: true;
       /** The LAST spawn rejected the saved `workingDirectory` and ran in home
        * (#1822 item 4a). Present only when it did. Deliberately not cleared on
        * exit or stop: it describes the last launch, and the next spawn
@@ -2141,6 +2149,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *  judged failed to bind since (R1.5). False at boot. Nothing else moves it:
    *  Off, idle-stop, a crash-resume and a relaunch keep it (decision 7). */
   let lastRunBound = false;
+  /** The latest run was judged failed to bind and no run has started since
+   *  (#2358 PR 3b-2e1): what `status()` reports as `bindFailed`. Set only by
+   *  `failBind` (so flag on only), cleared only by a run start. Unlike
+   *  `lastRunBound`, false at boot, so a run not yet judged reports nothing. */
+  let bindFailedLatch = false;
   /** Every spawn that reached `child = spawned` (flag on), numbered in order. */
   let spawnRecordSeq = 0;
   /** The spawn record with the highest number: the latest spawn (Terms). */
@@ -2264,6 +2277,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     try {
       if (rec !== latestRecord || rec.tornDown || rec.cause !== undefined) return;
       setLastRunBound(true);
+      bindFailedLatch = false;
       presenceErrorLatch = false;
       console.error("[Launcher] Tandem's Claude's run started: its spawn bound (ownership)");
       recomputePresence(true);
@@ -2293,6 +2307,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function failBind(rec: SpawnRecord, reason: FailedBindReason): void {
     rec.judged = true;
     try {
+      bindFailedLatch = true;
       setLastRunBound(false);
       console.error(`[Launcher] Tandem's Claude's spawn did not bind: ${reason} (ownership)`);
       if (!presenceSuppressed) notifyEach(failedBindListeners, "failed-bind", reason);
@@ -4833,6 +4848,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         ...(lastSpawnIgnoredWorkingDirectory
           ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
           : {}),
+        ...(bindFailed() ? { bindFailed: true as const } : {}),
       };
     }
     // A `cli-unusable` with no crash behind it (#2199) is a reading of the
@@ -4857,6 +4873,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // from standby (`respawn` runs while `standby` is still set, until the
     // spawn clears it), which the client shows as "Starting Claude…".
     if (greetingLate()) stopped.greetingLate = true;
+    // A `lastError` outranks it, as it outranks `standby`: a crash loop's
+    // breaker, a sign-in or licence refusal is the more specific diagnosis.
+    if (bindFailed() && lastError === undefined) stopped.bindFailed = true;
     if (lastSpawnIgnoredWorkingDirectory) {
       stopped.workingDirectoryIgnored = lastSpawnIgnoredWorkingDirectory;
     }
@@ -4891,6 +4910,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       stopped.heldForLocalModel = true;
     }
     return stopped;
+  }
+
+  /** `status()`'s failed-bind reason (#2358 PR 3b-2e1, ownership design
+   *  §8.7). The flag is read here too, so a dark server reports nothing even
+   *  if the latch were ever set. A diagnosis, not a choice: it rides beside
+   *  `standby` and `restartPending` and changes neither; a `lastError`
+   *  outranks it (the stopped arm leaves it off), as it outranks `standby`. */
+  function bindFailed(): boolean {
+    return ownershipEnabled() && bindFailedLatch;
   }
 
   /** Tandem is already bringing Claude back, so a Restart button would race it

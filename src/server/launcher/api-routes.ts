@@ -6,7 +6,8 @@
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
  *     `cwd`, `resuming`, `reaperPid`, `busy`, `attached`, `standby`,
- *     `startsOnMessage` and `greetingLate` are loopback-only
+ *     `startsOnMessage`, `greetingLate`, `bindFailed` and `boundTransports`
+ *     are loopback-only
  *     for the same reason as `/health`'s session-presence fields: `busy` in
  *     particular is an activity trace of the person at this machine, and the
  *     CORS allowlist admits any 127.0.0.1 port, so any local page can read
@@ -62,6 +63,8 @@ import {
 } from "../../shared/api-paths.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
 import {
+  BOUND_TRANSPORT_KINDS,
+  type BoundTransport,
   isPromotableByStartRoute,
   LAUNCHER_CWD_MAX_LENGTH,
   LAUNCHER_ERROR_CLI_UNUSABLE,
@@ -191,6 +194,12 @@ export interface LauncherRoutesDeps {
    * `mcp/server.ts`). Called with the supervisor's real UUID, which never leaves
    * the server: only the boolean is sent. */
   isClaudeSessionAttached: (claudeSessionId: string, sinceMs: number) => boolean;
+  /** The MCP connections bound to Tandem's Claude's live run, by kind alone
+   * (#2358 PR 3b-2e1, ownership design §3.3's Ruling C; `boundTransportKinds`
+   * in `mcp/server.ts`). `undefined` while multi-session ownership is off,
+   * so a dark server sends no `boundTransports` field. Optional so the route
+   * tests' deps need not supply it; absent reads as dark. */
+  boundTransports?: () => readonly BoundTransport[] | undefined;
   /** Reason the supervisor is null (stdio mode, disabled, deferred, failed to
    * start). Surfaced via GET /status. `not-configured` is NOT produced here: it
    * comes from a live supervisor's own status (#2180). */
@@ -300,6 +309,9 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
           },
         }
       : {};
+    // Loopback-only, on every arm a supervisor answers (#2358 PR 3b-2e1). Set
+    // only while ownership is on: `status()` reads the flag itself.
+    const bindFields = raw.bindFailed ? { bindFailed: true as const } : {};
     // Loopback-only, beside both stopped shapes below (#2195, #2196, #2197).
     const standbyFields = raw.running
       ? {}
@@ -336,6 +348,8 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         attached,
         ...(raw.greetingLate ? { greetingLate: true as const } : {}),
         ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
+        ...bindFields,
+        ...boundTransportFields(deps),
         ...ignored,
         skillRefresh,
       };
@@ -353,6 +367,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
             restartPending: true,
             // A Start from standby in progress (#2195): "Starting", not "Restarting".
             ...standbyFields,
+            ...bindFields,
             ...ignored,
             skillRefresh,
           }
@@ -382,12 +397,41 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
           running: false,
           lastError: raw.lastError,
           ...standbyFields,
+          ...bindFields,
           ...ignored,
           skillRefresh,
         }
       : { available: true, running: false };
     res.json(body);
   };
+}
+
+/**
+ * The running body's `boundTransports` (#2358 PR 3b-2e1): sent only when the
+ * dep answers a non-empty list (ownership on, at least one bound). Each row is
+ * rebuilt from its `kind` alone, and a kind outside the enum is dropped, so
+ * nothing but the enum can reach the wire whatever the dep returns. A throwing
+ * dep sends nothing: the list is a diagnosis, never worth failing the status.
+ */
+function boundTransportFields(deps: LauncherRoutesDeps): { boundTransports?: BoundTransport[] } {
+  let clean: BoundTransport[];
+  try {
+    const rows: unknown = deps.boundTransports?.();
+    if (!Array.isArray(rows)) return {};
+    // A null or non-object row is dropped here, inside the try, so a malformed
+    // row can no more fail the status than a throwing dep can.
+    clean = rows
+      .map((row: unknown) =>
+        typeof row === "object" && row !== null ? (row as { kind?: unknown }).kind : undefined,
+      )
+      .filter((kind): kind is BoundTransport["kind"] =>
+        BOUND_TRANSPORT_KINDS.includes(kind as BoundTransport["kind"]),
+      )
+      .map((kind) => ({ kind }));
+  } catch {
+    return {};
+  }
+  return clean.length > 0 ? { boundTransports: clean } : {};
 }
 
 /** A start that spawned nothing: no integration, or (#2199) no Claude Code

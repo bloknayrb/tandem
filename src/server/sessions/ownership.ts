@@ -552,8 +552,9 @@ let presenceSource: () => boolean = () => false;
 let ownSpawnSource: (() => OwnSpawn | null) | undefined;
 let ownChildCheck: ((sessionId: string) => boolean) | undefined;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
-let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =
-  () => {};
+let startOrWakeSink: (
+  cause: "document" | "message" | "departure" | "solo-release" | "mode-known",
+) => void = () => {};
 let requestWakeSink: () => void = () => {};
 let ownershipFrameSink: () => void = () => {};
 let roundOpener:
@@ -1814,7 +1815,7 @@ export function startOrWake(cause: WakeCause, admit?: () => boolean): boolean {
  * stored; called only by a flag-on `startOrWake`.
  */
 export function setStartOrWakeSink(
-  sink: (cause: "document" | "message" | "departure" | "solo-release") => void,
+  sink: (cause: "document" | "message" | "departure" | "solo-release" | "mode-known") => void,
 ): void {
   startOrWakeSink = sink;
 }
@@ -2269,6 +2270,77 @@ export function noteSoloReleased(): void {
   if (!ownershipEnabled()) return;
   try {
     runOutsideMcpContext(() => startOrWakeSink("solo-release"));
+  } catch {
+    logLimited("forward-failed", FORWARD_FAILED);
+  }
+}
+
+/**
+ * The mode-unknown observer's state (#2358, the restart question). In memory
+ * only, so a server run starts with both false: `modeUnknownSeen` is set
+ * while the mode last read unknown (the key absent, `readModeState()`'s
+ * `"indeterminate"`), and `modeKnownAsked` latches the one forward a run makes.
+ */
+let modeUnknownSeen = false;
+let modeKnownAsked = false;
+
+/**
+ * The mode-unknown observer (#2358, the restart question; Bryan, 2026-11-23:
+ * "Build an observer"). `events/queue.ts` installs an observer on
+ * `CTRL_ROOM`'s mode key beside the other `CTRL_ROOM` observers, so the
+ * Hocuspocus document swap re-installs it, and it calls this with the mode it
+ * reads at install and at every change of the key. While the mode is unknown
+ * (after a restart, before a client says whether it was Solo or Tandem) the
+ * waiting decision counts nothing a Solo hold could cover, so nothing starts
+ * or wakes Tandem's Claude; the first time in a server run the mode then
+ * reads Tandem, this asks again as the Solo release does (ownership design
+ * §8.3 "Leaving Solo"): forwarded to the supervisor's start-or-wake as
+ * `mode-known`, which it drops while Off or refused by the licence, and whose
+ * pass asks the whole waiting decision first. A Solo reading in between
+ * disarms it: Solo→Tandem is the release route's (`noteSoloReleased`), so
+ * the two do not both forward a change from a Solo the room saw (a window
+ * that toggled before its CTRL_ROOM sync writes only `tandem`, then posts the
+ * release, so both forward; the supervisor's pass joins or repeats the ask).
+ * At most once per server run. Flag
+ * off: nothing, and nothing recorded. Total, since it runs inside a
+ * `CTRL_ROOM` transaction's observer.
+ */
+export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
+  if (!ownershipEnabled()) return;
+  if (modeKnownAsked) return;
+  if (state === "indeterminate") {
+    modeUnknownSeen = true;
+    return;
+  }
+  if (state === "solo") {
+    modeUnknownSeen = false;
+    return;
+  }
+  if (!modeUnknownSeen) return;
+  modeKnownAsked = true;
+  try {
+    runOutsideMcpContext(() => startOrWakeSink("mode-known"));
+  } catch {
+    logLimited("forward-failed", FORWARD_FAILED);
+  }
+}
+
+/**
+ * The observer's ask again, replayed once the supervisor has started (#2358,
+ * the restart question). A window can reconnect and write the mode before the
+ * supervisor exists (the boot's config sweep runs first, and a deferred
+ * autostart creates none until the window opens), or while its `start()` has
+ * set no standby yet; the forward then reaches nothing, and the once-per-run
+ * latch would leave the waiting work unasked. `src/server/index.ts` calls
+ * this after `start()` resolves, and it forwards `mode-known` again when the
+ * observer has already asked this run; a forward that did land is asked
+ * twice, which the supervisor's pass joins or repeats. Flag off: nothing.
+ */
+export function replayModeKnownAfterSupervisorStart(): void {
+  if (!ownershipEnabled()) return;
+  if (!modeKnownAsked) return;
+  try {
+    runOutsideMcpContext(() => startOrWakeSink("mode-known"));
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
   }
@@ -4124,6 +4196,8 @@ export function resetOwnershipForTests(): void {
   chatFaultForTests = undefined;
   wakeObserverForTests = undefined;
   startOrWakeSink = () => {};
+  modeUnknownSeen = false;
+  modeKnownAsked = false;
   requestWakeSink = () => {};
   ownershipFrameSink = () => {};
   roundOpener = undefined;

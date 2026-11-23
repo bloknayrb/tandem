@@ -230,7 +230,7 @@ describe("createThreadAnswers (#2360)", () => {
           chatNotifications: true,
           chatNotificationContent: "generic",
           chatAttentionFlash: true,
-          chatSound: "chime",
+          chatSound: "vibes-low-marimba",
           chatSoundVolume: 0,
         }),
         isActive: () => false,

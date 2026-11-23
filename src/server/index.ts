@@ -99,6 +99,7 @@ import {
   noteOwnSpawnStarted,
   noteTandemPresence,
   noteTandemRunStart,
+  replayModeKnownAfterSupervisorStart,
   setDeliveryRoundOpener,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
@@ -266,6 +267,9 @@ async function startLauncherSupervisor(): Promise<void> {
       (id) => sup.isOwnChildSession?.(id) === true,
     );
     await launcherSupervisor.start();
+    // The mode observer's ask, if a window wrote the mode before this
+    // supervisor could hear it (#2358, the restart question). Flag off: nothing.
+    replayModeKnownAfterSupervisorStart();
   } catch (err) {
     launcherUnavailableReason = "spawn-failed";
     console.error(
