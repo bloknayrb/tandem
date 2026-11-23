@@ -2152,6 +2152,8 @@ const drainedFrom = new WeakMap<InboxChangeBatch, OwnerRecord>();
 export type InboxClaimCheck = "claimable" | "open" | "unowned" | "record" | "scope";
 
 let claimCheckForTests: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined;
+/** Runs right after a poll claim's `setDocOwner`, for {@link setPollClaimAppliedForTests}. */
+let pollClaimAppliedForTests: ((documentId: string) => void) | undefined;
 
 let scopeReadForTests: typeof inboxScopeOf | undefined;
 
@@ -2211,6 +2213,9 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         const kind = standing.claim;
         changed = true;
         setDocOwner(documentId, { ownerId: callerId, kind }, "poll-claim", callerId, sinceSeq);
+        // Tests only: what a re-entrant lapse through the detached cap does
+        // here (`rejudge` below), at the one point it can happen.
+        pollClaimAppliedForTests?.(documentId);
         const entry = ownerByDoc.get(documentId);
         if (entry?.ownerId !== callerId || entry.kind !== kind) {
           logLimited("poll-claim-not-applied", POLL_CLAIM_NOT_APPLIED);
@@ -3206,6 +3211,18 @@ export function setHandoverSeqForTests(documentId: string, seq: number): void {
  * The checks cannot fail while the commit stays synchronous except through
  * re-entrancy, which an ESM spy cannot reach. Undefined clears it.
  */
+/**
+ * Tests only (#2358 flip-blocker row, the chat claim's `"changed"` outcome):
+ * run `hook` right after a poll claim's `setDocOwner`, where a re-entrant
+ * lapse through the detached cap can move the document away. Reset by
+ * `resetOwnershipForTests`.
+ */
+export function setPollClaimAppliedForTests(
+  hook: ((documentId: string) => void) | undefined,
+): void {
+  pollClaimAppliedForTests = hook;
+}
+
 export function setInboxClaimCheckForTests(
   hook: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined,
 ): void {
@@ -3241,6 +3258,7 @@ export function resetOwnershipForTests(): void {
   compositeObserver = undefined;
   noticeFaultForTests = undefined;
   claimCheckForTests = undefined;
+  pollClaimAppliedForTests = undefined;
   scopeReadForTests = undefined;
   resetDocOpQueuesForTests();
   lastLogAt.clear();
