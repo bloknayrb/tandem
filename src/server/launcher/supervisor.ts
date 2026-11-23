@@ -917,8 +917,9 @@ export interface Supervisor {
    * hide (#2358 PR 3b-2e2, the owner's 2026-11-17 answer 3): the time the
    * latest turn still in flight was written, or now when a wake is queued
    * behind that turn (it is written when the turn ends). `null` with no turn
-   * in flight, once the turn in flight has run for `DELIVERY_STALL_MS`, with no live child, while a local model answers chat, and
-   * whenever ownership is off. Says nothing about WHICH item the turn serves.
+   * in flight, once the turn in flight has run for `DELIVERY_STALL_MS`, with
+   * no live child, while a local model answers chat, and whenever ownership
+   * is off. Says nothing about WHICH item the turn serves.
    * Never throws. Optional for the same reason as `tandemPresence`.
    */
   wokenAt?(): number | null;
