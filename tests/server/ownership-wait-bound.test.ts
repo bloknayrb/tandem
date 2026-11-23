@@ -414,6 +414,65 @@ describe("a call whose request was cancelled before its turn", () => {
     expect(isDocOpQueueBusy(id)).toBe(false);
   });
 
+  // What the stdio bridge's cancellation buys (ADR-054 as amended 2026-11-23):
+  // the bridge answered B's write itself and sent `notifications/cancelled`,
+  // the same frame the SDK client sends on abort. B's write was queued first;
+  // had it run it would have claimed the document and A's would be refused.
+  it("a cancelled write never runs or claims, and its uncancelled twin behind it does", async () => {
+    const { id, ydoc } = setupDoc("d");
+    const head = hold(id);
+    const abort = new AbortController();
+
+    const cancelled = await start(
+      B,
+      "tandem_edit",
+      { from: 0, to: 5, newText: "BBBBB", documentId: id },
+      { signal: abort.signal },
+    );
+    const twin = await start(A, "tandem_edit", {
+      from: 0,
+      to: 5,
+      newText: "AAAAA",
+      documentId: id,
+    });
+    expect(docOpWaitTimersForTests()).toBe(2);
+    abort.abort("the Tandem bridge's request timer fired");
+    await expect(cancelled.answer).rejects.toBeDefined();
+    expect(getDocOwner(id)).toBeUndefined();
+
+    head.release();
+    await head.done;
+    const answer = await twin.answer;
+    expect(answer.error).toBe(false);
+    expect(text(ydoc)).toContain("AAAAA");
+    expect(text(ydoc)).not.toContain("BBBBB");
+    expect(getDocOwner(id)).toMatchObject({ ownerId: A });
+    expect(isDocOpQueueBusy(id)).toBe(false);
+    expect(docOpWaitTimersForTests()).toBe(0);
+  });
+
+  it("a cancellation that arrives after the write started leaves it whole: it lands once and the queue is free", async () => {
+    const { id, ydoc } = setupDoc("d");
+    const abort = new AbortController();
+    // An idle document: the write starts in the caller's own tick.
+    const started = await start(
+      A,
+      "tandem_edit",
+      { from: 0, to: 5, newText: "Early", documentId: id },
+      { signal: abort.signal },
+    );
+    abort.abort("too late");
+    // Answered or dropped by the SDK, either way the write is not undone.
+    await started.answer.catch(() => undefined);
+    await settle();
+
+    expect(text(ydoc).match(/Early/g)).toHaveLength(1);
+    expect(getDocOwner(id)).toMatchObject({ ownerId: A });
+    expect(isDocOpQueueBusy(id)).toBe(false);
+    const next = await start(A, "tandem_comment", { from: 0, to: 5, text: "c", documentId: id });
+    expect((await next.answer).error).toBe(false);
+  });
+
   it("the signal reaches the caller through either wrapper, and only with ownership on", async () => {
     const signal = new AbortController().signal;
     const seen: ToolCaller[] = [];
