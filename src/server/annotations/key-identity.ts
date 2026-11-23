@@ -27,7 +27,7 @@ import { getFileSyncContextForDoc } from "../events/file-sync-registry.js";
 import { type AliasLedgerEntry, appendAliasLedger } from "./alias-ledger.js";
 import { hasAnnotationShape } from "./annotation-shape.js";
 import { nextRev } from "./schema.js";
-import { queueSnapshot } from "./sync.js";
+import { quarantineReplies, queueSnapshot } from "./sync.js";
 
 declare const reconciledBrand: unique symbol;
 
@@ -55,7 +55,6 @@ export function reconciledRepliesMap(token: ReconciledDoc): Y.Map<unknown> {
 }
 
 export {
-  type AliasLedgerEntry,
   copyAliasLedger,
   dropAliasLedger,
   getAliasLedger,
@@ -110,8 +109,7 @@ export function reconcileAnnotationKeys(ydoc: Y.Doc): ReconciledDoc {
   reconciledDocs.set(token, ydoc);
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const aliases = findAliases(map, map.keys());
-  if (aliases.length === 0) return token;
-  repair(ydoc, map, aliases);
+  if (aliases.length > 0) repair(ydoc, map, aliases);
   return token;
 }
 
@@ -128,21 +126,10 @@ function repair(ydoc: Y.Doc, map: Y.Map<unknown>, aliases: readonly Alias[]): vo
   withInternal(ydoc, () => {
     // (a) Replies filed under a stale id are ambiguous: an older client posted
     // the stale id from K's card, so a note-thread reply may sit under a
-    // comment. Fail closed. The `rev` bump makes the stamp win `pickWinner`
-    // against an unstamped envelope copy (sticky-private covers a tie).
-    replies.forEach((value, replyKey) => {
-      const reply = value as {
-        annotationId?: unknown;
-        author?: unknown;
-        private?: unknown;
-        rev?: number;
-      } | null;
-      if (!reply || typeof reply !== "object") return;
-      if (reply.author !== "user" || reply.private === true) return;
-      if (typeof reply.annotationId !== "string" || !staleIds.has(reply.annotationId)) return;
-      replies.set(replyKey, { ...reply, private: true, rev: nextRev(reply) });
-      quarantined.push(replyKey);
-    });
+    // comment. Fail closed, through the one quarantine the envelope merge also
+    // uses. Its `rev` bump makes the stamp win `pickWinner` against an
+    // unstamped envelope copy (sticky-private covers a tie).
+    quarantined.push(...quarantineReplies([], replies, staleIds).stampedLiveKeys);
 
     // (b) Rewrite each aliased record under its own key. Read inside the
     // transaction, never from a captured event value, so a concurrent stamp
@@ -200,10 +187,7 @@ function repair(ydoc: Y.Doc, map: Y.Map<unknown>, aliases: readonly Alias[]): vo
  *
  * The full scan at attach time covers state that arrived before the observer.
  */
-export function attachKeyIdentityObserver(
-  ydoc: Y.Doc,
-  opts: { scan: boolean } = { scan: true },
-): () => void {
+export function attachKeyIdentityObserver(ydoc: Y.Doc, opts: { scan: boolean }): () => void {
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const observer = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
     if (txn.origin === INTERNAL_ORIGIN) return;

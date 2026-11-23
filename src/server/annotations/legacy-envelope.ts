@@ -39,6 +39,7 @@
 
 import { createHash } from "node:crypto";
 import type * as Y from "yjs";
+import { TUTORIAL_ANNOTATION_PREFIX } from "../../shared/constants.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation } from "../../shared/types.js";
 import { keysDriftIndex } from "../file-io/docx-comments.js";
@@ -53,7 +54,6 @@ const FRESH_KEY_PREFIX = "ann_rk_";
 export function isFreshKey(key: string): boolean {
   return key.startsWith(FRESH_KEY_PREFIX);
 }
-const TUTORIAL_PREFIX = "tutorial-";
 
 export interface EnvelopeAssignment {
   /** Rows keyed by their target key, each stamped `id = targetKey`. */
@@ -101,8 +101,7 @@ function fingerprintOf(raw: unknown): Fingerprint | null {
     author: ann.author,
     promotedFrom: typeof r.promotedFrom === "string" ? r.promotedFrom : undefined,
     // An empty snapshot claims no text: treat it as absent.
-    textSnapshot:
-      typeof r.textSnapshot === "string" && r.textSnapshot !== "" ? r.textSnapshot : undefined,
+    textSnapshot: snapshotOrUndefined(r.textSnapshot),
     commentId: ann.importSource?.commentId,
     importAuthor: ann.importSource?.author,
     importFile: ann.importSource?.file,
@@ -115,12 +114,16 @@ function ledgerFingerprint(entry: AliasLedgerEntry): Fingerprint {
     type: entry.type,
     author: undefined,
     promotedFrom: undefined,
-    textSnapshot: entry.textSnapshot === "" ? undefined : entry.textSnapshot,
+    textSnapshot: snapshotOrUndefined(entry.textSnapshot),
     commentId: entry.commentId,
     importAuthor: undefined,
     importFile: undefined,
   };
 }
+
+/** A snapshot, or `undefined` when there is none: an empty one claims no text. */
+const snapshotOrUndefined = (v: unknown): string | undefined =>
+  typeof v === "string" && v !== "" ? v : undefined;
 
 const isImport = (f: Fingerprint) => f.author === "import" && f.importFile !== undefined;
 
@@ -190,7 +193,7 @@ function strictlyCompatible(row: Fingerprint, cand: Fingerprint): boolean {
  * re-import (never a promoted record; `commentId` strict).
  */
 function recreatedDeterministically(id: string, row: Fingerprint, live: Fingerprint): boolean {
-  if (id.startsWith(TUTORIAL_PREFIX)) {
+  if (id.startsWith(TUTORIAL_ANNOTATION_PREFIX)) {
     return (
       row.type === live.type &&
       row.textSnapshot !== undefined &&
@@ -198,8 +201,7 @@ function recreatedDeterministically(id: string, row: Fingerprint, live: Fingerpr
     );
   }
   if (live.author !== "import" || !isImport(row)) return false;
-  const typeOk =
-    row.type === live.type || (live.type === "note" && row.type === "comment" && isImport(row));
+  const typeOk = row.type === live.type || (live.type === "note" && row.type === "comment");
   return typeOk && strictCommentIdsAgree(row, live);
 }
 
@@ -348,21 +350,22 @@ export function assignEnvelopeRows(
   );
   const matched = new Set(target.filter((t): t is string => t !== undefined));
 
-  // Step 3: fallback to the row's own id, for a row with no candidate.
+  // Step 3: fallback to the row's own id, for a row with no candidate. An
+  // unreadable live value is not a record (the file copy replaces it, as it
+  // always has); nor is one the envelope's tombstone beats (the row then
+  // targets its own id, where the tombstone check deletes it).
+  const isOccupied = (id: string) => {
+    const live = annMap.get(id);
+    return (fingerprintOf(live) !== null && !doomed(id, live)) || ledgerByKey.has(id);
+  };
   const fallbacks = new Map<string, number[]>();
   file.annotations.forEach((row, index) => {
     if (forcedFresh.has(index) || target[index] !== undefined || rowCands[index].length > 0) {
       return;
     }
     const fp = rowFps[index];
-    const live = annMap.get(row.id);
-    // An unreadable live value is not a record: the file copy replaces it, as
-    // it always has. Nor is one the envelope's tombstone beats: the row then
-    // targets its own id, where the tombstone check deletes it.
-    const occupied =
-      (fingerprintOf(live) !== null && !doomed(row.id, live)) || ledgerByKey.has(row.id);
-    if (occupied) {
-      const liveFp = fingerprintOf(live);
+    if (isOccupied(row.id)) {
+      const liveFp = fingerprintOf(annMap.get(row.id));
       if (!fp || !liveFp || !recreatedDeterministically(row.id, fp, liveFp)) return;
     }
     const list = fallbacks.get(row.id);
@@ -374,10 +377,7 @@ export function assignEnvelopeRows(
     // nobody, so file order never decides.
     if (indexes.length !== 1 || matched.has(id)) continue;
     target[indexes[0]] = id;
-    const live = annMap.get(id);
-    if ((fingerprintOf(live) !== null && !doomed(id, live)) || ledgerByKey.has(id)) {
-      quarantineIds.add(id);
-    }
+    if (isOccupied(id)) quarantineIds.add(id);
   }
 
   // Step 4: everything else to a fresh key; then place, one row per key.

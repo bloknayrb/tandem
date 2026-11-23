@@ -176,7 +176,7 @@ describe("attachKeyIdentityObserver", () => {
       doc.getMap(Y_MAP_ANNOTATIONS).set("X", { ...COMMENT_X });
       doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r-note", reply("r-note", "X"));
     });
-    const detach = attachKeyIdentityObserver(doc);
+    const detach = attachKeyIdentityObserver(doc, { scan: true });
 
     withBrowser(doc, () => doc.getMap(Y_MAP_ANNOTATIONS).set("K", { ...NOTE_K_AS_X }));
 
@@ -188,7 +188,7 @@ describe("attachKeyIdentityObserver", () => {
   it("scans existing state at attach time (a session restore that arrived first)", () => {
     quiet();
     const doc = aliasedDoc();
-    const detach = attachKeyIdentityObserver(doc);
+    const detach = attachKeyIdentityObserver(doc, { scan: true });
     expect((doc.getMap(Y_MAP_ANNOTATIONS).get("K") as { id: string }).id).toBe("K");
     detach();
   });
@@ -196,7 +196,7 @@ describe("attachKeyIdentityObserver", () => {
   it("ignores its own internal-origin repair, so it never loops", () => {
     quiet();
     const doc = new Y.Doc();
-    const detach = attachKeyIdentityObserver(doc);
+    const detach = attachKeyIdentityObserver(doc, { scan: true });
     let transactions = 0;
     doc.on("afterTransaction", () => transactions++);
 

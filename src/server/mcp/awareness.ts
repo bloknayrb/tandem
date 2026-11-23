@@ -1624,8 +1624,10 @@ function carryHeld(
     } else if (entry.kind === "r") {
       if (!replies) {
         replies = new Map();
+        // One token for the whole pass: reconciling is a full scan of the map.
+        const reconciled = store.reconciled();
         for (const ann of allAnnotations) {
-          for (const reply of channelVisibleReplies(store.reconciled(), ann)) {
+          for (const reply of channelVisibleReplies(reconciled, ann)) {
             replies.set(ledgerKey(documentId, reply.id), reply);
           }
         }

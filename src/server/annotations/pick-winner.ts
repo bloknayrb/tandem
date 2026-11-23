@@ -36,15 +36,3 @@ export function pickWinner(
   }
   return "ymap";
 }
-
-/**
- * Merge a Map of file records into a Y.Map under `pickWinner`'s rules
- * (higher `rev` wins; tied `rev` falls back to `editedAt`). For each file
- * record: insert if absent (unless `shouldSkipInsert` vetoes), otherwise
- * compare normalized copies and let the winner replace. After the pass,
- * `needsWrite` is true if the Y.Map carries ids the file doesn't (minus
- * `ymapOnlyIgnoreIds`) — caller queues a post-merge write so those land.
- * `fileWon` names every id the pass wrote FROM the file (inserted or replaced),
- * so a caller can fix up records whose file copy predates something the live
- * map already reflects (#2269's post-reload remap).
- */

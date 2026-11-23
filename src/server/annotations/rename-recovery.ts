@@ -254,10 +254,12 @@ export async function recoverRenamedEnvelope(
       for (const reply of rekeyed.replies) {
         // `private` is sticky (as in every reply merge): a live copy already
         // withheld from Claude stays withheld.
-        const live = repMap.get(reply.id) as { private?: unknown } | undefined;
+        const live = repMap.get(reply.id) as { private?: unknown; rev?: number } | undefined;
         repMap.set(
           reply.id,
-          live?.private === true && reply.private !== true ? { ...reply, private: true } : reply,
+          live?.private === true && reply.private !== true
+            ? { ...reply, private: true, rev: Math.max(reply.rev, live.rev ?? 0) + 1 }
+            : reply,
         );
       }
     });

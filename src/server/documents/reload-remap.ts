@@ -576,19 +576,19 @@ export function remapEnvelopeWins(
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const hash = docHash(remap.filePath);
   let wrote = false;
+  let twins: Map<string, RemapEntry> | undefined;
   for (const id of ids) {
     const raw = map.get(id);
     const sanitized = sanitizeFor(raw, hash);
     if (!sanitized) continue;
     const ann = atMapKey(id, sanitized);
     const captured = remap.entries.get(id);
-    const entry: RemapEntry = captured
-      ? sameAnchor(raw, captured.raw)
+    const entry: RemapEntry =
+      captured && sameAnchor(raw, captured.raw)
         ? { ...captured, raw, ann }
-        : storedEntry(raw, ann, remap.oldText)
-      : isFreshKey(id)
-        ? freshKeyEntry(raw, ann, remap)
-        : storedEntry(raw, ann, remap.oldText);
+        : !captured && isFreshKey(id)
+          ? freshKeyEntry(raw, ann, remap, (twins ??= liveTwinIndex(remap)))
+          : storedEntry(raw, ann, remap.oldText);
     map.set(id, remapOne(ydoc, entry, remap, hunks, newText));
     wrote = true;
   }
@@ -605,8 +605,13 @@ export function remapEnvelopeWins(
  * contradict the old text there. Any other uncaptured key keeps master's
  * `storedEntry`.
  */
-function freshKeyEntry(raw: unknown, ann: Annotation, remap: ReloadRemap): RemapEntry {
-  const twin = ann.relRange ? liveTwinOf(remap, JSON.stringify(ann.relRange)) : undefined;
+function freshKeyEntry(
+  raw: unknown,
+  ann: Annotation,
+  remap: ReloadRemap,
+  twins: ReadonlyMap<string, RemapEntry>,
+): RemapEntry {
+  const twin = ann.relRange ? twins.get(JSON.stringify(ann.relRange)) : undefined;
   if (twin) {
     const oldSpan = remap.oldText.slice(twin.oldRange.from, twin.oldRange.to);
     if (!snapshotContradicts(ann, oldSpan)) {
@@ -617,17 +622,21 @@ function freshKeyEntry(raw: unknown, ann: Annotation, remap: ReloadRemap): Remap
 }
 
 /**
- * The first live-resolved captured entry (in capture order) whose own stored
- * `relRange` serializes to `key`. Keyed only on a present `relRange`, so two
- * anchor-less records never match.
+ * Live-resolved captured entries keyed by their own stored `relRange`
+ * (serialized), the first in capture order winning. Keyed only on a present
+ * `relRange`, so two anchor-less records never match. Built once per
+ * `remapEnvelopeWins`, and only when a fresh key needs it.
  */
-function liveTwinOf(remap: ReloadRemap, key: string): RemapEntry | undefined {
+function liveTwinIndex(remap: ReloadRemap): Map<string, RemapEntry> {
+  const index = new Map<string, RemapEntry>();
   for (const entry of remap.entries.values()) {
     if (!entry.liveResolved) continue;
     const relRange = (entry.ann as { relRange?: unknown }).relRange;
-    if (relRange !== undefined && JSON.stringify(relRange) === key) return entry;
+    if (relRange === undefined) continue;
+    const key = JSON.stringify(relRange);
+    if (!index.has(key)) index.set(key, entry);
   }
-  return undefined;
+  return index;
 }
 
 function sameAnchor(a: unknown, b: unknown): boolean {

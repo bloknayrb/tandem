@@ -472,8 +472,9 @@ export function quarantineReplies(
   fileReplies: readonly AnnotationReplyRecordV1[],
   repMap: Y.Map<unknown>,
   ids: ReadonlySet<string>,
-): { fileReplies: AnnotationReplyRecordV1[]; changed: boolean } {
-  if (ids.size === 0) return { fileReplies: [...fileReplies], changed: false };
+): { fileReplies: AnnotationReplyRecordV1[]; changed: boolean; stampedLiveKeys: string[] } {
+  const stampedLiveKeys: string[] = [];
+  if (ids.size === 0) return { fileReplies: [...fileReplies], changed: false, stampedLiveKeys };
   const ambiguous = (r: { author?: unknown; annotationId?: unknown; private?: unknown }) =>
     r.author === "user" &&
     r.private !== true &&
@@ -494,13 +495,40 @@ export function quarantineReplies(
     };
     if (!r || typeof r !== "object" || !ambiguous(r)) return;
     repMap.set(key, { ...r, private: true, rev: nextRev(r) });
+    stampedLiveKeys.push(key);
     changed = true;
   });
-  // A stamp on either side must reach disk: the caller is inside
-  // `withFileSync`, which durable sync skips.
-  return { fileReplies: stamped, changed };
+  return { fileReplies: stamped, changed, stampedLiveKeys };
 }
 
+/**
+ * Merge the file's replies into the live map: stamp the ambiguous ones private
+ * (`quarantineReplies`), then merge with `private` sticky. Returns whether a
+ * write must be forced. The one sequence `loadAndMerge` and
+ * `mergeEnvelopeForward` share.
+ */
+function mergeRepliesQuarantined(
+  repMap: Y.Map<unknown>,
+  replies: readonly AnnotationReplyRecordV1[],
+  ids: ReadonlySet<string>,
+): boolean {
+  const quarantined = quarantineReplies(replies, repMap, ids);
+  const fileReplies = new Map(quarantined.fileReplies.map((r) => [r.id, r]));
+  const merged = mergeMap(repMap, fileReplies, normalizeReply, { stickyPrivate: true });
+  return quarantined.changed || merged.needsWrite;
+}
+
+/**
+ * Merge a Map of file records into a Y.Map under `pickWinner`'s rules
+ * (higher `rev` wins; tied `rev` falls back to `editedAt`). For each file
+ * record: insert if absent (unless `shouldSkipInsert` vetoes), otherwise
+ * compare normalized copies and let the winner replace. After the pass,
+ * `needsWrite` is true if the Y.Map carries ids the file doesn't (minus
+ * `ymapOnlyIgnoreIds`) — caller queues a post-merge write so those land.
+ * `fileWon` names every id the pass wrote FROM the file (inserted or replaced),
+ * so a caller can fix up records whose file copy predates something the live
+ * map already reflects (#2269's post-reload remap).
+ */
 function mergeMap<T extends { rev: number; editedAt?: number }>(
   ymap: Y.Map<unknown>,
   fileRecs: Map<string, T>,
@@ -537,11 +565,7 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
     }
     const winner = pickWinner(fileRec, ymapRec);
     const survivor = winner === "file" ? fileRec : ymapRec;
-    if (
-      opts.stickyPrivate &&
-      isPrivate(survivor) !== true &&
-      (isPrivate(fileRec) || isPrivate(ymapRec))
-    ) {
+    if (opts.stickyPrivate && !isPrivate(survivor) && (isPrivate(fileRec) || isPrivate(ymapRec))) {
       ymap.set(id, { ...survivor, private: true, rev: Math.max(fileRec.rev, ymapRec.rev) + 1 });
       needsWrite = true;
       if (winner === "file") fileWon.add(id);
@@ -750,11 +774,9 @@ export async function loadAndMerge(
       needsWrite = true;
     }
 
-    const quarantined = quarantineReplies(file.replies, repMap, assignment.quarantineIds);
-    if (quarantined.changed) needsWrite = true;
-    const fileReplies = new Map(quarantined.fileReplies.map((r) => [r.id, r]));
-    const repResult = mergeMap(repMap, fileReplies, normalizeReply, { stickyPrivate: true });
-    if (repResult.needsWrite) needsWrite = true;
+    if (mergeRepliesQuarantined(repMap, file.replies, assignment.quarantineIds)) {
+      needsWrite = true;
+    }
   });
 
   // Force a write when the union pulled in tombstones the file lacked — those
@@ -831,11 +853,9 @@ export function mergeEnvelopeForward(
       shouldSkipInsert: (id) => winningTombstoneIds.has(id),
     });
     if (annResult.needsWrite) needsWrite = true;
-    const quarantined = quarantineReplies(file.replies, repMap, assignment.quarantineIds);
-    if (quarantined.changed) needsWrite = true;
-    const fileReplies = new Map(quarantined.fileReplies.map((r) => [r.id, r]));
-    const repResult = mergeMap(repMap, fileReplies, normalizeReply, { stickyPrivate: true });
-    if (repResult.needsWrite) needsWrite = true;
+    if (mergeRepliesQuarantined(repMap, file.replies, assignment.quarantineIds)) {
+      needsWrite = true;
+    }
   });
   // Queues no write itself; a caller that must persist reads `needsWrite`.
   return { needsWrite };
