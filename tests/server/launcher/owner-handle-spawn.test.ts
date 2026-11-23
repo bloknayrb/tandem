@@ -1103,12 +1103,13 @@ describe("flag off: master's spawn exactly (Ruling I, the dark requirement)", ()
   });
 });
 
-describe("the greeting, flag on (a regression test, not new behaviour)", () => {
-  it("a spawn with run files still classifies its own child's reply by session id, as on master (Ruling A)", async () => {
+describe("the greeting, flag on (#2358 PR 3b-2c: by bound transport, ownership design §7.3)", () => {
+  it("a spawn with run files classifies by the reply's transport fact, never by its session id", async () => {
     type Query = {
       sessionId: string | undefined;
       replyTo: string | undefined;
       inProgress: boolean | undefined;
+      bound?: boolean;
     };
     let classifier: ((q: Query) => boolean) | null = null;
     const sup = makeSupervisor({
@@ -1126,13 +1127,18 @@ describe("the greeting, flag on (a regression test, not new behaviour)", () => {
     const run = await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "the spawn");
     expect(run.mcpConfigPath).toBeDefined();
     await waitFor(() => records("turn-").length > 0, "the greeting turn");
-    const classify = (sessionId: string | undefined) =>
+    const classify = (sessionId: string | undefined, bound?: boolean) =>
       (classifier as ((q: Query) => boolean) | null)?.({
         sessionId,
         replyTo: undefined,
         inProgress: undefined,
+        ...(bound !== undefined ? { bound } : {}),
       }) ?? false;
-    expect(classify("00000000-0000-4000-8000-000000000000")).toBe(false);
-    expect(classify(run.sessionId)).toBe(true);
+    // Master's rule would tag both of these (Ruling A's regression test,
+    // until 3b-2c): the child's own id, and no id at all.
+    expect(classify(run.sessionId)).toBe(false);
+    expect(classify(undefined)).toBe(false);
+    expect(classify(run.sessionId, false)).toBe(false);
+    expect(classify("00000000-0000-4000-8000-000000000000", true)).toBe(true);
   });
 });

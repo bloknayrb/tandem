@@ -2337,7 +2337,9 @@ describe("MCP tool integration — awareness tools", () => {
       // A throwing listener never fails the reply.
       expect(parsed.data.sent).toBe(true);
       expect(seen).toHaveBeenCalledTimes(1);
-      expect(seen).toHaveBeenCalledWith(undefined);
+      // The session id is the first argument; with ownership on a second, the
+      // transport fact, follows (#2358 PR 3b-2c, ownership-greeting.test.ts).
+      expect(seen.mock.lastCall?.[0]).toBeUndefined();
       off2();
       await client.callTool({ name: "tandem_reply", arguments: { text: "again" } });
       expect(seen).toHaveBeenCalledTimes(1);

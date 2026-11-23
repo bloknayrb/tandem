@@ -3086,6 +3086,16 @@ describe("#2198 — the v1.0 walkthrough holds the boot start", () => {
 });
 
 describe("#2197 — the one-time greeting", () => {
+  // The dark rule (#2358 PR 3b-2c): these pin master's session-id keyed
+  // greeting, so they run flag-off in the ownership-flag-on job too. The
+  // bound-transport rule is the "#2358 PR 3b-2c" block below.
+  beforeEach(() => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function greetingSeam(owed = true) {
     const state = { owed, throws: false };
     const markDone = vi.fn(async () => {
@@ -3409,6 +3419,14 @@ describe("#2197 — the one-time greeting", () => {
 // --- #2227 ----------------------------------------------------------------------
 
 describe("#2227 — which reply is the hello: the greeting classifier", () => {
+  // The dark rule, as in the #2197 block above (#2358 PR 3b-2c).
+  beforeEach(() => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   type Query = {
     sessionId: string | undefined;
     replyTo: string | undefined;
@@ -3550,6 +3568,136 @@ describe("#2227 — which reply is the hello: the greeting classifier", () => {
     await sup.startFresh(cwdDir);
     expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
     expect(h.classify()).toBe(false);
+  });
+});
+
+describe("#2358 PR 3b-2c — the greeting by bound transport (ownership design §7.3)", () => {
+  type Query = {
+    sessionId: string | undefined;
+    replyTo: string | undefined;
+    inProgress: boolean | undefined;
+    bound?: boolean;
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /**
+   * The supervisor's two greeting seams, driven as `tandem_reply` and
+   * `/api/channel-reply` drive them: classify, then (after the append)
+   * notify, each with the same transport fact.
+   */
+  function harness() {
+    const state = { owed: true };
+    const markDone = vi.fn(async () => {
+      state.owed = false;
+    });
+    const replyCbs = new Set<(sessionId: string | undefined, bound?: boolean) => void>();
+    let classifier: ((q: Query) => boolean) | null = null;
+    const extra: ExtraOpts = {
+      greeting: { isOwed: () => state.owed, markDone },
+      subscribeTandemReply: (cb) => {
+        replyCbs.add(cb);
+        return () => replyCbs.delete(cb);
+      },
+      registerGreetingReplyClassifier: (fn) => {
+        classifier = fn;
+        return () => {
+          classifier = null;
+        };
+      },
+      userChatSnapshot: () => ({ ids: new Set<string>(), unread: false }),
+    };
+    const reply = (q: { sessionId?: string; bound?: boolean }): boolean => {
+      const query: Query = {
+        sessionId: q.sessionId,
+        replyTo: undefined,
+        inProgress: undefined,
+        ...(q.bound !== undefined ? { bound: q.bound } : {}),
+      };
+      const tagged = classifier?.(query) ?? false;
+      for (const cb of [...replyCbs]) {
+        if (q.bound === undefined) cb(q.sessionId);
+        else cb(q.sessionId, q.bound);
+      }
+      return tagged;
+    };
+    return { extra, markDone, reply };
+  }
+
+  const ownSessionId = (): string =>
+    (
+      JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8")) as {
+        sessionId: string;
+      }
+    ).sessionId;
+
+  async function greetingSpawn(h: ReturnType<typeof harness>) {
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
+    return sup;
+  }
+
+  it("flag on: a reply on the bound transport is the greeting, and answers it", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: true })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("flag on: a bound reply with no session id is the greeting too (the bind decides, not the header)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ bound: true })).toBe(true);
+  });
+
+  it("flag on: an unbound transport carrying the child's own session id is not the greeting, and does not answer it", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(false);
+    expect(h.markDone).not.toHaveBeenCalled();
+    // Still pending: the bound transport's reply that follows is the greeting.
+    expect(h.reply({ sessionId: ownSessionId(), bound: true })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("flag on: an unbound reply alone leaves the greeting unanswered at the turn's end", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(false);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).toMatchObject({ greetingLate: true });
+  });
+
+  it("flag on: a reply with no transport fact at all is not the greeting (fails closed)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId() })).toBe(false);
+    expect(h.reply({})).toBe(false);
+    expect(h.markDone).not.toHaveBeenCalled();
+  });
+
+  it("dark: the session id decides and the transport fact is not read (master's rule)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ sessionId: "someone-else", bound: true })).toBe(false);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
   });
 });
 

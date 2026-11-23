@@ -13,7 +13,11 @@
  * child) but must not import the MCP layer, so it registers a classifier here,
  * the same seam shape as `onTandemReply`; `index.ts` wires the two. The MCP
  * `tandem_reply` and `/api/channel-reply` ask it, synchronously, right before
- * they append, and pass the answer to `appendClaudeChatMessage`.
+ * they append, and pass the answer to `appendClaudeChatMessage`. With
+ * ownership on (#2358 PR 3b-2c) they also pass the transport fact, and the
+ * classifier keys on it instead of the session id: only a reply on the
+ * transport bound to the current spawn is the greeting, and a channel reply
+ * never is.
  *
  * The answer changes notification wording ONLY. A wrong `true` reads "Tandem's
  * Claude is ready" for one reply; a wrong `false` reads "Claude replied". So
@@ -32,6 +36,13 @@ export interface GreetingReplyQuery {
   sessionId: string | undefined;
   replyTo: string | undefined;
   inProgress: boolean | undefined;
+  /**
+   * Ownership on only (#2358 PR 3b-2c; `greetingTransportBound`): whether the
+   * reply arrived on a transport bound to Tandem's Claude's current run, false
+   * for a `/api/channel-reply` reply. Absent while ownership is off, when the
+   * classifier keys on `sessionId` as before.
+   */
+  bound?: boolean;
 }
 
 type Classifier = (query: GreetingReplyQuery) => boolean;

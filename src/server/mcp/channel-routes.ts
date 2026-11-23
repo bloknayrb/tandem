@@ -15,6 +15,7 @@ import { sseHandler } from "../events/sse.js";
 import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
+import { greetingTransportBound } from "../sessions/ownership.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
 import {
@@ -136,10 +137,15 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // The shim forwards its session id (`withClaudeSessionHeader`). Read once:
     // the greeting classifier (#2227) and the notify below must agree on it.
     const sessionId = normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
+    // Ownership on, a channel reply is never the greeting (#2358 PR 3b-2c;
+    // ownership design §7.3): the greeting is the bound transport's. Off,
+    // absent, and the session id decides as before.
+    const bound = greetingTransportBound("channel");
     const greeting = isGreetingReply({
       sessionId,
       replyTo: typeof replyTo === "string" ? replyTo : undefined,
       inProgress: inProgress === true,
+      ...(bound !== undefined ? { bound } : {}),
     });
     // Narrow the untrusted body fields, then route through the shared Claude-chat
     // write path that `tandem_reply` and the local-model collaborator also use.
@@ -163,7 +169,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     if (typeof replyTo === "string") closeMessageDeliveryRound(replyTo);
     // The shim's `tandem_reply` is a Claude Code session's reply like the MCP
     // tool's, so it can be Tandem's own Claude saying hello (#2197).
-    notifyTandemReply(sessionId);
+    notifyTandemReply(sessionId, bound);
     const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
     res.json({
       sent: true,

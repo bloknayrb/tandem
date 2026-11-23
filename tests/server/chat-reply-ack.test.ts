@@ -183,9 +183,13 @@ describe("POST /api/channel-reply", () => {
           "x-claude-session-id": "0b9c2a4e-1d2f-4a5b-8c6d-7e8f9a0b1c2d",
         },
       );
-      expect(seen).toHaveBeenCalledWith("0b9c2a4e-1d2f-4a5b-8c6d-7e8f9a0b1c2d");
+      // The session id is the first argument; with ownership on a second, the
+      // transport fact, follows (#2358 PR 3b-2c, pinned in
+      // ownership-greeting.test.ts).
+      expect(seen.mock.lastCall?.[0]).toBe("0b9c2a4e-1d2f-4a5b-8c6d-7e8f9a0b1c2d");
       post({ text: "no header" });
-      expect(seen).toHaveBeenLastCalledWith(undefined);
+      expect(seen).toHaveBeenCalledTimes(2);
+      expect(seen.mock.lastCall?.[0]).toBeUndefined();
       // A refused body writes nothing and tells no one.
       seen.mockClear();
       postRaw({ text: 7 });
