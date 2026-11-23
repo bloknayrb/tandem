@@ -212,18 +212,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "When Tandem's Claude stops being present, every per-message owner it holds of a message " +
-      "that is not handled must be dropped and the message re-owed, whatever the origin " +
-      "(a tab close of a document nobody held while it was present gives it origin 'close'; " +
-      "an acknowledgement, origin 'acknowledgement', whose message is handled, must be dropped " +
-      "too). releaseMessageOwners in sessions/ownership.ts takes the selector. Its record never " +
-      "lapses, so until then such a message is handed to nobody once presence ends, its own " +
-      "reply is refused (not-present) and every other session is refused 'Tandem's Claude " +
-      "answers this message' (the chat owners PR, R5.8; review round 1, item 3).",
-    closedBy: "PR 3b (presence).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -323,17 +311,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
       "answered-link, and the switch lands immediately before the flip, in the same release).",
     closedBy: "#2360's switch PR merged.",
-  },
-  {
-    gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), rule " +
-      "0's records are computed (3b-2b3a), and retirement, demotion, teardown re-pointing and " +
-      "the unbound-child refusal are built (3b-2b3b), but the own-spawn seam is unset and the " +
-      "supervisor does not call noteOwnSpawnStarted, so a transport bound to the current spawn " +
-      "still sits on its `claude:<id>` record, not the `tandem` record, no transport reaches an " +
-      "unbound-child or private record, and a child of Tandem's Claude that did not bind is " +
-      "answered as an ordinary session.",
-    closedBy: "3b-2b4's switch-on.",
   },
   {
     gap: "The Settings list of bound transports (Ruling C) is not built.",

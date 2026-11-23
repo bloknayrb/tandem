@@ -476,8 +476,9 @@ interface SpawnRecord {
 
 /**
  * The supervisor's presence seam for Tandem's Claude (#2358 PR 3b-1, R2.7),
- * so 3b-2 does not reopen this code. Nothing subscribes outside tests until
- * 3b-2. Flag off every read is false and nothing is ever announced.
+ * so 3b-2 does not reopen this code. `src/server/index.ts` subscribes
+ * presence and the spawn-started event inside its supervisor setup (#2358 PR
+ * 3b-2b4a). Flag off every read is false and nothing is ever announced.
  */
 export interface TandemPresenceSeam {
   /** The value last announced. */
@@ -486,6 +487,13 @@ export interface TandemPresenceSeam {
   subscribe(cb: (present: boolean) => void): () => void;
   /** Each run start (the latest spawn's first bind), after presence. */
   onRunStart(cb: () => void): () => void;
+  /**
+   * Each spawn's start (#2358 PR 3b-2b4a): its number and session id, right
+   * after the spawn's session id is recorded, only for a spawn with a record
+   * (flag on). A resumed spawn has the same id and a new number. Called
+   * synchronously inside the spawn; each subscriber in its own catch.
+   */
+  onSpawnStarted(cb: (spawn: { n: number; sessionId: string }) => void): () => void;
   /**
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
@@ -860,8 +868,8 @@ export interface Supervisor {
   /** The settings this supervisor last read or saved successfully, or null
    * before any. What it is acting on while the file cannot be read. */
   appliedSettings(): LauncherSettings | null;
-  /** Tandem's Claude's presence, computed and consumed by nothing yet (#2358
-   * PR 3b-1, R2.7). Ownership on only; flag off every read is false.
+  /** Tandem's Claude's presence (#2358 PR 3b-1, R2.7), consumed by ownership
+   * through `index.ts` (3b-2b4a). Ownership on only; flag off every read is false.
    * Optional so the test fakes of this interface need not implement it; the
    * real supervisor always has it. */
   tandemPresence?(): TandemPresenceSeam;
@@ -886,8 +894,8 @@ export interface Supervisor {
   startOrWake?(cause: StartOrWakeCause): void;
   /**
    * The own-spawn seam's two reads (#2358 PR 3b-2b3a), for ownership's
-   * `setOwnSpawnSource`, which `index.ts` does not call until 3b-2b4 (a
-   * source pin holds that). `ownSpawn`: the live child's spawn number and
+   * `setOwnSpawnSource`, which `index.ts` calls inside its supervisor setup
+   * (3b-2b4a; a source pin holds that). `ownSpawn`: the live child's spawn number and
    * session id, null with no live child, flag off, or once its spawn is torn
    * down. `isOwnChildSession`: whether any child of this supervisor ever used
    * `sessionId`, case-folded. Optional for the same reason as `tandemPresence`.
@@ -2135,6 +2143,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let presenceRecomputes = 0;
   const presenceListeners = new Set<(present: boolean) => void>();
   const runStartListeners = new Set<() => void>();
+  const spawnStartedListeners = new Set<(spawn: { n: number; sessionId: string }) => void>();
   const failedBindListeners = new Set<(reason: FailedBindReason) => void>();
 
   /** A field presence reads was written: recompute once per synchronous run
@@ -3063,6 +3072,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentSpawnedAt = spawnedAt;
     currentResuming = plan.resuming;
     lastSpawnIgnoredWorkingDirectory = plan.workingDirectoryIgnored;
+    // The spawn-started event (#2358 PR 3b-2b4a): flag on only (a record).
+    if (record !== null) {
+      notifyEach(spawnStartedListeners, "spawn-started", {
+        n: record.n,
+        sessionId: plan.sessionId,
+      });
+    }
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
@@ -5033,6 +5049,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     onRunStart: (cb) => {
       runStartListeners.add(cb);
       return () => runStartListeners.delete(cb);
+    },
+    onSpawnStarted: (cb) => {
+      spawnStartedListeners.add(cb);
+      return () => spawnStartedListeners.delete(cb);
     },
     onFailedBind: (cb) => {
       failedBindListeners.add(cb);

@@ -21,7 +21,7 @@
  * chat post can get ({@link postRefusal}: a post names no message and may be
  * about an unowned document or about none, so it has forms of its own where
  * the document forms would be false for it); `unlinked` arrives with the shim's identity (PR 4),
- * `unbound-child` is here since PR 3b-2b3b (reached only once rule 0 routes, 3b-2b4), and the `released` and `assigned`
+ * `unbound-child` is here since PR 3b-2b3b (reached only while rule 0 routes: flag on, since 3b-2b4a's switch-on), and the `released` and `assigned`
  * causes of `lost` with the controls (PR 5). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b-2; their copy is here
  * because the decision that produces them is.
