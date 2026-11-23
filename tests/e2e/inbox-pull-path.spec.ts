@@ -40,9 +40,8 @@ type AnnotationsData = { annotations: Array<{ content?: string }> };
 
 /**
  * The success payload of an MCP call. `McpTestClient.callTool` throws on an
- * SDK-level error and returns the parsed envelope otherwise, so the narrow here
- * is the same one `cleanupAllOpenDocuments` uses — a server-side `{ error: true }`
- * fails the cast and the test says so, rather than reading `undefined`.
+ * SDK-level error and on a server-side `{ error: true }` envelope, and returns
+ * the parsed envelope otherwise; the narrow here stays as a second guard.
  */
 async function callData<T>(name: string): Promise<T> {
   const res = (await mcp.callTool(name)) as ToolResponse<T>;

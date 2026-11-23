@@ -472,7 +472,7 @@ let transportMode: "http" | "stdio" | undefined;
 let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
-let startOrWakeSink: (cause: "document" | "message") => void = () => {};
+let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};
 let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
@@ -1288,6 +1288,13 @@ function lapse(record: OwnerRecord): void {
   // all the same, never from owner state (R0.1).
   releaseMessageOwners(record.ownerId, (key) => !handled.has(key) && !carriedOver.has(key));
   deleteIfGone(record);
+  // The re-ask (#2358 PR 3b-2b2; the claimable row): a session that stops
+  // counting may be the last other one, which makes claimable work Tandem's
+  // Claude's (Bryan's pick "Yes, unless another session is open"). Asked
+  // whatever the record held, so two sessions going away together are caught
+  // at the second; gated in `startOrWake` like a lapse, and the pass asks the
+  // whole waiting decision.
+  startOrWake("departure");
 }
 
 /** Delete a lapsed record once it holds nothing and no transport carries it. */
@@ -1436,7 +1443,7 @@ function reOweDocumentChat(documentId: string): void {
 }
 
 /** What reaches step 5: a document's change, or a change of a message's owner (R6.4). */
-export type WakeCause = OwnershipChangeCause | "message-owner";
+export type WakeCause = OwnershipChangeCause | "message-owner" | "departure";
 
 /** Fixed text: no id, no record, nothing from the error. */
 const FORWARD_FAILED =
@@ -1456,8 +1463,9 @@ const FORWARD_FAILED =
  * cause (`setWakeObserverForTests`); `user-open` is dropped; a
  * `message-owner` reaches the sink as `"message"` only when its `admit`
  * answers true (3b-2b1c-b; `messageOwnerChanged`'s), and a document cause
- * carries none; a `lapse` is dropped while another session is connected
- * ({@link anotherSessionConnected}); every other cause reaches the sink as
+ * carries none; a `lapse` or a `departure` (the lapse's re-ask, 3b-2b2) is
+ * dropped while another session is connected ({@link anotherSessionConnected});
+ * a `departure` reaches the sink as `"departure"`, every other cause as
  * `"document"`. The sink runs outside any MCP request context (a forward can
  * run inside another client's request: an eviction in its `initialize`,
  * `closeEntry`), in its own catch: a throw logs one fixed line and is never
@@ -1487,9 +1495,10 @@ export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
     // move). Only `lapse` is a holder going away: no other cause reaches here
     // with a caller that is not Tandem's Claude, so the others are forwarded
     // unchecked. A later writer that hands Tandem's Claude a document decides
-    // its own rule.
-    if (cause === "lapse" && anotherSessionConnected()) return;
-    runOutsideMcpContext(() => startOrWakeSink("document"));
+    // its own rule. A `departure` (the lapse's re-ask, 3b-2b2) is gated the
+    // same way and keeps its own name at the sink.
+    if ((cause === "lapse" || cause === "departure") && anotherSessionConnected()) return;
+    runOutsideMcpContext(() => startOrWakeSink(cause === "departure" ? "departure" : "document"));
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
   }
@@ -1501,7 +1510,9 @@ export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
  * `launcherSupervisor` reference, read at call time (null does nothing). Only
  * stored; called only by a flag-on `startOrWake`.
  */
-export function setStartOrWakeSink(sink: (cause: "document" | "message") => void): void {
+export function setStartOrWakeSink(
+  sink: (cause: "document" | "message" | "departure") => void,
+): void {
   startOrWakeSink = sink;
 }
 

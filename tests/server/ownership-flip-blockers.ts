@@ -301,19 +301,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The E2E `McpTestClient.callTool` does not throw on an error envelope (the plan's flip row, " +
-      "gate (b)): a NOT_DOC_OWNER on a spec's setup write is returned, not thrown, so a flag-on " +
-      "spec carries on.",
-    closedBy: "A change to tests/e2e/helpers.ts that makes it throw.",
-  },
-  {
-    gap:
-      "`ownership-bundle-probe.mjs`'s `probeRefusal` is pinned by regex alone (the plan's flip " +
-      "row, gate (c)).",
-    closedBy: "A pin by behaviour.",
-  },
-  {
-    gap:
       "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
       "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
       "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
@@ -445,33 +432,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "After a local-model period, a start Tandem's Claude owes for its own work is handled at " +
-      "the user's switch back as today's held message start: it is not started while another AI " +
-      "is attached. Bryan decided on 2026-11-17 (picked from options: 'Yes, unless Claude is " +
-      "Off') that it starts whether or not another AI is on, unless Claude is Off. The behaviour " +
-      "is still built as today's.",
-    closedBy:
-      "The local-period start PR (piece 36) builds the decided behaviour, with a test pinning it.",
-  },
-  {
-    gap:
-      "A crash restart can hold itself beside a live child: planAndSpawn " +
-      "(src/server/launcher/supervisor.ts) does not re-check `child` between buildPlan's await " +
-      "and two holds, so its first local-period hold can run, and its Off hold (holdInStandby) " +
-      "may run, after a spawn that did not move the stop epoch (for example a licence resume). " +
-      "The local hold leaves an awaiting-start standby and an armed standby watch beside the " +
-      "running Claude (reproduced by 3b-2b1b-R0's case, with an armed licence). The Off hold is " +
-      "asserted, not shown: Off through the settings stops the child first, so it needs a " +
-      "settings read that disagrees with updateSettings (an external write of the file); if " +
-      "reached it would also clear the wake owed across spawns, disarm the gap watch and read " +
-      "as Off to presence. ADR-054's 3b-2b1b-R0 amendment.",
-    closedBy:
-      "A launcher PR that re-checks `child` before those two holds (or otherwise keeps a hold " +
-      "from running beside a live child), with a test driving the 3b-2b1b-R0 sequence that " +
-      "fails without it.",
-  },
-  {
-    gap:
       "The restart question (3b-2b1b): while the mode is unknown (after a restart, before a " +
       "client says whether it was Solo), waiting counts no user comment or reply, and nothing " +
       "re-asks when the mode becomes known (the only release wake is emitModeReleaseWake, " +
@@ -563,28 +523,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A user's comment on an open document nobody holds counts as waiting for Tandem's Claude " +
-      "while no other session is connected (3b-2b1b-claimable; Bryan picked 'Yes, unless another " +
-      "session is open (Recommended)' and 'Yes, even before my first Start', picked from options, " +
-      "2026-11-19). By the review session's reading, chat that follows such a document and user " +
-      "replies on its Claude-facing threads count the same way. Nothing asks the decision when " +
-      "such work appears or when the other session goes: it changes no owner, so step 5 does " +
-      "not run; and where a change does make such chat claimable (a lapse releasing a message " +
-      "on an open document nobody holds), the message forward runs and refuses it (3b-2b1c-b: " +
-      "claimable chat is not admitted). A gone session also counts for its grace when a holder " +
-      "departs (3b-2b1c): with two sessions gone together the first one's waiting work is " +
-      "skipped and nothing asks again unless the second held waiting work; it reaches Claude at " +
-      "its next look or start. Bryan picked 'Yes, fine until the later piece (Recommended)', " +
-      "picked from options, 2026-11-19.",
-    closedBy:
-      "3b-2b2's widened start arm asking the decision, with a test where such a comment starts a " +
-      "stopped Tandem's Claude with no other session connected and does not with one connected; " +
-      "and when the last other session stops counting (its grace ends, or its transport is " +
-      "reaped) the decision is asked again, with a test; and a test of two sessions going away " +
-      "together.",
-  },
-  {
-    gap:
       "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
       "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
       "for a while after it stops claimable work does not count (about two minutes if its " +
@@ -636,16 +574,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "At the user's switch back from a local-model period, a start-or-wake start the period " +
-      "held runs as today's held message start, without asking again whether anything is still " +
-      "waiting. Bryan picked 'Yes, only if still waiting (Recommended)' (picked from options, " +
-      "2026-11-17).",
-    closedBy:
-      "The local-period start PR (piece 36), with a test where the work is gone by the switch " +
-      "back. It closes together with the row 'After a local-model period...' or says why not.",
-  },
-  {
-    gap:
       "Answered work starts Tandem's Claude (3b-2b1c). A handover retires the document's " +
       "delivery entries and nothing yet tells answered from unanswered, so after any handover, " +
       "at the next forward, every pending user comment, every settled one " +
@@ -656,18 +584,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The handled filter (#2360), with a test where a lapse of a holder that answered " +
       "everything in its threads starts nothing; for what it cannot see (answers in chat or by " +
       "an edit, state lost at a restart), the restart row's closer or Bryan's answer.",
-  },
-  {
-    gap:
-      "The presence gate 3b-2a deferred is not decided (its amendment, item 5: the pass 'does " +
-      "not consult presence ... gating starts on presence is 3b-2b's'). `startOrWakeStep` has no " +
-      "presence check, and after the claimable piece the decision can be true while Tandem's " +
-      "Claude is not present. Design §8.4's 'started if present' and the 2026-11-19 pick 'Yes, " +
-      "even before my first Start' (picked from options) pull in different directions for a " +
-      "claimable comment.",
-    closedBy:
-      "3b-2b2 (the standby arm that delivers claimable comments), which decides it with a test " +
-      "each way.",
   },
   {
     gap:
