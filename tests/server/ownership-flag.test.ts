@@ -147,40 +147,63 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   it("the accepted rows are exactly these, word for word (a new acceptance, or an edit to one, edits this pin)", () => {
     const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
     expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
+      "The waiting decision's cost is unmeasured (3b-2b1b-ch",
       "Acknowledged but unanswered chat is never started for",
       "Acknowledged but unanswered chat by the channel route",
     ]);
     expect(acceptedRows).toEqual([
       {
         gap:
-          "Acknowledged but unanswered chat is never started for (3b-2b1b-chat): a tandem_reply " +
-          "with replyTo and inProgress ('I'm on it') stamps the user message read, so it leaves " +
-          "waiting; if no final answer follows (the run dies or gives up), nothing starts or " +
-          "wakes Claude for it, and after a server restart it is carried over and never " +
-          "re-owed. The user notices and sends the message again.",
+          "The waiting decision's cost is unmeasured (3b-2b1b-chat): each tandemWorkWaiting ask runs " +
+          "one waiting probe per document Tandem's Claude holds, settledChatIds over every chat row, " +
+          "one structuredClone and one schema parse per user chat row, and one message read per owed " +
+          "key, and, while no other session is connected, one claim read and one waiting probe per " +
+          "open, unowned document. Since 3b-2b1c-a wires it as the supervisor's workWaiting, that " +
+          "happens at every start-or-wake pass, and a " +
+          "document whose waiting read keeps failing logs documentWaiting's unthrottled line at each. " +
+          "And (3b-2b1c-b) the message forward's admit runs one tandemChatWaiting scan (every owed " +
+          "key's message read and standing, one structuredClone per user chat row) per changed key " +
+          "that passes its caller check and departure gate, at the release loop and at " +
+          "dropChatOwners, none at setMessageOwner; a deleted record releasing N keys, handled ones " +
+          "included, runs up to N such scans.",
         closedBy:
-          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change " +
-          "with a test.",
+          "Measured by 3b-2b4c (ADR-054's 3b-2b4c amendment; tests/server/ownership-waiting-cost.test.ts): " +
+          "about 87 ms per decision at 50 held documents of 200 annotations and 500 chat rows, " +
+          "nothing waiting, almost all of it the per-document probe (about 1.7 ms each), and about " +
+          "1 to 1.5 ms per chat scan, so a release of N keys can cost N such scans. Closed by a " +
+          "cheaper decision (for example a cached or incremental waiting answer), with the " +
+          "measurement re-run, or Bryan accepting that cost.",
         acceptedFor:
-          "Bryan picked 'Known limit for 0.32; design it after (Recommended)', picked from " +
-          "options, 2026-11-19; tracked as #2484.",
+          "Bryan picked 'Accept (Recommended)' for the measured cost of about 87 ms per decision, " +
+          "picked from options, 2026-11-23; tracked as #2358.",
       },
       {
         gap:
-          "Acknowledged but unanswered chat by the channel route is never started for " +
-          "(3b-2b1b-chat): a POST /api/channel-reply with replyTo and inProgress ('I'm on it') " +
-          "from the session that owns the message stamps it read, so it leaves waiting; if no " +
-          "final answer follows (the run dies or gives up), nothing starts or wakes Claude for " +
-          "it, and after a server restart it is carried over and never re-owed. The user " +
-          "notices and sends the message again. (The same route's acknowledgement from a " +
-          "non-owner is PR 4's channel-reply row.)",
+          "Acknowledged but unanswered chat is never started for (3b-2b1b-chat): a tandem_reply with " +
+          "replyTo and inProgress ('I'm on it') stamps the user message read, so it leaves waiting; if " +
+          "no final answer follows (the run dies or gives up), nothing starts or wakes Claude for it, " +
+          "and after a server restart it is carried over and never re-owed. The user notices and " +
+          "sends the message again.",
         closedBy:
-          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change " +
-          "with a test.",
+          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
         acceptedFor:
-          "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so " +
-          "'Known limit for 0.32; design it after (Recommended)' covers the channel route too; " +
-          "tracked as #2484.",
+          "Bryan picked 'Known limit for 0.32; design it after (Recommended)', picked from options, " +
+          "2026-11-19; tracked as #2484.",
+      },
+      {
+        gap:
+          "Acknowledged but unanswered chat by the channel route is never started for (3b-2b1b-chat): " +
+          "a POST /api/channel-reply with replyTo and inProgress ('I'm on it') from the session that " +
+          "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
+          "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
+          "carried over and never re-owed. The user notices and sends the message again. (The same " +
+          "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
+        closedBy:
+          "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
+        acceptedFor:
+          "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so 'Known " +
+          "limit for 0.32; design it after (Recommended)' covers the channel route too; tracked as " +
+          "#2484.",
       },
     ]);
   });
