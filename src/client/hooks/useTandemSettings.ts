@@ -70,8 +70,25 @@ export type SidecarRetryStrategy = "exponential" | "constant-2s";
  */
 export const CHAT_NOTIFICATION_CONTENTS = ["generic", "document", "preview"] as const;
 export type ChatNotificationContent = (typeof CHAT_NOTIFICATION_CONTENTS)[number];
-/** App-played reply chimes (#2168), synthesized in `notifications/chimes.ts`. */
-export const CHAT_SOUNDS = ["none", "chime", "bell", "pop", "ping"] as const;
+/**
+ * App-played reply sounds (#2168): blends of recorded instruments, defined in
+ * `notifications/chimes.ts`. The synthesized `chime`, `bell`, `pop` and `ping`
+ * of 0.29–0.32 were retired; a saved one is not in this list, so both parse
+ * paths' `isOneOf(CHAT_SOUNDS, …)` coerce it to `DEFAULTS.chatSound` with no
+ * migration step (and no schema bump, so a downgrade resets only the sound).
+ */
+export const CHAT_SOUNDS = [
+  "none",
+  "marimba-glock",
+  "harp-glock",
+  "piano-vibes",
+  "vibes-low-marimba",
+  "glock-to-vibes",
+  "balafon-chimes",
+  "xylo-chimes",
+  "harp-vibes-glock",
+  "chimes-low-harp",
+] as const;
 export type ChatSound = (typeof CHAT_SOUNDS)[number];
 
 function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -360,7 +377,7 @@ const DEFAULTS: TandemSettings = {
   chatNotifications: true,
   chatNotificationContent: "document",
   chatAttentionFlash: true,
-  chatSound: "chime",
+  chatSound: "vibes-low-marimba",
   chatSoundVolume: 60,
   chatSeenWhenVisible: false,
 };

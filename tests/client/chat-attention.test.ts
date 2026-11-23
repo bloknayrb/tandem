@@ -17,7 +17,7 @@ const DEFAULTS: ChatAttentionSettings = {
   chatNotifications: true,
   chatNotificationContent: "document",
   chatAttentionFlash: true,
-  chatSound: "chime",
+  chatSound: "vibes-low-marimba",
   chatSoundVolume: 60,
 };
 
@@ -78,7 +78,7 @@ describe("createChatAttention (#2168)", () => {
     const t = setup({ active: true });
     t.attention.push([reply("a")]);
     t.flush();
-    expect(t.playChime).toHaveBeenCalledWith("chime", 60);
+    expect(t.playChime).toHaveBeenCalledWith("vibes-low-marimba", 60);
     expect(t.backend.notify).not.toHaveBeenCalled();
     expect(t.backend.attention).not.toHaveBeenCalled();
   });

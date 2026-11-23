@@ -2,7 +2,7 @@
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import type { ChatNotificationContent, ChatSound } from "../../hooks/useTandemSettings";
 import { sendTestNotification } from "../../notifications/backend";
-import { playChime } from "../../notifications/chimes";
+import { playChime, previewChime } from "../../notifications/chimes";
 import {
   requestWebNotificationPermission,
   type WebNotificationPermission,
@@ -10,6 +10,7 @@ import {
   webNotificationPermission,
 } from "../../notifications/web-notifier";
 import { disabledControlStyle } from "../../utils/colors";
+import LiveRegion from "../LiveRegion.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // Keep `$props()` as a single proxy variable and read fields via `ctx.foo`
@@ -38,13 +39,74 @@ const CONTENT_OPTIONS: { value: ChatNotificationContent; label: string }[] = [
   { value: "document", label: "Document name — “Claude replied in report.md”" },
   { value: "preview", label: "Message preview — the start of the reply" },
 ];
-const SOUND_OPTIONS: { value: ChatSound; label: string }[] = [
-  { value: "chime", label: "Chime" },
-  { value: "bell", label: "Bell" },
-  { value: "pop", label: "Pop" },
-  { value: "ping", label: "Ping" },
-  { value: "none", label: "None" },
+// Names as auditioned when the sounds were chosen; `hint` describes the chosen
+// sound under the list (native select popups show no option tooltips on Windows).
+const SOUND_OPTIONS: { value: ChatSound; label: string; hint: string }[] = [
+  {
+    value: "marimba-glock",
+    label: "Marimba and glockenspiel",
+    hint: "A wooden note with a quiet bell on top",
+  },
+  {
+    value: "harp-glock",
+    label: "Harp and glockenspiel",
+    hint: "Pluck and bell together, close to a celesta",
+  },
+  {
+    value: "piano-vibes",
+    label: "Piano and vibraphone",
+    hint: "A soft piano attack with a long vibraphone ring",
+  },
+  {
+    value: "vibes-low-marimba",
+    label: "Vibes over low marimba",
+    hint: "Vibraphone with a marimba an octave below",
+  },
+  {
+    value: "glock-to-vibes",
+    label: "Glockenspiel hands off to vibes",
+    hint: "Bright high note, warm low note",
+  },
+  {
+    value: "balafon-chimes",
+    label: "Balafon and hand chimes",
+    hint: "A woody buzz, then a ringing chime",
+  },
+  {
+    value: "xylo-chimes",
+    label: "Xylophone tap into chimes",
+    hint: "A light tap, like a striker, then the chimes ring",
+  },
+  {
+    value: "harp-vibes-glock",
+    label: "Harp, vibes and glockenspiel",
+    hint: "Pluck, ring and sparkle: the fullest blend",
+  },
+  {
+    value: "chimes-low-harp",
+    label: "Hand chimes over low harp",
+    hint: "Hand chimes with a harp an octave below",
+  },
+  { value: "none", label: "None", hint: "" },
 ];
+// No "try again": a clip whose decode hung is not retried until a reload.
+const SOUND_ERROR = "Couldn't load this sound.";
+
+let soundError = $state(false);
+const soundHint = $derived(
+  SOUND_OPTIONS.find((opt) => opt.value === ctx.settings.chatSound)?.hint ?? "",
+);
+// Only the newest preview's outcome may set or clear the error: an older one
+// can resolve later (it waited on a slower load) and must not overwrite it.
+let previewToken = 0;
+
+async function preview(sound: ChatSound, volume: number): Promise<void> {
+  const token = ++previewToken;
+  soundError = false;
+  const status = await previewChime(sound, volume);
+  if (token !== previewToken) return;
+  soundError = status === "failed" || status === "timeout";
+}
 
 const selectStyle =
   "width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2);";
@@ -173,7 +235,7 @@ function sendTest(): void {
       onchange={(e) => {
         const sound = (e.target as HTMLSelectElement).value as ChatSound;
         ctx.onUpdate({ chatSound: sound });
-        playChime(sound, ctx.settings.chatSoundVolume);
+        void preview(sound, ctx.settings.chatSoundVolume);
       }}
       style="{selectStyle} flex: 1; {disabledControlStyle(ctx.readOnly)}"
     >
@@ -185,12 +247,19 @@ function sendTest(): void {
       type="button"
       data-testid="notifications-sound-preview"
       disabled={ctx.settings.chatSound === "none"}
-      onclick={() => playChime(ctx.settings.chatSound, ctx.settings.chatSoundVolume)}
+      onclick={() => void preview(ctx.settings.chatSound, ctx.settings.chatSoundVolume)}
       style="{buttonStyle} {disabledControlStyle(ctx.settings.chatSound === 'none')}"
     >
       Preview
     </button>
   </div>
+  {#if soundHint}
+    <div data-testid="notifications-sound-hint" class="settings-hint">{soundHint}</div>
+  {/if}
+  {#if soundError}
+    <div data-testid="notifications-sound-error" aria-hidden="true" class="settings-hint" style="color: var(--tandem-error-fg);">{SOUND_ERROR}</div>
+  {/if}
+  <LiveRegion message={soundError ? SOUND_ERROR : ""} srOnly />
 </div>
 
 <div>
@@ -205,7 +274,7 @@ function sendTest(): void {
     value={ctx.settings.chatSoundVolume}
     disabled={ctx.readOnly || ctx.settings.chatSound === "none"}
     oninput={(e) => ctx.onUpdate({ chatSoundVolume: Number((e.target as HTMLInputElement).value) })}
-    onchange={() => playChime(ctx.settings.chatSound, ctx.settings.chatSoundVolume)}
+    onchange={() => void preview(ctx.settings.chatSound, ctx.settings.chatSoundVolume)}
     style="width: 100%; accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly || ctx.settings.chatSound === 'none', 'auto')}"
   />
 </div>

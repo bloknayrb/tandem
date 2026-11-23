@@ -47,6 +47,7 @@ src/server/file-io/docx-comments.ts diff
 *.woff  binary
 *.woff2 binary
 *.ttf   binary
+*.wav   binary
 *.docx  binary
 *.pdf   binary
 *.zip   binary
