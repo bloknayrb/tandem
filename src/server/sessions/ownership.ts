@@ -279,6 +279,12 @@ export interface OwnerRecord {
    * starts with none. At most {@link MAX_CHANGE_NOTICES}.
    */
   changeNotices?: ChangeNotice[];
+  /**
+   * Made by re-pointing Tandem's own child's bound transports at its teardown
+   * (`noteOwnSpawnEnded`): its lapse is the child's own leftovers going, so it
+   * starts nothing (Bryan, 2026-11-23: "No, its own lapse starts nothing").
+   */
+  fromOwnTeardown?: boolean;
 }
 
 /** One document's ownership entry (ownership design §2). No entry means unowned. */
@@ -681,9 +687,11 @@ export function noteOwnSpawnStarted(spawn: OwnSpawn): void {
 function noteOwnSpawnEnded(boundMcpSessionIds: readonly string[]): void {
   if (!ownSpawnRoutingActive()) return;
   const bound = new Set(boundMcpSessionIds);
-  total("noteOwnSpawnEnded", undefined, () =>
-    repointTransports(TANDEM_OWNER_ID, toPrivateRecord, bound),
-  );
+  total("noteOwnSpawnEnded", undefined, () => {
+    for (const record of repointTransports(TANDEM_OWNER_ID, toPrivateRecord, bound)) {
+      record.fromOwnTeardown = true;
+    }
+  });
 }
 
 /**
@@ -695,7 +703,7 @@ function repointTransports(
   fromOwnerId: string,
   to: (mcpSessionId: string) => { ownerId: string; recordKind: RecordKind },
   only?: ReadonlySet<string>,
-): void {
+): ReadonlySet<OwnerRecord> {
   const moved = new Set<OwnerRecord>();
   for (const entry of transportView()) {
     const sid = entry.sessionId;
@@ -708,6 +716,26 @@ function repointTransports(
     moved.add(record);
   }
   for (const record of moved) rejudge(record);
+  return moved;
+}
+
+/**
+ * Whether a record's lapse is Tandem's own child's leftovers going, which
+ * starts nothing (Bryan, 2026-11-23, picked from options: "No, its own lapse
+ * starts nothing (Recommended)"): a record its teardown re-pointed, or the
+ * unbound-child record of a spawn that is no longer current. A `--resume`
+ * terminal on the current spawn's record still counts and still re-asks.
+ */
+function isOwnChildLeftover(record: OwnerRecord): boolean {
+  if (record.fromOwnTeardown === true) return true;
+  if (record.recordKind !== "unbound-child") return false;
+  let current: OwnSpawn | null = null;
+  try {
+    current = ownSpawnSource?.() ?? null;
+  } catch {
+    current = null;
+  }
+  return current === null || record.ownerId !== `spawn:${current.n}`;
 }
 
 /** A rule-0 record of Tandem's own child that did not bind (design §3.1). */
@@ -1525,8 +1553,9 @@ function lapse(record: OwnerRecord): void {
   // Claude's (Bryan's pick "Yes, unless another session is open"). Asked
   // whatever the record held, so two sessions going away together are caught
   // at the second; gated in `startOrWake` like a lapse, and the pass asks the
-  // whole waiting decision.
-  startOrWake("departure");
+  // whole waiting decision. Tandem's own child's leftovers going start
+  // nothing (`isOwnChildLeftover`).
+  if (!isOwnChildLeftover(record)) startOrWake("departure");
 }
 
 /** Delete a lapsed record once it holds nothing and no transport carries it. */

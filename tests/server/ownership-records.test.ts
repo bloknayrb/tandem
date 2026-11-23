@@ -44,6 +44,7 @@ import {
   setTandemPresenceSource,
   setTransportView,
   setWaitingProbe,
+  setWakeObserverForTests,
   startOrWake,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
@@ -912,6 +913,48 @@ describe("retirement, demotion and teardown re-pointing (#2358 PR 3b-2b3b)", () 
     expect(child.ownerId).toBe("spawn:3");
     expect(getDocOwner("d4")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
     expectNoDanglingOwners();
+  });
+
+  describe("a stopped child's own leftovers start nothing (Bryan, 2026-11-23: 'No, its own lapse starts nothing')", () => {
+    function lapseOf(entry: TransportViewEntry): void {
+      view.splice(view.indexOf(entry), 1);
+      noteTransportChanged(entry.ownerId);
+      vi.advanceTimersByTime(10 * DEFAULT_GRACE_MS);
+    }
+    function departures(run: () => void): number {
+      let n = 0;
+      setWakeObserverForTests((cause) => {
+        if (cause === "departure") n += 1;
+      });
+      try {
+        run();
+      } finally {
+        setWakeObserverForTests(undefined);
+      }
+      return n;
+    }
+
+    it("a private record its teardown made lapses without the departure re-ask", () => {
+      const bind = registerSpawn({ handle: `th_${"P".repeat(32)}`, sessionId: SPAWN_ID });
+      markSpawnStarted(bind);
+      expect(confirmBind({ serial: bind.serial }, "m7")).toBe(true);
+      const bound = transport("m7", TANDEM_OWNER_ID, "tandem");
+      endSpawn(bind);
+      expect(bound.ownerId).toBe("private:m7");
+      expect(departures(() => lapseOf(bound))).toBe(0);
+    });
+
+    it("an earlier spawn's unbound-child record lapses without the re-ask; the current spawn's does re-ask (a --resume terminal still counts)", () => {
+      const old = transport("m1", "spawn:2", "unbound-child");
+      expect(departures(() => lapseOf(old))).toBe(0);
+      const current = transport("m2", "spawn:3", "unbound-child");
+      expect(departures(() => lapseOf(current))).toBe(1);
+    });
+
+    it("anchor: an ordinary terminal's lapse still re-asks", () => {
+      const t = transport("m3", "claude:terminal", "claude");
+      expect(departures(() => lapseOf(t))).toBe(1);
+    });
   });
 
   it("seam unset or flag off: a spawn's start and teardown change nothing and log nothing", () => {

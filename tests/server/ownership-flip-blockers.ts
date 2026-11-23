@@ -447,33 +447,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
-      "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
-      "for a while after it stops claimable work does not count (about two minutes if its " +
-      "transport held a stream, up to about 37 minutes if it never did; which applies is " +
-      "unmeasured); and it differs from the supervisor's otherAiAttached (#2196), which excludes " +
-      "Tandem's own children by session id. So also (3b-2b1c): if a session holding a document " +
-      "goes away while Tandem's Claude is running or has just stopped, Tandem's Claude is " +
-      "neither woken nor started for that session's waiting work; it reaches the work at its " +
-      "next look or start. And Tandem's own child can itself hold a document it opened and " +
-      "lapse when it stops, which starts Tandem's Claude for its own leftovers; with new " +
-      "blocker 2 (answered work reads as waiting after a handover) that can repeat after every " +
-      "idle stop. And while the child sits on a claude:<id> record, a document or chat that " +
-      "becomes Tandem's Claude's is refused to that child (reason 'default'), so a wake or start " +
-      "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
-      "starts it again. The same holds for chat (3b-2b1c-b): if the child's record held a " +
-      "document when it was closed, it owns that document's chat per message, and its lapse " +
-      "releases the message and, while no other session is connected (the departure gate), " +
-      "starts Tandem's Claude for it.",
-    closedBy:
-      "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
-      "transport does not count, and one 'another session' rule named for the decision and the " +
-      "start arm; and a test where a holder lapses beside a running, idle Tandem's Claude with " +
-      "no other session and it is woken, and a test that a stopped child's own lapse starts " +
-      "nothing.",
-  },
-  {
-    gap:
       "Claude Desktop is left out of 'another session' by its self-reported client name " +
       "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
       "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
