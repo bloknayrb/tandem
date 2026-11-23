@@ -49,6 +49,8 @@
  *
  * **Nearly a leaf.** It imports the flag, one helper from `sessions/context.ts`,
  * the operation queue, two names from `mcp/transport-registry.ts`, the
+ * spawn-end listener seam of `sessions/owner-handle-bind.ts` (#2358 PR
+ * 3b-2b3b; that module is a leaf), the
  * refusal copy (`ownership-refusal.ts`, which imports only types from here),
  * `crossBasename` from `src/shared` (dependency-free) and `node:crypto` — never the document registry or anything under `documents/`,
  * so every route and service that calls it keeps its module graph. Callers
@@ -72,7 +74,10 @@ import {
   resetDocOpQueuesForTests,
   runWhenDocIdle,
 } from "./doc-op-queue.js";
+import { setSpawnEndedListener } from "./owner-handle-bind.js";
 import {
+  type ChatRefusalWhy,
+  type ChatReplyRefusal,
   chatReplyRefusal,
   type PostRefusalInput,
   type PostRefusalReason,
@@ -84,8 +89,9 @@ import {
  * `unbound-child` (one per spawn, owner id `spawn:<n>`) and `child-private`
  * (one per transport, owner id `private:<Mcp-Session-Id>`) are rule 0's
  * records for Tandem's own children that did not bind (#2358 PR 3b-2b3a);
- * only {@link resolveTransportRecord} makes them, and only while the
- * own-spawn seam is set ({@link setOwnSpawnSource}).
+ * only {@link resolveTransportRecord} and the re-pointing at a spawn's start
+ * or teardown (3b-2b3b) make them, and only while the own-spawn seam is set
+ * ({@link setOwnSpawnSource}).
  */
 export type RecordKind =
   | "tandem"
@@ -194,7 +200,9 @@ export type OwnershipRefusalReason =
   | "default"
   | "not-present"
   | "chat"
-  | "post";
+  | "post"
+  /** A rule-0 child record on a document Tandem's Claude holds (#2358 PR 3b-2b3b; design §5.3). */
+  | "unbound-child";
 
 /** A refused ownership decision. `holder` is null when no record holds the document, or its record is gone. */
 export interface OwnershipRefusal {
@@ -274,8 +282,16 @@ export interface OwnershipEntry {
   readonly sinceSeq: number;
 }
 
-/** The slice of a transport-registry entry attachment is judged from. */
+/**
+ * The slice of a transport-registry entry attachment is judged from. The
+ * view is the registry's own entries, so re-pointing a transport
+ * (`repointTransports`, #2358 PR 3b-2b3b, reached only while rule 0 routes)
+ * writes `ownerId` on them; nothing else here writes through the view.
+ */
 export interface TransportViewEntry {
+  /** The transport's `Mcp-Session-Id`: a private record's key. */
+  readonly sessionId?: string;
+  readonly clientName?: string;
   ownerId?: string;
   openStreams: number;
   streamEver?: boolean;
@@ -584,6 +600,99 @@ export function setOwnSpawnSource(
 ): void {
   ownSpawnSource = source;
   ownChildCheck = source === undefined ? undefined : isOwnChild;
+  // Teardown re-pointing (#2358 PR 3b-2b3b) listens only while the seam is
+  // set, so an unset seam leaves a spawn's teardown exactly as it was.
+  setSpawnEndedListener(source === undefined ? undefined : noteOwnSpawnEnded);
+}
+
+const toPrivateRecord = (mcpSessionId: string) => ({
+  ownerId: `private:${mcpSessionId}`,
+  recordKind: "child-private" as const,
+});
+
+/**
+ * Retirement and demotion at each spawn (ownership design §3.1; #2358 PR
+ * 3b-2b3b), for the supervisor to call when spawn `n` starts — **not called
+ * from `src` until 3b-2b4** wires the seam, and a no-op unless rule 0 routes
+ * ({@link ownSpawnRoutingActive}). Every earlier spawn's `unbound-child`
+ * record is retired: each of its transports (a `--resume` terminal included)
+ * moves to a fresh `child-private` record of its own, then the record lapses,
+ * so its documents go to the default rule and its unanswered messages lose
+ * their owner, exactly as a lapse moves them. A plain `claude:` record
+ * holding the new spawn's session id is demoted the same way, its transports
+ * going to this spawn's `unbound-child` record. Never the `tandem` record.
+ */
+export function noteOwnSpawnStarted(spawn: OwnSpawn): void {
+  if (!ownSpawnRoutingActive()) return;
+  total("noteOwnSpawnStarted", undefined, () => {
+    const current = `spawn:${spawn.n}`;
+    for (const record of [...records.values()]) {
+      if (record.recordKind === "unbound-child" && record.ownerId !== current) {
+        repointTransports(record.ownerId, toPrivateRecord);
+        lapse(record);
+      }
+    }
+    const demoted = records.get(`claude:${claudeIdKey(spawn.sessionId)}`);
+    if (demoted?.recordKind === "claude") {
+      repointTransports(demoted.ownerId, () => ({ ownerId: current, recordKind: "unbound-child" }));
+      lapse(demoted);
+    }
+  });
+}
+
+/**
+ * A spawn's teardown (ownership design §3.3; #2358 PR 3b-2b3b): its bound
+ * transports still registered, which rule 0 put on `tandem`, move to fresh
+ * `child-private` records, one each. The `tandem` record keeps its
+ * documents: presence decides what it holds, not the run. Reached from
+ * `endSpawn` only while the seam is set, and a no-op unless rule 0 routes.
+ */
+function noteOwnSpawnEnded(boundMcpSessionIds: readonly string[]): void {
+  if (!ownSpawnRoutingActive()) return;
+  const bound = new Set(boundMcpSessionIds);
+  total("noteOwnSpawnEnded", undefined, () =>
+    repointTransports(TANDEM_OWNER_ID, toPrivateRecord, bound),
+  );
+}
+
+/**
+ * Move `fromOwnerId`'s registered transports (only those in `only`, when
+ * given) to the records `to` names, creating each, and re-judge them. The
+ * old record is the caller's to re-judge or lapse.
+ */
+function repointTransports(
+  fromOwnerId: string,
+  to: (mcpSessionId: string) => { ownerId: string; recordKind: RecordKind },
+  only?: ReadonlySet<string>,
+): void {
+  const moved = new Set<OwnerRecord>();
+  for (const entry of transportView()) {
+    const sid = entry.sessionId;
+    if (entry.ownerId !== fromOwnerId || sid === undefined) continue;
+    if (only !== undefined && !only.has(sid)) continue;
+    const next = to(sid);
+    const record = ensureRecord(next.ownerId, next.recordKind);
+    record.clientName = entry.clientName;
+    entry.ownerId = next.ownerId;
+    moved.add(record);
+  }
+  for (const record of moved) rejudge(record);
+}
+
+/** A rule-0 record of Tandem's own child that did not bind (design §3.1). */
+function isChildRecord(ownerId: string): boolean {
+  const kind = records.get(ownerId)?.recordKind;
+  return kind === "unbound-child" || kind === "child-private";
+}
+
+/**
+ * §3.1's one rule for `unbound-child` and `child-private` records: on a
+ * document Tandem's Claude holds they are refused with the `unbound-child`
+ * copy, and they take nothing from it. Everywhere else they are a terminal.
+ * No such record exists while the own-spawn seam is unset.
+ */
+function guardsTandem(entry: OwnershipEntry | undefined, callerId: string): boolean {
+  return entry?.ownerId === TANDEM_OWNER_ID && isChildRecord(callerId);
 }
 
 /** Whether rule 0 routes (flag on and the own-spawn seam set). */
@@ -1838,6 +1947,8 @@ function refusalFor(
 ): OwnershipRefusal | undefined {
   if (entry?.ownerId === callerId) return undefined;
   const holder = entry ? viewOf(entry.ownerId) : null;
+  // Before every other row: for such a record it replaces their copy (§5.3).
+  if (guardsTandem(entry, callerId)) return { ok: false, reason: "unbound-child", holder };
   // "The first row wins" (ownership design §5.3): a caller that lost this document is told so
   // before it is told who holds it now. With no entry this row is unreachable
   // today: `setDocOwner` deletes the loss record on every change of owner,
@@ -2467,10 +2578,10 @@ const REPLY_NO_OWNER =
   "tandem_reply refused: this request carries no owner identity. This is a Tandem wiring fault, not something to retry with different arguments.";
 
 function chatRefused(
-  reason: "chat" | "not-present" | "answered",
+  reason: ChatReplyRefusal["details"]["reason"],
   holder: HolderView | null,
   facts: ChatMessageFacts,
-  why: "holder" | "busy" | "lost" | "local" | "not-present" | "answered",
+  why: ChatRefusalWhy,
 ): ReplyGate {
   const { message, details } = chatReplyRefusal({
     reason,
@@ -2621,6 +2732,9 @@ function replyGate(
     case "owned":
       if (standing.ownerId === callerId) return accept(() => {});
       if (standing.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
+      if (standing.ownerId === TANDEM_OWNER_ID && isChildRecord(callerId)) {
+        return chatRefused("unbound-child", viewOf(TANDEM_OWNER_ID), facts, "unbound-child");
+      }
       return chatRefused("chat", viewOf(standing.ownerId), facts, "holder");
     case "with-document": {
       const documentId = standing.documentId;
@@ -2824,7 +2938,12 @@ export function decideTake(
   if (entry?.ownerId === callerId) {
     return { ok: true, next: entry.kind === "claimed" ? "opened" : null };
   }
-  if (entry && (entry.kind === "opened" || entry.kind === "assigned")) {
+  // The take guard (#2358 PR 3b-2b3b): a child record takes nothing from
+  // Tandem's Claude, whatever the kind.
+  if (
+    entry &&
+    (entry.kind === "opened" || entry.kind === "assigned" || guardsTandem(entry, callerId))
+  ) {
     return refusalFor(documentId, callerId, entry) as OwnershipRefusal;
   }
   if (isTandem) return { ok: true, next: isTandemPresent() ? "default" : null };
@@ -3144,6 +3263,9 @@ export function otherAnswererOf(
   item: string,
   callerId: string,
 ): { holder: HolderView | null } | undefined {
+  // A child record on Tandem's Claude's document is answered by the
+  // ownership check's `unbound-child` row instead, which replaces this one.
+  if (guardsTandem(readEntry(documentId), callerId)) return undefined;
   const answerer = answererByItem.get(answererKey(documentId, annotationId, item));
   if (answerer === undefined || answerer === callerId) return undefined;
   return { holder: viewOf(answerer) };
@@ -3352,6 +3474,7 @@ export function resetOwnershipForTests(): void {
   presenceSource = () => false;
   ownSpawnSource = undefined;
   ownChildCheck = undefined;
+  setSpawnEndedListener(undefined);
   waitingProbe = () => false;
   openDocumentIds = () => [];
   seqSource = () => 0;

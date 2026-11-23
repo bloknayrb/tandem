@@ -1370,6 +1370,15 @@ describe("the own-spawn seam is built and not set (#2358 PR 3b-2b3a; Bryan, 2026
     );
   });
 
+  it("retirement and demotion are called from nowhere yet, and only ownership listens for a spawn's end (#2358 PR 3b-2b3b)", () => {
+    // 3b-2b4 adds the supervisor's call when it wires the seam.
+    expect(filesMentioning("noteOwnSpawnStarted")).toEqual(["src/server/sessions/ownership.ts"]);
+    expect(filesMentioning("setSpawnEndedListener")).toEqual([
+      "src/server/sessions/owner-handle-bind.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+
   it("the supervisor's two seam reads are named only by the supervisor", () => {
     expect(filesMentioning("ownSpawn")).toEqual(["src/server/launcher/supervisor.ts"]);
     expect(filesMentioning("isOwnChildSession")).toEqual(["src/server/launcher/supervisor.ts"]);

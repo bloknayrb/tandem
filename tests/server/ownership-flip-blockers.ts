@@ -326,20 +326,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), and " +
-      "rule 0's records are computed (3b-2b3a), but the own-spawn seam is unset, so a " +
-      "transport bound to the current spawn still sits on its `claude:<id>` record, not the " +
-      "`tandem` record, no transport reaches an unbound-child or private record, and there is " +
-      "no retirement or demotion at a spawn.",
-    closedBy: "3b-2b3b and 3b-2b4's switch-on.",
-  },
-  {
-    gap:
-      "The `unbound-child` refusal and the take guard against Tandem's Claude are not built, so a " +
-      "child of Tandem's Claude that did not bind is answered as an ordinary session.",
-    closedBy:
-      "PR 3b, for documents and for messages; the per-message owner its message half reads " +
-      "landed in the chat owners PR.",
+      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), rule " +
+      "0's records are computed (3b-2b3a), and retirement, demotion, teardown re-pointing and " +
+      "the unbound-child refusal are built (3b-2b3b), but the own-spawn seam is unset and the " +
+      "supervisor does not call noteOwnSpawnStarted, so a transport bound to the current spawn " +
+      "still sits on its `claude:<id>` record, not the `tandem` record, no transport reaches an " +
+      "unbound-child or private record, and a child of Tandem's Claude that did not bind is " +
+      "answered as an ordinary session.",
+    closedBy: "3b-2b4's switch-on.",
   },
   {
     gap: "The Settings list of bound transports (Ruling C) is not built.",
