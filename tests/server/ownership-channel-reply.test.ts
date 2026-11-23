@@ -39,7 +39,10 @@ import {
   ownershipChatSide,
   resetInbox,
 } from "../../src/server/mcp/awareness.js";
-import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
+import {
+  CHANNEL_REPLY_GATE_FAILED,
+  registerChannelRoutes,
+} from "../../src/server/mcp/channel-routes.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
@@ -402,6 +405,27 @@ describe("Tandem's Claude's session id never acts as Tandem's Claude (R3.3)", ()
     expectNothingWritten(r, 0, [onTandem]);
     spawn.value = false;
     expect(shimReply(OLD, {}).body.message).toBe(UNLINKED_REPLY);
+  });
+});
+
+describe("a throw inside the permit", () => {
+  it("is a structured 500 INTERNAL_ERROR, never Express's default, and writes, stamps and tells nothing", () => {
+    register(A);
+    const m = userChat("m");
+    setOwnershipChatSide({
+      ...ownershipChatSide,
+      message: () => {
+        throw new Error("chat side exploded");
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = shimReply(ID_A, { replyTo: m });
+    expect(r.status).toBe(500);
+    expect(r.body).toEqual({ error: "INTERNAL_ERROR", message: CHANNEL_REPLY_GATE_FAILED });
+    expect(claudeRows()).toHaveLength(0);
+    expect(row(m)?.read).toBe(false);
+    expect(heard).toEqual([]);
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("chat side exploded"));
   });
 });
 

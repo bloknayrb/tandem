@@ -53,6 +53,10 @@ const REFUSAL_STATUS: Record<Extract<ReplyGate, { kind: "refused" }>["code"], nu
   INTERNAL_ERROR: 500,
 };
 
+/** The 500 answered when the permit itself throws: nothing was written. */
+export const CHANNEL_REPLY_GATE_FAILED =
+  "tandem_reply failed: Tandem could not check who may send this reply. Nothing was sent. This is a fault in Tandem, not something to retry with different arguments.";
+
 /** Register channel-related routes (/api/events, /api/channel-*, /api/chat) on the Express app. */
 export function registerChannelRoutes(app: Express, apiMiddleware: Handler): void {
   // SSE event stream for channel shim
@@ -155,18 +159,36 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // id is mapped to a record and judged by `tandem_reply`'s rule, writing
     // nothing; a refusal returns here with no row, no notify, no round closed
     // and nothing stamped read. Off, `legacy`, and master's path runs.
-    const gate = channelReplyGate(
-      sessionId,
-      {
-        ...(typeof replyTo === "string" ? { replyTo } : {}),
-        ...(inProgress === true ? { inProgress: true } : {}),
-        ...(typeof documentId === "string" ? { documentId } : {}),
-      },
-      {
-        isOpen: (id) => getOpenDocs().has(id),
-        activeDocumentId: () => getCurrentDoc(undefined)?.id ?? undefined,
-      },
-    );
+    // A throw from ownership code (reachable only flag on: the gate answers
+    // `legacy` at its first line while dark) is answered as the structured
+    // 500 `tandem_reply`'s error boundary would give, never Express's default
+    // HTML page, which the shim could only relay as "Non-JSON response".
+    let gate: ReplyGate;
+    try {
+      gate = channelReplyGate(
+        sessionId,
+        {
+          ...(typeof replyTo === "string" ? { replyTo } : {}),
+          ...(inProgress === true ? { inProgress: true } : {}),
+          ...(typeof documentId === "string" ? { documentId } : {}),
+        },
+        {
+          isOpen: (id) => getOpenDocs().has(id),
+          activeDocumentId: () => getCurrentDoc(undefined)?.id ?? undefined,
+        },
+      );
+    } catch (err) {
+      console.error(
+        `[Channel] channel-reply ownership check failed: ${sanitizeForLog(
+          err instanceof Error ? err.message : String(err),
+        )}`,
+      );
+      res.status(REFUSAL_STATUS.INTERNAL_ERROR).json({
+        error: "INTERNAL_ERROR",
+        message: CHANNEL_REPLY_GATE_FAILED,
+      });
+      return;
+    }
     if (gate.kind === "refused") {
       res.status(REFUSAL_STATUS[gate.code]).json({
         error: gate.code,
