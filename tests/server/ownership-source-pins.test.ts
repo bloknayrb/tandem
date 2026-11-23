@@ -1103,7 +1103,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =',
+      'let startOrWakeSink: (\n  cause: "document" | "message" | "departure" | "solo-release" | "mode-known",\n) => void =',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);

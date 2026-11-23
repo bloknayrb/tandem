@@ -399,6 +399,7 @@ export type StartOrWakeCause =
   | "document"
   | "message"
   | "solo-release"
+  | "mode-known"
   | "user-annotation"
   | "departure";
 /** The causes a log line may name; anything else is logged as `other`, so a
@@ -407,6 +408,7 @@ const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "document",
   "message",
   "solo-release",
+  "mode-known",
   "user-annotation",
   "departure",
 ]);
