@@ -169,6 +169,16 @@ function keyed(): boolean {
 }
 
 /**
+ * Whether rounds are keyed now, for `/health`'s `delivery.keyed` (#2358 PR
+ * 3b-2e2): the stall banner stops promising that the next check-in sees the
+ * message, because with keyed rounds another session's poll no longer closes
+ * it. False unwired, so every flag-off server answers false.
+ */
+export function deliveryRoundsKeyed(): boolean {
+  return keyed();
+}
+
+/**
  * A round's key, as stored: `""` for the key-less round (at most one),
  * `"d\0<documentId>"` or `"m\0<chat-map key>"`. NUL-separated, so no
  * document id or chat key can forge the other kind.

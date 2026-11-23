@@ -300,3 +300,141 @@ describe("GET /health — delivery under a licence refusal (#1521)", () => {
     expect(aiRefused).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #2358 PR 3b-2e2 — the stall banner's two flag-on facts (the owner's
+ * 2026-11-17 answer 3, "Hide while starting, then reword"). `keyed: true`
+ * whenever rounds are keyed; `tandemClaudeWoken: true` only while a round
+ * waits and Tandem's Claude was woken at or after it opened. A dark server
+ * (the dep absent or false) sends `getDeliveryState`'s object exactly.
+ */
+describe("GET /health — the stall banner's flag-on facts (#2358 PR 3b-2e2)", () => {
+  const NOW = 1_800_000_000_000;
+  const WAITING = {
+    pollCount: 1,
+    forwardCount: 2,
+    state: "awaiting-poll" as const,
+    latencyMs: null,
+    waitingMs: 150_000,
+    sincePollMs: 160_000,
+  };
+  /** When the oldest waiting round opened, by this read's clock. */
+  const OPENED = NOW - WAITING.waitingMs;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function delivery(
+    extra: {
+      deliveryRoundsKeyed?: () => boolean;
+      tandemClaudeWokenAt?: () => number | null;
+    },
+    state: DeliveryState = WAITING,
+    remoteAddress = "127.0.0.1",
+  ): Record<string, unknown> | undefined {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const res = makeMockRes();
+    makeHealthHandler({ ...DEPS, getDeliveryState: () => state, ...extra })(
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      makeMockReq(remoteAddress) as any,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      res as any,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      (() => {}) as any,
+    );
+    if (!res._body) throw new Error("handler did not respond");
+    return res._body.delivery as Record<string, unknown> | undefined;
+  }
+
+  it("dark (no dep, or the dep answers false): the object is getDeliveryState's, exactly", () => {
+    const woken = vi.fn(() => NOW);
+    expect(delivery({})).toEqual(WAITING);
+    expect(delivery({ deliveryRoundsKeyed: () => false, tandemClaudeWokenAt: woken })).toEqual(
+      WAITING,
+    );
+    expect(woken).not.toHaveBeenCalled();
+  });
+
+  it("keyed: `keyed: true`, and no woken fact while Tandem's Claude has no turn", () => {
+    expect(delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: () => null })).toEqual({
+      ...WAITING,
+      keyed: true,
+    });
+    expect(delivery({ deliveryRoundsKeyed: () => true })).toEqual({ ...WAITING, keyed: true });
+  });
+
+  it("keyed: woken at or after the oldest round opened reads `tandemClaudeWoken: true`", () => {
+    for (const at of [OPENED, OPENED + 1, NOW]) {
+      expect(delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: () => at })).toEqual({
+        ...WAITING,
+        keyed: true,
+        tandemClaudeWoken: true,
+      });
+    }
+  });
+
+  it("keyed: a turn written before the oldest round opened is not a wake for it", () => {
+    expect(
+      delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: () => OPENED - 1 }),
+    ).toEqual({ ...WAITING, keyed: true });
+  });
+
+  it("keyed: nothing waiting, the woken fact is never asked", () => {
+    const woken = vi.fn(() => NOW);
+    const polled = { ...WAITING, state: "polled" as const, waitingMs: null, latencyMs: 4_000 };
+    expect(
+      delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: woken }, polled),
+    ).toEqual({ ...polled, keyed: true });
+    const detached = { ...WAITING, state: "consumer-detached" as const, waitingMs: null };
+    expect(
+      delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: woken }, detached),
+    ).toEqual({ ...detached, keyed: true });
+    expect(woken).not.toHaveBeenCalled();
+  });
+
+  it("keyed: only `awaiting-poll` is a wait to compare against, even beside a clock", () => {
+    // Defensive: no state but `awaiting-poll` carries a `waitingMs` today. A
+    // state that ever did (a new one, or a detached round keeping its clock)
+    // must not read as woken for it.
+    const woken = vi.fn(() => NOW);
+    const detached = { ...WAITING, state: "consumer-detached" as const };
+    expect(
+      delivery({ deliveryRoundsKeyed: () => true, tandemClaudeWokenAt: woken }, detached),
+    ).toEqual({ ...detached, keyed: true });
+    expect(woken).not.toHaveBeenCalled();
+  });
+
+  it("a throwing dep reads as dark (keyed) or not woken (the woken fact)", () => {
+    expect(
+      delivery({
+        deliveryRoundsKeyed: () => {
+          throw new Error("boom");
+        },
+      }),
+    ).toEqual(WAITING);
+    expect(
+      delivery({
+        deliveryRoundsKeyed: () => true,
+        tandemClaudeWokenAt: () => {
+          throw new Error("boom");
+        },
+      }),
+    ).toEqual({ ...WAITING, keyed: true });
+  });
+
+  it("a LAN caller gets neither, and neither dep is asked", () => {
+    const keyed = vi.fn(() => true);
+    const woken = vi.fn(() => NOW);
+    expect(
+      delivery(
+        { deliveryRoundsKeyed: keyed, tandemClaudeWokenAt: woken },
+        WAITING,
+        "192.168.1.100",
+      ),
+    ).toBeUndefined();
+    expect(keyed).not.toHaveBeenCalled();
+    expect(woken).not.toHaveBeenCalled();
+  });
+});
