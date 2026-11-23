@@ -407,6 +407,8 @@ notifications-enable-toggle
 notifications-flash-toggle
 notifications-harness
 notifications-permission-status
+notifications-sound-error
+notifications-sound-hint
 notifications-sound-preview
 notifications-sound-select
 notifications-test-button

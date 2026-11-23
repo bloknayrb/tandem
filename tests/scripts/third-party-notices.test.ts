@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  CHIME_LICENCE_PATH,
+  chimeLicenceProblems,
   classifyLicence,
   findVendoredLicenceFiles,
   hasFullLicenceText,
@@ -24,6 +26,45 @@ import {
 
 const tmp = mkdtempSync(join(tmpdir(), "tandem-notices-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+describe("chimeLicenceProblems", () => {
+  const cc0 = "CC0 1.0 Universal\nglock_hi.wav  Idiophones/...\nglock_lo.wav  Idiophones/...";
+  const read = (text: string) => () => text;
+
+  it("passes when no reply-sound clips ship", () => {
+    expect(chimeLicenceProblems(["index.html"], read(""))).toEqual([]);
+  });
+
+  it("passes when the CC0 licence file names every clip", () => {
+    const files = ["chimes/glock_hi.wav", "chimes/glock_lo.wav", CHIME_LICENCE_PATH];
+    expect(chimeLicenceProblems(files, read(cc0))).toEqual([]);
+  });
+
+  it("fails when clips ship without the licence file", () => {
+    expect(chimeLicenceProblems(["chimes/glock_hi.wav"], read(cc0))).toHaveLength(1);
+  });
+
+  it("fails when the licence file is not the CC0 text", () => {
+    const files = ["chimes/glock_hi.wav", CHIME_LICENCE_PATH];
+    expect(chimeLicenceProblems(files, read("glock_hi.wav"))).toEqual([
+      `${CHIME_LICENCE_PATH} is not a CC0 1.0 Universal text`,
+    ]);
+  });
+
+  it("fails for a clip the licence file does not name", () => {
+    const files = ["chimes/glock_hi.wav", "chimes/kazoo_hi.wav", CHIME_LICENCE_PATH];
+    expect(chimeLicenceProblems(files, read(cc0))).toEqual([
+      `chimes/kazoo_hi.wav is not listed in ${CHIME_LICENCE_PATH}`,
+    ]);
+  });
+
+  it("does not accept a clip whose name is only a substring of a listed one", () => {
+    const files = ["chimes/glock_hi.wav", "chimes/hi.wav", CHIME_LICENCE_PATH];
+    expect(chimeLicenceProblems(files, read(cc0))).toEqual([
+      `chimes/hi.wav is not listed in ${CHIME_LICENCE_PATH}`,
+    ]);
+  });
+});
 
 describe("packageRootOf", () => {
   it("takes the LAST node_modules segment, so a nested copy wins over its parent", () => {
