@@ -143,6 +143,20 @@ describe("reconcileAnnotationKeys", () => {
       /client transaction/,
     );
   });
+
+  it("outside vitest (an npm install leaves NODE_ENV unset) it logs instead of throwing", () => {
+    const doc = aliasedDoc();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("VITEST", "");
+    try {
+      expect(() => withBrowser(doc, () => reconcileAnnotationKeys(doc))).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(errorSpy.mock.calls.some((args) => /client transaction/.test(String(args[0])))).toBe(
+      true,
+    );
+  });
 });
 
 describe("the reply gate only reads a reconciled document", () => {

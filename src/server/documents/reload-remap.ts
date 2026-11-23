@@ -523,6 +523,12 @@ const surrogates = "ignore" as const;
  * need it.
  */
 export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
+  // The content swap itself may have written records (the `.docx` adapter
+  // re-imports Word comments). Reconcile BEFORE the loop below, so an alias it
+  // left behind is repaired with its replies quarantined, never silently by the
+  // loop's `atMapKey` stamp — and before the early return, so a document with
+  // nothing captured is reconciled too.
+  reconcileAnnotationKeys(ydoc);
   const newText = extractText(ydoc);
   if (input.entries.size === 0) return { ...input, newText, hunks: null };
   const hunks = lineHunks(input.oldText, newText);
@@ -542,10 +548,6 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
     const ann = atMapKey(entry.id, sanitized);
     map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
-  // The content swap itself may have written records (the `.docx` adapter
-  // re-imports Word comments). Reconcile again, so an alias it left behind is
-  // repaired with its replies quarantined, not silently by the stamp above.
-  reconcileAnnotationKeys(ydoc);
   return remap;
 }
 

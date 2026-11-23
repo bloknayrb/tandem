@@ -215,8 +215,11 @@ function threadItemAnsweredBy(
 ): { annotationId: string; item: string } | null {
   const { raw } = rawAnnotationRecord(documentId, annotationId);
   if (!hasAnnotationShape(raw)) return null;
-  const parent = narrowForChannel(raw);
-  if (parent === null) return null;
+  const narrowed = narrowForChannel(raw);
+  if (narrowed === null) return null;
+  // Read BY its map key, so that key is its identity (`atMapKey`): a record
+  // stored under K with a stale `id: X` must load K's thread, not X's.
+  const parent = atMapKey(annotationId, narrowed);
   const store = getDocumentStore(documentId);
   if (!store) return null;
   if (hideFromAI(parent, readModeState())) return null;

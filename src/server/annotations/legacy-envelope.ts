@@ -205,8 +205,24 @@ function recreatedDeterministically(id: string, row: Fingerprint, live: Fingerpr
   return typeOk && strictCommentIdsAgree(row, live);
 }
 
-function freshKey(docHash: string, row: AnnotationRecordV1, index: number, salt: number): string {
-  const input = `${docHash}\u0000${row.id}\u0000${String(row.timestamp)}\u0000${index}\u0000${salt}`;
+/**
+ * Each row's ordinal among the rows sharing its (id, timestamp), in file order.
+ * A fresh key hashes this rather than the row's position in the file, so an
+ * envelope that an older build rewrote in another order gives every row the
+ * same key again (a positional key would mint a new duplicate on each cycle).
+ */
+function twinOrdinals(rows: readonly AnnotationRecordV1[]): number[] {
+  const seen = new Map<string, number>();
+  return rows.map((row) => {
+    const sig = `${row.id}\u0000${String(row.timestamp)}`;
+    const n = seen.get(sig) ?? 0;
+    seen.set(sig, n + 1);
+    return n;
+  });
+}
+
+function freshKey(docHash: string, row: AnnotationRecordV1, ordinal: number, salt: number): string {
+  const input = `${docHash}\u0000${row.id}\u0000${String(row.timestamp)}\u0000${ordinal}\u0000${salt}`;
   return FRESH_KEY_PREFIX + createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
@@ -223,6 +239,7 @@ export function assignEnvelopeRows(
   const quarantineIds = new Set(ledger.map((e) => e.storedId));
   const rows = new Map<string, AnnotationRecordV1>();
   const oldFormat = file.meta.keyIdentity !== KEY_IDENTITY_FORMAT;
+  const ordinals = twinOrdinals(file.annotations);
   let moved = false;
 
   const place = (target: string, row: AnnotationRecordV1) => {
@@ -238,7 +255,7 @@ export function assignEnvelopeRows(
         place(row.id, row);
         return;
       }
-      place(freshTarget(docHash, row, index, annMap, rows), row);
+      place(freshTarget(docHash, row, ordinals[index], annMap, rows), row);
       quarantineIds.add(row.id);
     });
     return { rows, quarantineIds, oldFormat, moved };
@@ -388,7 +405,7 @@ export function assignEnvelopeRows(
       if (own !== row.id) quarantineIds.add(row.id);
       return;
     }
-    place(freshTarget(docHash, row, index, annMap, rows), row);
+    place(freshTarget(docHash, row, ordinals[index], annMap, rows), row);
     quarantineIds.add(row.id);
   });
 
@@ -404,12 +421,12 @@ export function assignEnvelopeRows(
 function freshTarget(
   docHash: string,
   row: AnnotationRecordV1,
-  index: number,
+  ordinal: number,
   annMap: Y.Map<unknown>,
   taken: ReadonlyMap<string, AnnotationRecordV1>,
 ): string {
   for (let salt = 0; ; salt++) {
-    const key = freshKey(docHash, row, index, salt);
+    const key = freshKey(docHash, row, ordinal, salt);
     if (taken.has(key)) continue;
     const live = annMap.get(key) as { timestamp?: unknown } | undefined;
     if (live === undefined || live.timestamp === row.timestamp) return key;

@@ -202,6 +202,19 @@ describe("assignEnvelopeRows — old-format envelopes", () => {
     expect(second).toEqual(first);
   });
 
+  it("a fresh key survives the envelope being rewritten in another order", () => {
+    const stray = annRecord({ id: "X", content: "stray", timestamp: T_K, rev: 9 });
+    const other = annRecord({ id: "o", content: "other", timestamp: T_X });
+    const keyOf = (rows: AnnotationRecordV1[]) =>
+      [...assign(liveDoc({ X: { ...X }, o: { ...other } }), rows).rows].find(
+        ([, row]) => row.content === "stray",
+      )?.[0];
+
+    const before = keyOf([{ ...other }, { ...stray }]);
+    expect(before !== undefined && isFreshKey(before)).toBe(true);
+    expect(keyOf([{ ...stray }, { ...other }])).toBe(before);
+  });
+
   it("an import comment row pairs with a live migrated import note only on an equal commentId", () => {
     const source = { author: "Ann", file: "review.docx" };
     const liveNote = annRecord({

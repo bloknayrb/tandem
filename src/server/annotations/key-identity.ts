@@ -88,15 +88,17 @@ function findAliases(map: Y.Map<unknown>, keys: Iterable<string>): Alias[] {
  * transaction: its write would join that transaction and take its origin, so
  * the repair would be pushed to the channel as a user action. Every outer
  * transaction it can be reached from today is server-tagged; this checks the
- * convention in development and tests.
+ * convention. It throws only under vitest: `NODE_ENV` is unset on an npm
+ * install, so keying on it would make a shipped server fail every Claude read
+ * of the document instead of logging.
  */
 function assertNotInsideClientTransaction(ydoc: Y.Doc): void {
-  if (process.env.NODE_ENV === "production") return;
   const origin = (ydoc as unknown as { _transaction: { origin: unknown } | null })._transaction
     ?.origin;
-  if (origin === BROWSER_ORIGIN || (typeof origin === "object" && origin !== null)) {
-    throw new Error("reconcileAnnotationKeys ran inside a client transaction");
-  }
+  if (origin !== BROWSER_ORIGIN && (typeof origin !== "object" || origin === null)) return;
+  const message = "reconcileAnnotationKeys ran inside a client transaction";
+  if (process.env.VITEST) throw new Error(message);
+  console.error(`[key-identity] ${message}`);
 }
 
 /**

@@ -23,7 +23,7 @@ import {
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { anchoredRange, refreshRange } from "../../src/server/positions.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withMcp, withReload } from "../../src/shared/origins.js";
 import { type DocumentRange, toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -580,6 +580,30 @@ describe("applyRemap — what it leaves alone", () => {
     expect(textOf(doc, "a")).toBe("bravo");
     expect(annotationsOf(doc).get("a")?.content).toBe("migrated");
     expect(kindOf(doc, "a")).toBe("ok");
+  });
+
+  it("an alias the swap left (stale id on a record) quarantines that id's user replies (#2524)", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    const seeded = seedOn(doc, "a", "bravo");
+    const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    withReload(doc, () =>
+      replies.set("r", {
+        id: "r",
+        annotationId: "X",
+        author: "user",
+        text: "hi",
+        timestamp: 1,
+        rev: 1,
+      }),
+    );
+    withReload(doc, () => {
+      const input = captureRemapInput(doc, FILE);
+      loadMarkdown(doc, "new\n\nalpha\n\nbravo\n");
+      annotationsOf(doc).set("a", { ...seeded, id: "X" });
+      applyRemap(doc, input);
+    });
+    expect(annotationsOf(doc).get("a")?.id).toBe("a");
+    expect(replies.get("r")).toMatchObject({ private: true });
   });
 
   it("moves a point inside a replaced region to the edit point without stamping a snapshot", () => {

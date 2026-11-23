@@ -45,6 +45,7 @@ import { extractText } from "../mcp/document-model.js";
 import { getAliasLedger } from "./alias-ledger.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
 import { assignEnvelopeRows } from "./legacy-envelope.js";
+import { pickWinner } from "./pick-winner.js";
 import {
   type AnnotationDocV1,
   isPartialParse,
@@ -245,10 +246,22 @@ export async function recoverRenamedEnvelope(
     await store.flush();
 
     // Inject recovered annotations + replies into the Y.Doc (open-time
-    // population → withInternal). The merge that loadAndMerge runs next sees
-    // file == Y.Map and is a no-op. Each row's id is its target key.
+    // population → withInternal). Each row's id is its target key. A row lands
+    // only on an empty key or where the file copy wins `pickWinner`: the routing
+    // leaves a doubtful row on its own id precisely when the live copy would
+    // win, so a bare set here would write one record's body over another. A
+    // live copy that wins stays, and the `loadAndMerge` that runs next persists
+    // it over the envelope's row.
     withInternal(doc, () => {
       for (const ann of rekeyed.annotations) {
+        const live = annMap.get(ann.id) as { rev?: unknown; editedAt?: unknown } | undefined;
+        if (live && typeof live === "object") {
+          const liveStamp = {
+            rev: typeof live.rev === "number" ? live.rev : 0,
+            editedAt: typeof live.editedAt === "number" ? live.editedAt : undefined,
+          };
+          if (pickWinner(ann, liveStamp) !== "file") continue;
+        }
         annMap.set(ann.id, ann);
       }
       for (const reply of rekeyed.replies) {
