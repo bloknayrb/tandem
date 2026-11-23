@@ -188,6 +188,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-waiting-chat.test.ts",
     "tests/server/ownership-waiting-cost.test.ts",
     "tests/server/ownership-waiting.test.ts",
+    "tests/server/ownership-wake-frame.test.ts",
   ];
 
   it("the files that stub the variable at all are a reviewed set", () => {
@@ -245,6 +246,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
       "tests/server/ownership-waiting.test.ts",
+      // PR 3b-2d's one (`ownership-wake-frame.test.ts`): the ownership frame
+      // flag on, with a dark row run with every seam wired.
+      "tests/server/ownership-wake-frame.test.ts",
     ]);
   });
 
@@ -287,6 +291,8 @@ describe("tests and the flag", () => {
       // PR 3b-2b4c's measurement of the waiting cost: flag on throughout.
       "tests/server/ownership-waiting-cost.test.ts",
       "tests/server/ownership-waiting.test.ts",
+      // PR 3b-2d: the ownership frame on /api/wake, flag on with a dark row.
+      "tests/server/ownership-wake-frame.test.ts",
     ]);
   });
 

@@ -12,7 +12,10 @@
  *
  * Frames are payload-free (`toWakeFrame`) — see ADR-049 decision 2 and that
  * function's docblock. This carries the same contract as the supervisor's stdin
- * wake: enough to know something happened, never what.
+ * wake: enough to know something happened, never what. One frame is not an
+ * event: the `ownership` frame ({@link requestOwnershipFrame}, #2358 PR 3b-2d,
+ * ships dark), written when a change of owner leaves work waiting for a
+ * session other than Tandem's Claude, or for nobody. Same three fields.
  *
  * ## Why the guard is not `apiMiddleware`
  *
@@ -49,8 +52,14 @@ import type { Duplex } from "node:stream";
 import { type WebSocket, WebSocketServer } from "ws";
 import { API_WAKE } from "../../shared/api-paths.js";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
-import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
+import {
+  isWakeWorthy,
+  OWNERSHIP_WAKE_FRAME_TYPE,
+  toWakeFrame,
+  type WakeFrame,
+} from "../../shared/events/wake-scope.js";
 import { LICENSE_REQUIRED } from "../../shared/license-copy.js";
+import { generateEventId } from "../../shared/utils.js";
 import { isLoopback } from "../auth/middleware.js";
 import { aiRefusal } from "../license/ai-refusal.js";
 import { isHostAllowed, isLocalhostOrigin } from "../mcp/api-routes.js";
@@ -103,6 +112,107 @@ let wakeEndpoint: string | null = null;
 /** The live wake URL, or null if the transport is not running (stdio mode). */
 export function getWakeEndpoint(): string | null {
   return wakeEndpoint;
+}
+
+/**
+ * The attached wake servers, for the ownership frame's writer (#2358 PR 3b-2d),
+ * which is reached from outside any one socket's subscription. One in
+ * production (HTTP mode attaches once; stdio attaches none); a set so a test
+ * that attaches two, or a detach racing a frame, needs no special case.
+ */
+const attachedServers = new Set<WebSocketServer>();
+
+/**
+ * How long the ownership frame's writer gathers requests before it writes one
+ * frame (#2358 PR 3b-2d). The existing per-event writer has no coalescing of
+ * its own: it writes one frame per event, which `pushEvent` produces one at a
+ * time. An ownership change does not: the end of presence moves every
+ * document Tandem's Claude held, each at its own turn in its own queue, and a
+ * lapse releases a record's documents and its chat in one run, so one
+ * "something changed hands" can ask for a frame many times within a few
+ * milliseconds. This window folds those into one frame, and bounds the writer
+ * at ten frames a second however the requests arrive. A frame carries
+ * nothing, so a second one in the same window would tell a session nothing
+ * new; the reader's poll is what reads the whole change.
+ */
+const OWNERSHIP_FRAME_COALESCE_MS = 100;
+
+let ownershipFrameDelayMs = OWNERSHIP_FRAME_COALESCE_MS;
+let ownershipFrameTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Tests only: the coalescing window (`undefined` restores the default). */
+export function setOwnershipFrameDelayForTests(ms: number | undefined): void {
+  ownershipFrameDelayMs = ms ?? OWNERSHIP_FRAME_COALESCE_MS;
+}
+
+/**
+ * Ask for one payload-free `ownership` frame on every attached wake socket
+ * (#2358 PR 3b-2d; ADR-054; ownership design §4.4, §8.6, §8.7). Reached only
+ * through ownership's frame sink, which `src/server/index.ts` sets and which
+ * only a flag-on change of owner calls, so a dark server never arms the
+ * timer. Requests within {@link OWNERSHIP_FRAME_COALESCE_MS} of the first
+ * become one frame. Unscoped until Phase 3 (ownership design §9.4): every
+ * armed session gets it, polls, and finds nothing unless the work is its own
+ * or claimable. Never throws.
+ */
+export function requestOwnershipFrame(): void {
+  if (ownershipFrameTimer !== undefined || attachedServers.size === 0) return;
+  ownershipFrameTimer = setTimeout(() => {
+    ownershipFrameTimer = undefined;
+    writeOwnershipFrame();
+  }, ownershipFrameDelayMs);
+  ownershipFrameTimer.unref?.();
+}
+
+/**
+ * The ownership frame's writer: an AI surface outside `pushEvent` (Critical
+ * Rule 9; ownership design §8.6, §11.5), so it never inherits that function's
+ * revocation and asks the licence itself, at the moment it writes. A refusal
+ * ends every attached socket with 4403, exactly as the subscription's
+ * `onRevoke` does, and writes nothing; so does a decision that throws (the
+ * sockets are then left open: nothing was decided). The frame names the three
+ * fields every wake frame has and nothing else (ADR-049 decision 2).
+ */
+function writeOwnershipFrame(): void {
+  const clients = [...attachedServers].flatMap((wss) => [...wss.clients]);
+  if (clients.length === 0) return;
+  let refused: boolean;
+  try {
+    refused = aiRefusal() !== null;
+  } catch {
+    console.error("[Wake] The licence could not be read; no ownership frame was written.");
+    return;
+  }
+  if (refused) {
+    for (const ws of clients) closeLicenseRequired(ws);
+    return;
+  }
+  const frame: WakeFrame = {
+    id: generateEventId(),
+    type: OWNERSHIP_WAKE_FRAME_TYPE,
+    timestamp: Date.now(),
+  };
+  const raw = JSON.stringify(frame);
+  for (const ws of clients) {
+    try {
+      ws.send(raw);
+    } catch (err) {
+      console.error(
+        "[Wake] Send failed, closing socket:",
+        err instanceof Error ? err.message : err,
+      );
+      ws.terminate();
+    }
+  }
+}
+
+/** Close `ws` as unlicensed (#1521): 4403 and a short reason, or a terminate. */
+function closeLicenseRequired(ws: WebSocket): void {
+  try {
+    ws.close(WAKE_CLOSE_LICENSE_REQUIRED, LICENSE_REQUIRED);
+  } catch {
+    ws.terminate();
+  }
 }
 
 export type WakeUpgradeVerdict =
@@ -280,15 +390,7 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
     // `onRevoke` (#1521): an event pushed while Tandem is unlicensed closes the
     // socket with 4403. The reason stays SHORT — `ws` throws on a close reason
     // over 123 bytes, so the refusal message itself cannot ride here.
-    subscribe(onEvent, "external", {
-      onRevoke: () => {
-        try {
-          ws.close(WAKE_CLOSE_LICENSE_REQUIRED, LICENSE_REQUIRED);
-        } catch {
-          ws.terminate();
-        }
-      },
-    });
+    subscribe(onEvent, "external", { onRevoke: () => closeLicenseRequired(ws) });
 
     ws.on("close", () => unsubscribe(onEvent));
     ws.on("error", () => {
@@ -321,6 +423,7 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
   heartbeat.unref?.();
 
   httpServer.on("upgrade", onUpgrade);
+  attachedServers.add(wss);
 
   // The host is the loopback address the server actually bound, never the
   // configured name: `[::1]` on an IPv6-loopback bind, `127.0.0.1` otherwise.
@@ -352,6 +455,11 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
     clearInterval(heartbeat);
     httpServer.removeListener("upgrade", onUpgrade);
     httpServer.removeListener("listening", publishEndpoint);
+    attachedServers.delete(wss);
+    if (attachedServers.size === 0 && ownershipFrameTimer !== undefined) {
+      clearTimeout(ownershipFrameTimer);
+      ownershipFrameTimer = undefined;
+    }
     for (const ws of wss.clients) ws.terminate();
     wss.close();
     wakeEndpoint = null;

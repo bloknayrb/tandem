@@ -147,11 +147,88 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   it("the accepted rows are exactly these, word for word (a new acceptance, or an edit to one, edits this pin)", () => {
     const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
     expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
+      "The lone-session re-hand. With one session attached, ",
+      "Flag on, a message's delivery round that no poll will",
+      "A document claimed by a poll whose items its holder t",
+      "After a server restart the delivery registry is empty",
       "The waiting decision's cost is unmeasured (3b-2b1b-ch",
       "Acknowledged but unanswered chat is never started for",
       "Acknowledged but unanswered chat by the channel route",
+      "Read but unacknowledged chat is never started for (3b",
     ]);
     expect(acceptedRows).toEqual([
+      {
+        gap:
+          "The lone-session re-hand. With one session attached, a close and reopen of a tab it holds, " +
+          "a lapse (a laptop asleep past the grace, a Claude Code restart, the detached-record cap, or " +
+          "a session whose stream dropped while it keeps making requests: it is detached, each request " +
+          "re-arms the two-minute grace, an idle spell past it lapses it, its next write claims the " +
+          "document again with no handover, and the next idle lapse hands over again, so it is " +
+          "re-handed on every write-then-idle cycle; how often a dropped stream with live requests " +
+          "happens is unverified) or " +
+          "any other handover hands it again every pending user comment on that document, answered or " +
+          "not, every resolved comment that was ever edited, and every user reply on a Claude-facing " +
+          "thread, resolved long ago or not, so the re-hand grows with the document's history until the " +
+          "handled filter lands; and a comment edited since it was seen arrives without `edited: true`. " +
+          "On master a close and reopen re-hands nothing. Since the notice-rule PR, each lapse also " +
+          "settles the accept and dismiss notices from any response that session lost (#2294): in " +
+          "the write-then-idle cycle a lost response's notices go to nobody, the session included. " +
+          "(A restart that returns under the same owner " +
+          "id inside the two-minute grace is no handover: its fresh cursor counts what its earlier " +
+          "incarnation acknowledged as seen, as on master, so the outcome turns on the grace.) Since " +
+          "the scope PR a detached record also claims a document again on a poll that yields it " +
+          "something, so the write-then-idle cycle is also a poll-then-idle cycle.",
+        closedBy: "Bryan's answer to it (PR of the handover, 'Needs Bryan').",
+        acceptedFor:
+          "Bryan picked 'Accept (Recommended)' for the lone-session re-hand, picked from options, " +
+          "2026-11-23 (#2360's handled filter shrinks it); tracked as #2358.",
+      },
+      {
+        gap:
+          "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
+          "stays open, so the stall banner reports it: until a restart for a user row a client " +
+          "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
+          "rows it finds, never drops it); until Clear chat for a client-added user row under a key " +
+          "that a Claude reply already handles, and for a carried-over key re-added after such a " +
+          "delete. Each needs client-written rows. Kept open with no fix in the delivery-rounds PR " +
+          "(the reviewing session's ruling); Bryan decides whether to accept it or have the inbox's " +
+          "'never handed' answer key such a forward as no round.",
+        closedBy: "Bryan's decision, before the flip.",
+        acceptedFor:
+          "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (it needs " +
+          "client-written rows the server undoes); tracked as #2358.",
+      },
+      {
+        gap:
+          "A document claimed by a poll whose items its holder then never answers: the holder keeps " +
+          "it, and no other session is handed its items until a lapse, a close or a take moves it " +
+          "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does). " +
+          "Since the chat owners PR the same holds for a message owned per message that its owner " +
+          "never answers: nobody else is handed it while that owner's record exists. An unhandled " +
+          "one (an acknowledged one included: since the posts PR an acknowledgement handles nothing) " +
+          "is re-owed at the owner's lapse; a handled one (by a final reply or `settles`) is never " +
+          "re-owed, and stays the owner's until its record is deleted.",
+        closedBy:
+          "PR 3b for Tandem's Claude (3b-2b1c-a forwards a change of owner only, not a holder that " +
+          "keeps an item unanswered), or Bryan's answer for terminals.",
+        acceptedFor:
+          "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
+          "(PR 5's controls are the remedy); tracked as #2358.",
+      },
+      {
+        gap:
+          "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
+          "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
+          "session is connected (after a restart every restored document is unowned), every pending " +
+          "user comment reads as waiting, answered or not, as does a resolved " +
+          "comment ever edited, and every user thread reply on any Claude-facing comment (replies " +
+          "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
+          "that filter would not close it: a comment answered only in chat is never handled by it.",
+        closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
+        acceptedFor:
+          "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (the " +
+          "written-since-boot rule bounds what can start Tandem's Claude); tracked as #2358.",
+      },
       {
         gap:
           "The waiting decision's cost is unmeasured (3b-2b1b-chat): each tandemWorkWaiting ask runs " +
@@ -204,6 +281,17 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
           "Bryan picked 'Yes, both routes (Recommended)', picked from options, 2026-11-19, so 'Known " +
           "limit for 0.32; design it after (Recommended)' covers the channel route too; tracked as " +
           "#2484.",
+      },
+      {
+        gap:
+          "Read but unacknowledged chat is never started for (3b-2b1b-chat): a cursor acknowledgement, " +
+          "or a cursor-less poll's commit at hand-out, stamps a user message read with no 'I'm on it'; " +
+          "if Claude never answers, the message leaves waiting for good, and after a server restart it " +
+          "is carried over and never re-owed. The pick on acknowledged chat does not cover this.",
+        closedBy: "Bryan's answer, then its change with a test.",
+        acceptedFor:
+          "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
+          "as #2484.",
       },
     ]);
   });

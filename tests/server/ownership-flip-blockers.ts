@@ -124,6 +124,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "the scope PR a detached record also claims a document again on a poll that yields it " +
       "something, so the write-then-idle cycle is also a poll-then-idle cycle.",
     closedBy: "Bryan's answer to it (PR of the handover, 'Needs Bryan').",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)' for the lone-session re-hand, picked from options, " +
+      "2026-11-23 (#2360's handled filter shrinks it); tracked as #2358.",
   },
   {
     gap:
@@ -161,6 +164,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "(the reviewing session's ruling); Bryan decides whether to accept it or have the inbox's " +
       "'never handed' answer key such a forward as no round.",
     closedBy: "Bryan's decision, before the flip.",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (it needs " +
+      "client-written rows the server undoes); tracked as #2358.",
   },
   {
     gap:
@@ -174,13 +180,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A lapse to unowned wakes no session (the ownership frames are stubs, and 3b-2b1c-a's " +
-      "start-or-wake forwards only a document that goes to Tandem's Claude), so under " +
-      "inbox scope a user's next comment on that document waits until some session polls for " +
-      "an unrelated reason.",
+      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
+      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
+      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
+      "such a session waits for its next poll for a document that went unowned with work on it.",
     closedBy:
-      "PR 3b (presence, the ownership frames and the start rules of 3b-2b2; 3b-2b1c-a's " +
-      "start-or-wake does not cover a document that goes unowned).",
+      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
+      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
+      "have landed.",
   },
   {
     gap:
@@ -240,6 +247,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "PR 3b for Tandem's Claude (3b-2b1c-a forwards a change of owner only, not a holder that " +
       "keeps an item unanswered), or Bryan's answer for terminals.",
+    acceptedFor:
+      "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
+      "(PR 5's controls are the remedy); tracked as #2358.",
   },
   {
     gap:
@@ -386,6 +396,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
       "that filter would not close it: a comment answered only in chat is never handled by it.",
     closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (the " +
+      "written-since-boot rule bounds what can start Tandem's Claude); tracked as #2358.",
   },
   {
     gap:
@@ -447,6 +460,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "if Claude never answers, the message leaves waiting for good, and after a server restart it " +
       "is carried over and never re-owed. The pick on acknowledged chat does not cover this.",
     closedBy: "Bryan's answer, then its change with a test.",
+    acceptedFor:
+      "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
+      "as #2484.",
   },
   {
     gap:

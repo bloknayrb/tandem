@@ -1443,3 +1443,36 @@ describe("the switch-on: index.ts wires the own-spawn seam and presence's consum
     expect(unrouted).toBeLessThan(body.indexOf("await registry.add("));
   });
 });
+
+describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
+  // Unwired, the sink does nothing, so every unit test passes without the
+  // wiring; `main()` cannot run in a unit test, so it is pinned from source.
+  // `ownership-wake-frame.test.ts` wires the same expression against a real
+  // wake socket.
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("only index.ts sets it, once, to the wake socket's requestOwnershipFrame, before either branch", () => {
+    expect(filesMentioning("setOwnershipFrameSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    const line = "  setOwnershipFrameSink(requestOwnershipFrame);";
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    expect(stripComments(index).match(/\bsetOwnershipFrameSink\b/g)).toHaveLength(2);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  });
+
+  it("ownership.ts calls the sink in one place, outside any MCP request context, from three callers", () => {
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // The setter's and the reset's assignments (the declaration is typed).
+    expect(text.match(/\bownershipFrameSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(text.match(/\bownershipFrameSink\(\)/g)).toHaveLength(1);
+    expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
+    // Step 5, a release of per-message owners, and the end of presence.
+    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(3);
+  });
+});

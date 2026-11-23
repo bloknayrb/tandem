@@ -1549,13 +1549,16 @@ describe("step 5 asks the probe", () => {
     expect(probe.mock.results[0]?.value).toBe(true);
   });
 
-  it("characterization: at default presence the probe is never asked", () => {
+  it("characterization: at default presence the probe is asked only for the unowned frame", () => {
+    // Before #2358 PR 3b-2d it was never asked here; the `ownership` frame
+    // now asks once, with no owner, whether the document went unowned with
+    // work on it.
     const id = terminalHolds();
     const probe = vi.fn(() => true);
     setWaitingProbe(probe);
     lapseByGrace(A);
     expect(getDocOwner(id)).toBeUndefined();
-    expect(probe).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledExactlyOnceWith(id, "");
   });
 
   for (const flag of ["", "1"] as const) {
