@@ -66,15 +66,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
-      "items are owed.",
-    closedBy:
-      "PR 3b, where the re-owe's wake can open the round (moved there from the 'chat, rounds " +
-      "and the greeting' PR by the delivery-rounds PR's brief). 3b-2b1c-a lands the re-owe's " +
-      "start-or-wake for Tandem's Claude but opens no round.",
-  },
-  {
-    gap:
       "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
       "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
       "another session's polls never hide its items from you' (with inbox scope, only the " +
@@ -142,16 +133,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "explanations meant for that session (a destructive read; `holding` is unaffected; within " +
       "D4, coordination not security). It is not yet in docs/security.md's register.",
     closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
-  },
-  {
-    gap:
-      "Flag on, a document's close drops its delivery round and a reopen opens none (the reopen " +
-      "merges annotations with withFileSync, which the channel skips), while the document's " +
-      "items may still be owed, so /health can read idle with items owed (the delivery-rounds " +
-      "PR, R3.1).",
-    closedBy:
-      "PR 3b: a wake that opens the round when it wakes someone (3b-2b1c-a's start-or-wake " +
-      "opens none).",
   },
   {
     gap:
@@ -463,33 +444,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     acceptedFor:
       "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
       "as #2484.",
-  },
-  {
-    gap:
-      "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
-      "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
-      "for a while after it stops claimable work does not count (about two minutes if its " +
-      "transport held a stream, up to about 37 minutes if it never did; which applies is " +
-      "unmeasured); and it differs from the supervisor's otherAiAttached (#2196), which excludes " +
-      "Tandem's own children by session id. So also (3b-2b1c): if a session holding a document " +
-      "goes away while Tandem's Claude is running or has just stopped, Tandem's Claude is " +
-      "neither woken nor started for that session's waiting work; it reaches the work at its " +
-      "next look or start. And Tandem's own child can itself hold a document it opened and " +
-      "lapse when it stops, which starts Tandem's Claude for its own leftovers; with new " +
-      "blocker 2 (answered work reads as waiting after a handover) that can repeat after every " +
-      "idle stop. And while the child sits on a claude:<id> record, a document or chat that " +
-      "becomes Tandem's Claude's is refused to that child (reason 'default'), so a wake or start " +
-      "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
-      "starts it again. The same holds for chat (3b-2b1c-b): if the child's record held a " +
-      "document when it was closed, it owns that document's chat per message, and its lapse " +
-      "releases the message and, while no other session is connected (the departure gate), " +
-      "starts Tandem's Claude for it.",
-    closedBy:
-      "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
-      "transport does not count, and one 'another session' rule named for the decision and the " +
-      "start arm; and a test where a holder lapses beside a running, idle Tandem's Claude with " +
-      "no other session and it is woken, and a test that a stopped child's own lapse starts " +
-      "nothing.",
   },
   {
     gap:

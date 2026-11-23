@@ -1631,9 +1631,12 @@ describe("the delivery-round seam is wired in this world (keyed rounds, flag on)
 // kind and key, and the forward count. 3b-2b1c-a wired ownership's
 // `startOrWake` to the supervisor and these brackets did not change: its
 // wake (the supervisor's `requestWake`, or a start) does not go through
-// `pushEvent`, so it opens no round, and this file sets no sink. A later wake
-// that opens a round by design (flip-blocker row "Handover gap (d)", in
-// `ownership-flip-blockers.ts`) is expected to change them.
+// `pushEvent`, so it opens no round, and this file sets no sink. Since #2358
+// PR 3b-2b5 a re-owe that wakes someone opens the rounds of what it owed
+// again (handover gap (d)), but through ownership's own round opener, after
+// the handover and only beside a wake; this file sets neither the opener nor
+// a wake sink, and the handover itself still opens nothing (that PR's rounds
+// are judged by `ownership-reowe-rounds.test.ts`).
 // What each check sees: a round opens only through `pushEvent`
 // (`recordWakeForward`), and the bracket's external subscriber records every
 // push, so `events` is non-empty after any re-owe that pushes, whatever its

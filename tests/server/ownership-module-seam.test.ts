@@ -182,6 +182,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-presence.test.ts",
     "tests/server/ownership-records.test.ts",
+    "tests/server/ownership-reowe-rounds.test.ts",
     "tests/server/ownership-take-back.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -241,6 +242,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
       "tests/server/ownership-records.test.ts",
+      // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
+      // dark row run with every seam wired.
+      "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -284,6 +288,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
       "tests/server/ownership-records.test.ts",
+      // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
+      // dark row run with every seam wired.
+      "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",

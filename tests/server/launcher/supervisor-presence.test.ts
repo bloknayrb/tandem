@@ -61,14 +61,19 @@ import {
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
 import {
+  checkWrite,
   getDocOwner,
+  noteFailedBind,
   noteOwnSpawnStarted,
   noteSoloReleased,
   noteTandemPresence,
   noteTandemRunStart,
+  noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
+  setDocOwner,
+  setGraceMsForTests,
   setOpenDocumentIdsSource,
   setOwnSpawnSource,
   setRequestWakeSink,
@@ -78,6 +83,7 @@ import {
   setWaitingProbe,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
+  tandemWorkWaiting,
 } from "../../../src/server/sessions/ownership.js";
 import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
@@ -3119,12 +3125,13 @@ describe("the spawn-started event and the switch-on as index.ts wires it (#2358 
     setOpenDocumentIdsSource(() => []);
   });
 
-  /** `index.ts`'s wiring, against this supervisor (3b-2b4b: the run start and both sinks too). */
+  /** `index.ts`'s wiring, against this supervisor (3b-2b4b: the run start and both sinks too; 3b-2b5: the failed bind). */
   function wire(h: ReturnType<typeof makeSupervisor>): void {
     setTandemPresenceSource(() => h.sup.tandemPresence?.().isPresent() === true);
     h.seam.subscribe(noteTandemPresence);
     h.seam.onSpawnStarted(noteOwnSpawnStarted);
     h.seam.onRunStart(noteTandemRunStart);
+    h.seam.onFailedBind(noteFailedBind);
     setOwnSpawnSource(
       () => h.sup.ownSpawn?.() ?? null,
       (id) => h.sup.isOwnChildSession?.(id) === true,
@@ -3202,6 +3209,156 @@ describe("the spawn-started event and the switch-on as index.ts wires it (#2358 
     await lockBarrier(h2);
     expect(idle.calls).toBe(1);
     expect(children).toHaveLength(2);
+  });
+
+  describe("3b-2b5: the failed-bind wake (ownership design §8.7, R2.5)", () => {
+    /**
+     * A bound run holds `doc`; it crashes and its resumed spawn (child 2), a
+     * stub that never presents its handle, gets a user comment's wake, which
+     * starts its bind window. Child 2's stray transport sits on its
+     * `unbound-child` record, `spawn:2`, refused on Tandem's Claude's
+     * document until the bind fails.
+     */
+    async function strandedByFailedBind(
+      h: ReturnType<typeof makeSupervisor>,
+      waitingAtFailure = true,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      pushJson(c1, RESULT_OK);
+      await settle();
+      const c2 = await crashToResumed(c1);
+      view.push({ ownerId: "spawn:2", sessionId: "m-c2", openStreams: 1 });
+      noteTransportRegistered("spawn:2", { recordKind: "unbound-child" });
+      expect(checkWrite("doc", "spawn:2")).toMatchObject({ ok: false, reason: "unbound-child" });
+      h.emit(annotationEvent()); // its first turn: the window starts
+      await settle();
+      expect(wakes(c2)).toBe(1);
+      pushJson(c2, RESULT_OK); // idle again
+      await settle();
+      waiting = waitingAtFailure;
+      return c2;
+    }
+
+    it("the window expires: presence ends, the document goes unowned, and the live unbound child is woken once and may then claim the stranded item", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      advance(WINDOW);
+      await settle();
+      expect(h.log.slice(-2)).toEqual(["failed:window-expired", "not-present"]);
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(2);
+      // The woken child, as its unbound-child record, is no longer blocked.
+      expect(checkWrite("doc", "spawn:2")).toEqual({ ok: true, claim: "claimed" });
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the wake is deferred out of the supervisor's emit: nothing is written in the judging site's own turn", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      let inEmit = -1;
+      h.seam.onFailedBind(() => {
+        inEmit = wakes(c2);
+      });
+      advance(WINDOW);
+      expect(inEmit).toBe(1);
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the licence refusing: no wake is written", async () => {
+      const lic = licenceDouble();
+      const h = makeSupervisor({ aiRefusal: lic.fn });
+      const c2 = await strandedByFailedBind(h);
+      lic.refusing = true;
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("negative (anchor: the first row): nothing stranded, no wake", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h, false);
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("flag off: noteFailedBind wakes nothing, even with work waiting and the sink wired", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      let sunk = 0;
+      setRequestWakeSink(() => {
+        sunk += 1;
+      });
+      setOpenDocumentIdsSource(() => ["doc"]);
+      setWaitingProbe(() => true);
+      noteFailedBind();
+      await settle();
+      expect(sunk).toBe(0);
+      expect(logText()).not.toMatch(/ownership/);
+    });
+  });
+
+  describe("3b-2b5: a holder's lapse beside a running Tandem's Claude (the own-Claude 'another session' row's first test)", () => {
+    async function heldByTerminalBesideIdleTandem(
+      h: ReturnType<typeof makeSupervisor>,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      pushJson(c1, RESULT_OK);
+      await settle();
+      // Its bound transport, where rule 0 routes it (3b-2b4a): the built-in
+      // `tandem` record, which never counts as another session.
+      view.push({ ownerId: TANDEM_OWNER_ID, sessionId: "m-c1", openStreams: 1 });
+      view.push({ ownerId: "claude:term-a", openStreams: 1 });
+      noteTransportRegistered("claude:term-a", { recordKind: "claude" });
+      setDocOwner("doc", { ownerId: "claude:term-a", kind: "opened" }, "take", "claude:term-a");
+      waiting = true;
+      return c1;
+    }
+
+    function lapseTerminal(): void {
+      setGraceMsForTests(10);
+      view.splice(
+        view.findIndex((e) => e.ownerId === "claude:term-a"),
+        1,
+      );
+      noteTransportChanged("claude:term-a");
+      advance(10);
+    }
+
+    it("with no other session: the document goes to Tandem's Claude and the idle child is woken once", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      expect(wakes(c1)).toBe(0);
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(1);
+    });
+
+    it("negative (anchor: the row above): another terminal attached, so the lapse forwards nothing and the child is not woken", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      view.push({ ownerId: "claude:term-b", openStreams: 1 });
+      noteTransportRegistered("claude:term-b", { recordKind: "claude" });
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(0);
+    });
   });
 
   it("spawn 1, then a resumed spawn 2 with the same id and a new number", async () => {

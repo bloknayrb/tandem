@@ -478,7 +478,8 @@ interface SpawnRecord {
  * The supervisor's presence seam for Tandem's Claude (#2358 PR 3b-1, R2.7),
  * so 3b-2 does not reopen this code. `src/server/index.ts` subscribes
  * presence and the spawn-started event inside its supervisor setup (#2358 PR
- * 3b-2b4a). Flag off every read is false and nothing is ever announced.
+ * 3b-2b4a), the run start (3b-2b4b) and the failed-bind event (3b-2b5).
+ * Flag off every read is false and nothing is ever announced.
  */
 export interface TandemPresenceSeam {
   /** The value last announced. */
@@ -503,9 +504,9 @@ export interface TandemPresenceSeam {
    * torn down, or from the bind window's timer when it expires (site c). At
    * site (c) the spawn is not torn down — teardown cancels that timer — so
    * `activeTurnDelivery` is that live, unbound spawn. A subscriber that writes
-   * a turn, starts or wakes anything (3b-2's failed-bind wake, design §8.7)
-   * must defer that work (a microtask or later), or it writes into a spawn
-   * the judging site is still acting on. Kept synchronous so the failed-bind
+   * a turn, starts or wakes anything (ownership's `noteFailedBind`, 3b-2b5;
+   * design §8.7) must defer that work (a microtask or later), or it writes
+   * into a spawn the judging site is still acting on. Kept synchronous so the failed-bind
    * event precedes the presence announcement it causes.
    */
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
