@@ -64,6 +64,7 @@ import {
   checkWrite,
   getDocOwner,
   noteFailedBind,
+  noteModeObserved,
   noteOwnSpawnStarted,
   noteSoloReleased,
   noteTandemPresence,
@@ -3209,6 +3210,58 @@ describe("the spawn-started event and the switch-on as index.ts wires it (#2358 
     await lockBarrier(h2);
     expect(idle.calls).toBe(1);
     expect(children).toHaveLength(2);
+  });
+
+  describe("the mode-unknown observer (#2358, the restart question; Bryan: 'Build an observer')", () => {
+    // What the CTRL_ROOM observer reports, called as it calls it: the mode
+    // read unknown at install (a restart), then a client's first `tandem`.
+    // The observer itself is in tests/server/ownership-mode-known.test.ts.
+    it("the first Tandem mode after an unknown one starts a stopped Tandem's Claude for waiting work", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h);
+      const c2 = await childN(2);
+      await settle();
+      expect(waiting.calls).toBe(1);
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(logText()).toContain("Work is waiting for Tandem's Claude (mode-known)");
+    });
+
+    it("Off drops it, the licence refusing drops it, and nothing waiting starts nothing", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await offStopped({ workWaiting: waiting.fn });
+      setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(0);
+      expect(children).toHaveLength(1);
+
+      resetOwnershipForTests();
+      const lic = licenceDouble();
+      const refused = waitingDouble(true);
+      const { h: h2 } = await idleStopped({ workWaiting: refused.fn, aiRefusal: lic.fn });
+      lic.refusing = true;
+      setStartOrWakeSink((cause) => h2.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h2);
+      expect(refused.calls).toBe(0);
+      expect(children).toHaveLength(2);
+
+      resetOwnershipForTests();
+      const idle = waitingDouble(false);
+      const { h: h3 } = await idleStopped({ workWaiting: idle.fn });
+      setStartOrWakeSink((cause) => h3.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h3);
+      expect(idle.calls).toBe(1);
+      expect(children).toHaveLength(3);
+    });
   });
 
   describe("3b-2b5: the failed-bind wake (ownership design §8.7, R2.5)", () => {

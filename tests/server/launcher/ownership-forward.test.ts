@@ -479,7 +479,7 @@ let run = 0;
 let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
-const sink = vi.fn((cause: "document" | "message" | "solo-release") =>
+const sink = vi.fn((cause: "document" | "message" | "solo-release" | "mode-known") =>
   supRef?.startOrWake?.(cause),
 );
 const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
