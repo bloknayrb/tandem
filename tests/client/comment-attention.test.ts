@@ -198,7 +198,7 @@ describe("createChatAttention as the comment-answer instance (#2360)", () => {
     chatNotifications: true,
     chatNotificationContent: "document",
     chatAttentionFlash: true,
-    chatSound: "chime",
+    chatSound: "vibes-low-marimba",
     chatSoundVolume: 60,
   };
   beforeEach(() => {

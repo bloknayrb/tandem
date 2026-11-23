@@ -442,3 +442,34 @@ export function renderSection(key, title, components) {
   lines.push("");
   return lines.join("\n");
 }
+
+/** The licence file that ships beside the reply-sound recordings. */
+export const CHIME_LICENCE_PATH = "chimes/LICENSE-VCSL.txt";
+
+/**
+ * The reply sounds (`chimes/*.wav`, CC0 recordings from the Versilian
+ * Community Sample Library) ship with one licence file, which must be the CC0
+ * text and must name every clip, so a WAV from any other source cannot slip
+ * in under it. Returns the problems found; empty means fine.
+ *
+ * @param {string[]} files paths relative to the client folder, `/`-separated
+ * @param {(path: string) => string} read reads one of those paths
+ * @returns {string[]}
+ */
+export function chimeLicenceProblems(files, read) {
+  const wavs = files.filter((f) => /^chimes\/[^/]+\.wav$/.test(f));
+  if (wavs.length === 0) return [];
+  if (!files.includes(CHIME_LICENCE_PATH))
+    return [`chimes/*.wav ship without ${CHIME_LICENCE_PATH}`];
+  const text = read(CHIME_LICENCE_PATH);
+  const problems = [];
+  if (!text.includes("CC0 1.0 Universal")) {
+    problems.push(`${CHIME_LICENCE_PATH} is not a CC0 1.0 Universal text`);
+  }
+  for (const wav of wavs) {
+    if (!text.includes(wav.slice("chimes/".length))) {
+      problems.push(`${wav} is not listed in ${CHIME_LICENCE_PATH}`);
+    }
+  }
+  return problems;
+}

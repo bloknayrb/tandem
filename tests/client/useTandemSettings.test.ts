@@ -346,7 +346,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     chatNotifications: true,
     chatNotificationContent: "document",
     chatAttentionFlash: true,
-    chatSound: "chime",
+    chatSound: "vibes-low-marimba",
     chatSoundVolume: 60,
     chatSeenWhenVisible: false,
   } as TandemSettings;
@@ -358,7 +358,7 @@ describe("useTandemSettings — updateSettings write path", () => {
       chatNotificationContent: "all" as unknown as TandemSettings["chatNotificationContent"],
     });
     expect(next.chatSoundVolume).toBe(0);
-    expect(next.chatSound).toBe("chime");
+    expect(next.chatSound).toBe("vibes-low-marimba");
     expect(next.chatNotificationContent).toBe("document");
     expect(mergeAndClampSettings(BASE, { chatSoundVolume: Number.NaN }).chatSoundVolume).toBe(60);
     expect(mergeAndClampSettings(BASE, { chatSoundVolume: 250 }).chatSoundVolume).toBe(100);

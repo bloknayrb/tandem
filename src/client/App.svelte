@@ -141,7 +141,7 @@ import { createLayoutModel } from "./layout/model.svelte";
 import { createRailContentModel } from "./layout/rail-content.svelte";
 import { createNotifierBackend } from "./notifications/backend";
 import { createChatAttention } from "./notifications/chat-attention";
-import { armChimes, playChime } from "./notifications/chimes";
+import { armChimes, playChime, preloadChimes } from "./notifications/chimes";
 import {
   buildCommentNotificationText,
   type CommentAnswerItem,
@@ -2524,6 +2524,9 @@ const commentAttention = createChatAttention<CommentAnswerItem>({
 onDestroy(() => chatAttention.destroy());
 onDestroy(() => commentAttention.destroy());
 armChimes();
+// Fetch (not decode: no AudioContext before a gesture) the chosen sound's
+// recordings now, so the first reply sound doesn't wait on loading.
+preloadChimes(settingsState.settings.chatSound);
 $effect(() => {
   if (!windowAttention.active) return;
   untrack(() => {

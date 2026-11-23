@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CURRENT_SCHEMA_VERSION,
   loadSettings,
+  mergeAndClampSettings,
   type TandemSettings,
 } from "../../src/client/hooks/useTandemSettings.js";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants.js";
@@ -1089,7 +1090,7 @@ describe("loadSettings — migration chain", () => {
     expect(s.chatNotifications).toBe(true);
     expect(s.chatAttentionFlash).toBe(true);
     expect(s.chatNotificationContent).toBe("document");
-    expect(s.chatSound).toBe("chime");
+    expect(s.chatSound).toBe("vibes-low-marimba");
     expect(s.chatSoundVolume).toBe(60);
     // Default-FALSE boolean: an absent key must not opt the user in.
     expect(s.chatSeenWhenVisible).toBe(false);
@@ -1130,10 +1131,24 @@ describe("loadSettings — migration chain", () => {
     });
     const s = loadSettings();
     expect(s.chatNotificationContent).toBe("document");
-    expect(s.chatSound).toBe("chime");
+    expect(s.chatSound).toBe("vibes-low-marimba");
     expect(s.chatSoundVolume).toBe(100);
     writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, chatSoundVolume: "loud" });
     expect(loadSettings().chatSoundVolume).toBe(60);
+  });
+
+  it("a retired synthesized sound loads as the default, on both parse paths, with no schema bump", () => {
+    for (const retired of ["chime", "bell", "pop", "ping"]) {
+      store.clear();
+      writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, chatSound: retired });
+      expect(loadSettings().chatSound, `${retired} on load`).toBe("vibes-low-marimba");
+      expect(
+        mergeAndClampSettings(loadSettings(), { chatSound: retired as never }).chatSound,
+        `${retired} on update`,
+      ).toBe("vibes-low-marimba");
+    }
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, chatSound: "none" });
+    expect(loadSettings().chatSound).toBe("none");
   });
 
   it("chatNotifications=false is preserved across EVERY in-range schemaVersion bump", () => {
@@ -1142,13 +1157,13 @@ describe("loadSettings — migration chain", () => {
       writeRaw({
         schemaVersion: v,
         chatNotifications: false,
-        chatSound: "pop",
+        chatSound: "harp-glock",
         chatSeenWhenVisible: true,
       });
       const s = loadSettings();
       expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
       expect(s.chatNotifications, `chatNotifications dropped starting at v${v}`).toBe(false);
-      expect(s.chatSound, `chatSound dropped starting at v${v}`).toBe("pop");
+      expect(s.chatSound, `chatSound dropped starting at v${v}`).toBe("harp-glock");
       expect(s.chatSeenWhenVisible, `chatSeenWhenVisible dropped starting at v${v}`).toBe(true);
     }
   });
@@ -1164,10 +1179,10 @@ describe("loadSettings — migration chain", () => {
       });
       const s = loadSettings();
       expect(s._readOnly).toBe(true);
-      expect(s.chatSound).toBe("chime");
+      expect(s.chatSound).toBe("vibes-low-marimba");
       const messages = warn.mock.calls.map((call) => String(call[0]));
       for (const [field, value, shown] of [
-        ["chatSound", "airhorn", "chime"],
+        ["chatSound", "airhorn", "vibes-low-marimba"],
         ["chatNotificationContent", "everything", "document"],
         ["editorMeasure", "extra-wide", "comfortable"],
       ]) {
@@ -1183,8 +1198,8 @@ describe("loadSettings — migration chain", () => {
   it("forward-compat: a known closed-enum value does not warn", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      writeRaw({ schemaVersion: 99, chatSound: "bell" });
-      expect(loadSettings().chatSound).toBe("bell");
+      writeRaw({ schemaVersion: 99, chatSound: "harp-glock" });
+      expect(loadSettings().chatSound).toBe("harp-glock");
       const messages = warn.mock.calls.map((call) => String(call[0]));
       expect(messages.some((m) => m.includes("from newer client is unknown"))).toBe(false);
     } finally {
