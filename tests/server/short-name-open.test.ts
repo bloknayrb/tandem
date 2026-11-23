@@ -950,6 +950,9 @@ describe("records saved under the short spelling are moved, per kind, only into 
     audience: "outbound",
     content: "said under the short spelling",
     rev: 1,
+    // Distinct records carry distinct creation times (the merge tells records
+    // apart by them; `legacy-envelope.ts`).
+    timestamp: 1_700_000_000_001,
   } as Partial<Annotation> as never);
   const sNote = annRecord({
     id: "ann_s_note",
@@ -958,14 +961,39 @@ describe("records saved under the short spelling are moved, per kind, only into 
     audience: "private",
     content: "a private note under the short spelling",
     rev: 1,
+    timestamp: 1_700_000_000_002,
   } as Partial<Annotation> as never);
   const sReply = replyRecord({ id: "rep_s", annotationId: "ann_s_comment", text: "a reply" });
   /** In both: the session's copy is the older revision. */
-  const sBoth = annRecord({ id: "ann_both", author: "user", content: "session copy", rev: 1 });
-  const eBoth = annRecord({ id: "ann_both", author: "user", content: "envelope copy", rev: 5 });
+  const sBoth = annRecord({
+    id: "ann_both",
+    author: "user",
+    content: "session copy",
+    rev: 1,
+    timestamp: 1_700_000_000_003,
+  });
+  const eBoth = annRecord({
+    id: "ann_both",
+    author: "user",
+    content: "envelope copy",
+    rev: 5,
+    timestamp: 1_700_000_000_003,
+  });
   /** In the session only as a live record; the long envelope holds its tombstone. */
-  const sDead = annRecord({ id: "ann_dead", author: "user", content: "deleted since", rev: 1 });
-  const eNew = annRecord({ id: "ann_new", author: "user", content: "long spelling's own", rev: 1 });
+  const sDead = annRecord({
+    id: "ann_dead",
+    author: "user",
+    content: "deleted since",
+    rev: 1,
+    timestamp: 1_700_000_000_004,
+  });
+  const eNew = annRecord({
+    id: "ann_new",
+    author: "user",
+    content: "long spelling's own",
+    rev: 1,
+    timestamp: 1_700_000_000_005,
+  });
   const eReply = replyRecord({ id: "rep_new", annotationId: "ann_new", text: "its reply" });
 
   /** The old key: a session with annotations, and an envelope the open must not use. */

@@ -25,6 +25,7 @@ import { BROWSER_ORIGIN, INTERNAL_ORIGIN, withInternal } from "../../shared/orig
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { getFileSyncContextForDoc } from "../events/file-sync-registry.js";
 import { type AliasLedgerEntry, appendAliasLedger } from "./alias-ledger.js";
+import { hasAnnotationShape } from "./annotation-shape.js";
 import { nextRev } from "./schema.js";
 import { queueSnapshot } from "./sync.js";
 
@@ -66,14 +67,19 @@ interface Alias {
   storedId: string;
 }
 
+/**
+ * Keys whose well-formed record carries a different stored id. A malformed
+ * record (no range, say) is not touched: the read paths skip it, and
+ * `awareness.ts`'s notice rule deliberately keeps reading its raw `value.id`.
+ */
 function findAliases(map: Y.Map<unknown>, keys: Iterable<string>): Alias[] {
   const out: Alias[] = [];
   for (const key of keys) {
     if (key === "") continue;
     const value = map.get(key);
-    if (typeof value !== "object" || value === null) continue;
-    const storedId = (value as { id?: unknown }).id;
-    if (typeof storedId === "string" && storedId !== key) out.push({ key, storedId });
+    if (!hasAnnotationShape(value)) continue;
+    const storedId = value.id as string;
+    if (storedId !== key) out.push({ key, storedId });
   }
   return out;
 }
@@ -145,8 +151,15 @@ function repair(ydoc: Y.Doc, map: Y.Map<unknown>, aliases: readonly Alias[]): vo
       const raw = map.get(key) as (Record<string, unknown> & { rev?: number }) | undefined;
       if (!raw || raw.id !== storedId) continue;
       // (c) Ledger first, from the sanitized pre-repair value. Sanitize's
-      // migration events are not relayed here: the read paths relay them.
-      const ann = sanitizeAnnotation(raw as unknown as RawAnnotation, () => {});
+      // migration events are not relayed here: the read paths relay them. A
+      // record sanitize cannot read is skipped, never allowed to abort the
+      // whole reconcile (and with it every read and remap of the document).
+      let ann: ReturnType<typeof sanitizeAnnotation>;
+      try {
+        ann = sanitizeAnnotation(raw as unknown as RawAnnotation, () => {});
+      } catch {
+        continue;
+      }
       repaired.push({
         key,
         storedId,

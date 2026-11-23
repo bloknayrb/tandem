@@ -43,6 +43,7 @@ import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js
 import type { Annotation } from "../../shared/types.js";
 import { keysDriftIndex } from "../file-io/docx-comments.js";
 import type { AliasLedgerEntry } from "./alias-ledger.js";
+import { pickWinner } from "./pick-winner.js";
 import { type AnnotationDocV1, type AnnotationRecordV1, KEY_IDENTITY_FORMAT } from "./schema.js";
 
 /** The prefix of a fresh key. No minting path uses it. */
@@ -99,7 +100,9 @@ function fingerprintOf(raw: unknown): Fingerprint | null {
     type: ann.type,
     author: ann.author,
     promotedFrom: typeof r.promotedFrom === "string" ? r.promotedFrom : undefined,
-    textSnapshot: typeof r.textSnapshot === "string" ? r.textSnapshot : undefined,
+    // An empty snapshot claims no text: treat it as absent.
+    textSnapshot:
+      typeof r.textSnapshot === "string" && r.textSnapshot !== "" ? r.textSnapshot : undefined,
     commentId: ann.importSource?.commentId,
     importAuthor: ann.importSource?.author,
     importFile: ann.importSource?.file,
@@ -112,7 +115,7 @@ function ledgerFingerprint(entry: AliasLedgerEntry): Fingerprint {
     type: entry.type,
     author: undefined,
     promotedFrom: undefined,
-    textSnapshot: entry.textSnapshot,
+    textSnapshot: entry.textSnapshot === "" ? undefined : entry.textSnapshot,
     commentId: entry.commentId,
     importAuthor: undefined,
     importFile: undefined,
@@ -151,16 +154,33 @@ function agreesWhereBothPresent(a: string | undefined, b: string | undefined): b
   return a === undefined || b === undefined || a === b;
 }
 
-function compatible(row: Fingerprint, cand: Fingerprint): boolean {
+/**
+ * LOOSE compatibility, on fields nothing rewrites: creation `timestamp`, type
+ * (with the re-typings), and the import identity. It decides whether a row may
+ * stay on its OWN id. `textSnapshot` is deliberately not part of it: remap's
+ * collapse writes one, so a record's own row can disagree with it.
+ */
+function looselyCompatible(row: Fingerprint, cand: Fingerprint): boolean {
   if (row.timestamp === undefined || row.timestamp !== cand.timestamp) return false;
   if (!typeCompatible(row, cand)) return false;
-  if (!agreesWhereBothPresent(row.textSnapshot, cand.textSnapshot)) return false;
   if (keysDriftIndex(row.commentId) && keysDriftIndex(cand.commentId)) {
     if (row.commentId !== cand.commentId) return false;
   }
   return (
     agreesWhereBothPresent(row.importAuthor, cand.importAuthor) &&
     agreesWhereBothPresent(row.importFile, cand.importFile)
+  );
+}
+
+/**
+ * STRICT compatibility: loose, and `textSnapshot` agreeing where both have
+ * one. Required before a row may be routed onto a DIFFERENT key, and used to
+ * narrow an ambiguous set: weak evidence must never move a row onto another
+ * record.
+ */
+function strictlyCompatible(row: Fingerprint, cand: Fingerprint): boolean {
+  return (
+    looselyCompatible(row, cand) && agreesWhereBothPresent(row.textSnapshot, cand.textSnapshot)
   );
 }
 
@@ -251,41 +271,65 @@ export function assignEnvelopeRows(
   }
 
   const rowFps = file.annotations.map((row) => fingerprintOf(row));
-  const allCands = rowFps.map((fp) =>
+  const looseCands = rowFps.map((fp) =>
     fp?.timestamp === undefined
       ? []
       : (byTimestamp.get(fp.timestamp) ?? []).filter((key) =>
-          compatible(fp, candidates.get(key) as Fingerprint),
+          looselyCompatible(fp, candidates.get(key) as Fingerprint),
         ),
   );
+  const strictCands = looseCands.map((cands, index) =>
+    cands.filter((key) =>
+      strictlyCompatible(rowFps[index] as Fingerprint, candidates.get(key) as Fingerprint),
+    ),
+  );
 
-  // Step 1b: a row first claims its OWN id when nothing marks that id as
-  // aliased. Records commonly share a creation timestamp (tutorial seeds,
+  // Step 1b: a row claims its OWN id when the live record there is loosely
+  // compatible. Records commonly share a creation timestamp (tutorial seeds,
   // same-second Word imports, one local-model run), so without this a
   // well-formed old envelope would be duplicated wholesale on its first merge.
-  // The claim is refused, and the row left to the global pass, when:
-  //   - its id appears more than once in the file (an alias beside its record);
-  //   - its id is a repaired alias's stale id, or a repaired key (the ledger);
-  //   - a live key that has NO row in the file is also compatible with it. The
-  //     old `snapshot()` wrote an aliased record K as another id, so K having
-  //     no row of its own is the alias signal that survives a restart.
+  // Not claimed: an id that appears more than once in the file (an alias beside
+  // its record) or that the ledger names (a repaired key or stale id).
+  //
+  // A claim is AMBIGUOUS when another key is also compatible, unless the
+  // snapshot narrows the set to exactly the row's own id. An ambiguous claim
+  // (round 16: key cycles of indistinguishable twins after a restart):
+  //   - quarantines the id's replies, so a note-thread reply an older client
+  //     filed under it never reaches Claude; and
+  //   - if the file copy would win `pickWinner`, sends the row to a fresh key
+  //     instead, so it is duplicated and never written over the live record.
   const idCount = new Map<string, number>();
   for (const row of file.annotations) idCount.set(row.id, (idCount.get(row.id) ?? 0) + 1);
-  const fileIds = new Set(idCount.keys());
   const ledgerIds = new Set(ledger.flatMap((e) => [e.key, e.storedId]));
   const claimed = new Set<string>();
-  const ownClaim: boolean[] = file.annotations.map((row, index) => {
-    const cands = allCands[index];
-    if (idCount.get(row.id) !== 1 || ledgerIds.has(row.id) || !cands.includes(row.id)) {
-      return false;
+  const claimedRows = new Set<number>();
+  const forcedFresh = new Set<number>();
+  file.annotations.forEach((row, index) => {
+    const loose = looseCands[index];
+    if (idCount.get(row.id) !== 1 || ledgerIds.has(row.id) || !loose.includes(row.id)) return;
+    const strict = strictCands[index];
+    const ambiguous = loose.length > 1 && !(strict.length === 1 && strict[0] === row.id);
+    if (ambiguous) {
+      quarantineIds.add(row.id);
+      const live = annMap.get(row.id) as { rev?: number; editedAt?: number } | undefined;
+      if (
+        pickWinner(
+          { rev: row.rev, editedAt: row.editedAt },
+          { rev: live?.rev ?? 0, editedAt: live?.editedAt },
+        ) === "file"
+      ) {
+        forcedFresh.add(index);
+        return;
+      }
     }
-    if (cands.some((key) => key !== row.id && !fileIds.has(key))) return false;
     claimed.add(row.id);
-    return true;
+    claimedRows.add(index);
   });
-  const rowCands = allCands.map((cands, index) =>
-    ownClaim[index] ? [file.annotations[index].id] : cands.filter((key) => !claimed.has(key)),
-  );
+  const rowCands = strictCands.map((cands, index) => {
+    if (forcedFresh.has(index)) return [];
+    if (claimedRows.has(index)) return [file.annotations[index].id];
+    return cands.filter((key) => !claimed.has(key));
+  });
 
   // Step 2: unique mutual match.
   const soleClaims = new Map<string, number>();
@@ -300,12 +344,16 @@ export function assignEnvelopeRows(
   // Step 3: fallback to the row's own id, for a row with no candidate.
   const fallbacks = new Map<string, number[]>();
   file.annotations.forEach((row, index) => {
-    if (target[index] !== undefined || rowCands[index].length > 0) return;
+    if (forcedFresh.has(index) || target[index] !== undefined || rowCands[index].length > 0) {
+      return;
+    }
     const fp = rowFps[index];
     const live = annMap.get(row.id);
     // An unreadable live value is not a record: the file copy replaces it, as
-    // it always has.
-    const occupied = fingerprintOf(live) !== null || ledgerByKey.has(row.id);
+    // it always has. Nor is one the envelope's tombstone beats: the row then
+    // targets its own id, where the tombstone check deletes it.
+    const occupied =
+      (fingerprintOf(live) !== null && !doomed(row.id, live)) || ledgerByKey.has(row.id);
     if (occupied) {
       const liveFp = fingerprintOf(live);
       if (!fp || !liveFp || !recreatedDeterministically(row.id, fp, liveFp)) return;
@@ -319,7 +367,10 @@ export function assignEnvelopeRows(
     // nobody, so file order never decides.
     if (indexes.length !== 1 || matched.has(id)) continue;
     target[indexes[0]] = id;
-    if (fingerprintOf(annMap.get(id)) !== null || ledgerByKey.has(id)) quarantineIds.add(id);
+    const live = annMap.get(id);
+    if ((fingerprintOf(live) !== null && !doomed(id, live)) || ledgerByKey.has(id)) {
+      quarantineIds.add(id);
+    }
   }
 
   // Step 4: everything else to a fresh key; then place, one row per key.

@@ -1469,10 +1469,11 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   /** The session's ann-W over "beta" at {6,10}. The snapshot is set
    *  explicitly: `seedHighlight`'s default `""` is a real claim that the
    *  range held no text, and would fail the overlay's gate. */
-  function seedSessionAnnW(older: Y.Doc, id = "ann-W"): void {
+  function seedSessionAnnW(older: Y.Doc, id = "ann-W", extra: Record<string, unknown> = {}): void {
     seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), id, 6, 10, {
       textSnapshot: "beta",
       relRange: liveRelRange(older, 6, 10),
+      ...extra,
     });
   }
 
@@ -1551,7 +1552,13 @@ describe("corrupt ydocState quarantine (#1800)", () => {
 
   it("a suggestion whose snapshot differs is not overlaid (#1863)", async () => {
     const { resolved } = await writeDocFile("overlay-suggestion.md", DISK_TEXT);
-    await writeFallbackSessions(resolved, (older) => seedSessionAnnW(older));
+    // The session's copy of ann-W is the same record as the envelope's, so it
+    // carries the record's own type: one record is never a highlight in one
+    // copy and a comment in the other, and the envelope merge tells records
+    // apart by type (`legacy-envelope.ts`).
+    await writeFallbackSessions(resolved, (older) =>
+      seedSessionAnnW(older, "ann-W", { type: "comment", content: "Capitalize" }),
+    );
     // Accept replaces the stored span verbatim, so a suggestion written for
     // "BETA" must not be moved onto the session's "beta".
     await seedEnvelope(resolved, [

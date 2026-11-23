@@ -542,6 +542,10 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
     const ann = atMapKey(entry.id, sanitized);
     map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
+  // The content swap itself may have written records (the `.docx` adapter
+  // re-imports Word comments). Reconcile again, so an alias it left behind is
+  // repaired with its replies quarantined, not silently by the stamp above.
+  reconcileAnnotationKeys(ydoc);
   return remap;
 }
 
@@ -605,7 +609,7 @@ function freshKeyEntry(raw: unknown, ann: Annotation, remap: ReloadRemap): Remap
   const twin = ann.relRange ? liveTwinOf(remap, JSON.stringify(ann.relRange)) : undefined;
   if (twin) {
     const oldSpan = remap.oldText.slice(twin.oldRange.from, twin.oldRange.to);
-    if (ann.textSnapshot === undefined || !snapshotContradicts(ann, oldSpan)) {
+    if (!snapshotContradicts(ann, oldSpan)) {
       return { id: ann.id, raw, ann, oldRange: twin.oldRange, trusted: twin.trusted };
     }
   }

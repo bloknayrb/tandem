@@ -226,6 +226,72 @@ describe("assignEnvelopeRows — old-format envelopes", () => {
   });
 });
 
+/**
+ * Round 16: records indistinguishable on timestamp, type and snapshot ("twins")
+ * in a key cycle, with NO ledger (after a restart). Each id appears once in the
+ * file, so each row would claim its own id and the bodies would swap.
+ */
+describe("assignEnvelopeRows — indistinguishable twins, no ledger", () => {
+  const twin = (id: string, content: string, rev: number) =>
+    annRecord({ id, author: "user", type: "note", content, timestamp: T_X, rev });
+
+  it("a 2-cycle never writes one twin's body over the other, and quarantines both ids", () => {
+    const doc = liveDoc({ X: twin("X", "X body", 1), K: twin("K", "K body", 7) });
+    // Row X holds K's body at a higher rev than live X; row K holds X's body.
+    const out = assign(doc, [twin("X", "K body", 6), twin("K", "X body", 0)]);
+    // The row the file would win with goes to a fresh key: duplicated, not
+    // written over X. The row live wins against is a no-op claim.
+    expect(out.rows.get("X")).toBeUndefined();
+    expect(out.rows.get("K")?.content).toBe("X body");
+    expect([...out.rows.keys()].filter(isFreshKey)).toHaveLength(1);
+    expect(out.quarantineIds.has("X")).toBe(true);
+    expect(out.quarantineIds.has("K")).toBe(true);
+    expect(out.moved).toBe(true);
+  });
+
+  it("a 3-cycle at higher file revs rotates nothing onto a live record", () => {
+    const doc = liveDoc({ A: twin("A", "A", 1), B: twin("B", "B", 1), C: twin("C", "C", 1) });
+    const out = assign(doc, [twin("B", "A", 9), twin("C", "B", 9), twin("A", "C", 9)]);
+    for (const key of ["A", "B", "C"]) expect(out.rows.has(key)).toBe(false);
+    expect([...out.rows.keys()].every(isFreshKey)).toBe(true);
+  });
+
+  it("a chain with a distinguishable head moves no twin's body onto another", () => {
+    const head = annRecord({ id: "C", content: "C", timestamp: T_K, rev: 1 });
+    const doc = liveDoc({ C: { ...head }, B: twin("B", "B", 1), x: twin("x", "x", 1) });
+    const out = assign(doc, [{ ...head }, twin("x", "B", 9), twin("B", "x", 9)]);
+    expect(out.rows.get("C")?.content).toBe("C");
+    expect(out.rows.has("B")).toBe(false);
+    expect(out.rows.has("x")).toBe(false);
+  });
+
+  it("re-running against the unchanged envelope adds no further duplicate", () => {
+    const doc = liveDoc({ X: twin("X", "X body", 1), K: twin("K", "K body", 7) });
+    const rows = [twin("X", "K body", 6), twin("K", "X body", 0)];
+    const first = assign(doc, rows);
+    // Place run 1's fresh rows in the live map, as the merge would.
+    withInternal(doc, () => {
+      for (const [key, row] of first.rows)
+        if (isFreshKey(key)) doc.getMap(Y_MAP_ANNOTATIONS).set(key, row);
+    });
+    const second = assign(doc, rows);
+    expect([...second.rows.keys()].sort()).toEqual([...first.rows.keys()].sort());
+  });
+});
+
+describe("assignEnvelopeRows — a row whose own record its tombstone beats", () => {
+  it("targets its own id, where the tombstone deletes it, never a fresh key", () => {
+    const doc = liveDoc({ X: { ...X, rev: 1 } });
+    const file = makeAnnotationDoc(HASH_A, FILE_A, {
+      annotations: [{ ...X, rev: 1 }],
+      tombstones: [{ id: "X", rev: 4, deletedAt: 1 }],
+    });
+    const out = assignEnvelopeRows(file, doc.getMap(Y_MAP_ANNOTATIONS), [], HASH_A);
+    expect([...out.rows.keys()]).toEqual(["X"]);
+    expect(out.moved).toBe(false);
+  });
+});
+
 describe("assignEnvelopeRows — marked envelopes", () => {
   it("merges by id, but a second row at one id never races: it goes to a fresh key", () => {
     const doc = liveDoc({ X: { ...X } });
@@ -257,6 +323,39 @@ describe("loadAndMerge — replies", () => {
     });
 
     expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r-note")).toMatchObject({ private: true });
+    cleanup("close");
+  });
+
+  it("round 16: a file-only note-thread reply under a twin cycle stays private, and the stamp is written", async () => {
+    const twin = (id: string, content: string, rev: number, extra = {}) =>
+      annRecord({ id, author: "user", type: "note", content, timestamp: T_X, rev, ...extra });
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, {
+        annotations: [twin("X", "N body", 1), twin("K", "C body", 1)],
+        replies: [replyRecord({ id: "r1", annotationId: "X", author: "user", rev: 1 })],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+    // Live already repaired (no ledger: a restart). X is now the promoted,
+    // outbound comment C; K is the note N.
+    const doc = liveDoc({
+      X: twin("X", "C body", 5, { type: "comment", promotedFrom: "note", audience: "outbound" }),
+      K: twin("K", "N body", 5),
+    });
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queued = vi.spyOn(store, "queueWrite");
+
+    const cleanup = await loadAndMerge({
+      ydoc: doc,
+      store,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A },
+    });
+
+    expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1")).toMatchObject({ private: true });
+    expect(queued).toHaveBeenCalled();
     cleanup("close");
   });
 

@@ -658,6 +658,60 @@ describe("remapEnvelopeWins", () => {
   });
 });
 
+/**
+ * A row the envelope merge placed at a FRESH key (`ann_rk_…`, a duplicate it
+ * could not match with certainty) was never captured, and its stored flat range
+ * predates the reload. It must never be anchored from those stale offsets.
+ */
+describe("remapEnvelopeWins — a fresh-key duplicate", () => {
+  const FRESH = "ann_rk_0123456789abcdef";
+
+  function duplicateAt(doc: Y.Doc, from: Annotation, extra: Partial<Annotation> = {}) {
+    withMcp(doc, () =>
+      annotationsOf(doc).set(FRESH, { ...from, id: FRESH, rev: 9, ...extra } as Annotation),
+    );
+  }
+
+  it("borrows the live-resolved twin's span when it holds the same anchor", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload);
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    expect(textOf(doc, FRESH)).toBe("bravo");
+    expect(kindOf(doc, FRESH)).toBe("ok");
+  });
+
+  it("is not anchored on the twin's text when its own snapshot disagrees", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload, { textSnapshot: "alpha" });
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    const dup = annotationsOf(doc).get(FRESH) as Annotation;
+    expect(dup.relRange).toBeUndefined();
+    expect(kindOf(doc, FRESH)).toBe("degraded");
+  });
+
+  it("with no twin, keeps its shifted range and gets no anchor of its own", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    seedOn(doc, "a", "bravo");
+    const preReload = annotationsOf(doc).get("a") as Annotation;
+    const remap = reload(doc, "new paragraph\n\nalpha\n\nbravo\n");
+    duplicateAt(doc, preReload, { relRange: undefined });
+
+    remapEnvelopeWins(doc, remap, new Set([FRESH]));
+
+    expect((annotationsOf(doc).get(FRESH) as Annotation).relRange).toBeUndefined();
+  });
+});
+
 describe("editBudgetFor — deterministic diff work bound", () => {
   it("keeps the full 2000-edit budget for ordinary documents", () => {
     const doc = "line\n".repeat(500);

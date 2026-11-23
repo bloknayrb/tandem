@@ -1004,19 +1004,22 @@ describe("loadAndMerge — afterMerge hook (#2269)", () => {
   }
 
   it("names every id the file won — inserted, replaced on rev, replaced on rule 3 — and nothing else", async () => {
+    // Four distinct records, so four creation times: records indistinguishable
+    // on timestamp, type and snapshot are duplicated rather than merged by the
+    // old-format envelope pass (`legacy-envelope.ts`), which is not this test.
     await seedFile([
-      annRecord({ id: "inserted", rev: 1 }),
-      annRecord({ id: "rev-wins", rev: 5, content: "disk" }),
-      annRecord({ id: "rule3", rev: 2, editedAt: 111, content: "disk" }),
-      annRecord({ id: "tie", rev: 3, content: "disk" }),
+      annRecord({ id: "inserted", rev: 1, timestamp: 1 }),
+      annRecord({ id: "rev-wins", rev: 5, content: "disk", timestamp: 2 }),
+      annRecord({ id: "rule3", rev: 2, editedAt: 111, content: "disk", timestamp: 3 }),
+      annRecord({ id: "tie", rev: 3, content: "disk", timestamp: 4 }),
     ]);
     const ydoc = new Y.Doc();
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    annMap.set("rev-wins", annRecord({ id: "rev-wins", rev: 2, content: "map" }));
+    annMap.set("rev-wins", annRecord({ id: "rev-wins", rev: 2, content: "map", timestamp: 2 }));
     // Rule 3: rev tie, file has editedAt, the map copy does not.
-    annMap.set("rule3", annRecord({ id: "rule3", rev: 2, content: "map" }));
+    annMap.set("rule3", annRecord({ id: "rule3", rev: 2, content: "map", timestamp: 3 }));
     // A plain tie keeps the map copy, so it is NOT a file win.
-    annMap.set("tie", annRecord({ id: "tie", rev: 3, content: "map" }));
+    annMap.set("tie", annRecord({ id: "tie", rev: 3, content: "map", timestamp: 4 }));
 
     const seen: string[][] = [];
     let origin: unknown;

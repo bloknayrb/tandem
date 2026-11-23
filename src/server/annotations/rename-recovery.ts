@@ -252,7 +252,13 @@ export async function recoverRenamedEnvelope(
         annMap.set(ann.id, ann);
       }
       for (const reply of rekeyed.replies) {
-        repMap.set(reply.id, reply);
+        // `private` is sticky (as in every reply merge): a live copy already
+        // withheld from Claude stays withheld.
+        const live = repMap.get(reply.id) as { private?: unknown } | undefined;
+        repMap.set(
+          reply.id,
+          live?.private === true && reply.private !== true ? { ...reply, private: true } : reply,
+        );
       }
     });
 
