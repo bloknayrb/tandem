@@ -166,6 +166,7 @@ describe("what a refusal may say (R3.6)", () => {
       "claimed",
       "default",
       "not-present",
+      "unbound-child",
     ];
     for (const reason of reasons) {
       const text = message({ reason, documentId: "SECRET-NAME-9f3a", targetWasDefaulted: true });
@@ -265,5 +266,35 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
       message: "Tandem's Claude already answered this. Do not answer it again.",
       details: { reason: "answered", holder: tandem },
     });
+  });
+});
+
+describe("unbound-child (#2358 PR 3b-2b3b; design §5.3)", () => {
+  const DOCUMENT =
+    "Tandem's Claude answers this document. This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so leave this document unless the user assigns it to you from its tab.";
+
+  it("a write or a take: the design's copy, whatever else the call carried", () => {
+    expect(message({ reason: "unbound-child", holder: tandem })).toBe(DOCUMENT);
+    const { details } = notDocOwnerRefusal({ ...base, reason: "unbound-child", holder: tandem });
+    expect(details).toEqual({ reason: "unbound-child", documentId: "doc-1", holder: tandem });
+    expect(
+      message({ reason: "unbound-child", holder: tandem, callerIsLegacyClaudeCode: true }),
+    ).toBe(DOCUMENT);
+  });
+
+  it("a reply to a message: the same copy for a message, and nothing was sent", () => {
+    expect(
+      chatReplyRefusal({ reason: "unbound-child", holder: tandem, why: "unbound-child" }),
+    ).toEqual({
+      message:
+        "Tandem's Claude answers this message. This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so do not reply to it. Nothing was sent.",
+      details: { reason: "unbound-child", holder: tandem },
+    });
+  });
+
+  it("a post on a document: the document copy, and nothing was sent", () => {
+    expect(postRefusal({ reason: "unbound-child", holder: tandem, documentId: "d" }).message).toBe(
+      `${DOCUMENT} Nothing was sent.`,
+    );
   });
 });
