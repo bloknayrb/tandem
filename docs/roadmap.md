@@ -41,8 +41,9 @@ below still stand before v1.0 either way.
    to 3b-2d are merged, with 3b-2c (the greeting) and 3b-2d (the `/api/wake` frame)
    landing 2026-11-23. Merged and live: 1b (#1952) and 2b (#2370, v0.31.0). **Still to
    build:**
-   - **3b-2e**: the Settings list of bound transports, the failed-bind reason in
-     `status()`, the stall banner, and #2167's attribution. In progress (see In flight).
+   - **3b-2e**: 3b-2e1 (the failed-bind reason in `status()` and the Settings list of
+     bound transports) merged as #2534 on 2026-11-23. Left: 3b-2e2 (the stall banner)
+     and #2167's attribution. In progress (see In flight).
    - **PR 4**: push scope and the shim's permit, plus 4a's `ownership-changed` push event.
    - **PR 5**: controls (routes, badge, popover, native menu, Assign and Release), the
      labels on `tandem_getAnnotations` and `tandem_listDocuments`, the pickup and stall
@@ -51,8 +52,8 @@ below still stand before v1.0 either way.
      filter. Its "later reply" rule needs rework first. It merges right before the flip
      and ships in the same release.
    - **PR 6, the flip.** It waits on every row of `tests/server/ownership-flip-blockers.ts`
-     being closed or accepted by Bryan. On 2026-11-23 that file held 36 rows: 8 accepted,
-     **28 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check
+     being closed or accepted by Bryan. At the end of 2026-11-23 that file held 34 rows: 8
+     accepted, **26 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check
      on a real Claude Code or Claude Desktop session, a smoke run, or a decision of
      Bryan's (#2439 among them). The plan's manual check runs after both flips, before
      that release.
@@ -78,14 +79,15 @@ below still stand before v1.0 either way.
 A snapshot for whoever picks up next. It goes stale within days, so re-check open PRs
 before relying on it.
 
-- **Ownership 3b-2e** is being built in its own session, as 3b-2e1 and 3b-2e2 (the stall
-  banner's keyed-round wording). #2532 (the stdio bridge cancels upstream every request it
-  answers itself) merged the same day.
+- **Ownership 3b-2e2** (the stall banner's keyed-round wording) is being built in its own
+  session. 3b-2e1 (#2534) and #2535 (the mode-unknown observer re-asks at the first Tandem
+  mode after a restart) merged the same day, as did #2532 (the stdio bridge cancels
+  upstream every request it answers itself).
 - **#2517** (`tandem_edit`'s new text takes ProseMirror's marks; raw runs are
   non-inclusive), a #1823 follow-up, merged the same day.
 - **#2510** (document headings follow the user's editor font) is open.
 - **Dependabot:** #2506 (npm group), #2511, #2512 and #2513 (libloading 0.9, a major).
-- **Not v1.0 work:** a chat notification sound, waiting on Bryan's pick of sounds.
+- **Not v1.0 work:** reply sounds for chat notifications (#2168) merged as #2537.
 
 ### Decisions still owed
 
