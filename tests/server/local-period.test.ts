@@ -328,6 +328,22 @@ const TAKE_BACK_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
+/**
+ * #2358 PR 3b-2b4c's change to the flag-on schema: one new cause word, a
+ * terminal's loss to Tandem's Claude, in the enum and in the cause
+ * description.
+ */
+const TAKE_BACK_CAUSE_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    '"Tandem stopped counting this session as attached"\n',
+    '"Tandem stopped counting this session as attached",\n"Tandem\'s Claude took it back"\n',
+  ],
+  [
+    'and this session stopped holding it"',
+    'and this session stopped holding it; \\"Tandem\'s Claude took it back\\": Tandem\'s Claude took it from this session, when a run of it started or when it opened the document"',
+  ],
+];
+
 /** The chat owners PR's second session, and who the next tool call runs as. */
 const LP_OTHER = "claude:lp-other";
 let lpCaller = "test:caller";
@@ -1506,6 +1522,7 @@ describe("the dark guard", () => {
           ...CHAT_OWNERS_SCHEMA_CHANGES,
           ...POSTS_SCHEMA_CHANGES,
           ...TAKE_BACK_SCHEMA_CHANGES,
+          ...TAKE_BACK_CAUSE_SCHEMA_CHANGES,
         ]) {
           expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
           masterText = masterText.replace(before, after);

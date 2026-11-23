@@ -266,16 +266,19 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
-      "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
-      "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
-      "present) and Tandem's Claude's lost entry when it stops being present. Each must follow " +
-      "Ruling 10 (a past-tense fact with no instruction, the change-notice PR's R7.3 and R7.4). " +
-      "Until then a session holding a document those paths move is told only through `holding`. " +
-      "Note: `changeCauseOf` (sessions/ownership.ts) today maps every `take` loss to 'another " +
-      "session took it'; a take by Tandem's Claude, which `lossCauseOf` calls 'taken back', must " +
-      "get its own word then.",
-    closedBy: "PR 3b: the causes, with tests through their production paths.",
+      "Change-notice causes PR 3b still owes (the change-notice PR, R7.2): every gained entry " +
+      "for Tandem's Claude (the default rule after a lapse or a user open, presence, a " +
+      "take-back, its own tandem_open while present) and Tandem's Claude's lost entry when it " +
+      "stops being present. `noticeRecord` (sessions/ownership.ts) queues no notice for the " +
+      "`tandem` record at all, and no design document says whether Tandem's Claude is told of " +
+      "its own changes or in which words. Each must follow Ruling 10 (a past-tense fact with no " +
+      "instruction, the change-notice PR's R7.3 and R7.4). Until then Tandem's Claude is told " +
+      "only through `holding`. (A terminal's loss to Tandem's Claude, the `taken back` loss, " +
+      "has its word since 3b-2b4c: 'Tandem's Claude took it back'.)",
+    closedBy:
+      "A decision on whether Tandem's Claude is told of its own changes, then PR 3b: the " +
+      "causes, with tests through their production paths (or, if it is not told, an ADR line " +
+      "saying so and the row deleted).",
   },
   {
     gap:

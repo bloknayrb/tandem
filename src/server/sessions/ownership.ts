@@ -112,9 +112,11 @@ export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "o
  * `ownership-refusal.ts` (`CHANGE_CAUSE_FACTS`), a `Record` over this type,
  * and the output schema's enum is this list, so no word can be queued that
  * the schema does not list. A cause no production path makes today (Tandem's
- * Claude's gains and losses, its take-back, Release, Assign) is not here:
- * each joins with the PR that produces it. A chat post's claim joined with
- * the posts PR (R1.8). None equals an internal {@link OwnershipChangeCause}.
+ * Claude's gains and losses, Release, Assign) is not here: each joins with
+ * the PR that produces it. A chat post's claim joined with the posts PR
+ * (R1.8); a terminal's loss to Tandem's Claude (a take-back, or its own
+ * `tandem_open`: the `taken back` loss) with #2358 PR 3b-2b4c. None equals
+ * an internal {@link OwnershipChangeCause}.
  */
 export const CHANGE_CAUSES = [
   "your write claimed it",
@@ -125,6 +127,7 @@ export const CHANGE_CAUSES = [
   "another session took it",
   "its tab was closed",
   "Tandem stopped counting this session as attached",
+  "Tandem's Claude took it back",
 ] as const;
 export type ChangeCause = (typeof CHANGE_CAUSES)[number];
 
@@ -2066,15 +2069,19 @@ function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCaus
 
 /**
  * The cause word an ownership change gives the record it reaches, or
- * undefined when it gives none: a cause no production path makes today
- * (`user-open`, `take-back`), the clearing of a stale entry (its record is
- * gone), or a combination no path makes (a claim never moves a document away
- * from an existing record). Undefined queues nothing, so no word outside the
- * schema can be queued.
+ * undefined when it gives none: a gain by Tandem's Claude (its record is
+ * never told: `noticeRecord`), a cause with no word yet (`user-open`,
+ * `presence`), the clearing of a stale entry (its record is gone), or a
+ * combination no path makes (a claim never moves a document away from an
+ * existing record). A loss whose loss record is `taken back`
+ * (`lossCauseOf`: a take-back, or Tandem's Claude's own `tandem_open`) has
+ * its own word (#2358 PR 3b-2b4c). Undefined queues nothing, so no word
+ * outside the schema can be queued.
  */
 function changeCauseOf(
   cause: OwnershipChangeCause,
   change: "gained" | "lost",
+  nextOwnerId: string | undefined,
 ): ChangeCause | undefined {
   if (change === "gained") {
     if (cause === "claim") return "your write claimed it";
@@ -2083,6 +2090,9 @@ function changeCauseOf(
     if (cause === "post-claim") return "a chat post of yours claimed it";
     if (cause === "take") return "you opened or created it";
     return undefined;
+  }
+  if (nextOwnerId !== undefined && lossCauseOf(cause, nextOwnerId) === "taken back") {
+    return "Tandem's Claude took it back";
   }
   if (cause === "take") return "another session took it";
   if (cause === "lapse") return "Tandem stopped counting this session as attached";
@@ -2121,7 +2131,7 @@ function queueChangeNotices(
       [nextId, "gained"],
     ] as const) {
       const record = noticeRecord(ownerId);
-      const word = changeCauseOf(cause, change);
+      const word = changeCauseOf(cause, change, nextId);
       if (record && word !== undefined) pushNotice(record, { documentId, change, cause: word });
     }
   } catch {

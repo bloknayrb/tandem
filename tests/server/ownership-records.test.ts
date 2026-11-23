@@ -397,15 +397,21 @@ describe("what a record holds", () => {
     expect(recordHoldsState(record)).toBe(false);
   });
 
-  it("no change notice is queued for Tandem's Claude (every one of its causes is PR 3b-2's)", () => {
-    // A cause literal: this proves the mapping, not a path (no path reaches
-    // the tandem record before PR 3b-2).
+  it("no change notice is queued for Tandem's Claude; the terminal it took a document back from is told (3b-2b4c)", () => {
+    // A cause literal: this proves the mapping, not a path (the paths are in
+    // ownership-change-notices.test.ts).
     register("claude:a");
     setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take", TANDEM_OWNER_ID);
     setDocOwner("d", { ownerId: "claude:a", kind: "opened" }, "take", "claude:a");
     setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
     expect(ownershipSnapshotForTests().changeNotices).toEqual([
-      ["claude:a", [{ documentId: "d", change: "gained", cause: "you opened or created it" }]],
+      [
+        "claude:a",
+        [
+          { documentId: "d", change: "gained", cause: "you opened or created it" },
+          { documentId: "d", change: "lost", cause: "Tandem's Claude took it back" },
+        ],
+      ],
     ]);
   });
 
