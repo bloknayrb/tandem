@@ -374,10 +374,11 @@ describe("the handover is wired in a running server, and reachable only through 
     expect(cursor.match(/\bretireWhere\(/g)).toHaveLength(1);
   });
 
-  it("the ownership side runs it from exactly two places, each behind its function's first-line flag return, with no await", () => {
-    // The definition plus two calls.
-    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(2);
-    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(3);
+  it("the ownership side runs it from exactly three places, each behind its function's first-line flag return, with no await", () => {
+    // The definition plus three calls: the two ownership changes, and the
+    // run start's self re-owe (#2358 PR 3b-2b4b), which moves no entry.
+    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(3);
+    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(4);
     expect(ownership.match(/\binboxHandover\(/g)).toHaveLength(1);
     expect(ownership.match(/\binboxHandover\(documentId\)/g)).toHaveLength(1);
     // Private: not exported, and no other file names it.
@@ -386,6 +387,7 @@ describe("the handover is wired in a running server, and reachable only through 
     for (const declaration of [
       "export function setDocOwner(",
       "export function onDocumentClosed(",
+      "export function noteTandemRunStart(",
     ]) {
       const body = functionBody(declaration);
       const open = body.indexOf("): void {\n");
@@ -990,16 +992,27 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
   });
 });
 
-describe("the supervisor's start-or-wake is wired from ownership, requestWake is called by nothing yet (#2358 PR 3b-2a, R2.8; 3b-2b1c-a)", () => {
-  // 3b-2b deletes this describe once requestWake is wired too. Token-level, not a
+describe("the supervisor's start-or-wake and requestWake are wired from ownership, each through one sink (#2358 PR 3b-2a, R2.8; 3b-2b1c-a; 3b-2b4b)", () => {
+  // Token-level, not a
   // call regex: a `.startOrWake(` regex misses an optional call (`?.`), a
   // reference passed on without being called, bracket access and a
   // destructuring (including in a parameter), all of which name the token.
   const SUPERVISOR = "src/server/launcher/supervisor.ts";
   const OWNERSHIP = "src/server/sessions/ownership.ts";
 
-  it("no src file but the supervisor names requestWake; only index.ts names the waiting decision", () => {
-    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual([]);
+  it("outside the supervisor only index.ts names requestWake, once, in ownership's wake sink; only index.ts names the waiting decision", () => {
+    // 3b-2b4b: the run start's wake. The supervisor's writer asks the licence
+    // (`requestWakeOnSpawn`, pinned in ai-surface-inventory-claims.test.ts),
+    // so a caller outside it needs none of its own (Critical Rule 9).
+    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
+    const index = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(index.match(/\brequestWake\b/g)).toHaveLength(1);
+    expect(index).toContain("  setRequestWakeSink(() => launcherSupervisor?.requestWake?.());");
+    expect(filesMentioning("setRequestWakeSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    const own = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // The declaration, the setter's and the reset's assignments, one call.
+    expect(own.match(/\brequestWakeSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(own.match(/\brequestWakeSink\(\)/g)).toHaveLength(1);
     // Covers `index.ts`'s `createSupervisor` options however they are built
     // (a literal, an object built first, a spread).
     expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
@@ -1085,7 +1098,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};',
+      'let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
@@ -1218,8 +1231,10 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // The per-file pin above cannot see a caller inside ownership.ts, where
     // step 5 and startOrWake live. 3b-2b1c-b added the message forward's call.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
+    // 3b-2b4b: and asked once by the run start's wake (`noteTandemRunStart`).
+    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(2);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
+    expect(text).toContain("if (tandemWorkWaiting()) wakeTandem();");
     expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(4);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
@@ -1229,8 +1244,12 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
 
   it("step 5 asks the composite, once, in its condition; the composite asks the probe first and the chat that follows the document (3b-2b1b-chat-step5)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    // Defined once and called once.
-    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(2);
+    // Defined once and called twice: step 5, and a deferred take-back's wake
+    // (3b-2b4b), which step 5 does not forward.
+    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(3);
+    expect(text).toContain(
+      "if (deferred && waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) wakeTandem();",
+    );
     const setDocOwner = text.slice(
       text.indexOf("export function setDocOwner("),
       text.indexOf("function reOweDocumentChat("),

@@ -96,12 +96,14 @@ import {
   keyedDeliveryRounds,
   noteOwnSpawnStarted,
   noteTandemPresence,
+  noteTandemRunStart,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
   setOwnSpawnSource,
+  setRequestWakeSink,
   setStartOrWakeSink,
   setTandemPresenceSource,
   setWaitingProbe,
@@ -247,6 +249,9 @@ async function startLauncherSupervisor(): Promise<void> {
     setTandemPresenceSource(() => launcherSupervisor?.tandemPresence?.().isPresent() === true);
     sup.tandemPresence?.().subscribe(noteTandemPresence);
     sup.tandemPresence?.().onSpawnStarted(noteOwnSpawnStarted);
+    // Take-back, the self re-owe and their wake at each run start (#2358 PR
+    // 3b-2b4b), after presence's announcement in the same synchronous run.
+    sup.tandemPresence?.().onRunStart(noteTandemRunStart);
     setOwnSpawnSource(
       () => sup.ownSpawn?.() ?? null,
       (id) => sup.isOwnChildSession?.(id) === true,
@@ -889,6 +894,10 @@ async function main() {
   // supervisor exists) does nothing. Beside the probe for the same reason;
   // only a flag-on `startOrWake` calls it.
   setStartOrWakeSink((cause) => launcherSupervisor?.startOrWake?.(cause));
+  // The run start's wake (#2358 PR 3b-2b4b; ownership design §8.2, §8.6): the
+  // supervisor's `requestWake`, which asks the licence at its writer. Read at
+  // call time like the sink above; only a flag-on `noteTandemRunStart` calls it.
+  setRequestWakeSink(() => launcherSupervisor?.requestWake?.());
   // The open documents, for the waiting decision's claimable work (#2358 PR
   // 3b-2b1b-claimable): an open document nobody holds counts for Tandem's
   // Claude while no other session is connected. Beside the probe for the same

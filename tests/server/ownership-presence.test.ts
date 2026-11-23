@@ -129,6 +129,7 @@ describe("presence false: what Tandem's Claude held goes", () => {
     const side: OwnershipChatSide = {
       handledKeys: () => handled,
       messagesOn: (documentId) => (documentId === "closed" ? ["close-open"] : []),
+      unhandledKeys: () => [],
       message: (key) => rows.get(key),
       // As the real chat side (`awareness.ts`): only what is not handled.
       reOwe: (keys) => reOwed.push(...keys.filter((k) => !handled.has(k))),

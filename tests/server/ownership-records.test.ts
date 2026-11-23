@@ -765,9 +765,11 @@ describe("the tandem record at an HTTP-mode boot (#2358 PR 3b-2b3a)", () => {
 describe("another session is connected: rule 0's kinds count, tandem does not (#2358 PR 3b-2b3a)", () => {
   // Observed through the lapse gate (Bryan's pick 2): a lapse forwards to the
   // sink only while no other session is connected.
-  let sink: ReturnType<typeof vi.fn<(cause: "document" | "message" | "departure") => void>>;
+  let sink: ReturnType<
+    typeof vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>
+  >;
   beforeEach(() => {
-    sink = vi.fn<(cause: "document" | "message" | "departure") => void>();
+    sink = vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>();
     setStartOrWakeSink(sink);
   });
 
@@ -831,6 +833,7 @@ describe("retirement, demotion and teardown re-pointing (#2358 PR 3b-2b3b)", () 
     setOwnershipChatSide({
       handledKeys: () => new Set(),
       messagesOn: () => [],
+      unhandledKeys: () => [],
       message: () => ({ documentOpen: false, localPeriod: false }),
       reOwe: (keys) => reOwed.push(...keys),
       settleCandidates: () => [],
@@ -1016,6 +1019,7 @@ describe("the unbound-child refusal and the take guard (#2358 PR 3b-2b3b; design
       setOwnershipChatSide({
         handledKeys: () => new Set(),
         messagesOn: () => [],
+        unhandledKeys: () => [],
         message: (key) => rows.get(key),
         reOwe: () => {},
         settleCandidates: () => [],
