@@ -23,8 +23,8 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { BROWSER_ORIGIN, INTERNAL_ORIGIN, withInternal } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
-import type { AnnotationType } from "../../shared/types.js";
 import { getFileSyncContextForDoc } from "../events/file-sync-registry.js";
+import { type AliasLedgerEntry, appendAliasLedger } from "./alias-ledger.js";
 import { nextRev } from "./schema.js";
 import { queueSnapshot } from "./sync.js";
 
@@ -53,45 +53,12 @@ export function reconciledRepliesMap(token: ReconciledDoc): Y.Map<unknown> {
   return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 }
 
-/**
- * One repaired alias, captured from the sanitized value BEFORE the repair.
- * The legacy-envelope pass (`legacy-envelope.ts`) treats these repair-time
- * values as the authority for record K, even if K is later edited or deleted.
- */
-export interface AliasLedgerEntry {
-  readonly key: string;
-  readonly storedId: string;
-  readonly timestamp: number | undefined;
-  readonly textSnapshot: string | undefined;
-  readonly commentId: string | undefined;
-  readonly type: AnnotationType;
-}
-
-/**
- * Per-document alias ledger. Dropped only when the document closes
- * (`dropAliasLedger`, from `closeDocumentById`), never in the sync cleanup's
- * `"close"` phase, which `tandem_open force` also runs: a later
- * `mergeEnvelopeForward`, force-open or rename recovery may still read an
- * uncorrected envelope, for instance while the store is read-only.
- */
-const ledgers = new WeakMap<Y.Doc, AliasLedgerEntry[]>();
-
-export function getAliasLedger(ydoc: Y.Doc): readonly AliasLedgerEntry[] {
-  return ledgers.get(ydoc) ?? [];
-}
-
-/**
- * Copy (never move) the ledger to a replacement doc on a Hocuspocus swap: an
- * in-flight `loadAndMerge` still holds the old `ctx.ydoc`.
- */
-export function copyAliasLedger(from: Y.Doc, to: Y.Doc): void {
-  const entries = ledgers.get(from);
-  if (entries && entries.length > 0) ledgers.set(to, [...entries, ...(ledgers.get(to) ?? [])]);
-}
-
-export function dropAliasLedger(ydoc: Y.Doc): void {
-  ledgers.delete(ydoc);
-}
+export {
+  type AliasLedgerEntry,
+  copyAliasLedger,
+  dropAliasLedger,
+  getAliasLedger,
+} from "./alias-ledger.js";
 
 /** A key whose stored value carries a different, string id. */
 interface Alias {
@@ -192,7 +159,7 @@ function repair(ydoc: Y.Doc, map: Y.Map<unknown>, aliases: readonly Alias[]): vo
     }
   });
 
-  if (repaired.length > 0) ledgers.set(ydoc, [...(ledgers.get(ydoc) ?? []), ...repaired]);
+  if (repaired.length > 0) appendAliasLedger(ydoc, repaired);
 
   const ctx = getFileSyncContextForDoc(ydoc);
   if (ctx) queueSnapshot(ctx);
@@ -266,9 +233,4 @@ export function forgetKeyMismatchReports(docHashKey?: string): void {
   for (const entry of reportedKeyMismatches) {
     if (entry.startsWith(`${docHashKey}\u0000`)) reportedKeyMismatches.delete(entry);
   }
-}
-
-/** Test-only: forget every ledger. WeakMaps cannot be cleared, so replace it. */
-export function resetAliasLedgersForTesting(docs: readonly Y.Doc[]): void {
-  for (const doc of docs) ledgers.delete(doc);
 }

@@ -42,10 +42,13 @@ import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { extractText } from "../mcp/document-model.js";
+import { getAliasLedger } from "./alias-ledger.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
+import { assignEnvelopeRows } from "./legacy-envelope.js";
 import {
   type AnnotationDocV1,
   isPartialParse,
+  KEY_IDENTITY_FORMAT,
   parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "./schema.js";
@@ -56,7 +59,7 @@ import {
   isStoreReadOnly,
   preservePartialEnvelope,
 } from "./store.js";
-import { recordTombstone } from "./sync.js";
+import { quarantineReplies, recordTombstone } from "./sync.js";
 
 // Envelope filename shape is hoisted to ./doc-hash.ts as ENVELOPE_FILENAME_RE
 // so rename-recovery + session-cleanup share one source of truth (any drift
@@ -204,10 +207,24 @@ export async function recoverRenamedEnvelope(
     const source = candidates[0].doc;
     const sourceFile = candidates[0].file;
 
+    // Route the found envelope's rows onto target keys BEFORE anything is
+    // flushed (`legacy-envelope.ts`): an old-format envelope can hold a record
+    // under another record's id, and the flush below must never carry such a
+    // body forward, let alone under the `keyIdentity` marker. Ambiguous user
+    // replies are stamped private in the same pass.
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const routed = withInternal(doc, () => {
+      const assignment = assignEnvelopeRows(source, annMap, getAliasLedger(doc), currentHash);
+      const replies = quarantineReplies(source.replies, repMap, assignment.quarantineIds);
+      return { annotations: [...assignment.rows.values()], replies: replies.fileReplies };
+    });
+
     // Rewrite the ENTIRE envelope under the new docHash via the store's
     // queueWrite/flush (never a raw fs.rename that could race a pending
     // debounce on either hash). lastUpdated/contentHash are refreshed; the
     // snapshot observer will re-stamp contentHash on the next live write too.
+    // Its rows are now keyed by target key, so it carries the marker.
     const rekeyed: AnnotationDocV1 = {
       ...source,
       schemaVersion: SCHEMA_VERSION,
@@ -217,7 +234,10 @@ export async function recoverRenamedEnvelope(
         filePath: currentFilePath,
         lastUpdated: Date.now(),
         contentHash: wantHash,
+        keyIdentity: KEY_IDENTITY_FORMAT,
       },
+      annotations: routed.annotations,
+      replies: routed.replies,
     };
 
     const store = createStore(currentHash, { filePath: currentFilePath });
@@ -226,9 +246,7 @@ export async function recoverRenamedEnvelope(
 
     // Inject recovered annotations + replies into the Y.Doc (open-time
     // population → withInternal). The merge that loadAndMerge runs next sees
-    // file == Y.Map and is a no-op.
-    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
-    const repMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    // file == Y.Map and is a no-op. Each row's id is its target key.
     withInternal(doc, () => {
       for (const ann of rekeyed.annotations) {
         annMap.set(ann.id, ann);

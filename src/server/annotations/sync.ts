@@ -69,7 +69,9 @@ import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
 import { atMapKey, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
+import { getAliasLedger } from "./alias-ledger.js";
 import { contentHash } from "./doc-hash.js";
+import { assignEnvelopeRows } from "./legacy-envelope.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
@@ -77,6 +79,7 @@ import {
   AnnotationReplyRecordSchemaV1,
   type AnnotationReplyRecordV1,
   KEY_IDENTITY_FORMAT,
+  nextRev,
   SCHEMA_VERSION,
   type TombstoneRecordV1,
 } from "./schema.js";
@@ -495,6 +498,46 @@ export function pickWinner(
  * so a caller can fix up records whose file copy predates something the live
  * map already reflects (#2269's post-reload remap).
  */
+const isPrivate = (rec: unknown): boolean => (rec as { private?: unknown }).private === true;
+
+/**
+ * Stamp `private` (with a bumped `rev`) on every USER reply filed under one of
+ * `ids`, in both the file's copies and the live map. An id lands here when the
+ * legacy-envelope pass found its thread ambiguous: an older client posted that
+ * id from another record's card, so a note-thread reply may sit under a
+ * comment. Fails closed. Returns the stamped file replies and whether the live
+ * map changed (the caller is inside `withFileSync`, which durable sync skips,
+ * so a change must force a write).
+ */
+export function quarantineReplies(
+  fileReplies: readonly AnnotationReplyRecordV1[],
+  repMap: Y.Map<unknown>,
+  ids: ReadonlySet<string>,
+): { fileReplies: AnnotationReplyRecordV1[]; liveChanged: boolean } {
+  if (ids.size === 0) return { fileReplies: [...fileReplies], liveChanged: false };
+  const ambiguous = (r: { author?: unknown; annotationId?: unknown; private?: unknown }) =>
+    r.author === "user" &&
+    r.private !== true &&
+    typeof r.annotationId === "string" &&
+    ids.has(r.annotationId);
+  const stamped = fileReplies.map((r) =>
+    ambiguous(r) ? { ...r, private: true, rev: nextRev(r) } : r,
+  );
+  let liveChanged = false;
+  repMap.forEach((value, key) => {
+    const r = value as {
+      author?: unknown;
+      annotationId?: unknown;
+      private?: unknown;
+      rev?: number;
+    };
+    if (!r || typeof r !== "object" || !ambiguous(r)) return;
+    repMap.set(key, { ...r, private: true, rev: nextRev(r) });
+    liveChanged = true;
+  });
+  return { fileReplies: stamped, liveChanged };
+}
+
 function mergeMap<T extends { rev: number; editedAt?: number }>(
   ymap: Y.Map<unknown>,
   fileRecs: Map<string, T>,
@@ -502,6 +545,14 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
   opts: {
     shouldSkipInsert?: (id: string, fileRec: T) => boolean;
     ymapOnlyIgnoreIds?: Set<string>;
+    /**
+     * Replies only: `private: true` is sticky. If either copy is private the
+     * survivor is written private, with `rev = max + 1`, so a stale envelope
+     * copy can never bring back a reply the key-identity reconciler withheld
+     * (nothing in `src/` ever clears `private`). A winner already private is
+     * left as is, or every load would write.
+     */
+    stickyPrivate?: boolean;
   } = {},
 ): { needsWrite: boolean; fileWon: Set<string> } {
   let needsWrite = false;
@@ -522,6 +573,17 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
       continue;
     }
     const winner = pickWinner(fileRec, ymapRec);
+    const survivor = winner === "file" ? fileRec : ymapRec;
+    if (
+      opts.stickyPrivate &&
+      isPrivate(survivor) !== true &&
+      (isPrivate(fileRec) || isPrivate(ymapRec))
+    ) {
+      ymap.set(id, { ...survivor, private: true, rev: Math.max(fileRec.rev, ymapRec.rev) + 1 });
+      needsWrite = true;
+      if (winner === "file") fileWon.add(id);
+      continue;
+    }
     if (winner === "file") {
       ymap.set(id, fileRec);
       fileWon.add(id);
@@ -700,7 +762,14 @@ export async function loadAndMerge(
     // does the tombstone is authoritative. This guards only the
     // Y.Map-absent insert path; the preceding loop already handled the
     // Y.Map-present case.
-    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
+    // Rows are routed onto TARGET keys (`legacy-envelope.ts`): an old-format
+    // envelope can hold a record under another record's id, and keying rows by
+    // id (last one wins) wrote one record over another. Runs after the
+    // tombstone loop, so a deleted record is no candidate. Tombstones are then
+    // checked at the TARGET key, which is what they are recorded under.
+    const assignment = assignEnvelopeRows(file, annMap, getAliasLedger(ydoc), docHash);
+    const fileAnns = assignment.rows;
+    if (assignment.moved) needsWrite = true; // write the corrected, marked envelope
     const winningTombstoneIds = new Set<string>();
     const tombstoneIds = new Set<string>();
     for (const stone of effectiveTombstones) {
@@ -718,8 +787,10 @@ export async function loadAndMerge(
       needsWrite = true;
     }
 
-    const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
-    const repResult = mergeMap(repMap, fileReplies, normalizeReply);
+    const quarantined = quarantineReplies(file.replies, repMap, assignment.quarantineIds);
+    if (quarantined.liveChanged) needsWrite = true;
+    const fileReplies = new Map(quarantined.fileReplies.map((r) => [r.id, r]));
+    const repResult = mergeMap(repMap, fileReplies, normalizeReply, { stickyPrivate: true });
     if (repResult.needsWrite) needsWrite = true;
   });
 
@@ -759,7 +830,11 @@ export async function loadAndMerge(
  * the effective ledger already tombstones-out, so a just-deleted note isn't
  * resurrected by this pre-fold even before the re-wire runs.
  */
-export function mergeEnvelopeForward(ydoc: Y.Doc, file: AnnotationDocV1, docHash: string): void {
+export function mergeEnvelopeForward(
+  ydoc: Y.Doc,
+  file: AnnotationDocV1,
+  docHash: string,
+): { needsWrite: boolean } {
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
@@ -777,20 +852,30 @@ export function mergeEnvelopeForward(ydoc: Y.Doc, file: AnnotationDocV1, docHash
     const existing = effectiveRev.get(stone.id);
     if (existing === undefined || stone.rev > existing) effectiveRev.set(stone.id, stone.rev);
   }
-  const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
-  const winningTombstoneIds = new Set<string>();
-  for (const [id, ann] of fileAnns) {
-    const stoneRev = effectiveRev.get(id);
-    if (stoneRev !== undefined && stoneRev > ann.rev) winningTombstoneIds.add(id);
-  }
-
+  let needsWrite = false;
   withFileSync(ydoc, () => {
-    mergeMap(annMap, fileAnns, (raw) => normalizeAnnotation(raw, docHash), {
+    // Same routing as `loadAndMerge`: rows onto target keys, tombstones
+    // checked at the target key.
+    const assignment = assignEnvelopeRows(file, annMap, getAliasLedger(ydoc), docHash);
+    const fileAnns = assignment.rows;
+    if (assignment.moved) needsWrite = true;
+    const winningTombstoneIds = new Set<string>();
+    for (const [id, ann] of fileAnns) {
+      const stoneRev = effectiveRev.get(id);
+      if (stoneRev !== undefined && stoneRev > ann.rev) winningTombstoneIds.add(id);
+    }
+    const annResult = mergeMap(annMap, fileAnns, (raw) => normalizeAnnotation(raw, docHash), {
       shouldSkipInsert: (id) => winningTombstoneIds.has(id),
     });
-    const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
-    mergeMap(repMap, fileReplies, normalizeReply);
+    if (annResult.needsWrite) needsWrite = true;
+    const quarantined = quarantineReplies(file.replies, repMap, assignment.quarantineIds);
+    if (quarantined.liveChanged) needsWrite = true;
+    const fileReplies = new Map(quarantined.fileReplies.map((r) => [r.id, r]));
+    const repResult = mergeMap(repMap, fileReplies, normalizeReply, { stickyPrivate: true });
+    if (repResult.needsWrite) needsWrite = true;
   });
+  // Queues no write itself; a caller that must persist reads `needsWrite`.
+  return { needsWrite };
 }
 
 /**

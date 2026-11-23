@@ -105,10 +105,15 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { type DocumentRange, toFlatOffset } from "../../shared/positions/types.js";
 import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
-import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
+import {
+  isSnapshotTruncated,
+  snapshotContradicts,
+  snapshotSearchPrefix,
+} from "../../shared/snapshot.js";
 import type { Annotation } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { reconcileAnnotationKeys } from "../annotations/key-identity.js";
+import { isFreshKey } from "../annotations/legacy-envelope.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { extractText, extractTextWithBreaks, type FlatBreak } from "../mcp/document-model.js";
 import {
@@ -371,6 +376,13 @@ interface RemapEntry {
   oldRange: DocumentRange;
   /** See the module header: does `oldRange` hold the record's real old text? */
   trusted: boolean;
+  /**
+   * Whether `oldRange` came from resolving the record's LIVE anchor (`ok` /
+   * `updated`), rather than from its stored range or a mint from it. Only such
+   * an entry may stand in for another record that shares its anchor
+   * (`remapEnvelopeWins`).
+   */
+  liveResolved?: boolean;
 }
 
 /** Everything {@link applyRemap} and {@link remapEnvelopeWins} need. */
@@ -429,6 +441,7 @@ function entryFor(raw: unknown, ann: Annotation, ydoc: Y.Doc, oldText: string): 
         ann,
         oldRange: clampRange(result.annotation.range, oldText.length),
         trusted: true,
+        liveResolved: result.kind === "ok" || result.kind === "updated",
       };
     case "degraded":
     case "failed":
@@ -565,14 +578,52 @@ export function remapEnvelopeWins(
     if (!sanitized) continue;
     const ann = atMapKey(id, sanitized);
     const captured = remap.entries.get(id);
-    const entry: RemapEntry =
-      captured && sameAnchor(raw, captured.raw)
+    const entry: RemapEntry = captured
+      ? sameAnchor(raw, captured.raw)
         ? { ...captured, raw, ann }
+        : storedEntry(raw, ann, remap.oldText)
+      : isFreshKey(id)
+        ? freshKeyEntry(raw, ann, remap)
         : storedEntry(raw, ann, remap.oldText);
     map.set(id, remapOne(ydoc, entry, remap, hunks, newText));
     wrote = true;
   }
   return wrote;
+}
+
+/**
+ * An entry for a row the envelope merge placed at a FRESH key (a duplicate it
+ * could not match with certainty, `legacy-envelope.ts`). The capture never saw
+ * that key, and the row's stored flat range predates the reload, so it is never
+ * trusted on its own: a confident anchor minted there could sit on unrelated
+ * text. It borrows a captured entry only when that entry holds the SAME live
+ * anchor (equal `relRange`), resolved live, and the row's own snapshot does not
+ * contradict the old text there. Any other uncaptured key keeps master's
+ * `storedEntry`.
+ */
+function freshKeyEntry(raw: unknown, ann: Annotation, remap: ReloadRemap): RemapEntry {
+  const twin = ann.relRange ? liveTwinOf(remap, JSON.stringify(ann.relRange)) : undefined;
+  if (twin) {
+    const oldSpan = remap.oldText.slice(twin.oldRange.from, twin.oldRange.to);
+    if (ann.textSnapshot === undefined || !snapshotContradicts(ann, oldSpan)) {
+      return { id: ann.id, raw, ann, oldRange: twin.oldRange, trusted: twin.trusted };
+    }
+  }
+  return { ...storedEntry(raw, ann, remap.oldText), trusted: false };
+}
+
+/**
+ * The first live-resolved captured entry (in capture order) whose own stored
+ * `relRange` serializes to `key`. Keyed only on a present `relRange`, so two
+ * anchor-less records never match.
+ */
+function liveTwinOf(remap: ReloadRemap, key: string): RemapEntry | undefined {
+  for (const entry of remap.entries.values()) {
+    if (!entry.liveResolved) continue;
+    const relRange = (entry.ann as { relRange?: unknown }).relRange;
+    if (relRange !== undefined && JSON.stringify(relRange) === key) return entry;
+  }
+  return undefined;
 }
 
 function sameAnchor(a: unknown, b: unknown): boolean {
