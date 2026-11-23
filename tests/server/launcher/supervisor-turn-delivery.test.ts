@@ -2051,13 +2051,18 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
   });
 
   it("cancels a crash restart that is only scheduled", async () => {
-    const { sup } = makeSupervisor({ restartBackoffsMs: [150] });
+    // A backoff far longer than the settings write: with 150 ms, a loaded
+    // Windows runner let the restart fire before `updateSettings` landed, and
+    // the case read a second child (vitest-windows on #2520). The restart must
+    // still be pending when Off arrives; the sleep then outlasts the backoff.
+    const { sup } = makeSupervisor({ restartBackoffsMs: [2_000] });
     await sup.start();
     exitChild(await nthChild(1), 1);
     await settle();
     expect(sup.status()).toMatchObject({ running: false, restartPending: true });
     await sup.updateSettings({ startMode: "off" });
-    await sleep(300);
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+    await sleep(2_300);
     await settle();
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });

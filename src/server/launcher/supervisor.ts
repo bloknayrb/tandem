@@ -4061,6 +4061,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
+    // And `child` (#2358 flip-blocker row, 3b-2b1b-R0): a spawn that did not
+    // move the stop epoch (a licence resume, under the lock) can land during
+    // the reads above. Checked here, before the Off and local-period holds,
+    // so neither runs beside a live child: the local hold would set an
+    // `awaiting-start` standby and arm the standby watch beside it, and the
+    // Off hold would clear the wake owed across spawns and disarm the gap
+    // watch.
+    if (child !== null) {
+      console.error("[Launcher] A Claude started while building the spawn plan — not spawning");
+      return;
+    }
     // Off holds every non-user start (#2195) — boot, a crash restart, a
     // licence resume — so a Claude the user turned off never comes back on its
     // own. After the re-checks above, so a stop that passed through during the

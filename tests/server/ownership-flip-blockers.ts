@@ -301,19 +301,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The E2E `McpTestClient.callTool` does not throw on an error envelope (the plan's flip row, " +
-      "gate (b)): a NOT_DOC_OWNER on a spec's setup write is returned, not thrown, so a flag-on " +
-      "spec carries on.",
-    closedBy: "A change to tests/e2e/helpers.ts that makes it throw.",
-  },
-  {
-    gap:
-      "`ownership-bundle-probe.mjs`'s `probeRefusal` is pinned by regex alone (the plan's flip " +
-      "row, gate (c)).",
-    closedBy: "A pin by behaviour.",
-  },
-  {
-    gap:
       "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
       "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
       "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
@@ -442,23 +429,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "it on 2026-11-17 for the dark state (docs/security.md, Accepted (bounded)); the acceptance " +
       "is re-decided when OWNERSHIP_ENABLED flips.",
     closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
-  },
-  {
-    gap:
-      "A crash restart can hold itself beside a live child: planAndSpawn " +
-      "(src/server/launcher/supervisor.ts) does not re-check `child` between buildPlan's await " +
-      "and two holds, so its first local-period hold can run, and its Off hold (holdInStandby) " +
-      "may run, after a spawn that did not move the stop epoch (for example a licence resume). " +
-      "The local hold leaves an awaiting-start standby and an armed standby watch beside the " +
-      "running Claude (reproduced by 3b-2b1b-R0's case, with an armed licence). The Off hold is " +
-      "asserted, not shown: Off through the settings stops the child first, so it needs a " +
-      "settings read that disagrees with updateSettings (an external write of the file); if " +
-      "reached it would also clear the wake owed across spawns, disarm the gap watch and read " +
-      "as Off to presence. ADR-054's 3b-2b1b-R0 amendment.",
-    closedBy:
-      "A launcher PR that re-checks `child` before those two holds (or otherwise keeps a hold " +
-      "from running beside a live child), with a test driving the 3b-2b1b-R0 sequence that " +
-      "fails without it.",
   },
   {
     gap:
