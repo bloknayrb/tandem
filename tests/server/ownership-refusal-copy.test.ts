@@ -268,6 +268,18 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
     );
   });
 
+  it("lost, released, a caller that is Tandem's Claude (PR 5a): never says that a session has it", () => {
+    expect(
+      postRefusal({ reason: "lost", holder: null, cause: "released", callerIsTandem: true })
+        .message,
+    ).toBe(
+      "This document was released from Tandem's Claude, and nobody holds it now. Nothing was sent.",
+    );
+    expect(message({ reason: "lost", cause: "released", holder: null, callerIsTandem: true })).toBe(
+      "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.",
+    );
+  });
+
   it("every post form names no message and no other session beyond the holder phrase, and carries no owner id", () => {
     for (const reason of ["post", "not-present", "lost", "held", "claimed", "default"] as const) {
       for (const holder of [null, tandem]) {

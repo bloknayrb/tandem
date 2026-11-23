@@ -288,6 +288,9 @@ function body(input: NotDocOwnerInput): string {
     case "answered":
       return `${holder} already answered this. Do not answer it again.`;
     case "lost":
+      // A Release records a loss on Tandem's Claude only when it moves the
+      // document to unowned (it is not present), so nobody holds it then.
+      if (input.callerIsTandem && input.cause === "released") return RELEASED;
       if (input.callerIsTandem) {
         return `A session the user is working with has this document now; leave it.`;
       }
@@ -474,6 +477,9 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
     case "default":
       return `Tandem's Claude answers this document's comments and chat. Do not take the document in order to post about it. ${POST_OUTLET}`;
     case "lost":
+      if (input.callerIsTandem && input.cause === "released") {
+        return "This document was released from Tandem's Claude, and nobody holds it now. Nothing was sent.";
+      }
       if (input.callerIsTandem) {
         return input.holder
           ? "A session the user is working with has this document now; leave it. Nothing was sent."

@@ -1624,7 +1624,8 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * §4.3). **No enforcement here or anywhere in 1a.** Synchronous. From PR 1c
  * a claim, a take and a lapse call it at their turn in the document's
  * operation queue, and so do the user-open default and presence's moves
- * (3b-2b4a); the stale-entry backstop and a lapse whose wait ran out call it
+ * (3b-2b4a) and the user's Release and Assign (PR 5a, `controlDocumentOwner`);
+ * the stale-entry backstop and a lapse whose wait ran out call it
  * where they are. (The tab-close point does
  * not come through here at all: `onDocumentClosed` deletes the entry itself.
  * `doc-op-queue.ts`'s header lists every unqueued change.) Of the design's five
@@ -2659,8 +2660,9 @@ function liveEntry(documentId: string): OwnershipEntry | undefined {
 /**
  * The document's entry as a **reader** sees it: one whose record no longer
  * exists reads as unowned, and nothing is written. Clearing such an entry is
- * an ownership change (it runs the composite), so only the two decisions made
- * inside the document's queue do it (`checkWrite`, `decideTake`, through
+ * an ownership change (it runs the composite), so only the decisions made
+ * inside the document's queue do it (`checkWrite`, `decideTake` and, since
+ * PR 5a, the user's Release and Assign in `applyControl`, through
  * `liveEntry`); every read outside the queue comes through here.
  */
 function readEntry(documentId: string): OwnershipEntry | undefined {
@@ -3594,8 +3596,8 @@ function replyGate(
       if (handedByRecord.get(callerId)?.has(key)) {
         return accept(() => setMessageOwner(key, callerId, origin));
       }
-      // A blocking loss on an unowned document (PR 5's Release; only
-      // `setLossForTests` reaches it before then) is not a running operation.
+      // A blocking loss on an unowned document (a Release to unowned, PR 5a)
+      // is not a running operation.
       const lost = lossByDoc.get(documentId)?.ownerId === callerId;
       return chatRefused("chat", null, facts, lost ? "lost" : "busy");
     }
