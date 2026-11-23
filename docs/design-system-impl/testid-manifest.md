@@ -371,7 +371,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — Notifications tab (#2168)
 - `notifications-enable-toggle`, `notifications-content-select`,
   `notifications-flash-toggle`, `notifications-sound-select`,
-  `notifications-sound-preview`, `notifications-sound-error`, `notifications-volume-slider`,
+  `notifications-sound-preview`, `notifications-sound-error`, `notifications-sound-hint`, `notifications-volume-slider`,
   `notifications-test-button`
 - `notifications-permission-status` — the platform line (desktop: managed by
   the OS; browser: granted / denied / unsupported / ask), and

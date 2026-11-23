@@ -39,7 +39,8 @@ const CONTENT_OPTIONS: { value: ChatNotificationContent; label: string }[] = [
   { value: "document", label: "Document name — “Claude replied in report.md”" },
   { value: "preview", label: "Message preview — the start of the reply" },
 ];
-// Names as auditioned when the sounds were chosen; `hint` is each option's tooltip.
+// Names as auditioned when the sounds were chosen; `hint` describes the chosen
+// sound under the list (native select popups show no option tooltips on Windows).
 const SOUND_OPTIONS: { value: ChatSound; label: string; hint: string }[] = [
   {
     value: "marimba-glock",
@@ -86,11 +87,15 @@ const SOUND_OPTIONS: { value: ChatSound; label: string; hint: string }[] = [
     label: "Hand chimes over low harp",
     hint: "Hand chimes with a harp an octave below",
   },
-  { value: "none", label: "None", hint: "No sound" },
+  { value: "none", label: "None", hint: "" },
 ];
-const SOUND_ERROR = "Couldn't load this sound. Try Preview again.";
+// No "try again": a clip whose decode hung is not retried until a reload.
+const SOUND_ERROR = "Couldn't load this sound.";
 
 let soundError = $state(false);
+const soundHint = $derived(
+  SOUND_OPTIONS.find((opt) => opt.value === ctx.settings.chatSound)?.hint ?? "",
+);
 // Only the newest preview's outcome may set or clear the error: an older one
 // can resolve later (it waited on a slower load) and must not overwrite it.
 let previewToken = 0;
@@ -235,7 +240,7 @@ function sendTest(): void {
       style="{selectStyle} flex: 1; {disabledControlStyle(ctx.readOnly)}"
     >
       {#each SOUND_OPTIONS as opt (opt.value)}
-        <option value={opt.value} title={opt.hint}>{opt.label}</option>
+        <option value={opt.value}>{opt.label}</option>
       {/each}
     </select>
     <button
@@ -248,6 +253,9 @@ function sendTest(): void {
       Preview
     </button>
   </div>
+  {#if soundHint}
+    <div data-testid="notifications-sound-hint" class="settings-hint">{soundHint}</div>
+  {/if}
   {#if soundError}
     <div data-testid="notifications-sound-error" aria-hidden="true" class="settings-hint" style="color: var(--tandem-error-fg);">{SOUND_ERROR}</div>
   {/if}

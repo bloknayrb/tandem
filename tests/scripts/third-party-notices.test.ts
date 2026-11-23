@@ -57,6 +57,13 @@ describe("chimeLicenceProblems", () => {
       `chimes/kazoo_hi.wav is not listed in ${CHIME_LICENCE_PATH}`,
     ]);
   });
+
+  it("does not accept a clip whose name is only a substring of a listed one", () => {
+    const files = ["chimes/glock_hi.wav", "chimes/hi.wav", CHIME_LICENCE_PATH];
+    expect(chimeLicenceProblems(files, read(cc0))).toEqual([
+      `chimes/hi.wav is not listed in ${CHIME_LICENCE_PATH}`,
+    ]);
+  });
 });
 
 describe("packageRootOf", () => {

@@ -47,7 +47,8 @@ import type { ChatSound } from "../hooks/useTandemSettings";
  * never pin a clip for the session. The one exception is a decode that hangs
  * past its deadline: it cannot be cancelled, so that clip is not retried until
  * the page reloads. `decodeAudioData` detaches the buffer it is given, so it
- * always gets a copy. Fetch and decode deadlines run one after the other, so a
+ * gets a copy: no path decodes cached bytes twice today, and the copy keeps a
+ * future one from failing on a detached buffer. Fetch and decode deadlines run one after the other, so a
  * very slow first load can outlast a preview's wait; it still fills the cache
  * and the next preview plays at once.
  */
@@ -189,7 +190,10 @@ function clipKey(instrument: Instrument, note: NoteName): string {
   return `${instrument}_${note}`;
 }
 
-/** Page-relative, so it is same-origin wherever the client is served from. */
+/**
+ * Root-absolute on the page's own origin, never the API base (on desktop that
+ * is another origin). The client is always served at the root.
+ */
 export function clipUrl(clip: string): string {
   return `/chimes/${clip}.wav`;
 }

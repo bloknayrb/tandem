@@ -263,6 +263,23 @@ describe("reply sounds (#2168)", () => {
       expect(c.starts).toEqual([]);
     });
 
+    it("a reply sound still plays when resume settles at 1.9 s, and is dropped at 2.1 s", async () => {
+      const chimes = await load();
+      chimes.playChime("harp-glock", 100);
+      const c = ctx();
+      await vi.advanceTimersByTimeAsync(1_900);
+      await resolveResume(c);
+      expect(c.starts).toHaveLength(4);
+
+      const late = await load();
+      FakeAudioContext.instances = [];
+      late.playChime("harp-glock", 100);
+      const d = ctx();
+      await vi.advanceTimersByTimeAsync(2_100);
+      await resolveResume(d);
+      expect(d.starts).toEqual([]);
+    });
+
     it("does not schedule if the context was suspended again before the clips finished loading", async () => {
       const chimes = await load();
       const c = await warm(chimes, "harp-glock");

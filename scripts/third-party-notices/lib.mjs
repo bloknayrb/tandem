@@ -466,8 +466,11 @@ export function chimeLicenceProblems(files, read) {
   if (!text.includes("CC0 1.0 Universal")) {
     problems.push(`${CHIME_LICENCE_PATH} is not a CC0 1.0 Universal text`);
   }
+  // A clip is listed when a line starts with its exact file name, so a short
+  // name such as `hi.wav` cannot pass as a substring of a listed one.
+  const listed = new Set(text.split(/\r?\n/).map((line) => line.split(/\s/)[0]));
   for (const wav of wavs) {
-    if (!text.includes(wav.slice("chimes/".length))) {
+    if (!listed.has(wav.slice("chimes/".length))) {
       problems.push(`${wav} is not listed in ${CHIME_LICENCE_PATH}`);
     }
   }
