@@ -44,6 +44,7 @@
  * the normal state of a long-lived desktop client between tool calls.
  */
 
+import type { BoundTransportKind } from "../../shared/launcher/contract.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { sessionIdForLog } from "../sessions/log-id.js";
 
@@ -113,7 +114,7 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
    * list of bound transports (`boundTransportKinds` in `server.ts`), under
    * the same `isSpawnLive` mask.
    */
-  bindKind?: "bridge" | "direct-http";
+  bindKind?: BoundTransportKind;
 }
 
 export interface McpSessionRegistryOptions<S extends ClosableServer, T> {

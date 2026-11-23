@@ -414,16 +414,23 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
  * dep sends nothing: the list is a diagnosis, never worth failing the status.
  */
 function boundTransportFields(deps: LauncherRoutesDeps): { boundTransports?: BoundTransport[] } {
-  let rows: readonly BoundTransport[] | undefined;
+  let clean: BoundTransport[];
   try {
-    rows = deps.boundTransports?.();
+    const rows: unknown = deps.boundTransports?.();
+    if (!Array.isArray(rows)) return {};
+    // A null or non-object row is dropped here, inside the try, so a malformed
+    // row can no more fail the status than a throwing dep can.
+    clean = rows
+      .map((row: unknown) =>
+        typeof row === "object" && row !== null ? (row as { kind?: unknown }).kind : undefined,
+      )
+      .filter((kind): kind is BoundTransport["kind"] =>
+        BOUND_TRANSPORT_KINDS.includes(kind as BoundTransport["kind"]),
+      )
+      .map((kind) => ({ kind }));
   } catch {
     return {};
   }
-  if (!rows) return {};
-  const clean = rows
-    .filter((row) => BOUND_TRANSPORT_KINDS.includes(row.kind))
-    .map((row) => ({ kind: row.kind }));
   return clean.length > 0 ? { boundTransports: clean } : {};
 }
 

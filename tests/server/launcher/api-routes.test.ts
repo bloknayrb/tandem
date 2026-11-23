@@ -2131,6 +2131,22 @@ describe("GET /api/launcher/status — the failed bind and the bound transports 
     });
   });
 
+  it("a null or non-object row is dropped, never a 500 (the status survives a malformed dep)", async () => {
+    const sup = supWith(RUNNING);
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      boundTransports: () =>
+        [null, 7, "bridge", { kind: "bridge" }] as unknown as ReturnType<
+          NonNullable<LauncherRoutesDeps["boundTransports"]>
+        >,
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect((res.body as { boundTransports?: unknown }).boundTransports).toEqual([
+      { kind: "bridge" },
+    ]);
+  });
+
   it("sends no `boundTransports` on a stopped arm, even when the dep answers rows", async () => {
     const { app } = makeApp({
       ...baseDeps(supWith({ running: false })),

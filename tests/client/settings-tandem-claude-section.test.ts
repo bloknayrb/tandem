@@ -400,6 +400,57 @@ describe("SettingsTandemClaudeSection — the failed bind and the bound transpor
     expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(false);
   });
 
+  it("names `tandem doctor` in a browser, and only the wizard on the desktop app, which ships no `tandem` command", async () => {
+    statusIs({ ...RUNNING, bindFailed: true });
+    const browser = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(q(browser.container, "settings-modal-tandem-claude-bind-failed").textContent).toContain(
+      "tandem doctor",
+    );
+    cleanup();
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    const desktop = render(SettingsTandemClaudeSection);
+    await flush();
+    const note = q(desktop.container, "settings-modal-tandem-claude-bind-failed");
+    expect(note.textContent).toContain("integration wizard");
+    expect(note.textContent).not.toContain("tandem doctor");
+  });
+
+  it("re-reads while a diagnosis is shown, so a bind that lands clears the warning without a remount", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      statusIs({ ...RUNNING, bindFailed: true });
+      const { container } = render(SettingsTandemClaudeSection);
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(true);
+      statusIs({ ...RUNNING, boundTransports: [{ kind: "bridge" }] });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(false);
+      expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a dark server's status is read once: no diagnosis, no re-read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      statusIs({ ...RUNNING });
+      render(SettingsTandemClaudeSection);
+      await vi.advanceTimersByTimeAsync(0);
+      const statusReads = () =>
+        fetchSpy.mock.calls.filter(([u]) => String(u) === `${API_BASE}${API_LAUNCHER_STATUS}`)
+          .length;
+      const first = statusReads();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(statusReads()).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the wizard's start-mode-only view renders neither", async () => {
     statusIs({ ...RUNNING, bindFailed: true, boundTransports: [{ kind: "bridge" }] });
     const { container } = render(SettingsTandemClaudeSection, { props: { startModeOnly: true } });

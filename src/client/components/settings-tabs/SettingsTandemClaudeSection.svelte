@@ -41,7 +41,9 @@ import {
   OFF_NOT_SAVED_MESSAGE,
   saveLauncherSettings,
 } from "../../actions/builtin.svelte.js";
+import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { API_BASE } from "../../utils/fileUpload";
+import "../warning-box.css";
 
 interface Props {
   /** The setup wizard's v1.0 walkthrough (#2198): the start choice alone,
@@ -114,6 +116,7 @@ let idleError = $state<string | null>(null);
 let mounted = true;
 onDestroy(() => {
   mounted = false;
+  if (rereadTimer !== null) clearTimeout(rereadTimer);
   // A save cut short by an unmount must not leave the host held busy.
   onBusyChange?.(false);
 });
@@ -175,9 +178,30 @@ async function loadSettings(): Promise<void> {
   }
 }
 
+/** While the last answer carried an ownership diagnosis, re-read it, so a bind
+ * that lands later or a setup the user fixes clears the panel without a
+ * remount. Only those fields start it, so a dark server is read once, as
+ * before; a panel opened inside the bind window before any judgement shows
+ * nothing until it is reopened. */
+const STATUS_REREAD_MS = 5_000;
+let rereadTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleReread(): void {
+  if (!mounted || rereadTimer !== null) return;
+  if (!bindFailed && boundTransports.length === 0) return;
+  rereadTimer = setTimeout(() => {
+    rereadTimer = null;
+    void checkLauncherPresent();
+  }, STATUS_REREAD_MS);
+}
+
 async function checkLauncherPresent(): Promise<void> {
   const status = await fetchLauncherStatus();
-  if (!mounted || !status.ok) return;
+  if (!mounted) return;
+  if (!status.ok) {
+    scheduleReread();
+    return;
+  }
   const value = status.value;
   if (value.available) {
     // Read defensively: an unknown kind is dropped rather than shown, and a
@@ -191,8 +215,11 @@ async function checkLauncherPresent(): Promise<void> {
             BOUND_TRANSPORT_KINDS.includes(kind as BoundTransportKind),
           )
       : [];
+    scheduleReread();
     return;
   }
+  bindFailed = false;
+  boundTransports = [];
   launcherAbsent = value.reason === "stdio-mode" || value.reason === "disabled-by-env";
 }
 
@@ -314,10 +341,15 @@ const controlsDisabled = $derived(settings === null || readOnly);
   {#if !startModeOnly && bindFailed}
     <!-- Ownership design §8.7: the reason, and no Start (a restart reproduces
          it). The remedies are the install's: the setup wizard and doctor. -->
-    <div role="status" class="tc-warning" data-testid="settings-modal-tandem-claude-bind-failed">
+    <div
+      role="status"
+      class="tandem-warning-box tc-warning"
+      data-testid="settings-modal-tandem-claude-bind-failed"
+    >
       Tandem's Claude couldn't connect its Tandem tools, so it isn't holding your documents or
       answering for them. Starting it again won't fix this: reopen the integration wizard below to
-      set Claude Code up again, or run <code>tandem doctor</code> in a terminal to see what's wrong.
+      set Claude Code up again{#if isTauriRuntime()}.{:else}, or run <code>tandem doctor</code> in a
+        terminal to see what's wrong.{/if}
     </div>
   {/if}
   {#if !startModeOnly && boundTransports.length > 0}
@@ -465,13 +497,9 @@ const controlsDisabled = $derived(settings === null || readOnly);
     font-size: 11px;
     color: var(--tandem-error-fg-strong);
   }
+  /* Box and colours come from `.tandem-warning-box`. */
   .tc-warning {
     font-size: 11px;
-    padding: var(--tandem-space-2);
-    border-radius: var(--tandem-r-2);
-    border: 1px solid var(--tandem-warning-border);
-    background: var(--tandem-warning-bg);
-    color: var(--tandem-warning-fg-strong);
   }
   .tc-bound-list {
     margin: 0;
