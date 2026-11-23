@@ -28,6 +28,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DELIVERY_STALL_MS } from "../../shared/constants.js";
 
 import type { TandemEvent } from "../../shared/events/types.js";
 import { isStartWorthy, isWakeWorthy } from "../../shared/events/wake-scope.js";
@@ -911,6 +912,17 @@ export interface Supervisor {
    */
   ownSpawn?(): { n: number; sessionId: string } | null;
   isOwnChildSession?(sessionId: string): boolean;
+  /**
+   * When the live Tandem's Claude was last woken, for the stall banner's
+   * hide (#2358 PR 3b-2e2, the owner's 2026-11-17 answer 3): the time the
+   * latest turn still in flight was written, or now when a wake is queued
+   * behind that turn (it is written when the turn ends). `null` with no turn
+   * in flight, once the turn in flight has run for `DELIVERY_STALL_MS`, with
+   * no live child, while a local model answers chat, and whenever ownership
+   * is off. Says nothing about WHICH item the turn serves.
+   * Never throws. Optional for the same reason as `tandemPresence`.
+   */
+  wokenAt?(): number | null;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -1525,6 +1537,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     /** Wake this spawn as an event's wake does, minus the event filter
      *  (#2358 PR 3b-2a, R1.1). Only `requestWake` calls it, flag on. */
     requestWake: () => void;
+    /** See `Supervisor.wokenAt` (#2358 PR 3b-2e2): this spawn's half. */
+    wokenAt: () => number | null;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -3164,6 +3178,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
     /** True between writing a turn and seeing that turn's `result` envelope. */
     let turnInFlight = false;
+    /** When the latest turn was written (#2358 PR 3b-2e2): read only by
+     *  `wokenAt`, and only while `turnInFlight`. */
+    let lastTurnWrittenAt = 0;
     /** An event arrived mid-turn; wake once the current turn finishes. */
     let pendingWake = false;
     let latchTimer: NodeJS.Timeout | null = null;
@@ -3336,6 +3353,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const receiptCheckable = unresolvedTurns === 0;
       unresolvedTurns += 1;
       turnInFlight = true;
+      lastTurnWrittenAt = Date.now();
       clearIdle();
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
@@ -3518,6 +3536,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       },
       record,
       requestWake: requestWakeOnSpawn,
+      // A wake queued behind the turn in flight is written when that turn
+      // ends (`flushPendingWake`), so it reads as woken now. Not while a local
+      // model answers chat: the flush writes nothing then. And not once the
+      // turn in flight has run as long as the stall threshold: a stuck turn
+      // would otherwise hide the banner until the wake latch fired, and again
+      // for each message sent meanwhile, so the hide is capped at one
+      // threshold per written turn.
+      wokenAt: () => {
+        if (!turnInFlight || tornDown || localHeld()) return null;
+        const now = Date.now();
+        if (now - lastTurnWrittenAt >= DELIVERY_STALL_MS) return null;
+        return pendingWake ? now : lastTurnWrittenAt;
+      },
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -4821,6 +4852,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
+  /** See `Supervisor.wokenAt` (#2358 PR 3b-2e2). Flag off: null, read first. */
+  function wokenAt(): number | null {
+    try {
+      if (!ownershipEnabled()) return null;
+      const delivery = activeTurnDelivery;
+      if (delivery === null || child !== delivery.spawned || delivery.spawned.killed) return null;
+      return delivery.wokenAt();
+    } catch {
+      return null;
+    }
+  }
+
   function status(): SupervisorStatus {
     if (
       child &&
@@ -5137,6 +5180,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     startOrWake,
     ownSpawn,
     isOwnChildSession,
+    wokenAt,
   };
 }
 

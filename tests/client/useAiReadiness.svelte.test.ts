@@ -1379,6 +1379,115 @@ describe("createAiReadiness — push consumer", () => {
       await settle();
       expect(screen.queryByTestId("wake-stall-banner")).toBeNull();
     });
+
+    // --- #2358 PR 3b-2e2: the owner's 2026-11-17 answer 3, "Hide while
+    // starting, then reword". Through the mounted banner, so the reactive path
+    // is what is under test.
+    describe("keyed rounds (multi-session ownership, #2358 PR 3b-2e2)", () => {
+      const KEYED = { state: "awaiting-poll", waitingMs: 200_000, keyed: true };
+      const RESTARTING = () =>
+        mkResponse({ available: true, running: false, restartPending: true });
+      const banner = () => screen.queryByTestId("wake-stall-banner");
+
+      it("hidden while Tandem's Claude was woken for what waits; back, reworded, once that turn is over", async () => {
+        let body: unknown = {
+          status: "ok",
+          hasSession: true,
+          delivery: { ...KEYED, tandemClaudeWoken: true },
+        };
+        globalThis.fetch = routedFetch({
+          launcher: RUNNING_LAUNCHER,
+          health: () => mkResponse(body),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().deliveryStalledMs).toBeNull();
+        expect(banner()).toBeNull();
+
+        body = { status: "ok", hasSession: true, delivery: KEYED };
+        h.get().refresh();
+        await settle();
+        expect(h.get().deliveryStalledMs).toBe(200_000);
+        expect(banner()?.textContent?.trim()).toBe(
+          "Claude hasn't picked this up for 3 minutes. Your message is still waiting.",
+        );
+        // No promise of when Claude will look, and no dismiss.
+        expect(banner()?.textContent).not.toMatch(/checks in|next time|queued/);
+        expect(banner()?.querySelector("button")).toBeNull();
+      });
+
+      it("hidden while Tandem's Claude is being started; back, reworded, once the start is over", async () => {
+        let launcher = RESTARTING;
+        globalThis.fetch = routedFetch({
+          launcher: () => launcher(),
+          health: () => mkResponse({ status: "ok", hasSession: true, delivery: KEYED }),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().launcherRestarting).toBe(true);
+        expect(h.get().deliveryStalledMs).toBeNull();
+        expect(banner()).toBeNull();
+
+        launcher = RUNNING_LAUNCHER;
+        h.get().refresh();
+        await settle();
+        expect(h.get().deliveryStalledMs).toBe(200_000);
+        expect(banner()?.textContent).toContain("Your message is still waiting.");
+      });
+
+      it("flag off (no `keyed`): a start under way hides nothing, and the copy is today's", async () => {
+        globalThis.fetch = routedFetch({
+          launcher: RESTARTING,
+          health: mkResponse({
+            status: "ok",
+            hasSession: true,
+            delivery: { state: "awaiting-poll", waitingMs: 200_000 },
+          }),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().launcherRestarting).toBe(true);
+        expect(h.get().deliveryKeyed).toBe(false);
+        expect(h.get().deliveryStalledMs).toBe(200_000);
+        expect(banner()?.textContent).toContain("Your message is queued — it'll be seen the next");
+        expect(banner()?.textContent).toContain("time Claude checks in.");
+      });
+
+      it("flag off: a stray woken fact without `keyed` hides nothing", async () => {
+        globalThis.fetch = routedFetch({
+          launcher: RUNNING_LAUNCHER,
+          health: mkResponse({
+            status: "ok",
+            hasSession: true,
+            delivery: { state: "awaiting-poll", waitingMs: 200_000, tandemClaudeWoken: true },
+          }),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().deliveryStalledMs).toBe(200_000);
+        expect(banner()).not.toBeNull();
+      });
+
+      it("a later read without `keyed` drops the reword at once", async () => {
+        let body: unknown = { status: "ok", hasSession: true, delivery: KEYED };
+        globalThis.fetch = routedFetch({
+          launcher: RUNNING_LAUNCHER,
+          health: () => mkResponse(body),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().deliveryKeyed).toBe(true);
+        body = {
+          status: "ok",
+          hasSession: true,
+          delivery: { state: "awaiting-poll", waitingMs: 200_000 },
+        };
+        h.get().refresh();
+        await settle();
+        expect(h.get().deliveryKeyed).toBe(false);
+        expect(banner()?.textContent).toContain("time Claude checks in.");
+      });
+    });
   });
 });
 

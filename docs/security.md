@@ -179,7 +179,10 @@ whether another AI session is attached — the same presence fact `/health`'s lo
 `bindFailed` says Tandem's Claude's latest run never connected its Tandem tools, and
 `boundTransports` lists the connections bound to its run by kind alone (`bridge` or
 `direct-http`, never an id); both are loopback-only, and both sit inside the owners exposure
-Bryan filed for local pages (ownership design §11.3). `GET /api/launcher/settings` refuses a
+Bryan filed for local pages (ownership design §11.3). With it on (#2358 PR 3b-2e2), `/health`'s
+loopback-only `delivery` also carries `keyed: true`, and `tandemClaudeWoken: true` while Tandem's
+Claude has a turn in flight written after the oldest waiting message (or a wake queued behind
+one) — a boolean narrower than `launcher/status`'s `busy`, never a time or an id. `GET /api/launcher/settings` refuses a
 non-loopback caller by hand and has no origin gate: a browser sends no `Origin` on a same-origin
 GET (measured against Chromium, 2026-10-13), so the gate would refuse the npm build's own editor,
 and the read has no side effect for it to protect. For the same reason `GET /api/launcher/nonce`

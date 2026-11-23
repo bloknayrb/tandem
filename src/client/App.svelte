@@ -3617,7 +3617,10 @@ function dismissModelPicker() {
          reports one aggregate: flag off one process-global round, flag on the
          oldest of the rounds keyed by document and by message), so it sits
          outside the per-tab guards above. -->
-    <WakeStallBanner stalledMs={aiReadiness.deliveryStalledMs} />
+    <WakeStallBanner
+      stalledMs={aiReadiness.deliveryStalledMs}
+      keyed={aiReadiness.deliveryKeyed}
+    />
     {#if activeTab && activeTab.format === "docx"}
       <FidelityReportBanner
         ydoc={activeTab.ydoc}

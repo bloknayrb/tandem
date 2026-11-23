@@ -83,4 +83,15 @@ describe("deliveryStall", () => {
   it("reports the raw wait, leaving formatting to the component", () => {
     expect(deliveryStall({ ...base, waitingMs: 754_000 })).toBe(754_000);
   });
+
+  // #2358 PR 3b-2e2, the owner's 2026-11-17 answer 3: hidden while Tandem's
+  // Claude is started or woken for what waits. The hook sets it only with
+  // keyed rounds, so a dark build never passes it.
+  it("makes no claim while a check-in is under way; absent or false, as before", () => {
+    expect(deliveryStall({ ...base, waitingMs: 60 * 60_000, checkInUnderway: true })).toBeNull();
+    expect(deliveryStall({ ...base, waitingMs: 60 * 60_000, checkInUnderway: false })).toBe(
+      60 * 60_000,
+    );
+    expect(deliveryStall({ ...base, waitingMs: 60 * 60_000 })).toBe(60 * 60_000);
+  });
 });
