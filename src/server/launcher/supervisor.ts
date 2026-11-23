@@ -269,9 +269,13 @@ interface SupervisorOpts {
    * its transport sends none (`onTandemReply` in `mcp/awareness.ts`, wired in
    * `index.ts`; this module must not import the MCP layer). That is how the
    * supervisor learns the greeting arrived; a reply from a session it did not
-   * spawn is not the greeting. Default: never.
+   * spawn is not the greeting. With ownership on, `bound` is the reply's
+   * transport fact (#2358 PR 3b-2c), and only a bound reply counts. Default:
+   * never.
    */
-  subscribeTandemReply?: (cb: (sessionId: string | undefined) => void) => () => void;
+  subscribeTandemReply?: (
+    cb: (sessionId: string | undefined, bound?: boolean) => void,
+  ) => () => void;
   /**
    * Seam onto `mcp/greeting-reply.ts` (#2227): the supervisor registers the
    * classifier that tells `tandem_reply` whether a reply is the one-time hello,
@@ -284,6 +288,7 @@ interface SupervisorOpts {
       sessionId: string | undefined;
       replyTo: string | undefined;
       inProgress: boolean | undefined;
+      bound?: boolean;
     }) => boolean,
   ) => () => void;
   /**
@@ -1627,16 +1632,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Could not record that the greeting was sent:", err);
     });
   }
-  // A reply carrying another session's id is that session's, not the
-  // greeting. One with no id is counted: the header is optional, and a child
-  // that never sends it must not owe its greeting on every spawn.
-  const unsubscribeTandemReply = (opts.subscribeTandemReply ?? (() => () => {}))((sessionId) => {
-    if (greeting === null || greeting.phase === "answered") return;
-    if (sessionId !== undefined && !isOwnChildSession(sessionId)) return;
-    greeting.phase = "answered";
-    unsubscribeTandemReply();
-    spendGreeting();
-  });
+  /**
+   * Whether a reply came from this supervisor's own child, for both greeting
+   * checks below. Ownership off: a reply carrying another session's id is that
+   * session's, not the greeting; one with no id is counted (the header is
+   * optional, and a child that never sends it must not owe its greeting on
+   * every spawn). Ownership on (#2358 PR 3b-2c; ownership design §7.3): only a
+   * reply on the transport bound to the current spawn counts — `bound`, which
+   * `tandem_reply` passes and a `/api/channel-reply` reply passes false — and
+   * the session id never does. A missing `bound` is not bound.
+   */
+  function isOwnChildReply(sessionId: string | undefined, bound: boolean | undefined): boolean {
+    if (ownershipEnabled()) return bound === true;
+    return sessionId === undefined || isOwnChildSession(sessionId);
+  }
+  const unsubscribeTandemReply = (opts.subscribeTandemReply ?? (() => () => {}))(
+    (sessionId, bound) => {
+      if (greeting === null || greeting.phase === "answered") return;
+      if (!isOwnChildReply(sessionId, bound)) return;
+      greeting.phase = "answered";
+      unsubscribeTandemReply();
+      spendGreeting();
+    },
+  );
 
   /** `opts.userChatSnapshot`, with a throw or an absent seam read as null. */
   function readUserChat(): { ids: ReadonlySet<string>; unread: boolean } | null {
@@ -1656,7 +1674,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *   flips it to `answered` (through `subscribeTandemReply`, in the same
    *   synchronous stretch as the append), and the turn's `result` to
    *   `unanswered`, so at most the FIRST reply is ever tagged.
-   * - The reply is the supervisor's own child's. One with no session id counts,
+   * - The reply is the supervisor's own child's (`isOwnChildReply`; with
+   *   ownership on, the bound transport's, #2358 PR 3b-2c — the rest of this
+   *   item is the dark rule). One with no session id counts,
    *   as it does for `answered` above: the direct-HTTP entry `tandem setup`
    *   wrote before #2358 PR 2b sends no `X-Claude-Session-Id`, and an entry
    *   the boot sweep has not switched yet still is one, so requiring an id
@@ -1674,9 +1694,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     sessionId: string | undefined;
     replyTo: string | undefined;
     inProgress: boolean | undefined;
+    bound?: boolean;
   }): boolean {
     if (greeting === null || greeting.phase !== "pending") return false;
-    if (query.sessionId !== undefined && !isOwnChildSession(query.sessionId)) return false;
+    if (!isOwnChildReply(query.sessionId, query.bound)) return false;
     if (query.replyTo !== undefined || query.inProgress === true) return false;
     const atStart = greeting.userChatAtStart;
     if (atStart === null || atStart.unread) return false;

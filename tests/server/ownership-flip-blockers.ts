@@ -285,14 +285,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The greeting classification is still keyed on the reply's session id, and a " +
-      "`/api/channel-reply` reply can still be the greeting.",
-    closedBy:
-      "PR 3b (classify by bound transport; a channel reply is never the greeting), moved there " +
-      "from the 'chat, rounds and the greeting' PR by the delivery-rounds PR's brief.",
-  },
-  {
-    gap:
       "PR 3a's assumptions the 2026-11-17 smoke left unmeasured (Windows 11, Claude Code " +
       "2.1.325, one sample, run contained): whether `--settings` disables a plugin beside " +
       "`--mcp-config`; a project-scope `.mcp.json` `tandem` entry and the user's own Tandem " +

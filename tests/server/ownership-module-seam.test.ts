@@ -157,6 +157,7 @@ describe("tests and the flag", () => {
     "tests/server/launcher/owner-handle-spawn.test.ts",
     "tests/server/launcher/ownership-forward.test.ts",
     "tests/server/launcher/supervisor-presence.test.ts",
+    "tests/server/launcher/supervisor-turn-delivery.test.ts",
     "tests/server/launcher/supervisor.test.ts",
     "tests/server/license-armed-restricted.test.ts",
     "tests/server/local-period.test.ts",
@@ -174,6 +175,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-delivery-rounds.test.ts",
     "tests/server/ownership-enforcement.test.ts",
     "tests/server/ownership-flag.test.ts",
+    "tests/server/ownership-greeting.test.ts",
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
@@ -225,6 +227,9 @@ describe("tests and the flag", () => {
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/launcher/ownership-forward.test.ts",
       "tests/server/launcher/supervisor-presence.test.ts",
+      // PR 3b-2c: the greeting by bound transport, flag on, with its two
+      // dark (master's session-id) greeting blocks.
+      "tests/server/launcher/supervisor-turn-delivery.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
@@ -236,6 +241,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-flag.test.ts",
+      // PR 3b-2c: what the reply paths hand the greeting classifier, flag on
+      // with dark rows.
+      "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
@@ -264,6 +272,8 @@ describe("tests and the flag", () => {
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/launcher/ownership-forward.test.ts",
       "tests/server/launcher/supervisor-presence.test.ts",
+      // PR 3b-2c: the greeting by bound transport, flag on.
+      "tests/server/launcher/supervisor-turn-delivery.test.ts",
       // The keyed-rounds suites PR: its live check of the delivery-round
       // wiring, flag on in `check` too (the rest of the file is unstubbed).
       "tests/server/license-armed-restricted.test.ts",
@@ -282,6 +292,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
+      // PR 3b-2c: what the reply paths hand the greeting classifier, flag on
+      // with dark rows.
+      "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
