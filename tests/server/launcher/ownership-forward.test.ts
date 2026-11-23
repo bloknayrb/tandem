@@ -479,7 +479,9 @@ let run = 0;
 let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
-const sink = vi.fn((cause: "document" | "message") => supRef?.startOrWake?.(cause));
+const sink = vi.fn((cause: "document" | "message" | "solo-release") =>
+  supRef?.startOrWake?.(cause),
+);
 const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
 /** The passes the lapse's re-ask may own (3b-2b2): at most one, and only when
  *  it was forwarded (no other session connected). It finds what the row
@@ -703,6 +705,8 @@ describe("R1: ownership's startOrWake, called directly", () => {
     // A Record over WakeCause: a new member of the union fails to compile here.
     const expected: Record<WakeCause, "document" | "departure" | null> = {
       "user-open": null,
+      // Presence's consumer (3b-2b4a): forwarded, never dropped.
+      presence: "document",
       lapse: "document",
       "take-back": "document",
       claim: "document",
@@ -737,7 +741,7 @@ describe("R1: ownership's startOrWake, called directly", () => {
     const _all: OwnershipChangeCause[] = Object.keys(expected).filter(
       (k) => k !== "message-owner" && k !== "departure",
     ) as OwnershipChangeCause[];
-    expect(_all).toHaveLength(9);
+    expect(_all).toHaveLength(10);
   });
 
   it("R1.7 directly: a lapse with another session connected tells the observer and not the sink; every other cause still forwards", () => {
@@ -747,6 +751,9 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink).not.toHaveBeenCalled();
     startOrWake("take");
     expect(sink.mock.calls).toEqual([["document"]]);
+    // Presence is not gated (Bryan, 2026-11-23: "Yes, start anyway").
+    startOrWake("presence");
+    expect(sink.mock.calls).toEqual([["document"], ["document"]]);
   });
 
   it("R1.5: a forward made inside a request context reaches the sink, and the pass, with no caller identity readable", async () => {

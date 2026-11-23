@@ -316,6 +316,18 @@ const POSTS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
+/**
+ * #2358 PR 3b-2b4b's change to the flag-on schema: `notYours`'s description
+ * gains the take-back sentence (Bryan, 2026-11-23: "Yes; tell it it was
+ * taken back (Recommended)").
+ */
+const TAKE_BACK_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    'An item Tandem handed or pushed to you is not such a request."',
+    "An item Tandem handed or pushed to you is not such a request. If Tandem's Claude took one back from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.\"",
+  ],
+];
+
 /** The chat owners PR's second session, and who the next tool call runs as. */
 const LP_OTHER = "claude:lp-other";
 let lpCaller = "test:caller";
@@ -1490,7 +1502,11 @@ describe("the dark guard", () => {
         "utf8",
       );
       if (isOwnership) {
-        for (const [before, after] of [...CHAT_OWNERS_SCHEMA_CHANGES, ...POSTS_SCHEMA_CHANGES]) {
+        for (const [before, after] of [
+          ...CHAT_OWNERS_SCHEMA_CHANGES,
+          ...POSTS_SCHEMA_CHANGES,
+          ...TAKE_BACK_SCHEMA_CHANGES,
+        ]) {
           expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
           masterText = masterText.replace(before, after);
         }

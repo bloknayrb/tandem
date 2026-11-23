@@ -374,10 +374,11 @@ describe("the handover is wired in a running server, and reachable only through 
     expect(cursor.match(/\bretireWhere\(/g)).toHaveLength(1);
   });
 
-  it("the ownership side runs it from exactly two places, each behind its function's first-line flag return, with no await", () => {
-    // The definition plus two calls.
-    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(2);
-    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(3);
+  it("the ownership side runs it from exactly three places, each behind its function's first-line flag return, with no await", () => {
+    // The definition plus three calls: the two ownership changes, and the
+    // run start's self re-owe (#2358 PR 3b-2b4b), which moves no entry.
+    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(3);
+    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(4);
     expect(ownership.match(/\binboxHandover\(/g)).toHaveLength(1);
     expect(ownership.match(/\binboxHandover\(documentId\)/g)).toHaveLength(1);
     // Private: not exported, and no other file names it.
@@ -386,6 +387,7 @@ describe("the handover is wired in a running server, and reachable only through 
     for (const declaration of [
       "export function setDocOwner(",
       "export function onDocumentClosed(",
+      "export function noteTandemRunStart(",
     ]) {
       const body = functionBody(declaration);
       const open = body.indexOf("): void {\n");
@@ -797,7 +799,7 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
     expect(queue).toContain("a claim made by an accepted chat post");
     expect(queue).toContain("cause\n * `post-claim`");
-    expect(queue).toContain("Seven run where they are");
+    expect(queue).toContain("Six run where they are");
   });
 });
 
@@ -990,16 +992,27 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
   });
 });
 
-describe("the supervisor's start-or-wake is wired from ownership, requestWake is called by nothing yet (#2358 PR 3b-2a, R2.8; 3b-2b1c-a)", () => {
-  // 3b-2b deletes this describe once requestWake is wired too. Token-level, not a
+describe("the supervisor's start-or-wake and requestWake are wired from ownership, each through one sink (#2358 PR 3b-2a, R2.8; 3b-2b1c-a; 3b-2b4b)", () => {
+  // Token-level, not a
   // call regex: a `.startOrWake(` regex misses an optional call (`?.`), a
   // reference passed on without being called, bracket access and a
   // destructuring (including in a parameter), all of which name the token.
   const SUPERVISOR = "src/server/launcher/supervisor.ts";
   const OWNERSHIP = "src/server/sessions/ownership.ts";
 
-  it("no src file but the supervisor names requestWake; only index.ts names the waiting decision", () => {
-    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual([]);
+  it("outside the supervisor only index.ts names requestWake, once, in ownership's wake sink; only index.ts names the waiting decision", () => {
+    // 3b-2b4b: the run start's wake. The supervisor's writer asks the licence
+    // (`requestWakeOnSpawn`, pinned in ai-surface-inventory-claims.test.ts),
+    // so a caller outside it needs none of its own (Critical Rule 9).
+    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
+    const index = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(index.match(/\brequestWake\b/g)).toHaveLength(1);
+    expect(index).toContain("  setRequestWakeSink(() => launcherSupervisor?.requestWake?.());");
+    expect(filesMentioning("setRequestWakeSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    const own = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // The declaration, the setter's and the reset's assignments, one call.
+    expect(own.match(/\brequestWakeSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(own.match(/\brequestWakeSink\(\)/g)).toHaveLength(1);
     // Covers `index.ts`'s `createSupervisor` options however they are built
     // (a literal, an object built first, a spread).
     expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
@@ -1085,7 +1098,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};',
+      'let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-release") => void =',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
@@ -1218,8 +1231,10 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // The per-file pin above cannot see a caller inside ownership.ts, where
     // step 5 and startOrWake live. 3b-2b1c-b added the message forward's call.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
+    // 3b-2b4b: and asked once by the run start's wake (`noteTandemRunStart`).
+    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(2);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
+    expect(text).toContain("if (tandemWorkWaiting()) wakeTandem();");
     expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(4);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
@@ -1229,8 +1244,12 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
 
   it("step 5 asks the composite, once, in its condition; the composite asks the probe first and the chat that follows the document (3b-2b1b-chat-step5)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    // Defined once and called once.
-    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(2);
+    // Defined once and called twice: step 5, and a deferred take-back's wake
+    // (3b-2b4b), which step 5 does not forward.
+    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(3);
+    expect(text).toContain(
+      "if (deferred && waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) wakeTandem();",
+    );
     const setDocOwner = text.slice(
       text.indexOf("export function setDocOwner("),
       text.indexOf("function reOweDocumentChat("),
@@ -1360,28 +1379,52 @@ describe("claimable work (#2358 PR 3b-2b1b-claimable)", () => {
   });
 });
 
-describe("the own-spawn seam is built and not set (#2358 PR 3b-2b3a; Bryan, 2026-11-23: build dark, switch on with 3b-2b4)", () => {
-  // 3b-2b4 deletes or rewrites this describe when it wires the seam together
-  // with presence's consumer.
-  it("no src file but ownership.ts names setOwnSpawnSource: index.ts leaves it unset", () => {
-    expect(filesMentioning("setOwnSpawnSource")).toEqual(["src/server/sessions/ownership.ts"]);
-    expect(stripComments(SRC_FILES.get("src/server/index.ts") as string)).not.toMatch(
-      /OwnSpawnSource/,
-    );
-  });
+describe("the switch-on: index.ts wires the own-spawn seam and presence's consumer once, inside the supervisor setup (#2358 PR 3b-2b4a; Bryan, 2026-11-23: build dark, switch on with 3b-2b4)", () => {
+  const INDEX = "src/server/index.ts";
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const SUPERVISOR = "src/server/launcher/supervisor.ts";
+  const index = stripComments(SRC_FILES.get(INDEX) as string);
+  const uses = (name: string) => index.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
+  // `startLauncherSupervisor`'s body between `createSupervisor({` and the
+  // `start()` call: suites that build a supervisor directly never reach it.
+  const setup = (() => {
+    const fn = index.slice(index.indexOf("async function startLauncherSupervisor("));
+    const from = fn.indexOf("launcherSupervisor = createSupervisor({");
+    const to = fn.indexOf("await launcherSupervisor.start();");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return fn.slice(from, to);
+  })();
 
-  it("retirement and demotion are called from nowhere yet, and only ownership listens for a spawn's end (#2358 PR 3b-2b3b)", () => {
-    // 3b-2b4 adds the supervisor's call when it wires the seam.
-    expect(filesMentioning("noteOwnSpawnStarted")).toEqual(["src/server/sessions/ownership.ts"]);
+  it.each([
+    ["setOwnSpawnSource", OWNERSHIP, 2],
+    ["setTandemPresenceSource", OWNERSHIP, 2],
+    ["noteOwnSpawnStarted", OWNERSHIP, 2],
+    ["noteTandemPresence", OWNERSHIP, 2],
+    ["onSpawnStarted", SUPERVISOR, 1],
+  ] as const)(
+    "%s is named only by its module and index.ts, whose one use sits in the setup",
+    (name, owner, inIndex) => {
+      expect(filesMentioning(name)).toEqual([INDEX, owner].sort());
+      // The import (for the ownership names), then exactly one use.
+      expect(uses(name)).toBe(inIndex);
+      expect(setup).toMatch(new RegExp(`\\b${name}\\b`));
+    },
+  );
+
+  it("only ownership listens for a spawn's end", () => {
     expect(filesMentioning("setSpawnEndedListener")).toEqual([
       "src/server/sessions/owner-handle-bind.ts",
-      "src/server/sessions/ownership.ts",
+      OWNERSHIP,
     ]);
   });
 
-  it("the supervisor's two seam reads are named only by the supervisor", () => {
-    expect(filesMentioning("ownSpawn")).toEqual(["src/server/launcher/supervisor.ts"]);
-    expect(filesMentioning("isOwnChildSession")).toEqual(["src/server/launcher/supervisor.ts"]);
+  it("the supervisor's two seam reads are named only by the supervisor and the setup", () => {
+    for (const name of ["ownSpawn", "isOwnChildSession"]) {
+      expect(filesMentioning(name), name).toEqual([INDEX, SUPERVISOR]);
+      expect(uses(name), name).toBe(1);
+      expect(setup, name).toMatch(new RegExp(`\\b${name}\\b`));
+    }
   });
 
   it("server.ts resolves the routed record after the bind is confirmed, from the bind outcome", () => {
