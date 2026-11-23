@@ -82,8 +82,7 @@ before relying on it.
   banner's keyed-round wording). #2532 (the stdio bridge cancels upstream every request it
   answers itself) merged the same day.
 - **#2517** (`tandem_edit`'s new text takes ProseMirror's marks; raw runs are
-  non-inclusive), a #1823 follow-up, is green and waiting to merge once it is up to date
-  with master.
+  non-inclusive), a #1823 follow-up, merged the same day.
 - **#2510** (document headings follow the user's editor font) is open.
 - **Dependabot:** #2506 (npm group), #2511, #2512 and #2513 (libloading 0.9, a major).
 - **Not v1.0 work:** a chat notification sound, waiting on Bryan's pick of sounds.
@@ -223,7 +222,7 @@ rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** Met on the live build (2026-11-23): #1632 closed, and #1823, the server Lows batch that held the remaining range items, closed on 2026-11-23. Its follow-up #2517 (mark inheritance in `tandem_edit`) was still open that day. Still open are #1754 and #1693, both on the `.docx` path that ships dark, so they block re-enabling `.docx`, not v1.0.
+- **Zero open position- or anchor-related bugs.** Met on the live build (2026-11-23): #1632 closed, and #1823, the server Lows batch that held the remaining range items, closed on 2026-11-23. Its follow-up #2517 (mark inheritance in `tandem_edit`) merged the same day. Still open are #1754 and #1693, both on the `.docx` path that ships dark, so they block re-enabling `.docx`, not v1.0.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
