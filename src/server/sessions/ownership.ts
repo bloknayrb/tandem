@@ -1947,7 +1947,7 @@ function refusalFor(
 ): OwnershipRefusal | undefined {
   if (entry?.ownerId === callerId) return undefined;
   const holder = entry ? viewOf(entry.ownerId) : null;
-  // Before every other row: for such a record it replaces their copy (§5.3).
+  // Before every other row: for such a record it replaces their copy (ownership design §5.3).
   if (guardsTandem(entry, callerId)) return { ok: false, reason: "unbound-child", holder };
   // "The first row wins" (ownership design §5.3): a caller that lost this document is told so
   // before it is told who holds it now. With no entry this row is unreachable
