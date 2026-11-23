@@ -340,6 +340,18 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
+      "The restart question's other-owner half: the mode-unknown observer re-asks only " +
+      "Tandem's Claude's start-or-wake (mode-known) when the mode first reads Tandem after " +
+      "reading unknown. A session other than Tandem's Claude holding a document gets no " +
+      "`ownership` frame and no push wake for a user comment made while the mode was unknown " +
+      "(pushEvent's Solo gate dropped it); it sees the comment only at its next " +
+      "tandem_checkInbox, which stays authoritative.",
+    closedBy:
+      "A re-ask for other owners when the mode becomes known (the `ownership` frame, or a " +
+      "push-stream nudge), with a test, or Bryan's acceptance of the gap.",
+  },
+  {
+    gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
       "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
       "session is connected (after a restart every restored document is unowned), every pending " +

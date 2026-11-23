@@ -1519,3 +1519,17 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(3);
   });
 });
+
+describe("the mode observer's ask is replayed after the supervisor starts (#2358, the restart question)", () => {
+  it("startLauncherSupervisor calls the replay once, right after `start()` resolves, inside its try", () => {
+    const src = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(src.match(/replayModeKnownAfterSupervisorStart\(\);/g)).toHaveLength(1);
+    expect(src).toMatch(
+      /await launcherSupervisor\.start\(\);\s*replayModeKnownAfterSupervisorStart\(\);\s*\} catch/,
+    );
+    expect(filesMentioning("replayModeKnownAfterSupervisorStart").sort()).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+});

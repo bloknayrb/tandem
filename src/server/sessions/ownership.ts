@@ -2298,7 +2298,10 @@ let modeKnownAsked = false;
  * `mode-known`, which it drops while Off or refused by the licence, and whose
  * pass asks the whole waiting decision first. A Solo reading in between
  * disarms it: Solo→Tandem is the release route's (`noteSoloReleased`), so
- * the two never both forward one change. At most once per server run. Flag
+ * the two do not both forward a change from a Solo the room saw (a window
+ * that toggled before its CTRL_ROOM sync writes only `tandem`, then posts the
+ * release, so both forward; the supervisor's pass joins or repeats the ask).
+ * At most once per server run. Flag
  * off: nothing, and nothing recorded. Total, since it runs inside a
  * `CTRL_ROOM` transaction's observer.
  */
@@ -2315,6 +2318,27 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
   }
   if (!modeUnknownSeen) return;
   modeKnownAsked = true;
+  try {
+    runOutsideMcpContext(() => startOrWakeSink("mode-known"));
+  } catch {
+    logLimited("forward-failed", FORWARD_FAILED);
+  }
+}
+
+/**
+ * The observer's ask again, replayed once the supervisor has started (#2358,
+ * the restart question). A window can reconnect and write the mode before the
+ * supervisor exists (the boot's config sweep runs first, and a deferred
+ * autostart creates none until the window opens), or while its `start()` has
+ * set no standby yet; the forward then reaches nothing, and the once-per-run
+ * latch would leave the waiting work unasked. `src/server/index.ts` calls
+ * this after `start()` resolves, and it forwards `mode-known` again when the
+ * observer has already asked this run; a forward that did land is asked
+ * twice, which the supervisor's pass joins or repeats. Flag off: nothing.
+ */
+export function replayModeKnownAfterSupervisorStart(): void {
+  if (!ownershipEnabled()) return;
+  if (!modeKnownAsked) return;
   try {
     runOutsideMcpContext(() => startOrWakeSink("mode-known"));
   } catch {

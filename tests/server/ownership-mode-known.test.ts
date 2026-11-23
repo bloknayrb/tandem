@@ -27,6 +27,7 @@ import {
 } from "../../src/server/events/queue.js";
 import {
   ownershipSnapshotForTests,
+  replayModeKnownAfterSupervisorStart,
   resetOwnershipForTests,
   setStartOrWakeSink,
 } from "../../src/server/sessions/ownership.js";
@@ -166,6 +167,25 @@ describe("the mode-unknown observer (#2358, the restart question)", () => {
     // Turned on later in the same run, the flag-off stretch left nothing armed.
     vi.stubEnv("TANDEM_OWNERSHIP", "1");
     clientWritesMode("tandem");
+    expect(forwarded).toEqual([]);
+  });
+
+  it("the supervisor's start replays the ask when the observer asked before it existed, and only then", () => {
+    attachCtrlObservers();
+    replayModeKnownAfterSupervisorStart();
+    expect(forwarded).toEqual([]);
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual(["mode-known"]);
+    replayModeKnownAfterSupervisorStart();
+    expect(forwarded).toEqual(["mode-known", "mode-known"]);
+  });
+
+  it("flag off, the replay forwards nothing", () => {
+    attachCtrlObservers();
+    clientWritesMode("tandem");
+    forwarded = [];
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    replayModeKnownAfterSupervisorStart();
     expect(forwarded).toEqual([]);
   });
 });
