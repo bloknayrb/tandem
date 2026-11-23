@@ -94,12 +94,18 @@ import {
   applyUserOpenDefaultToDocuments,
   forgetChatMessageOwners,
   keyedDeliveryRounds,
+  noteOwnSpawnStarted,
+  noteTandemPresence,
+  noteTandemRunStart,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  setOwnSpawnSource,
+  setRequestWakeSink,
   setStartOrWakeSink,
+  setTandemPresenceSource,
   setWaitingProbe,
   tandemWorkWaiting,
   undoClientChatWrites,
@@ -234,6 +240,22 @@ async function startLauncherSupervisor(): Promise<void> {
           : null;
       },
     });
+    // The switch-on (#2358 PR 3b-2b4a): ownership reads the supervisor's
+    // presence and own spawn, and hears each presence change and each spawn's
+    // start. Before `start()`, so the first spawn is heard. Flag off all of it
+    // is inert: the supervisor announces nothing and ownership returns at its
+    // flag check.
+    const sup = launcherSupervisor;
+    setTandemPresenceSource(() => launcherSupervisor?.tandemPresence?.().isPresent() === true);
+    sup.tandemPresence?.().subscribe(noteTandemPresence);
+    sup.tandemPresence?.().onSpawnStarted(noteOwnSpawnStarted);
+    // Take-back, the self re-owe and their wake at each run start (#2358 PR
+    // 3b-2b4b), after presence's announcement in the same synchronous run.
+    sup.tandemPresence?.().onRunStart(noteTandemRunStart);
+    setOwnSpawnSource(
+      () => sup.ownSpawn?.() ?? null,
+      (id) => sup.isOwnChildSession?.(id) === true,
+    );
     await launcherSupervisor.start();
   } catch (err) {
     launcherUnavailableReason = "spawn-failed";
@@ -872,6 +894,10 @@ async function main() {
   // supervisor exists) does nothing. Beside the probe for the same reason;
   // only a flag-on `startOrWake` calls it.
   setStartOrWakeSink((cause) => launcherSupervisor?.startOrWake?.(cause));
+  // The run start's wake (#2358 PR 3b-2b4b; ownership design §8.2, §8.6): the
+  // supervisor's `requestWake`, which asks the licence at its writer. Read at
+  // call time like the sink above; only a flag-on `noteTandemRunStart` calls it.
+  setRequestWakeSink(() => launcherSupervisor?.requestWake?.());
   // The open documents, for the waiting decision's claimable work (#2358 PR
   // 3b-2b1b-claimable): an open document nobody holds counts for Tandem's
   // Claude while no other session is connected. Beside the probe for the same

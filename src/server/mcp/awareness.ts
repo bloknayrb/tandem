@@ -2491,17 +2491,11 @@ export const ownershipChatSide = Object.freeze({
   },
   /** The unhandled, non-local-period user messages that name `documentId`. */
   messagesOn(documentId: string): string[] {
-    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-    const handled = settledChatIds(chatMap);
-    const keys: string[] = [];
-    chatMap.forEach((value, key) => {
-      if (typeof value !== "object" || value === null) return;
-      const msg = value as Partial<ChatMessage>;
-      if (msg.author !== "user" || chatDocumentOf(msg) !== documentId) return;
-      if (handled.has(key) || isLocalPeriodChat(key)) return;
-      keys.push(key);
-    });
-    return keys;
+    return unhandledUserChat((msg) => chatDocumentOf(msg) === documentId);
+  },
+  /** Every unhandled, non-local-period user message (#2358 PR 3b-2b4b, the self re-owe). */
+  unhandledKeys(): string[] {
+    return unhandledUserChat(() => true);
   },
   /**
    * The keys of the user chat rows a fresh cursor reader would be handed if
@@ -2671,6 +2665,21 @@ function settleHandOutRows(
     if (earlier.length > 0) candidates.set(rowKey, earlier);
   }
   return candidates.size === 0 ? [] : addSettles(chatMap, candidates, owns);
+}
+
+/** The unhandled, non-local-period user messages `keep` accepts, by key. */
+function unhandledUserChat(keep: (msg: Partial<ChatMessage>) => boolean): string[] {
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const handled = settledChatIds(chatMap);
+  const keys: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user" || !keep(msg)) return;
+    if (handled.has(key) || isLocalPeriodChat(key)) return;
+    keys.push(key);
+  });
+  return keys;
 }
 
 /** {@link ownershipChatSide}'s re-owe (R6.1; the posts PR, R3.3). */
@@ -3368,10 +3377,15 @@ export function registerAwarenessTools(server: McpServer): void {
           // The texts carry the refusals' take guard (`ownership-refusal.ts`).
           const activityExcluded =
             activityDocumentId !== null && docs.excluded.includes(activityDocumentId);
+          // Those Tandem's Claude took back from this caller (#2358 PR
+          // 3b-2b4b): named, because an earlier request no longer counts.
+          const takenBack = scope.takenBack(docs.excluded);
+          const takenBackNames = takenBack.map((id) => labels.get(id) ?? id);
           if (docs.readAnyDocument && docs.excluded.length > 0) {
             actions += inboxExcludedSomeNote(
               docs.excluded.map((id) => labels.get(id) ?? id),
               activityExcluded,
+              takenBackNames,
             );
           }
           const summary = docs.readAnyDocument
@@ -3380,8 +3394,8 @@ export function registerAwarenessTools(server: McpServer): void {
                 docs.excluded.length === 0
                   ? noDocumentInboxNote(requestedId)
                   : requestedId !== undefined
-                    ? inboxExcludedNamedNote(requestedId)
-                    : inboxExcludedAllNote(activityExcluded)
+                    ? inboxExcludedNamedNote(requestedId, takenBack.length > 0)
+                    : inboxExcludedAllNote(activityExcluded, takenBackNames)
               } ${actions}`;
           const ownership = ownershipActive
             ? {

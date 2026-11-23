@@ -212,18 +212,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "When Tandem's Claude stops being present, every per-message owner it holds of a message " +
-      "that is not handled must be dropped and the message re-owed, whatever the origin " +
-      "(a tab close of a document nobody held while it was present gives it origin 'close'; " +
-      "an acknowledgement, origin 'acknowledgement', whose message is handled, must be dropped " +
-      "too). releaseMessageOwners in sessions/ownership.ts takes the selector. Its record never " +
-      "lapses, so until then such a message is handed to nobody once presence ends, its own " +
-      "reply is refused (not-present) and every other session is refused 'Tandem's Claude " +
-      "answers this message' (the chat owners PR, R5.8; review round 1, item 3).",
-    closedBy: "PR 3b (presence).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -252,17 +240,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "PR 3b for Tandem's Claude (3b-2b1c-a forwards a change of owner only, not a holder that " +
       "keeps an item unanswered), or Bryan's answer for terminals.",
-  },
-  {
-    gap:
-      "A take-back and the inbox's exclusion texts: after Tandem's Claude takes a document back " +
-      "('taken back'), the refusal tells the loser not to tandem_open it again unless the user asks " +
-      "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
-      "only 'only if the user asked you, in your own conversation', which the original request " +
-      "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
-      "Claude. Unreachable until Tandem's Claude can be present (PR 3b).",
-    closedBy:
-      "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
   },
   {
     gap:
@@ -323,17 +300,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
       "answered-link, and the switch lands immediately before the flip, in the same release).",
     closedBy: "#2360's switch PR merged.",
-  },
-  {
-    gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), rule " +
-      "0's records are computed (3b-2b3a), and retirement, demotion, teardown re-pointing and " +
-      "the unbound-child refusal are built (3b-2b3b), but the own-spawn seam is unset and the " +
-      "supervisor does not call noteOwnSpawnStarted, so a transport bound to the current spawn " +
-      "still sits on its `claude:<id>` record, not the `tandem` record, no transport reaches an " +
-      "unbound-child or private record, and a child of Tandem's Claude that did not bind is " +
-      "answered as an ordinary session.",
-    closedBy: "3b-2b4's switch-on.",
   },
   {
     gap: "The Settings list of bound transports (Ruling C) is not built.",
@@ -443,14 +409,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
       "that filter would not close it: a comment answered only in chat is never handled by it.",
     closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
-  },
-  {
-    gap:
-      "An item a run of Tandem's Claude acknowledged, after which that run died, reads as not " +
-      "waiting (3b-2b1b, Ruling K), so nothing starts Claude for it: it is stranded. (An item " +
-      "handed but unacknowledged reads as waiting.)",
-    closedBy:
-      "3b-2b4 retiring Tandem's Claude's own document entries at each run start (a self re-owe).",
   },
   {
     gap:
@@ -573,6 +531,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
       "line.",
+  },
+  {
+    gap:
+      "When Tandem's Claude stops being present (3b-2b4a), only its per-message chat owners are " +
+      "released and re-owed. Doc-less and closed-document chat it held by presence alone, with no " +
+      "per-message owner, is not re-owed as ownership design §7.2 asks, so a message it was " +
+      "handed but did not answer can stay read and unanswered for whoever owns it next.",
+    closedBy:
+      "A change that re-owes, when presence ends, the doc-less and closed-document chat Tandem's " +
+      "Claude held by presence alone, with a test.",
   },
 ];
 
