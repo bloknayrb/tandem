@@ -182,6 +182,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
+    "tests/server/ownership-mode-known.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-posts.test.ts",
@@ -249,6 +250,9 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // The mode-unknown observer: flag on, with a dark row that writes the
+      // mode and swaps CTRL_ROOM flag off.
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
@@ -300,6 +304,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",

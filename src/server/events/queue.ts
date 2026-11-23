@@ -21,8 +21,9 @@ import {
   registerDirtyObserver,
 } from "../documents/dirty.js";
 import { aiRefusal } from "../license/ai-refusal.js";
-import { installModeProvenanceObserver, readModeState } from "../mode.js";
+import { installModeKnownObserver, installModeProvenanceObserver, readModeState } from "../mode.js";
 import { inLocalPeriod, withheldForLocalPeriod } from "../models/local-period.js";
+import { noteModeObserved } from "../sessions/ownership.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   deliveryRoundKeyOf,
@@ -828,6 +829,10 @@ export function attachCtrlObservers(): void {
     // #1733: record which connection last wrote the mode key. Pushed here so the
     // Hocuspocus doc swap re-installs it.
     installModeProvenanceObserver(ctrlDoc),
+    // #2358, the restart question: the first Tandem mode after an unknown one
+    // asks the waiting decision again (ownership's; nothing flag off). Pushed
+    // here so the Hocuspocus doc swap re-installs it.
+    installModeKnownObserver(ctrlDoc, noteModeObserved),
   ];
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");

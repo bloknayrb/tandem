@@ -340,13 +340,15 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The restart question (3b-2b1b): while the mode is unknown (after a restart, before a " +
-      "client says whether it was Solo), waiting counts no user comment or reply, and nothing " +
-      "re-asks when the mode becomes known (the only release wake is emitModeReleaseWake, " +
-      "src/server/mcp/routes/mode-release.ts). Such a comment counts only when something next " +
-      "asks: a change of owner, or 3b-2b4's checks.",
+      "The restart question's other-owner half: the mode-unknown observer re-asks only " +
+      "Tandem's Claude's start-or-wake (mode-known) when the mode first reads Tandem after " +
+      "reading unknown. A session other than Tandem's Claude holding a document gets no " +
+      "`ownership` frame and no push wake for a user comment made while the mode was unknown " +
+      "(pushEvent's Solo gate dropped it); it sees the comment only at its next " +
+      "tandem_checkInbox, which stays authoritative.",
     closedBy:
-      "Bryan's answer (3b-2b1b's 'Needs Bryan') and, if it differs, the change with a test.",
+      "A re-ask for other owners when the mode becomes known (the `ownership` frame, or a " +
+      "push-stream nudge), with a test, or Bryan's acceptance of the gap.",
   },
   {
     gap:

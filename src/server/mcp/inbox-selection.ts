@@ -36,7 +36,8 @@
  *    version 0. No status gate: the collector ignores the parent's status.
  *  - **Solo:** both count only while the mode reads `"tandem"`; the push rule
  *    (`shouldForwardExternally`). Indeterminate never counts (the reviewing
- *    session's ruling; flip-blocker "the restart question").
+ *    session's ruling; "the restart question", whose re-ask is the
+ *    mode-unknown observer, `noteModeObserved` in `sessions/ownership.ts`).
  *  - **Schema:** each item is built as a poll would build it, with an empty
  *    `textSnippet` (the text is not read), and must pass its bucket's schema,
  *    the poll's last gate (`admit`).
