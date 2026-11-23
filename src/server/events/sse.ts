@@ -19,6 +19,7 @@ import {
 } from "../../shared/events/wake-scope.js";
 import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { pushStreamAdmits } from "../sessions/ownership.js";
+import { chatMessageRowKeyOf } from "./delivery-state.js";
 import { replaySince, subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
 
@@ -116,7 +117,15 @@ function streamAdmits(sessionId: string | undefined, event: TandemEvent): boolea
   return pushStreamAdmits(
     sessionId,
     event.type === "chat:message"
-      ? { documentId: event.documentId, chatMessageKey: event.payload.messageId }
+      ? {
+          documentId: event.documentId,
+          // The row's chat-map key, as the CTRL chat observer noted it: the
+          // payload's `messageId` is the row's client-writable `id` field, not
+          // its key (R1.1), so a row whose `id` names another row's key would
+          // otherwise be narrowed as that row. The `messageId` only for an
+          // event pushed with no noted key (rounds not keyed).
+          chatMessageKey: chatMessageRowKeyOf(event) ?? event.payload.messageId,
+        }
       : { documentId: event.documentId },
   );
 }

@@ -32,6 +32,10 @@ import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
+import {
+  noteChatMessageRowKey,
+  setDeliveryRoundSeam,
+} from "../../src/server/events/delivery-state.js";
 import { _pushEventForTests, resetForTesting } from "../../src/server/events/queue.js";
 import {
   requestOwnershipChangedEvent,
@@ -52,6 +56,7 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import {
   inboxOwnership,
+  keyedDeliveryRounds,
   noteTransportChanged,
   noteTransportRegistered,
   type OwnershipChatSide,
@@ -426,6 +431,34 @@ describe("narrowing chat (ownership design §7.1, §9.1)", () => {
     for (const e of Object.values(ev)) _pushEventForTests(e);
     expect(a.ids()).toEqual([ev.a.id, ev.freeDoc.id, ev.docless.id]);
     expect(bare.ids()).toEqual(Object.values(ev).map((e) => e.id));
+  });
+
+  it("chat is narrowed by the row's chat-map key, never the client-writable messageId (R1.1)", () => {
+    register(A);
+    register(B);
+    const d1 = mkDoc("a").id;
+    const d2 = mkDoc("b").id;
+    hold(d1, A);
+    hold(d2, B);
+    setOwnershipChatSide(
+      stubChat({
+        "row-a": { documentId: d1, documentOpen: true },
+        "row-b": { documentId: d2, documentOpen: true },
+      }),
+    );
+    setDeliveryRoundSeam({ keyed: keyedDeliveryRounds, isDocumentOpen: () => true });
+    try {
+      const a = connect(ID_A);
+      const b = connect(ID_B);
+      // Row `row-b` (B's document) whose client-written `id` names A's row.
+      const forged = chat("row-a", d2);
+      noteChatMessageRowKey(forged, "row-b");
+      _pushEventForTests(forged);
+      expect(a.ids()).toEqual([]);
+      expect(b.ids()).toEqual([forged.id]);
+    } finally {
+      setDeliveryRoundSeam(undefined);
+    }
   });
 
   it("doc-less chat is Tandem's Claude's while it is present: a terminal's stream does not get it", () => {
