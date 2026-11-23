@@ -436,6 +436,35 @@ describe("exportAnnotations", () => {
     expect(result).not.toContain("## Notes");
   });
 
+  // #1823 item 4: the caller's refresh verdict renders as one `Anchor:` line
+  // under its own item, and an absent verdict renders nothing.
+  it("renders an Anchor line only for items the caller marked degraded or failed", () => {
+    loadHtml("<p>Hello world test content</p>");
+
+    const result = exportAnnotations(doc, [
+      makeAnnotation({ id: "h", type: "comment", range: range(0, 5), content: "healthy" }),
+      {
+        ...makeAnnotation({ id: "d", type: "comment", range: range(6, 11), content: "drifted" }),
+        anchor: "degraded",
+      },
+      {
+        ...makeAnnotation({ id: "f", type: "comment", range: range(12, 16), content: "inverted" }),
+        anchor: "failed",
+      },
+    ]);
+
+    const lines = result.split("\n");
+    const anchorLines = lines.filter((l) => l.includes("Anchor:"));
+    expect(anchorLines).toHaveLength(2);
+    expect(anchorLines[0]).toMatch(/^ {2}- Anchor: Degraded — /);
+    expect(anchorLines[1]).toMatch(/^ {2}- Anchor: Failed — .*inverted/);
+    // Each line sits directly under its own item's Status line.
+    const itemOf = (needle: string) => lines.findIndex((l) => l.startsWith(`- **"${needle}"**`));
+    expect(lines[itemOf("world") + 2]).toBe(anchorLines[0]);
+    expect(lines[itemOf("test") + 2]).toBe(anchorLines[1]);
+    expect(lines[itemOf("Hello") + 2]).not.toContain("Anchor:");
+  });
+
   it("generates markdown grouped by type", () => {
     loadHtml("<p>Hello world test content</p>");
 
