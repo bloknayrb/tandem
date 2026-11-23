@@ -21,6 +21,8 @@
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_SETTINGS } from "../../../shared/api-paths";
 import {
+  BOUND_TRANSPORT_KINDS,
+  type BoundTransportKind,
   isLauncherIdleMinutes,
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_NONCE,
@@ -78,6 +80,13 @@ const LIFETIMES: Array<{ value: LauncherLifetime; label: string }> = [
 
 const LOAD_ERROR = "Couldn't load these settings.";
 
+/** The Settings list of bound transports (#2358 PR 3b-2e1, ownership design
+ * §3.3's Ruling C): one fixed label per kind. The server sends kinds only. */
+const BOUND_TRANSPORT_LABELS: Record<BoundTransportKind, string> = {
+  bridge: "Through Tandem's bridge",
+  "direct-http": "Directly over HTTP",
+};
+
 let settings = $state<LauncherSettings | null>(null);
 let readOnly = $state(false);
 /** The file could not be read: the controls show what Tandem is doing
@@ -89,6 +98,14 @@ let saveError = $state<string | null>(null);
 /** The launcher will not run here at all (stdio, or switched off by the
  * operator), so these settings change nothing until it does. */
 let launcherAbsent = $state(false);
+/** Multi-session ownership only (#2358 PR 3b-2e1, ownership design §8.7):
+ * the latest run of Tandem's Claude failed to bind. A dark server never sends
+ * it, so this stays false and nothing new renders. */
+let bindFailed = $state(false);
+/** Multi-session ownership only (Ruling C): the kinds of the connections bound
+ * to the running Claude's run. Empty, and the list not rendered, when the
+ * server sends none, which a dark server never does. */
+let boundTransports = $state<BoundTransportKind[]>([]);
 /** The idle-minutes field's own text, so an invalid entry can be shown and
  * corrected without being saved. */
 let idleText = $state("");
@@ -160,9 +177,23 @@ async function loadSettings(): Promise<void> {
 
 async function checkLauncherPresent(): Promise<void> {
   const status = await fetchLauncherStatus();
-  if (!mounted || !status.ok || status.value.available) return;
-  launcherAbsent =
-    status.value.reason === "stdio-mode" || status.value.reason === "disabled-by-env";
+  if (!mounted || !status.ok) return;
+  const value = status.value;
+  if (value.available) {
+    // Read defensively: an unknown kind is dropped rather than shown, and a
+    // malformed field reads as absent.
+    bindFailed = value.bindFailed === true;
+    const rows: unknown = value.running ? value.boundTransports : undefined;
+    boundTransports = Array.isArray(rows)
+      ? rows
+          .map((row) => (row as { kind?: unknown } | null)?.kind)
+          .filter((kind): kind is BoundTransportKind =>
+            BOUND_TRANSPORT_KINDS.includes(kind as BoundTransportKind),
+          )
+      : [];
+    return;
+  }
+  launcherAbsent = value.reason === "stdio-mode" || value.reason === "disabled-by-env";
 }
 
 void Promise.all([loadSettings(), checkLauncherPresent()]);
@@ -277,6 +308,32 @@ const controlsDisabled = $derived(settings === null || readOnly);
   {#if launcherAbsent}
     <div class="settings-hint" data-testid="settings-modal-tandem-claude-absent">
       Tandem isn't running its own Claude in this setup, so these settings have no effect right now.
+    </div>
+  {/if}
+
+  {#if !startModeOnly && bindFailed}
+    <!-- Ownership design §8.7: the reason, and no Start (a restart reproduces
+         it). The remedies are the install's: the setup wizard and doctor. -->
+    <div role="status" class="tc-warning" data-testid="settings-modal-tandem-claude-bind-failed">
+      Tandem's Claude couldn't connect its Tandem tools, so it isn't holding your documents or
+      answering for them. Starting it again won't fix this: reopen the integration wizard below to
+      set Claude Code up again, or run <code>tandem doctor</code> in a terminal to see what's wrong.
+    </div>
+  {/if}
+  {#if !startModeOnly && boundTransports.length > 0}
+    <div class="tc-bound" data-testid="settings-modal-tandem-claude-bound-transports">
+      <div class="settings-hint">
+        {boundTransports.length === 1
+          ? "Connected to Tandem's tools by one connection:"
+          : `Connected to Tandem's tools by ${boundTransports.length} connections:`}
+      </div>
+      <ul class="tc-bound-list">
+        {#each boundTransports as kind, i (i)}
+          <li data-testid="settings-modal-tandem-claude-bound-transport" data-kind={kind}>
+            {BOUND_TRANSPORT_LABELS[kind]}
+          </li>
+        {/each}
+      </ul>
     </div>
   {/if}
 
@@ -407,5 +464,18 @@ const controlsDisabled = $derived(settings === null || readOnly);
   .tc-error {
     font-size: 11px;
     color: var(--tandem-error-fg-strong);
+  }
+  .tc-warning {
+    font-size: 11px;
+    padding: var(--tandem-space-2);
+    border-radius: var(--tandem-r-2);
+    border: 1px solid var(--tandem-warning-border);
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+  }
+  .tc-bound-list {
+    margin: 0;
+    padding-left: var(--tandem-space-5);
+    font-size: 12px;
   }
 </style>

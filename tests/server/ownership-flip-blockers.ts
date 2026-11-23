@@ -273,10 +273,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy: "#2360's switch PR merged.",
   },
   {
-    gap: "The Settings list of bound transports (Ruling C) is not built.",
-    closedBy: "PR 3b.",
-  },
-  {
     gap:
       "PR 3a's assumptions the 2026-11-17 smoke left unmeasured (Windows 11, Claude Code " +
       "2.1.325, one sample, run contained): whether `--settings` disables a plugin beside " +

@@ -24,6 +24,7 @@ import {
   TANDEM_PURCHASE_URL,
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
+import type { BoundTransport, BoundTransportKind } from "../../shared/launcher/contract.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
 import { type LocalModelState, MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
 import { OWNER_HANDLE_HEADER } from "../../shared/owner-handle.js";
@@ -650,7 +651,12 @@ async function openSession(
       );
       const bound =
         ownerHandle !== undefined &&
-        noteOwnerHandleBind(registry, sessionId, ownerHandle.candidate);
+        noteOwnerHandleBind(
+          registry,
+          sessionId,
+          ownerHandle.candidate,
+          clientId !== undefined ? "bridge" : "direct-http",
+        );
       // Synchronous from `add` to here, so the entry is never seen unrouted.
       const entry = routeAfterBind ? registry.get(sessionId) : undefined;
       const routed =
@@ -698,10 +704,12 @@ function noteOwnerHandleBind(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   sessionId: string,
   candidate: BindCandidate | null,
+  bindKind: BoundTransportKind,
 ): boolean {
   const entry = registry.get(sessionId);
   if (candidate !== null && entry !== undefined && confirmBind(candidate, sessionId)) {
     entry.boundSpawn = candidate.serial;
+    entry.bindKind = bindKind;
     console.error(
       `[Tandem] MCP session ${sessionIdForLog(sessionId)} bound to Tandem's Claude's current run`,
     );
@@ -726,6 +734,25 @@ export function mcpSessionBindsForTests(): Array<{ sessionId: string; boundSpawn
     boundSpawn:
       entry.boundSpawn !== undefined && isSpawnLive(entry.boundSpawn) ? entry.boundSpawn : null,
   }));
+}
+
+/**
+ * The Settings list of bound transports (#2358 PR 3b-2e1, ownership design
+ * §3.3's Ruling C): one row per live MCP session bound to a live spawn of
+ * Tandem's Claude (the `isSpawnLive` mask every reader of the bind fact
+ * applies), by kind alone — never its `Mcp-Session-Id`, owner record id or
+ * Claude session id, which the rows have no field for. `undefined` while
+ * ownership is off, so a dark server's status carries no field; the launcher
+ * status route copies each row's `kind` and nothing else.
+ */
+export function boundTransportKinds(): BoundTransport[] | undefined {
+  if (!ownershipEnabled()) return undefined;
+  const rows: BoundTransport[] = [];
+  for (const entry of sessions?.list() ?? []) {
+    if (entry.boundSpawn === undefined || !isSpawnLive(entry.boundSpawn)) continue;
+    rows.push({ kind: entry.bindKind ?? "direct-http" });
+  }
+  return rows;
 }
 
 /**
@@ -1444,6 +1471,7 @@ export async function startMcpServerHttp(
       settingsBase: resolveAppDataDir(),
       getSkillRefreshError,
       isClaudeSessionAttached,
+      boundTransports: boundTransportKinds,
       // Tandem's own auto-opened documents. `welcome.md` opens on first run and
       // `CHANGELOG.md` after every upgrade, both from inside the app bundle —
       // which on Windows sits under `%LOCALAPPDATA%`, i.e. INSIDE the user's

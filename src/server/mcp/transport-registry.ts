@@ -105,6 +105,15 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
    * sets it. Nothing reads it in 3a except tests.
    */
   boundSpawn?: number;
+  /**
+   * How the bound transport reached Tandem (#2358 PR 3b-2e1, ownership design
+   * §3.3's Ruling C): `bridge` when its `initialize` carried the stdio
+   * bridge's `X-Tandem-Client-Id`, else `direct-http`. Set with `boundSpawn`
+   * and only then, so only while ownership is on; read only for the Settings
+   * list of bound transports (`boundTransportKinds` in `server.ts`), under
+   * the same `isSpawnLive` mask.
+   */
+  bindKind?: "bridge" | "direct-http";
 }
 
 export interface McpSessionRegistryOptions<S extends ClosableServer, T> {
