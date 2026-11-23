@@ -340,16 +340,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The restart question (3b-2b1b): while the mode is unknown (after a restart, before a " +
-      "client says whether it was Solo), waiting counts no user comment or reply, and nothing " +
-      "re-asks when the mode becomes known (the only release wake is emitModeReleaseWake, " +
-      "src/server/mcp/routes/mode-release.ts). Such a comment counts only when something next " +
-      "asks: a change of owner, or 3b-2b4's checks.",
-    closedBy:
-      "Bryan's answer (3b-2b1b's 'Needs Bryan') and, if it differs, the change with a test.",
-  },
-  {
-    gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
       "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
       "session is connected (after a restart every restored document is unowned), every pending " +

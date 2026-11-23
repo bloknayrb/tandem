@@ -781,11 +781,10 @@ describe("the tandem record at an HTTP-mode boot (#2358 PR 3b-2b3a)", () => {
 describe("another session is connected: rule 0's kinds count, tandem does not (#2358 PR 3b-2b3a)", () => {
   // Observed through the lapse gate (Bryan's pick 2): a lapse forwards to the
   // sink only while no other session is connected.
-  let sink: ReturnType<
-    typeof vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>
-  >;
+  type Cause = "document" | "message" | "departure" | "solo-release" | "mode-known";
+  let sink: ReturnType<typeof vi.fn<(cause: Cause) => void>>;
   beforeEach(() => {
-    sink = vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>();
+    sink = vi.fn<(cause: Cause) => void>();
     setStartOrWakeSink(sink);
   });
 

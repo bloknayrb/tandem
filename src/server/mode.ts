@@ -210,3 +210,27 @@ export function installModeProvenanceObserver(ctrlDoc: Y.Doc): () => void {
   awareness.observe(onChange);
   return () => awareness.unobserve(onChange);
 }
+
+/**
+ * Report the mode to `note` at install and at every change of the mode key
+ * (#2358, the restart question; ADR-054's mode-unknown observer amendment).
+ * Only reads; what to do with it is `note`'s (`noteModeObserved` in
+ * `sessions/ownership.ts`, which does nothing while ownership is off, so this
+ * module stays free of the ownership flag). `events/queue.ts`'s
+ * `attachCtrlObservers` installs it beside the provenance observer, so the
+ * Hocuspocus doc swap re-installs it; the report at install is what arms it at
+ * boot and what carries a mode the swap copied in. Returns the unobserve
+ * cleanup.
+ */
+export function installModeKnownObserver(
+  ctrlDoc: Y.Doc,
+  note: (state: ModeState) => void,
+): () => void {
+  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+  note(readModeState());
+  const onChange = (event: Y.YMapEvent<unknown>): void => {
+    if (event.keysChanged.has(Y_MAP_MODE)) note(readModeState());
+  };
+  awareness.observe(onChange);
+  return () => awareness.unobserve(onChange);
+}
