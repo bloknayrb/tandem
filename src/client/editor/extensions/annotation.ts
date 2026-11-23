@@ -11,7 +11,7 @@ import {
   normalizeHighlightColor,
   Y_MAP_ANNOTATIONS,
 } from "../../../shared/constants";
-import { sanitizeAnnotation } from "../../../shared/sanitize";
+import { atMapKey, sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { agentLabelSource } from "../../hooks/useModels.svelte";
 import { annotationToPmRange } from "../../positions";
@@ -126,11 +126,16 @@ function buildDecorations(
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
 
-  annotationsMap.forEach((value) => {
-    const ann = sanitizeAnnotation(value as Annotation, (event) => {
-      // Browser DevTools breadcrumb — only forensic trail client-side.
-      console.warn("[sanitize]", event);
-    });
+  annotationsMap.forEach((value, key) => {
+    if (key === "") return;
+    // The decoration's id is the MAP KEY, the id every click action posts.
+    const ann = atMapKey(
+      key,
+      sanitizeAnnotation(value as Annotation, (event) => {
+        // Browser DevTools breadcrumb — only forensic trail client-side.
+        console.warn("[sanitize]", event);
+      }),
+    );
     if (ann.status !== "pending") return;
     // Per-type display filter (1.13). Display-only — notes filtered here are
     // still present in the Y.Map and never read by Claude server-side (ADR-027).

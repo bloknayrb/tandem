@@ -90,6 +90,23 @@ export function getFileSyncContext(
 }
 
 /**
+ * The registered file-sync context whose Y.Doc is `ydoc`, if any.
+ *
+ * Backed by the name-keyed registry itself, never by a second doc-keyed map:
+ * once `clearFileSyncContext` drops a context (`tandem_open force` clears it
+ * before swapping content), this answers `undefined`. A separate `WeakMap`
+ * would still answer, and a snapshot queued through it would write
+ * `tombstones: []` before re-wiring re-seeds them (deleted Word comments
+ * would come back).
+ */
+export function getFileSyncContextForDoc(ydoc: Y.Doc): SyncContext | undefined {
+  for (const entry of fileSyncContexts.values()) {
+    if (entry.ctx.ydoc === ydoc) return entry.ctx;
+  }
+  return undefined;
+}
+
+/**
  * Drop the file-sync context for a document (on close or force-reload prep).
  * Returns the dropped `{ store, docHash }` so callers can flush/clear the
  * durable store without recomputing the hash or minting a transient handle.

@@ -42,10 +42,14 @@ import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { extractText } from "../mcp/document-model.js";
+import { getAliasLedger } from "./alias-ledger.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
+import { assignEnvelopeRows } from "./legacy-envelope.js";
+import { pickWinner } from "./pick-winner.js";
 import {
   type AnnotationDocV1,
   isPartialParse,
+  KEY_IDENTITY_FORMAT,
   parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "./schema.js";
@@ -56,7 +60,7 @@ import {
   isStoreReadOnly,
   preservePartialEnvelope,
 } from "./store.js";
-import { recordTombstone } from "./sync.js";
+import { quarantineReplies, recordTombstone } from "./sync.js";
 
 // Envelope filename shape is hoisted to ./doc-hash.ts as ENVELOPE_FILENAME_RE
 // so rename-recovery + session-cleanup share one source of truth (any drift
@@ -204,10 +208,24 @@ export async function recoverRenamedEnvelope(
     const source = candidates[0].doc;
     const sourceFile = candidates[0].file;
 
+    // Route the found envelope's rows onto target keys BEFORE anything is
+    // flushed (`legacy-envelope.ts`): an old-format envelope can hold a record
+    // under another record's id, and the flush below must never carry such a
+    // body forward, let alone under the `keyIdentity` marker. Ambiguous user
+    // replies are stamped private in the same pass.
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const routed = withInternal(doc, () => {
+      const assignment = assignEnvelopeRows(source, annMap, getAliasLedger(doc), currentHash);
+      const replies = quarantineReplies(source.replies, repMap, assignment.quarantineIds);
+      return { annotations: [...assignment.rows.values()], replies: replies.fileReplies };
+    });
+
     // Rewrite the ENTIRE envelope under the new docHash via the store's
     // queueWrite/flush (never a raw fs.rename that could race a pending
     // debounce on either hash). lastUpdated/contentHash are refreshed; the
     // snapshot observer will re-stamp contentHash on the next live write too.
+    // Its rows are now keyed by target key, so it carries the marker.
     const rekeyed: AnnotationDocV1 = {
       ...source,
       schemaVersion: SCHEMA_VERSION,
@@ -217,7 +235,10 @@ export async function recoverRenamedEnvelope(
         filePath: currentFilePath,
         lastUpdated: Date.now(),
         contentHash: wantHash,
+        keyIdentity: KEY_IDENTITY_FORMAT,
       },
+      annotations: routed.annotations,
+      replies: routed.replies,
     };
 
     const store = createStore(currentHash, { filePath: currentFilePath });
@@ -225,16 +246,34 @@ export async function recoverRenamedEnvelope(
     await store.flush();
 
     // Inject recovered annotations + replies into the Y.Doc (open-time
-    // population → withInternal). The merge that loadAndMerge runs next sees
-    // file == Y.Map and is a no-op.
-    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
-    const repMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    // population → withInternal). Each row's id is its target key. A row lands
+    // only on an empty key or where the file copy wins `pickWinner`: the routing
+    // leaves a doubtful row on its own id precisely when the live copy would
+    // win, so a bare set here would write one record's body over another. A
+    // live copy that wins stays, and the `loadAndMerge` that runs next persists
+    // it over the envelope's row.
     withInternal(doc, () => {
       for (const ann of rekeyed.annotations) {
+        const live = annMap.get(ann.id) as { rev?: unknown; editedAt?: unknown } | undefined;
+        if (live && typeof live === "object") {
+          const liveStamp = {
+            rev: typeof live.rev === "number" ? live.rev : 0,
+            editedAt: typeof live.editedAt === "number" ? live.editedAt : undefined,
+          };
+          if (pickWinner(ann, liveStamp) !== "file") continue;
+        }
         annMap.set(ann.id, ann);
       }
       for (const reply of rekeyed.replies) {
-        repMap.set(reply.id, reply);
+        // `private` is sticky (as in every reply merge): a live copy already
+        // withheld from Claude stays withheld.
+        const live = repMap.get(reply.id) as { private?: unknown; rev?: number } | undefined;
+        repMap.set(
+          reply.id,
+          live?.private === true && reply.private !== true
+            ? { ...reply, private: true, rev: Math.max(reply.rev, live.rev ?? 0) + 1 }
+            : reply,
+        );
       }
     });
 

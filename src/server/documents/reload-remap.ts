@@ -104,10 +104,16 @@ import { diffLines } from "diff";
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { type DocumentRange, toFlatOffset } from "../../shared/positions/types.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
-import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
+import {
+  isSnapshotTruncated,
+  snapshotContradicts,
+  snapshotSearchPrefix,
+} from "../../shared/snapshot.js";
 import type { Annotation } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { reconcileAnnotationKeys } from "../annotations/key-identity.js";
+import { isFreshKey } from "../annotations/legacy-envelope.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { extractText, extractTextWithBreaks, type FlatBreak } from "../mcp/document-model.js";
 import {
@@ -370,6 +376,13 @@ interface RemapEntry {
   oldRange: DocumentRange;
   /** See the module header: does `oldRange` hold the record's real old text? */
   trusted: boolean;
+  /**
+   * Whether `oldRange` came from resolving the record's LIVE anchor (`ok` /
+   * `updated`), rather than from its stored range or a mint from it. Only such
+   * an entry may stand in for another record that shares its anchor
+   * (`remapEnvelopeWins`).
+   */
+  liveResolved?: boolean;
 }
 
 /** Everything {@link applyRemap} and {@link remapEnvelopeWins} need. */
@@ -428,6 +441,7 @@ function entryFor(raw: unknown, ann: Annotation, ydoc: Y.Doc, oldText: string): 
         ann,
         oldRange: clampRange(result.annotation.range, oldText.length),
         trusted: true,
+        liveResolved: result.kind === "ok" || result.kind === "updated",
       };
     case "degraded":
     case "failed":
@@ -465,13 +479,22 @@ function sanitizeFor(raw: unknown, hash: string): Annotation | null {
  * the same transaction as the content swap and before it — no await between.
  */
 export function captureRemapInput(ydoc: Y.Doc, filePath: string): RemapInput {
+  // Remap writes every record back under its key, so it is a repairing writer:
+  // reconcile first, so replies filed under a stale id are quarantined before
+  // any id is repaired, and `entry.raw` is the reconciled object. Inside the
+  // content-swap transaction this joins it and takes its server origin.
+  reconcileAnnotationKeys(ydoc);
   const { text: oldText, breaks: oldBreaks } = extractTextWithBreaks(ydoc);
   const entries = new Map<string, RemapEntry>();
   const hash = docHash(filePath);
   ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((raw, key) => {
-    const ann = sanitizeFor(raw, hash);
-    if (!ann || ann.id !== key) return;
-    entries.set(key, entryFor(raw, ann, ydoc, oldText));
+    // Identity is the map key: a record stored under K with a stale `id: X` is
+    // remapped as K (it used to be skipped, so it kept pre-reload coordinates
+    // under a dead anchor). Only `ann` is stamped; `raw` stays the live map
+    // value, because `applyRemap`'s `current === entry.raw` is a reference check.
+    const sanitized = key === "" ? null : sanitizeFor(raw, hash);
+    if (!sanitized) return;
+    entries.set(key, entryFor(raw, atMapKey(key, sanitized), ydoc, oldText));
   });
   return { oldText, oldBreaks, entries, filePath };
 }
@@ -500,6 +523,12 @@ const surrogates = "ignore" as const;
  * need it.
  */
 export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
+  // The content swap itself may have written records (the `.docx` adapter
+  // re-imports Word comments). Reconcile BEFORE the loop below, so an alias it
+  // left behind is repaired with its replies quarantined, never silently by the
+  // loop's `atMapKey` stamp — and before the early return, so a document with
+  // nothing captured is reconciled too.
+  reconcileAnnotationKeys(ydoc);
   const newText = extractText(ydoc);
   if (input.entries.size === 0) return { ...input, newText, hunks: null };
   const hunks = lineHunks(input.oldText, newText);
@@ -514,8 +543,9 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
     }
     if (current === undefined || !sameAnchor(current, entry.raw)) continue;
     hash ??= docHash(input.filePath);
-    const ann = sanitizeFor(current, hash);
-    if (!ann || ann.id !== entry.id) continue;
+    const sanitized = sanitizeFor(current, hash);
+    if (!sanitized) continue;
+    const ann = atMapKey(entry.id, sanitized);
     map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
   return remap;
@@ -548,19 +578,67 @@ export function remapEnvelopeWins(
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const hash = docHash(remap.filePath);
   let wrote = false;
+  let twins: Map<string, RemapEntry> | undefined;
   for (const id of ids) {
     const raw = map.get(id);
-    const ann = sanitizeFor(raw, hash);
-    if (!ann || ann.id !== id) continue;
+    const sanitized = sanitizeFor(raw, hash);
+    if (!sanitized) continue;
+    const ann = atMapKey(id, sanitized);
     const captured = remap.entries.get(id);
     const entry: RemapEntry =
       captured && sameAnchor(raw, captured.raw)
         ? { ...captured, raw, ann }
-        : storedEntry(raw, ann, remap.oldText);
+        : !captured && isFreshKey(id)
+          ? freshKeyEntry(raw, ann, remap, (twins ??= liveTwinIndex(remap)))
+          : storedEntry(raw, ann, remap.oldText);
     map.set(id, remapOne(ydoc, entry, remap, hunks, newText));
     wrote = true;
   }
   return wrote;
+}
+
+/**
+ * An entry for a row the envelope merge placed at a FRESH key (a duplicate it
+ * could not match with certainty, `legacy-envelope.ts`). The capture never saw
+ * that key, and the row's stored flat range predates the reload, so it is never
+ * trusted on its own: a confident anchor minted there could sit on unrelated
+ * text. It borrows a captured entry only when that entry holds the SAME live
+ * anchor (equal `relRange`), resolved live, and the row's own snapshot does not
+ * contradict the old text there. Any other uncaptured key keeps master's
+ * `storedEntry`.
+ */
+function freshKeyEntry(
+  raw: unknown,
+  ann: Annotation,
+  remap: ReloadRemap,
+  twins: ReadonlyMap<string, RemapEntry>,
+): RemapEntry {
+  const twin = ann.relRange ? twins.get(JSON.stringify(ann.relRange)) : undefined;
+  if (twin) {
+    const oldSpan = remap.oldText.slice(twin.oldRange.from, twin.oldRange.to);
+    if (!snapshotContradicts(ann, oldSpan)) {
+      return { id: ann.id, raw, ann, oldRange: twin.oldRange, trusted: twin.trusted };
+    }
+  }
+  return { ...storedEntry(raw, ann, remap.oldText), trusted: false };
+}
+
+/**
+ * Live-resolved captured entries keyed by their own stored `relRange`
+ * (serialized), the first in capture order winning. Keyed only on a present
+ * `relRange`, so two anchor-less records never match. Built once per
+ * `remapEnvelopeWins`, and only when a fresh key needs it.
+ */
+function liveTwinIndex(remap: ReloadRemap): Map<string, RemapEntry> {
+  const index = new Map<string, RemapEntry>();
+  for (const entry of remap.entries.values()) {
+    if (!entry.liveResolved) continue;
+    const relRange = (entry.ann as { relRange?: unknown }).relRange;
+    if (relRange === undefined) continue;
+    const key = JSON.stringify(relRange);
+    if (!index.has(key)) index.set(key, entry);
+  }
+  return index;
 }
 
 function sameAnchor(a: unknown, b: unknown): boolean {

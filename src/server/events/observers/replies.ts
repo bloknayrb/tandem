@@ -1,5 +1,6 @@
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
+import { atMapKey } from "../../../shared/sanitize.js";
 import type { AnnotationReply } from "../../../shared/types.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import {
@@ -43,7 +44,8 @@ export function makeRepliesObserver(deps: {
       // a reply the user had just watched themselves write -- parent corrupt,
       // parent private, parent deleted -- with no signal anywhere, which is the
       // "sometimes it is instant and sometimes it is not" report that costs days.
-      const parent = narrowForChannel(annotationsMap.get(reply?.annotationId ?? ""), {
+      const parentKey = reply?.annotationId ?? "";
+      const narrowed = narrowForChannel(annotationsMap.get(parentKey), {
         onLossy: (event) => relaySanitizationEvent(docName, event),
         onRefused: (refusal, refused) => {
           if (!isNoteworthyRefusal(refusal)) return;
@@ -52,7 +54,13 @@ export function makeRepliesObserver(deps: {
           );
         },
       });
-      if (!parent) return undefined;
+      if (!narrowed) return undefined;
+      // The parent was fetched BY its map key, so that key is its identity
+      // (`atMapKey`), stamped after the narrow on the eligible copy. A parent
+      // stored with a stale `id` would otherwise fail the parent-mismatch check
+      // in `projection.ts` and drop every reply on it, while the pull side
+      // (which reads keys) showed them.
+      const parent = atMapKey(parentKey, narrowed);
 
       // The parent being eligible says nothing about the reply.
       // `AnnotationReply.private` is stamped at creation from the parent's type

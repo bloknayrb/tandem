@@ -34,6 +34,7 @@ import { resetMigrationLog } from "../../../src/server/annotations/migration-log
 import {
   type AnnotationRecordV1,
   type AnnotationReplyRecordV1,
+  KEY_IDENTITY_FORMAT,
   parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "../../../src/server/annotations/schema.js";
@@ -45,15 +46,23 @@ import {
 import {
   getTombstones,
   loadAndMerge,
+  mergeEnvelopeForward,
   migrateTombstoneLedger,
   pickWinner,
+  quarantineReplies,
+  queueSnapshot,
   recordTombstone,
   registerAnnotationObserver,
   resetForTesting,
   type SyncContext,
 } from "../../../src/server/annotations/sync.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../src/shared/constants.js";
-import { FILE_SYNC_ORIGIN, INTERNAL_ORIGIN, MCP_ORIGIN } from "../../../src/shared/origins.js";
+import {
+  FILE_SYNC_ORIGIN,
+  INTERNAL_ORIGIN,
+  MCP_ORIGIN,
+  withInternal,
+} from "../../../src/shared/origins.js";
 import {
   annRecord,
   FILE_A,
@@ -1004,19 +1013,22 @@ describe("loadAndMerge — afterMerge hook (#2269)", () => {
   }
 
   it("names every id the file won — inserted, replaced on rev, replaced on rule 3 — and nothing else", async () => {
+    // Four distinct records, so four creation times: records indistinguishable
+    // on timestamp, type and snapshot are duplicated rather than merged by the
+    // old-format envelope pass (`legacy-envelope.ts`), which is not this test.
     await seedFile([
-      annRecord({ id: "inserted", rev: 1 }),
-      annRecord({ id: "rev-wins", rev: 5, content: "disk" }),
-      annRecord({ id: "rule3", rev: 2, editedAt: 111, content: "disk" }),
-      annRecord({ id: "tie", rev: 3, content: "disk" }),
+      annRecord({ id: "inserted", rev: 1, timestamp: 1 }),
+      annRecord({ id: "rev-wins", rev: 5, content: "disk", timestamp: 2 }),
+      annRecord({ id: "rule3", rev: 2, editedAt: 111, content: "disk", timestamp: 3 }),
+      annRecord({ id: "tie", rev: 3, content: "disk", timestamp: 4 }),
     ]);
     const ydoc = new Y.Doc();
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    annMap.set("rev-wins", annRecord({ id: "rev-wins", rev: 2, content: "map" }));
+    annMap.set("rev-wins", annRecord({ id: "rev-wins", rev: 2, content: "map", timestamp: 2 }));
     // Rule 3: rev tie, file has editedAt, the map copy does not.
-    annMap.set("rule3", annRecord({ id: "rule3", rev: 2, content: "map" }));
+    annMap.set("rule3", annRecord({ id: "rule3", rev: 2, content: "map", timestamp: 3 }));
     // A plain tie keeps the map copy, so it is NOT a file win.
-    annMap.set("tie", annRecord({ id: "tie", rev: 3, content: "map" }));
+    annMap.set("tie", annRecord({ id: "tie", rev: 3, content: "map", timestamp: 4 }));
 
     const seen: string[][] = [];
     let origin: unknown;
@@ -1887,5 +1899,223 @@ describe("pickWinner", () => {
     // Both sides carry a defined timestamp — `0 > 0` is false, Rule 2
     // returns ymap. Guards against a truthy refactor dropping into Rule 4.
     expect(pickWinner({ rev: 1, editedAt: 0 }, { rev: 1, editedAt: 0 })).toBe("ymap");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key identity (#2524): queueSnapshot, mergeEnvelopeForward, sticky private,
+// quarantineReplies
+// ---------------------------------------------------------------------------
+
+async function readEnvelope(): Promise<{
+  meta: Record<string, unknown>;
+  annotations: AnnotationRecordV1[];
+}> {
+  const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
+  return JSON.parse(raw);
+}
+
+async function seedEnvelope(overrides: Parameters<typeof makeAnnotationDoc>[2]): Promise<void> {
+  const store0 = createStore(HASH_A, { filePath: FILE_A });
+  store0.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A, overrides));
+  await store0.flush();
+  resetStoreForTesting();
+}
+
+const T_X = 1_700_000_000_000;
+const T_K = 1_700_000_500_000;
+const REC_X = annRecord({ id: "X", content: "X body", timestamp: T_X, rev: 1 });
+const REC_K = annRecord({
+  id: "K",
+  author: "user",
+  type: "note",
+  content: "K body",
+  timestamp: T_K,
+  rev: 1,
+});
+
+function liveAnnotations(records: Record<string, unknown>): Y.Doc {
+  const doc = new Y.Doc();
+  withInternal(doc, () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    for (const [key, value] of Object.entries(records)) map.set(key, value);
+  });
+  return doc;
+}
+
+describe("queueSnapshot", () => {
+  it("writes the live map under its keys and marks the envelope keyIdentity", async () => {
+    const ydoc = liveAnnotations({ K: { ...REC_K, id: "X" } });
+    const store = createStore(HASH_A, { filePath: FILE_A });
+
+    queueSnapshot(syncCtx(ydoc, store));
+    await store.flush();
+
+    const onDisk = await readEnvelope();
+    expect(onDisk.meta.keyIdentity).toBe(KEY_IDENTITY_FORMAT);
+    expect(onDisk.annotations.map((a) => [a.id, a.content])).toEqual([["K", "K body"]]);
+  });
+
+  it("drops a record stored under an empty key, and counts the drop", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ydoc = liveAnnotations({ "": { ...REC_X, id: "" }, X: { ...REC_X } });
+    const store = createStore(HASH_A, { filePath: FILE_A });
+
+    queueSnapshot(syncCtx(ydoc, store));
+    await store.flush();
+
+    const onDisk = await readEnvelope();
+    expect(onDisk.annotations.map((a) => a.id)).toEqual(["X"]);
+    expect(
+      errorSpy.mock.calls.some((args) => String(args[0]).includes("dropped 1 annotation(s)")),
+    ).toBe(true);
+  });
+});
+
+describe("mergeEnvelopeForward — key identity", () => {
+  it("routes an old-format alias row onto its record's key and reports a write", () => {
+    const ydoc = liveAnnotations({ X: { ...REC_X }, K: { ...REC_K } });
+    const file = makeAnnotationDoc(HASH_A, FILE_A, {
+      annotations: [{ ...REC_X }, { ...REC_K, id: "X", content: "K newer", rev: 5 }],
+    });
+
+    const out = mergeEnvelopeForward(ydoc, file, HASH_A);
+
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    expect(out.needsWrite).toBe(true);
+    expect((annMap.get("X") as AnnotationRecordV1).content).toBe("X body");
+    expect(annMap.get("K")).toMatchObject({ id: "K", content: "K newer", rev: 5 });
+  });
+
+  // A rev tie counts as "live wins" and asks for a write (`mergeMap`), so the
+  // no-write case is a marked envelope whose every row is newer than live.
+  it("reports no write when a marked envelope's rows all win in place", () => {
+    const ydoc = liveAnnotations({ X: { ...REC_X }, K: { ...REC_K } });
+    const file = makeAnnotationDoc(HASH_A, FILE_A, {
+      annotations: [
+        { ...REC_X, rev: 2 },
+        { ...REC_K, rev: 2 },
+      ],
+    });
+    file.meta = { ...file.meta, keyIdentity: KEY_IDENTITY_FORMAT };
+
+    expect(mergeEnvelopeForward(ydoc, file, HASH_A)).toEqual({ needsWrite: false });
+    expect(ydoc.getMap(Y_MAP_ANNOTATIONS).get("K")).toMatchObject({ id: "K", rev: 2 });
+  });
+
+  it("brings a file-only user reply under an ambiguous id back private, and forces a write", () => {
+    const ydoc = liveAnnotations({ X: { ...REC_X }, K: { ...REC_K } });
+    const file = makeAnnotationDoc(HASH_A, FILE_A, {
+      annotations: [{ ...REC_X }, { ...REC_K }, { ...REC_K, id: "X", rev: 5 }],
+      replies: [replyRecord({ id: "r1", annotationId: "X", author: "user", rev: 1 })],
+    });
+
+    const out = mergeEnvelopeForward(ydoc, file, HASH_A);
+
+    expect(out.needsWrite).toBe(true);
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1")).toMatchObject({
+      private: true,
+      rev: 2,
+    });
+  });
+});
+
+describe("replies merge — sticky private", () => {
+  function liveWithReply(reply: AnnotationReplyRecordV1): Y.Doc {
+    const ydoc = liveAnnotations({ X: { ...REC_X } });
+    withInternal(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set(reply.id, reply));
+    return ydoc;
+  }
+
+  it("file wins on rev but is not private: survivor is the file's text, private, rev max+1", async () => {
+    await seedEnvelope({
+      annotations: [{ ...REC_X }],
+      replies: [replyRecord({ id: "r1", annotationId: "X", rev: 7, text: "file" })],
+    });
+    const ydoc = liveWithReply(
+      replyRecord({ id: "r1", annotationId: "X", rev: 2, text: "live", private: true }),
+    );
+
+    const cleanup = await loadAndMerge(syncCtx(ydoc, createStore(HASH_A, { filePath: FILE_A })));
+
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1")).toMatchObject({
+      text: "file",
+      private: true,
+      rev: 8,
+    });
+    cleanup("close");
+  });
+
+  it("live wins on rev but is not private while the file copy is: stamped, and a write is queued", async () => {
+    await seedEnvelope({
+      annotations: [{ ...REC_X }],
+      replies: [replyRecord({ id: "r1", annotationId: "X", rev: 2, text: "file", private: true })],
+    });
+    const ydoc = liveWithReply(replyRecord({ id: "r1", annotationId: "X", rev: 7, text: "live" }));
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queued = vi.spyOn(store, "queueWrite");
+
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1")).toMatchObject({
+      text: "live",
+      private: true,
+      rev: 8,
+    });
+    expect(queued).toHaveBeenCalled();
+    cleanup("close");
+  });
+
+  it("both copies already private: no rewrite and no rev bump", async () => {
+    const reply = replyRecord({ id: "r1", annotationId: "X", rev: 3, private: true });
+    await seedEnvelope({ annotations: [{ ...REC_X }], replies: [{ ...reply }] });
+    const ydoc = liveWithReply({ ...reply });
+    const before = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1");
+
+    const cleanup = await loadAndMerge(syncCtx(ydoc, createStore(HASH_A, { filePath: FILE_A })));
+
+    const after = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("r1");
+    expect(after).toBe(before);
+    expect(after).toMatchObject({ rev: 3 });
+    cleanup("close");
+  });
+});
+
+describe("quarantineReplies", () => {
+  it("returns the input unchanged when no id is ambiguous", () => {
+    const ydoc = new Y.Doc();
+    const fileReplies = [replyRecord({ id: "r1", annotationId: "X" })];
+
+    const out = quarantineReplies(fileReplies, ydoc.getMap(Y_MAP_ANNOTATION_REPLIES), new Set());
+
+    expect(out).toEqual({ fileReplies, changed: false, stampedLiveKeys: [] });
+    expect(out.fileReplies).not.toBe(fileReplies);
+  });
+
+  it("stamps only user replies under an ambiguous id, skips non-objects, and names the live keys", () => {
+    const ydoc = new Y.Doc();
+    const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    withInternal(ydoc, () => {
+      repMap.set("bad", "not a reply");
+      repMap.set("nul", null);
+      repMap.set("u1", replyRecord({ id: "u1", annotationId: "X", rev: 1 }));
+      repMap.set("c1", replyRecord({ id: "c1", annotationId: "X", author: "claude", rev: 1 }));
+      repMap.set("p1", replyRecord({ id: "p1", annotationId: "X", rev: 1, private: true }));
+      repMap.set("o1", replyRecord({ id: "o1", annotationId: "Y", rev: 1 }));
+    });
+    const fileReplies = [
+      replyRecord({ id: "f1", annotationId: "X", rev: 4 }),
+      replyRecord({ id: "f2", annotationId: "Y", rev: 4 }),
+    ];
+
+    const out = quarantineReplies(fileReplies, repMap, new Set(["X"]));
+
+    expect(out.changed).toBe(true);
+    expect(out.stampedLiveKeys).toEqual(["u1"]);
+    expect(repMap.get("u1")).toMatchObject({ private: true, rev: 2 });
+    expect(repMap.get("c1")).not.toHaveProperty("private");
+    expect(repMap.get("bad")).toBe("not a reply");
+    expect(out.fileReplies[0]).toMatchObject({ id: "f1", private: true, rev: 5 });
+    expect(out.fileReplies[1]).toBe(fileReplies[1]);
   });
 });

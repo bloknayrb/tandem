@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
+import type { ReconciledDoc } from "../../src/server/annotations/key-identity.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   attachObservers,
@@ -49,6 +50,7 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
 import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
 import { range, unanchored } from "../helpers/positions.js";
+import { reconciledReplies } from "../helpers/reconciled-replies.js";
 import { createAnnotation } from "../helpers/ydoc-factory.js";
 
 // #2358 scope PR: flag-on, a poll reads only what its record holds or may
@@ -645,12 +647,24 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
   it("surfaces a user reply once in Tandem, then dedups", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
-    const first = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, ctx());
+    const first = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      reconciledReplies(replies),
+      ledger,
+      ctx(),
+    );
     expect(first).toHaveLength(1);
     expect(first[0].id).toBe("r1");
     expect(first[0].textSnippet).toBe("Hello");
 
-    const second = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, ctx());
+    const second = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      reconciledReplies(replies),
+      ledger,
+      ctx(),
+    );
     expect(second).toHaveLength(0);
   });
 
@@ -660,7 +674,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const solo = collectInboxUserReplies(
       [commentParent],
       fullText,
-      () => replies,
+      reconciledReplies(replies),
       ledger,
       ctx({ modeState: "solo" }),
     );
@@ -670,7 +684,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const released = collectInboxUserReplies(
       [commentParent],
       fullText,
-      () => replies,
+      reconciledReplies(replies),
       ledger,
       ctx(),
     );
@@ -679,20 +693,38 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
 
   it("never surfaces a Claude reply (Claude doesn't need its own replies echoed)", () => {
     const replies = [reply({ id: "rc", author: "claude" })];
-    const out = collectInboxUserReplies([commentParent], fullText, () => replies, new Set(), ctx());
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      reconciledReplies(replies),
+      new Set(),
+      ctx(),
+    );
     expect(out).toHaveLength(0);
   });
 
   it("never surfaces a private reply or a note-thread reply (ADR-027)", () => {
     const privateOnComment = [reply({ id: "rp", private: true })];
     expect(
-      collectInboxUserReplies([commentParent], fullText, () => privateOnComment, new Set(), ctx()),
+      collectInboxUserReplies(
+        [commentParent],
+        fullText,
+        reconciledReplies(privateOnComment),
+        new Set(),
+        ctx(),
+      ),
     ).toHaveLength(0);
 
     // A reply on a note parent must never surface even without the private flag.
     const noteReply = [reply({ id: "rn", annotationId: "parent-note" })];
     expect(
-      collectInboxUserReplies([noteParent], fullText, () => noteReply, new Set(), ctx()),
+      collectInboxUserReplies(
+        [noteParent],
+        fullText,
+        reconciledReplies(noteReply),
+        new Set(),
+        ctx(),
+      ),
     ).toHaveLength(0);
   });
 
@@ -706,7 +738,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const out = collectInboxUserReplies(
       [commentParent],
       fullText,
-      () => replies,
+      reconciledReplies(replies),
       ledger,
       ctx({ wasChannelEmitted: (id) => id === "r1" }),
     );
@@ -754,7 +786,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const out = collectInboxUserReplies(
       [commentParent],
       extractText(ydoc),
-      () => [reply({ id: "r_queue" })],
+      reconciledReplies([reply({ id: "r_queue" })]),
       new Set<string>(),
       ctx({ wasChannelEmitted: wasEmittedViaChannel }),
     );
@@ -771,7 +803,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const out = collectInboxUserReplies(
       [commentParent],
       fullText,
-      () => replies,
+      reconciledReplies(replies),
       new Set(),
       ctx({ modeState: "indeterminate" }),
     );
@@ -1064,7 +1096,7 @@ describe("inbox ledgers are document-scoped", () => {
       const out = collectInboxUserReplies(
         [parent],
         "Hello world",
-        () => [sharedReply],
+        reconciledReplies([sharedReply]),
         ledger,
         ctx({ documentId: docKey }),
       );
@@ -1095,13 +1127,7 @@ describe("InboxPollContext (#1702)", () => {
       [Annotation[], string, InboxLedger, (anns: Annotation[]) => Annotation[], InboxPollContext]
     >();
     expectTypeOf(collectInboxUserReplies).parameters.toEqualTypeOf<
-      [
-        Annotation[],
-        string,
-        (annotationId: string) => AnnotationReply[],
-        ReplyLedger,
-        InboxPollContext,
-      ]
+      [Annotation[], string, ReconciledDoc, ReplyLedger, InboxPollContext]
     >();
     // The private helper is where `modeState` and `wasChannelEmitted` are read
     // for userActions/userResponses. Its one caller would compile unchanged

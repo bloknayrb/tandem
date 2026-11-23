@@ -39,6 +39,7 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { reconciledReplies } from "../helpers/reconciled-replies.js";
 import { noRelay } from "../helpers/ydoc-factory.js";
 
 const DOC_ID = "read-audience-doc";
@@ -346,12 +347,11 @@ describe("the Claude-facing reads honour audience (#1619, #1710)", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     const priv = sanitizeAnnotation(map.get("priv") as Annotation, noRelay);
     const ctl = sanitizeAnnotation(map.get("ctl") as Annotation, noRelay);
-    const load = (id: string): AnnotationReply[] => [
-      { id: "x", annotationId: id, author: "user", text: "hi", timestamp: 1 },
-    ];
+    const load = (id: string) =>
+      reconciledReplies([{ id: "x", annotationId: id, author: "user", text: "hi", timestamp: 1 }]);
 
-    expect(channelVisibleReplies(priv, load)).toEqual([]);
-    expect(channelVisibleReplies(ctl, load)).toHaveLength(1);
+    expect(channelVisibleReplies(load(priv.id), priv)).toEqual([]);
+    expect(channelVisibleReplies(load(ctl.id), ctl)).toHaveLength(1);
   });
 
   it("agrees with narrowForChannel over every (type × audience) cell", () => {

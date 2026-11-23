@@ -184,6 +184,7 @@ describe("YDocStore's surface — the escape hatches stay closed", () => {
       "listAnnotationsRefreshed",
       "listReplies",
       "onLossy",
+      "reconciled",
       "refreshAnnotations",
       "removeAnnotation",
     ]);

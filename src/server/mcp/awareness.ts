@@ -19,6 +19,7 @@ import type {
   ChatNoticeKind,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import type { ReconciledDoc } from "../annotations/key-identity.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
@@ -617,11 +618,11 @@ export function documentWaiting(documentId: string): boolean {
     const ydoc = getDocument(documentId);
     if (!doc || !ydoc) return false;
     const store = new YDocStore(ydoc, doc.filePath, doc.id);
+    const reconciled = store.reconciled();
     return isDocumentWaiting({
       documentId,
       annotations: structuredClone(store.listAnnotations()),
-      repliesOf: (annotation) =>
-        structuredClone(channelVisibleReplies(annotation, (id) => store.listReplies(id))),
+      repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
       mode: readModeState(),
       handedAtOrAbove: (kind, id, editedAt) =>
         deliveryRegistry
@@ -1545,7 +1546,7 @@ function collectDocumentInbox(
   const userReplies = collectInboxUserReplies(
     allAnnotations,
     fullText,
-    (id) => store.listReplies(id),
+    store.reconciled(),
     ledgers.replySurfaced,
     pollCtx,
   );
@@ -1637,8 +1638,10 @@ function carryHeld(
     } else if (entry.kind === "r") {
       if (!replies) {
         replies = new Map();
+        // One token for the whole pass: reconciling is a full scan of the map.
+        const reconciled = store.reconciled();
         for (const ann of allAnnotations) {
-          for (const reply of channelVisibleReplies(ann, (id) => store.listReplies(id))) {
+          for (const reply of channelVisibleReplies(reconciled, ann)) {
             replies.set(ledgerKey(documentId, reply.id), reply);
           }
         }
@@ -4079,7 +4082,7 @@ export type InboxUserResponse = Annotation & { textSnippet: string; documentId: 
 export function collectInboxUserReplies(
   allAnnotations: Annotation[],
   fullText: string,
-  loadReplies: (annotationId: string) => AnnotationReply[],
+  reconciled: ReconciledDoc,
   replySurfaced: ReplyLedger,
   ctx: InboxPollContext,
 ): InboxUserReply[] {
@@ -4089,7 +4092,7 @@ export function collectInboxUserReplies(
     // never handed to Claude (#1123 A2, decision 7); a user reply on Claude's
     // own annotation always is, even where the local model also replied.
     if (isLocalModelRecord(ann)) continue;
-    const visible = channelVisibleReplies(ann, loadReplies);
+    const visible = channelVisibleReplies(reconciled, ann);
     if (visible.length === 0) continue;
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     for (const reply of visible) {
