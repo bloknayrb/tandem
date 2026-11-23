@@ -344,6 +344,54 @@ export function dropMessageDeliveryRounds(chatKeys: Iterable<string>): void {
   dropKeyed([...chatKeys].map(messageRoundKey));
 }
 
+/**
+ * What a change of owner owed again and woke someone for, or a reopened
+ * document with items owed (#2358 PR 3b-2b5; handover gap (d), the reopen
+ * round): the documents whose items are owed and the chat-map keys of the
+ * messages. Named by ownership, which never imports this module (the seam
+ * `setDeliveryRoundOpener`, wired in `index.ts` to `queue.ts`'s wrapper).
+ */
+export interface OwedDeliveryRounds {
+  documents: readonly string[];
+  messages: readonly string[];
+}
+
+/**
+ * Open the keyed round of each document and message in `owed` (#2358 PR
+ * 3b-2b5): a handover's re-owe woke someone (the supervisor's start-or-wake
+ * or `requestWake` for Tandem's Claude, the `ownership` frame for other
+ * sessions), or a document was reopened with items owed, and no push event
+ * carries those items, so without this `/health` would read idle while they
+ * wait. A round already open keeps its first clock (R1.3). A document that
+ * is not open opens nothing: no poll reads it, and its items are owed to its
+ * next open. `abandoned` is whether no external consumer is attached now
+ * (the caller holds that count): such a round reads `consumer-detached`, as
+ * a forward's round does once every consumer has left, until one attaches
+ * (R4.1). Nothing while rounds are not keyed (every release build) or while
+ * the local period suspends them (it hands nothing; its switch back discards
+ * and re-wakes). Never throws: it runs after the change that owes the items,
+ * which must stand.
+ */
+export function openOwedDeliveryRounds(
+  owed: OwedDeliveryRounds,
+  abandoned: boolean,
+  now: number = Date.now(),
+): void {
+  if (!keyed() || keyedSuspended) return;
+  try {
+    const keys: DeliveryRoundKey[] = [];
+    for (const id of owed.documents) {
+      if (roundSeam?.isDocumentOpen(id) === true) keys.push(documentRoundKey(id));
+    }
+    for (const chatKey of owed.messages) keys.push(messageRoundKey(chatKey));
+    for (const key of keys) {
+      if (!keyedRounds.has(key)) keyedRounds.set(key, { forwardedAt: now, abandoned });
+    }
+  } catch {
+    console.error("[Tandem] Opening the delivery round of owed work failed");
+  }
+}
+
 /** Testing-only: the open keyed rounds, oldest first. */
 export function keyedDeliveryRoundsForTests(): Array<{
   kind: "document" | "message" | "keyless";

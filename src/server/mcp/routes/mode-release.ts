@@ -11,6 +11,7 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { readModeState } from "../../mode.js";
+import { noteSoloReleased } from "../../sessions/ownership.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 
 /**
@@ -115,6 +116,10 @@ export function handleModeRelease(req: Request, res: Response): void {
   }
 
   if (released > 0) emitModeReleaseWake();
+  // The Solo-release check (#2358 PR 3b-2b4b; ownership design §8.3 "Leaving
+  // Solo"): whatever was released, waiting work may now start or wake
+  // Tandem's Claude (Off still drops it). Ownership off: nothing.
+  noteSoloReleased();
 
   res.json({ data: { released } });
 }

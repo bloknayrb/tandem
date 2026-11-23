@@ -99,17 +99,40 @@ export function markSpawnStarted(spawn: SpawnBind): void {
  * A spawn's teardown (R4.3): its handle stops binding and its transports stop
  * counting as bound. Ends only its own state — a newer spawn is never touched,
  * which is what makes the superseded spawn's late teardown safe. Idempotent.
- * Moves no transport and no document (Ruling A).
+ * Moves no transport and no document itself (Ruling A); from 3b-2b3b it tells
+ * the spawn-ended listener, when one is set, which transports were bound.
  */
 export function endSpawn(spawn: SpawnBind): void {
   const state = spawns.get(spawn.serial);
   if (!state) return;
+  const bound = [...state.bound];
   state.ended = true;
   state.bound.clear();
   state.onFirstBind = undefined;
   state.handle.fill(0);
   spawns.delete(state.serial);
   if (current === state) current = null;
+  if (bound.length === 0 || spawnEndedListener === undefined) return;
+  try {
+    spawnEndedListener(bound);
+  } catch (err) {
+    console.error("[Tandem] Owner handle: spawn-ended listener failed:", err);
+  }
+}
+
+/** #2358 PR 3b-2b3b: told a torn-down spawn's bound transports, by Mcp-Session-Id. */
+let spawnEndedListener: ((boundMcpSessionIds: readonly string[]) => void) | undefined;
+
+/**
+ * Ownership's teardown re-pointing (ownership design §3.3). Set only by
+ * `setOwnSpawnSource` in `sessions/ownership.ts` while its seam is set, which
+ * `index.ts`'s supervisor setup does (#2358 PR 3b-2b4a); unset, teardown is
+ * exactly 3a's.
+ */
+export function setSpawnEndedListener(
+  listener: ((boundMcpSessionIds: readonly string[]) => void) | undefined,
+): void {
+  spawnEndedListener = listener;
 }
 
 /** A bind candidate decided before the record is resolved (R3.9). */

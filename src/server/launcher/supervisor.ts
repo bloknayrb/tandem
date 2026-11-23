@@ -476,8 +476,10 @@ interface SpawnRecord {
 
 /**
  * The supervisor's presence seam for Tandem's Claude (#2358 PR 3b-1, R2.7),
- * so 3b-2 does not reopen this code. Nothing subscribes outside tests until
- * 3b-2. Flag off every read is false and nothing is ever announced.
+ * so 3b-2 does not reopen this code. `src/server/index.ts` subscribes
+ * presence and the spawn-started event inside its supervisor setup (#2358 PR
+ * 3b-2b4a), the run start (3b-2b4b) and the failed-bind event (3b-2b5).
+ * Flag off every read is false and nothing is ever announced.
  */
 export interface TandemPresenceSeam {
   /** The value last announced. */
@@ -487,6 +489,13 @@ export interface TandemPresenceSeam {
   /** Each run start (the latest spawn's first bind), after presence. */
   onRunStart(cb: () => void): () => void;
   /**
+   * Each spawn's start (#2358 PR 3b-2b4a): its number and session id, right
+   * after the spawn's session id is recorded, only for a spawn with a record
+   * (flag on). A resumed spawn has the same id and a new number. Called
+   * synchronously inside the spawn; each subscriber in its own catch.
+   */
+  onSpawnStarted(cb: (spawn: { n: number; sessionId: string }) => void): () => void;
+  /**
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
    * **Called synchronously from the judging site**: inside the child's exit
@@ -495,9 +504,9 @@ export interface TandemPresenceSeam {
    * torn down, or from the bind window's timer when it expires (site c). At
    * site (c) the spawn is not torn down — teardown cancels that timer — so
    * `activeTurnDelivery` is that live, unbound spawn. A subscriber that writes
-   * a turn, starts or wakes anything (3b-2's failed-bind wake, design §8.7)
-   * must defer that work (a microtask or later), or it writes into a spawn
-   * the judging site is still acting on. Kept synchronous so the failed-bind
+   * a turn, starts or wakes anything (ownership's `noteFailedBind`, 3b-2b5;
+   * design §8.7) must defer that work (a microtask or later), or it writes
+   * into a spawn the judging site is still acting on. Kept synchronous so the failed-bind
    * event precedes the presence announcement it causes.
    */
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
@@ -860,8 +869,8 @@ export interface Supervisor {
   /** The settings this supervisor last read or saved successfully, or null
    * before any. What it is acting on while the file cannot be read. */
   appliedSettings(): LauncherSettings | null;
-  /** Tandem's Claude's presence, computed and consumed by nothing yet (#2358
-   * PR 3b-1, R2.7). Ownership on only; flag off every read is false.
+  /** Tandem's Claude's presence (#2358 PR 3b-1, R2.7), consumed by ownership
+   * through `index.ts` (3b-2b4a). Ownership on only; flag off every read is false.
    * Optional so the test fakes of this interface need not implement it; the
    * real supervisor always has it. */
   tandemPresence?(): TandemPresenceSeam;
@@ -869,8 +878,9 @@ export interface Supervisor {
    * Wake a running Tandem's Claude for work that is its own (#2358 PR 3b-2a;
    * design §8.6). Ownership on only. Licence-refused, during a local-model
    * period, or with no live child, it writes and owes nothing. Never throws.
-   * Called by nothing in production yet (3b-2b wires it; a source pin holds
-   * that). Optional for the same reason as `tandemPresence`.
+   * Called from outside only by ownership's run-start wake, through the sink
+   * `index.ts` sets (#2358 PR 3b-2b4b; a source pin holds that). Optional for
+   * the same reason as `tandemPresence`.
    */
   requestWake?(): void;
   /**
@@ -886,8 +896,8 @@ export interface Supervisor {
   startOrWake?(cause: StartOrWakeCause): void;
   /**
    * The own-spawn seam's two reads (#2358 PR 3b-2b3a), for ownership's
-   * `setOwnSpawnSource`, which `index.ts` does not call until 3b-2b4 (a
-   * source pin holds that). `ownSpawn`: the live child's spawn number and
+   * `setOwnSpawnSource`, which `index.ts` calls inside its supervisor setup
+   * (3b-2b4a; a source pin holds that). `ownSpawn`: the live child's spawn number and
    * session id, null with no live child, flag off, or once its spawn is torn
    * down. `isOwnChildSession`: whether any child of this supervisor ever used
    * `sessionId`, case-folded. Optional for the same reason as `tandemPresence`.
@@ -2007,7 +2017,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *
    * It does NOT ask the waiting decision and is not Solo-gated: every caller
    * owes that screen first (design §8.5, where Solo protection lives). The
-   * start pass asks it before calling here; 3b-2b's take-back must too.
+   * start pass asks it before calling here; ownership's take-back asks
+   * `tandemWorkWaiting` (#2358 PR 3b-2b4b).
    */
   function requestWake(): void {
     try {
@@ -2135,6 +2146,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let presenceRecomputes = 0;
   const presenceListeners = new Set<(present: boolean) => void>();
   const runStartListeners = new Set<() => void>();
+  const spawnStartedListeners = new Set<(spawn: { n: number; sessionId: string }) => void>();
   const failedBindListeners = new Set<(reason: FailedBindReason) => void>();
 
   /** A field presence reads was written: recompute once per synchronous run
@@ -3063,6 +3075,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentSpawnedAt = spawnedAt;
     currentResuming = plan.resuming;
     lastSpawnIgnoredWorkingDirectory = plan.workingDirectoryIgnored;
+    // The spawn-started event (#2358 PR 3b-2b4a): flag on only (a record).
+    if (record !== null) {
+      notifyEach(spawnStartedListeners, "spawn-started", {
+        n: record.n,
+        sessionId: plan.sessionId,
+      });
+    }
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
@@ -5033,6 +5052,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     onRunStart: (cb) => {
       runStartListeners.add(cb);
       return () => runStartListeners.delete(cb);
+    },
+    onSpawnStarted: (cb) => {
+      spawnStartedListeners.add(cb);
+      return () => spawnStartedListeners.delete(cb);
     },
     onFailedBind: (cb) => {
       failedBindListeners.add(cb);

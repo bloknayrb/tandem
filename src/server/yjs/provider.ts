@@ -269,6 +269,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       // If MCP tools have already created and populated a doc for this room,
       // merge its state into the Hocuspocus-provided doc, then swap the map entry
       const existing = documents.get(documentName);
+      const replaced = existing && existing !== document ? existing : undefined;
       if (existing && existing !== document) {
         const update = Y.encodeStateAsUpdate(existing);
         Y.applyUpdate(document, update);
@@ -281,7 +282,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
 
       // Notify event queue to reattach observers to the new doc instance
       if (lifecycle) {
-        lifecycle.onDocSwapped(documentName, document);
+        lifecycle.onDocSwapped(documentName, document, replaced);
       } else {
         console.error(
           `[Tandem] WARN: onDocSwapped callback not registered during doc load for ${documentName}. ` +

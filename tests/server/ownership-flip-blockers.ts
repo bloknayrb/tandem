@@ -66,15 +66,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
-      "items are owed.",
-    closedBy:
-      "PR 3b, where the re-owe's wake can open the round (moved there from the 'chat, rounds " +
-      "and the greeting' PR by the delivery-rounds PR's brief). 3b-2b1c-a lands the re-owe's " +
-      "start-or-wake for Tandem's Claude but opens no round.",
-  },
-  {
-    gap:
       "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
       "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
       "another session's polls never hide its items from you' (with inbox scope, only the " +
@@ -124,6 +115,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "the scope PR a detached record also claims a document again on a poll that yields it " +
       "something, so the write-then-idle cycle is also a poll-then-idle cycle.",
     closedBy: "Bryan's answer to it (PR of the handover, 'Needs Bryan').",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)' for the lone-session re-hand, picked from options, " +
+      "2026-11-23 (#2360's handled filter shrinks it); tracked as #2358.",
   },
   {
     gap:
@@ -142,16 +136,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Flag on, a document's close drops its delivery round and a reopen opens none (the reopen " +
-      "merges annotations with withFileSync, which the channel skips), while the document's " +
-      "items may still be owed, so /health can read idle with items owed (the delivery-rounds " +
-      "PR, R3.1).",
-    closedBy:
-      "PR 3b: a wake that opens the round when it wakes someone (3b-2b1c-a's start-or-wake " +
-      "opens none).",
-  },
-  {
-    gap:
       "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
       "stays open, so the stall banner reports it: until a restart for a user row a client " +
       "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
@@ -161,6 +145,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "(the reviewing session's ruling); Bryan decides whether to accept it or have the inbox's " +
       "'never handed' answer key such a forward as no round.",
     closedBy: "Bryan's decision, before the flip.",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (it needs " +
+      "client-written rows the server undoes); tracked as #2358.",
   },
   {
     gap:
@@ -174,13 +161,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A lapse to unowned wakes no session (the ownership frames are stubs, and 3b-2b1c-a's " +
-      "start-or-wake forwards only a document that goes to Tandem's Claude), so under " +
-      "inbox scope a user's next comment on that document waits until some session polls for " +
-      "an unrelated reason.",
+      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
+      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
+      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
+      "such a session waits for its next poll for a document that went unowned with work on it.",
     closedBy:
-      "PR 3b (presence, the ownership frames and the start rules of 3b-2b2; 3b-2b1c-a's " +
-      "start-or-wake does not cover a document that goes unowned).",
+      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
+      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
+      "have landed.",
   },
   {
     gap:
@@ -212,18 +200,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "When Tandem's Claude stops being present, every per-message owner it holds of a message " +
-      "that is not handled must be dropped and the message re-owed, whatever the origin " +
-      "(a tab close of a document nobody held while it was present gives it origin 'close'; " +
-      "an acknowledgement, origin 'acknowledgement', whose message is handled, must be dropped " +
-      "too). releaseMessageOwners in sessions/ownership.ts takes the selector. Its record never " +
-      "lapses, so until then such a message is handed to nobody once presence ends, its own " +
-      "reply is refused (not-present) and every other session is refused 'Tandem's Claude " +
-      "answers this message' (the chat owners PR, R5.8; review round 1, item 3).",
-    closedBy: "PR 3b (presence).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -252,17 +228,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "PR 3b for Tandem's Claude (3b-2b1c-a forwards a change of owner only, not a holder that " +
       "keeps an item unanswered), or Bryan's answer for terminals.",
-  },
-  {
-    gap:
-      "A take-back and the inbox's exclusion texts: after Tandem's Claude takes a document back " +
-      "('taken back'), the refusal tells the loser not to tandem_open it again unless the user asks " +
-      "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
-      "only 'only if the user asked you, in your own conversation', which the original request " +
-      "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
-      "Claude. Unreachable until Tandem's Claude can be present (PR 3b).",
-    closedBy:
-      "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
+    acceptedFor:
+      "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
+      "(PR 5's controls are the remedy); tracked as #2358.",
   },
   {
     gap:
@@ -289,19 +257,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
-      "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
-      "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
-      "present) and Tandem's Claude's lost entry when it stops being present. Each must follow " +
-      "Ruling 10 (a past-tense fact with no instruction, the change-notice PR's R7.3 and R7.4). " +
-      "Until then a session holding a document those paths move is told only through `holding`. " +
-      "Note: `changeCauseOf` (sessions/ownership.ts) today maps every `take` loss to 'another " +
-      "session took it'; a take by Tandem's Claude, which `lossCauseOf` calls 'taken back', must " +
-      "get its own word then.",
-    closedBy: "PR 3b: the causes, with tests through their production paths.",
-  },
-  {
-    gap:
       "Change-notice causes PR 5 owes (R7.2): lost by Release and by Assign, gained by Assign, " +
       "each a past-tense fact with no instruction (Ruling 10); a released session is told only " +
       "that the document was released, never that the user chose it (design §11.3). Until then " +
@@ -323,23 +278,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
       "answered-link, and the switch lands immediately before the flip, in the same release).",
     closedBy: "#2360's switch PR merged.",
-  },
-  {
-    gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), and " +
-      "rule 0's records are computed (3b-2b3a), but the own-spawn seam is unset, so a " +
-      "transport bound to the current spawn still sits on its `claude:<id>` record, not the " +
-      "`tandem` record, no transport reaches an unbound-child or private record, and there is " +
-      "no retirement or demotion at a spawn.",
-    closedBy: "3b-2b3b and 3b-2b4's switch-on.",
-  },
-  {
-    gap:
-      "The `unbound-child` refusal and the take guard against Tandem's Claude are not built, so a " +
-      "child of Tandem's Claude that did not bind is answered as an ordinary session.",
-    closedBy:
-      "PR 3b, for documents and for messages; the per-message owner its message half reads " +
-      "landed in the chat owners PR.",
   },
   {
     gap: "The Settings list of bound transports (Ruling C) is not built.",
@@ -431,16 +369,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
-      "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
-      "each ownership change that reaches step 5's probe; and when the probe answers false, step 5 " +
-      "(3b-2b1b-chat-step5) also clones every user chat row and parses each unhandled, unread, " +
-      "non-local-period one (chatRowsOwedToFreshReader) against the chat schema, inside " +
-      "setDocOwner.",
-    closedBy: "3b-2b4's measurement.",
-  },
-  {
-    gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
       "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
       "session is connected (after a restart every restored document is unowned), every pending " +
@@ -449,14 +377,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "have no status gate). The handled-filter row covers a handover's re-owe, not this, and " +
       "that filter would not close it: a comment answered only in chat is never handled by it.",
     closedBy: "3b-2b4: a durable registry, or a handled rule covering chat answers.",
-  },
-  {
-    gap:
-      "An item a run of Tandem's Claude acknowledged, after which that run died, reads as not " +
-      "waiting (3b-2b1b, Ruling K), so nothing starts Claude for it: it is stranded. (An item " +
-      "handed but unacknowledged reads as waiting.)",
-    closedBy:
-      "3b-2b4 retiring Tandem's Claude's own document entries at each run start (a self re-owe).",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)', picked from options, 2026-11-23 (the " +
+      "written-since-boot rule bounds what can start Tandem's Claude); tracked as #2358.",
   },
   {
     gap:
@@ -472,7 +395,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "that passes its caller check and departure gate, at the release loop and at " +
       "dropChatOwners, none at setMessageOwner; a deleted record releasing N keys, handled ones " +
       "included, runs up to N such scans.",
-    closedBy: "3b-2b4's measurement.",
+    closedBy:
+      "Measured by 3b-2b4c (ADR-054's 3b-2b4c amendment; tests/server/ownership-waiting-cost.test.ts): " +
+      "about 87 ms per decision at 50 held documents of 200 annotations and 500 chat rows, " +
+      "nothing waiting, almost all of it the per-document probe (about 1.7 ms each), and about " +
+      "1 to 1.5 ms per chat scan, so a release of N keys can cost N such scans. Closed by a " +
+      "cheaper decision (for example a cached or incremental waiting answer), with the " +
+      "measurement re-run, or Bryan accepting that cost.",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)' for the measured cost of about 87 ms per decision, " +
+      "picked from options, 2026-11-23; tracked as #2358.",
   },
   {
     gap:
@@ -509,33 +441,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "if Claude never answers, the message leaves waiting for good, and after a server restart it " +
       "is carried over and never re-owed. The pick on acknowledged chat does not cover this.",
     closedBy: "Bryan's answer, then its change with a test.",
-  },
-  {
-    gap:
-      "The decision's 'another session is connected' (3b-2b1b-claimable) counts Tandem's own " +
-      "launched Claude, whose transports still sit on claude:<id> records, so while it runs and " +
-      "for a while after it stops claimable work does not count (about two minutes if its " +
-      "transport held a stream, up to about 37 minutes if it never did; which applies is " +
-      "unmeasured); and it differs from the supervisor's otherAiAttached (#2196), which excludes " +
-      "Tandem's own children by session id. So also (3b-2b1c): if a session holding a document " +
-      "goes away while Tandem's Claude is running or has just stopped, Tandem's Claude is " +
-      "neither woken nor started for that session's waiting work; it reaches the work at its " +
-      "next look or start. And Tandem's own child can itself hold a document it opened and " +
-      "lapse when it stops, which starts Tandem's Claude for its own leftovers; with new " +
-      "blocker 2 (answered work reads as waiting after a handover) that can repeat after every " +
-      "idle stop. And while the child sits on a claude:<id> record, a document or chat that " +
-      "becomes Tandem's Claude's is refused to that child (reason 'default'), so a wake or start " +
-      "for it hands it nothing, the work stays waiting, and each later forward or pass wakes or " +
-      "starts it again. The same holds for chat (3b-2b1c-b): if the child's record held a " +
-      "document when it was closed, it owns that document's chat per message, and its lapse " +
-      "releases the message and, while no other session is connected (the departure gate), " +
-      "starts Tandem's Claude for it.",
-    closedBy:
-      "3b-2b3's routing of Tandem's own transports to the tandem record, with a row where its " +
-      "transport does not count, and one 'another session' rule named for the decision and the " +
-      "start arm; and a test where a holder lapses beside a running, idle Tandem's Claude with " +
-      "no other session and it is woken, and a test that a stopped child's own lapse starts " +
-      "nothing.",
+    acceptedFor:
+      "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
+      "as #2484.",
   },
   {
     gap:

@@ -479,7 +479,9 @@ let run = 0;
 let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
-const sink = vi.fn((cause: "document" | "message") => supRef?.startOrWake?.(cause));
+const sink = vi.fn((cause: "document" | "message" | "solo-release") =>
+  supRef?.startOrWake?.(cause),
+);
 const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
 /** The passes the lapse's re-ask may own (3b-2b2): at most one, and only when
  *  it was forwarded (no other session connected). It finds what the row
@@ -703,6 +705,8 @@ describe("R1: ownership's startOrWake, called directly", () => {
     // A Record over WakeCause: a new member of the union fails to compile here.
     const expected: Record<WakeCause, "document" | "departure" | null> = {
       "user-open": null,
+      // Presence's consumer (3b-2b4a): forwarded, never dropped.
+      presence: "document",
       lapse: "document",
       "take-back": "document",
       claim: "document",
@@ -737,7 +741,7 @@ describe("R1: ownership's startOrWake, called directly", () => {
     const _all: OwnershipChangeCause[] = Object.keys(expected).filter(
       (k) => k !== "message-owner" && k !== "departure",
     ) as OwnershipChangeCause[];
-    expect(_all).toHaveLength(9);
+    expect(_all).toHaveLength(10);
   });
 
   it("R1.7 directly: a lapse with another session connected tells the observer and not the sink; every other cause still forwards", () => {
@@ -747,6 +751,9 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink).not.toHaveBeenCalled();
     startOrWake("take");
     expect(sink.mock.calls).toEqual([["document"]]);
+    // Presence is not gated (Bryan, 2026-11-23: "Yes, start anyway").
+    startOrWake("presence");
+    expect(sink.mock.calls).toEqual([["document"], ["document"]]);
   });
 
   it("R1.5: a forward made inside a request context reaches the sink, and the pass, with no caller identity readable", async () => {
@@ -1189,6 +1196,9 @@ describe("the decision table: A lapses", () => {
 
 const FORWARD_FAILED =
   "[ownership] a change of owner could not be passed on to Tandem's Claude; it may not have been started or woken.";
+/** The `ownership` frame's waiting read (#2358 PR 3b-2d). */
+const FRAME_WAITING_FAILED =
+  "[ownership] whether work is waiting after a change of owner could not be read; no session was told.";
 
 describe("other cases (PR a)", () => {
   it("R1.5: a throwing sink inside a lapse of two documents: both move, one fixed line, and no setDocOwner-failed line", () => {
@@ -1660,7 +1670,9 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m1)).toBeUndefined();
     expect(messageOwner(m2)).toBeUndefined();
     expect(reOwe.mock.calls.flat(2).sort()).toEqual([m1, m2].sort());
-    expect(ownershipLines()).toEqual([FORWARD_FAILED]);
+    // And, since #2358 PR 3b-2d, the release's frame check reads the same
+    // throwing member: its own fixed line, and no frame.
+    expect(ownershipLines()).toEqual([FORWARD_FAILED, FRAME_WAITING_FAILED]);
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);

@@ -96,6 +96,7 @@ import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation, ExternalConflictState, FlatOffset } from "../../shared/types.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import { reconcileAnnotationKeys } from "../annotations/key-identity.js";
 import { isDarkDocx, supportedExtensions } from "../file-io/docx-flag.js";
 import { getAdapter } from "../file-io/index.js";
 import { expandShortNames } from "../file-io/short-names.js";
@@ -1375,6 +1376,9 @@ async function maybeRestoreSession(
     if (!changed || dirtySession) {
       try {
         restoreYDoc(doc, active);
+        // Eager clean-up of key/id aliases the session blob brought back. Not
+        // load-bearing for privacy (every Claude reply read reconciles first).
+        reconcileAnnotationKeys(doc);
       } catch (restoreErr) {
         // #1800: a truncated or bit-flipped `ydocState` throws out of
         // `restoreYDoc` — and a missing/non-string one throws out of
@@ -1449,6 +1453,7 @@ async function maybeRestoreSession(
         }
         try {
           fallbackAnnotations = cloneFallbackIntoDoc(doc, scratch, resolved);
+          reconcileAnnotationKeys(doc);
         } catch (cloneErr) {
           return abandonFallbackToDisk(
             doc,

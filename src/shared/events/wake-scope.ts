@@ -63,10 +63,24 @@ export function isStartWorthy(event: TandemEvent): boolean {
   );
 }
 
+/**
+ * The type of the one wake frame that is not an event (#2358 PR 3b-2d; ADR-054;
+ * ownership design §4.4, §8.6, §8.7): written on `/api/wake` when a change of
+ * owner leaves work waiting for a session other than Tandem's Claude, or for
+ * nobody. It names no document, record or item: the reader polls
+ * `tandem_checkInbox` and finds out there, as for every other frame. A
+ * consumer that reads only `type`'s presence (a `Monitor` watch, which hands
+ * each line to the model, whose skill says "a wake tells you that, never
+ * what") wakes on it as on any frame; nothing in Tandem switches on a wake
+ * frame's `type`, and the plugin monitor reads `/api/events`, never this
+ * socket. Never an SSE event name here: the push-stream nudge is PR 4a's.
+ */
+export const OWNERSHIP_WAKE_FRAME_TYPE = "ownership";
+
 /** A wake notification: enough to know something happened, never what. */
 export interface WakeFrame {
   id: string;
-  type: TandemEvent["type"];
+  type: TandemEvent["type"] | typeof OWNERSHIP_WAKE_FRAME_TYPE;
   timestamp: number;
 }
 

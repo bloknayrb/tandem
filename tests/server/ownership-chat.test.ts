@@ -1863,6 +1863,7 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       handledKeys: () => (counts.handledKeys++, ownershipChatSide.handledKeys()),
       message: (k) => (counts.message++, ownershipChatSide.message(k)),
       messagesOn: (id) => (counts.messagesOn++, ownershipChatSide.messagesOn(id)),
+      unhandledKeys: () => ownershipChatSide.unhandledKeys(),
       reOwe: (keys) => (counts.reOwe++, ownershipChatSide.reOwe(keys)),
       settleCandidates: (row) => ownershipChatSide.settleCandidates(row),
       addSettles: (row, keys) => ownershipChatSide.addSettles(row, keys),

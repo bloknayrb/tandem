@@ -1,7 +1,8 @@
 /**
  * Tandem's Claude's run state in the supervisor (#2358 PR 3b-1, ships dark):
  * the spawn record, the bind window and the failed-bind judgement (R1), and
- * presence with its announcements (R2). Computed, consumed by nothing yet.
+ * presence with its announcements (R2). Consumed by ownership through
+ * `index.ts` since #2358 PR 3b-2b4a; the last describe wires it the same way.
  *
  * `spawn` is mocked for the whole file (a `FakeChild` whose exit the test can
  * hold), as `supervisor-turn-delivery.test.ts` does; the run files are real,
@@ -59,6 +60,31 @@ import {
   judgeBind,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
+import {
+  checkWrite,
+  getDocOwner,
+  noteFailedBind,
+  noteOwnSpawnStarted,
+  noteSoloReleased,
+  noteTandemPresence,
+  noteTandemRunStart,
+  noteTransportChanged,
+  noteTransportRegistered,
+  ownershipSnapshotForTests,
+  resetOwnershipForTests,
+  setDocOwner,
+  setGraceMsForTests,
+  setOpenDocumentIdsSource,
+  setOwnSpawnSource,
+  setRequestWakeSink,
+  setStartOrWakeSink,
+  setTandemPresenceSource,
+  setTransportView,
+  setWaitingProbe,
+  TANDEM_OWNER_ID,
+  type TransportViewEntry,
+  tandemWorkWaiting,
+} from "../../../src/server/sessions/ownership.js";
 import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
 
@@ -3063,7 +3089,7 @@ describe("3b-2b2: a new user comment or any user thread reply asks start-or-wake
   });
 });
 
-describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; not wired by index.ts)", () => {
+describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; wired by index.ts since 3b-2b4a)", () => {
   it("ownSpawn names the live child's spawn and id; a resumed spawn has the same id and a new number; isOwnChildSession folds case", async () => {
     const h = makeSupervisor();
     expect(h.sup.ownSpawn?.()).toBeNull();
@@ -3085,5 +3111,311 @@ describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; not wired by index.ts)",
     await h.sup.startFresh(cwdDir);
     await childN(1);
     expect(h.sup.ownSpawn?.()).toBeNull();
+  });
+});
+
+describe("the spawn-started event and the switch-on as index.ts wires it (#2358 PR 3b-2b4a)", () => {
+  let view: TransportViewEntry[];
+  beforeEach(() => {
+    view = [];
+    setTransportView(() => view);
+  });
+  afterEach(() => {
+    resetOwnershipForTests();
+    setOpenDocumentIdsSource(() => []);
+  });
+
+  /** `index.ts`'s wiring, against this supervisor (3b-2b4b: the run start and both sinks too; 3b-2b5: the failed bind). */
+  function wire(h: ReturnType<typeof makeSupervisor>): void {
+    setTandemPresenceSource(() => h.sup.tandemPresence?.().isPresent() === true);
+    h.seam.subscribe(noteTandemPresence);
+    h.seam.onSpawnStarted(noteOwnSpawnStarted);
+    h.seam.onRunStart(noteTandemRunStart);
+    h.seam.onFailedBind(noteFailedBind);
+    setOwnSpawnSource(
+      () => h.sup.ownSpawn?.() ?? null,
+      (id) => h.sup.isOwnChildSession?.(id) === true,
+    );
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    setRequestWakeSink(() => h.sup.requestWake?.());
+  }
+
+  it("3b-2b4b: a run start with work waiting on a held document wakes the child once, after its first turn", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(wakes(c1)).toBe(0); // the bootstrap turn is in flight
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("3b-2b4b: the same run start with the licence refusing writes no wake", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    lic.refusing = true;
+    expect(await bind(c1)).toBe(true);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: nothing waiting at the run start, no wake", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: the Solo-release check starts a stopped Tandem's Claude for waiting work", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(waiting.calls).toBe(1);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(logText()).toContain("Work is waiting for Tandem's Claude (solo-release)");
+  });
+
+  it("3b-2b4b: the Solo-release check while Off, or with nothing waiting, starts nothing", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    const idle = waitingDouble(false);
+    const { h: h2 } = await idleStopped({ workWaiting: idle.fn });
+    setStartOrWakeSink((cause) => h2.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h2);
+    expect(idle.calls).toBe(1);
+    expect(children).toHaveLength(2);
+  });
+
+  describe("3b-2b5: the failed-bind wake (ownership design §8.7, R2.5)", () => {
+    /**
+     * A bound run holds `doc`; it crashes and its resumed spawn (child 2), a
+     * stub that never presents its handle, gets a user comment's wake, which
+     * starts its bind window. Child 2's stray transport sits on its
+     * `unbound-child` record, `spawn:2`, refused on Tandem's Claude's
+     * document until the bind fails.
+     */
+    async function strandedByFailedBind(
+      h: ReturnType<typeof makeSupervisor>,
+      waitingAtFailure = true,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      pushJson(c1, RESULT_OK);
+      await settle();
+      const c2 = await crashToResumed(c1);
+      view.push({ ownerId: "spawn:2", sessionId: "m-c2", openStreams: 1 });
+      noteTransportRegistered("spawn:2", { recordKind: "unbound-child" });
+      expect(checkWrite("doc", "spawn:2")).toMatchObject({ ok: false, reason: "unbound-child" });
+      h.emit(annotationEvent()); // its first turn: the window starts
+      await settle();
+      expect(wakes(c2)).toBe(1);
+      pushJson(c2, RESULT_OK); // idle again
+      await settle();
+      waiting = waitingAtFailure;
+      return c2;
+    }
+
+    it("the window expires: presence ends, the document goes unowned, and the live unbound child is woken once and may then claim the stranded item", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      advance(WINDOW);
+      await settle();
+      expect(h.log.slice(-2)).toEqual(["failed:window-expired", "not-present"]);
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(2);
+      // The woken child, as its unbound-child record, is no longer blocked.
+      expect(checkWrite("doc", "spawn:2")).toEqual({ ok: true, claim: "claimed" });
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the wake is deferred out of the supervisor's emit: nothing is written in the judging site's own turn", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      let inEmit = -1;
+      h.seam.onFailedBind(() => {
+        inEmit = wakes(c2);
+      });
+      advance(WINDOW);
+      expect(inEmit).toBe(1);
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the licence refusing: no wake is written", async () => {
+      const lic = licenceDouble();
+      const h = makeSupervisor({ aiRefusal: lic.fn });
+      const c2 = await strandedByFailedBind(h);
+      lic.refusing = true;
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("negative (anchor: the first row): nothing stranded, no wake", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h, false);
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("flag off: noteFailedBind wakes nothing, even with work waiting and the sink wired", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      let sunk = 0;
+      setRequestWakeSink(() => {
+        sunk += 1;
+      });
+      setOpenDocumentIdsSource(() => ["doc"]);
+      setWaitingProbe(() => true);
+      noteFailedBind();
+      await settle();
+      expect(sunk).toBe(0);
+      expect(logText()).not.toMatch(/ownership/);
+    });
+  });
+
+  describe("3b-2b5: a holder's lapse beside a running Tandem's Claude (the own-Claude 'another session' row's first test)", () => {
+    async function heldByTerminalBesideIdleTandem(
+      h: ReturnType<typeof makeSupervisor>,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      pushJson(c1, RESULT_OK);
+      await settle();
+      // Its bound transport, where rule 0 routes it (3b-2b4a): the built-in
+      // `tandem` record, which never counts as another session.
+      view.push({ ownerId: TANDEM_OWNER_ID, sessionId: "m-c1", openStreams: 1 });
+      view.push({ ownerId: "claude:term-a", openStreams: 1 });
+      noteTransportRegistered("claude:term-a", { recordKind: "claude" });
+      setDocOwner("doc", { ownerId: "claude:term-a", kind: "opened" }, "take", "claude:term-a");
+      waiting = true;
+      return c1;
+    }
+
+    function lapseTerminal(): void {
+      setGraceMsForTests(10);
+      view.splice(
+        view.findIndex((e) => e.ownerId === "claude:term-a"),
+        1,
+      );
+      noteTransportChanged("claude:term-a");
+      advance(10);
+    }
+
+    it("with no other session: the document goes to Tandem's Claude and the idle child is woken once", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      expect(wakes(c1)).toBe(0);
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(1);
+    });
+
+    it("negative (anchor: the row above): another terminal attached, so the lapse forwards nothing and the child is not woken", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      view.push({ ownerId: "claude:term-b", openStreams: 1 });
+      noteTransportRegistered("claude:term-b", { recordKind: "claude" });
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(0);
+    });
+  });
+
+  it("spawn 1, then a resumed spawn 2 with the same id and a new number", async () => {
+    const h = makeSupervisor();
+    const seen: Array<{ n: number; sessionId: string }> = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    const c1 = await boundFreshRun(h);
+    const id = argAfter(c1, "--session-id") as string;
+    expect(seen).toEqual([{ n: 1, sessionId: id }]);
+    await crashToResumed(c1);
+    expect(seen).toEqual([
+      { n: 1, sessionId: id },
+      { n: 2, sessionId: id },
+    ]);
+  });
+
+  it("wired: presence gives an open document nobody holds to Tandem's Claude, and spawn 2 retires spawn 1's record", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    const stray: TransportViewEntry = { ownerId: "spawn:1", sessionId: "m-stray", openStreams: 0 };
+    view.push(stray);
+    noteTransportRegistered("spawn:1", { recordKind: "unbound-child" });
+    await crashToResumed(c1);
+    expect(stray.ownerId).toBe("private:m-stray");
+    expect(getDocOwner("doc")?.ownerId).toBe(TANDEM_OWNER_ID);
+  });
+
+  it("a throwing spawn-started subscriber is contained: the next one still hears it", async () => {
+    const h = makeSupervisor();
+    const seen: number[] = [];
+    h.seam.onSpawnStarted(() => {
+      throw new Error("boom");
+    });
+    h.seam.onSpawnStarted((s) => seen.push(s.n));
+    await boundFreshRun(h);
+    expect(seen).toEqual([1]);
+    expect(logText()).toMatch(/A spawn-started subscriber threw \(ignored\): Error: boom/);
+  });
+
+  it("flag off, wired as index.ts wires it: no event, no presence, nothing created", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    const seen: unknown[] = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    await settle();
+    expect(seen).toEqual([]);
+    expect(h.log).toEqual([]);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+    expect(ownershipSnapshotForTests().ownerByDoc).toEqual([]);
+    expect(logText()).not.toMatch(/ownership|spawn-started/);
   });
 });

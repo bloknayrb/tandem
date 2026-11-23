@@ -2,25 +2,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_DESKTOP_CLIENT_NAME } from "../../src/server/mcp/transport-registry.js";
 import { getMcpContext, runWithMcpContext } from "../../src/server/sessions/context.js";
 import {
+  confirmBind,
+  endSpawn,
+  markSpawnStarted,
+  registerSpawn,
+  resetOwnerHandleBindForTests,
+} from "../../src/server/sessions/owner-handle-bind.js";
+import {
+  type ChatMessageFacts,
   CLAUDE_CODE_CLIENT_NAME,
+  checkWrite,
   DEFAULT_GRACE_MS,
+  decideTake,
   displayKindOf,
   getDocOwner,
   getOwnerRecord,
   getOwnershipTransportMode,
+  heldDocumentIds,
+  inboxOwnership,
   LOCAL_OWNER_ID,
   MAX_DETACHED_RECORDS,
+  noteOwnSpawnStarted,
   noteRecordPoll,
   noteTransportChanged,
   noteTransportRegistered,
   type OwnerRecord,
   type OwnSpawn,
+  otherAnswererOf,
   ownershipSnapshotForTests,
   ownSpawnRoutingActive,
+  recordAnswerer,
   recordHoldsState,
   resetOwnershipForTests,
   resolveTransportRecord,
   setDocOwner,
+  setOwnershipChatSide,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
   setOwnSpawnSource,
@@ -28,9 +44,11 @@ import {
   setTandemPresenceSource,
   setTransportView,
   setWaitingProbe,
+  setWakeObserverForTests,
   startOrWake,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
+  takeDocument,
 } from "../../src/server/sessions/ownership.js";
 
 /**
@@ -351,7 +369,10 @@ describe("what a record holds", () => {
       graceArmedAt: 0,
       lapsed: true,
       changeNotices: [],
+      fromOwnTeardown: true,
     };
+    // `fromOwnTeardown` (3b-2b5): provenance, not state the record holds, so
+    // NOT counted by recordHoldsState; it only skips the departure re-ask.
     // `changeNotices` (the change-notice PR): NOT counted by
     // recordHoldsState (Ruling 6), pinned by the next test. The chat owners
     // PR adds no field: per-message owners and "handed" memory live in the
@@ -360,6 +381,7 @@ describe("what a record holds", () => {
     expect(Object.keys(full).sort()).toEqual([
       "changeNotices",
       "clientName",
+      "fromOwnTeardown",
       "graceArmedAt",
       "graceTimer",
       "label",
@@ -380,15 +402,21 @@ describe("what a record holds", () => {
     expect(recordHoldsState(record)).toBe(false);
   });
 
-  it("no change notice is queued for Tandem's Claude (every one of its causes is PR 3b-2's)", () => {
-    // A cause literal: this proves the mapping, not a path (no path reaches
-    // the tandem record before PR 3b-2).
+  it("no change notice is queued for Tandem's Claude; the terminal it took a document back from is told (3b-2b4c)", () => {
+    // A cause literal: this proves the mapping, not a path (the paths are in
+    // ownership-change-notices.test.ts).
     register("claude:a");
     setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take", TANDEM_OWNER_ID);
     setDocOwner("d", { ownerId: "claude:a", kind: "opened" }, "take", "claude:a");
     setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
     expect(ownershipSnapshotForTests().changeNotices).toEqual([
-      ["claude:a", [{ documentId: "d", change: "gained", cause: "you opened or created it" }]],
+      [
+        "claude:a",
+        [
+          { documentId: "d", change: "gained", cause: "you opened or created it" },
+          { documentId: "d", change: "lost", cause: "Tandem's Claude took it back" },
+        ],
+      ],
     ]);
   });
 
@@ -573,12 +601,17 @@ describe("review gaps (#2371): behaviours a mutation could remove unnoticed", ()
     expect(getDocOwner("d")?.sinceSeq).toBe(7);
   });
 
-  it("step 5 asks whether items wait only for Tandem's Claude, not on its own change or a take-back", () => {
+  it("step 5 asks whether items wait, never on Tandem's Claude's own change or a take-back", () => {
+    // Since #2358 PR 3b-2d step 5 also asks for another record's gain made by
+    // someone else (the `ownership` frame), so d1 is asked, with its owner.
     const probe = vi.fn(() => false);
     setWaitingProbe(probe);
     setDocOwner("d1", { ownerId: "claude:a", kind: "claimed" }, "user-open");
+    expect(probe).toHaveBeenCalledExactlyOnceWith("d1", "claude:a");
+    probe.mockClear();
     setDocOwner("d2", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open", TANDEM_OWNER_ID);
     setDocOwner("d3", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
+    setDocOwner("d5", { ownerId: "claude:a", kind: "claimed" }, "claim", "claude:a");
     expect(probe).not.toHaveBeenCalled();
     setDocOwner("d4", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
     expect(probe).toHaveBeenCalledExactlyOnceWith("d4", TANDEM_OWNER_ID);
@@ -748,9 +781,11 @@ describe("the tandem record at an HTTP-mode boot (#2358 PR 3b-2b3a)", () => {
 describe("another session is connected: rule 0's kinds count, tandem does not (#2358 PR 3b-2b3a)", () => {
   // Observed through the lapse gate (Bryan's pick 2): a lapse forwards to the
   // sink only while no other session is connected.
-  let sink: ReturnType<typeof vi.fn<(cause: "document" | "message" | "departure") => void>>;
+  let sink: ReturnType<
+    typeof vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>
+  >;
   beforeEach(() => {
-    sink = vi.fn<(cause: "document" | "message" | "departure") => void>();
+    sink = vi.fn<(cause: "document" | "message" | "departure" | "solo-release") => void>();
     setStartOrWakeSink(sink);
   });
 
@@ -767,5 +802,311 @@ describe("another session is connected: rule 0's kinds count, tandem does not (#
     register(ownerId, kind);
     startOrWake("lapse");
     expect(sink).not.toHaveBeenCalled();
+  });
+});
+
+describe("retirement, demotion and teardown re-pointing (#2358 PR 3b-2b3b)", () => {
+  // Nothing in `src` sets the seam or calls `noteOwnSpawnStarted` until
+  // 3b-2b4; these set the seam with a test source to prove what it switches on.
+  const SPAWN_ID = "AbCd-Spawn-1";
+  let spawn: OwnSpawn | null;
+  const isOwnChild = (id: string) => id.toLowerCase() === SPAWN_ID.toLowerCase();
+
+  beforeEach(() => {
+    spawn = { n: 3, sessionId: SPAWN_ID };
+    setOwnSpawnSource(() => spawn, isOwnChild);
+    setTandemPresenceSource(() => true);
+  });
+
+  afterEach(() => {
+    resetOwnerHandleBindForTests();
+  });
+
+  /** A transport with an Mcp-Session-Id, registered the way server.ts does. */
+  function transport(sessionId: string, ownerId: string, kind: OwnerRecord["recordKind"]) {
+    const entry: TransportViewEntry = { sessionId, clientName: "probe", ownerId, openStreams: 0 };
+    view.push(entry);
+    noteTransportRegistered(ownerId, { recordKind: kind, clientName: "probe" });
+    return entry;
+  }
+
+  it("a new spawn retires the previous spawn's unbound-child record: documents to the default rule, each transport to a private record", () => {
+    const a = transport("m1", "spawn:3", "unbound-child");
+    const b = transport("m2", "spawn:3", "unbound-child");
+    setDocOwner("d1", { ownerId: "spawn:3", kind: "claimed" }, "claim", "spawn:3");
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+    expect(getOwnerRecord("spawn:3")).toBeUndefined();
+    expect(getDocOwner("d1")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect([a.ownerId, b.ownerId]).toEqual(["private:m1", "private:m2"]);
+    expect(getOwnerRecord("private:m1")?.recordKind).toBe("child-private");
+    expect(getOwnerRecord("private:m2")?.clientName).toBe("probe");
+    expect(heldDocumentIds("private:m1")).toEqual([]);
+    expectNoDanglingOwners();
+  });
+
+  it("a retired record's per-message chat is re-owed and follows the default rule (3b-2b3b review)", () => {
+    const reOwed: string[] = [];
+    setOwnershipChatSide({
+      handledKeys: () => new Set(),
+      messagesOn: () => [],
+      unhandledKeys: () => [],
+      message: () => ({ documentOpen: false, localPeriod: false }),
+      reOwe: (keys) => reOwed.push(...keys),
+      settleCandidates: () => [],
+      addSettles: () => [],
+      owedToFreshReader: () => [],
+    });
+    transport("m1", "spawn:3", "unbound-child");
+    setTandemPresenceSource(() => false);
+    const out = { owners: [] as string[], handed: [] as string[] };
+    inboxOwnership.begin({ ownerId: "spawn:3" }, [], 0).commitChat(["chat-1"], ["chat-1"], out);
+    expect(out.owners).toEqual(["chat-1"]);
+    setTandemPresenceSource(() => true);
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+    expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+    expect(reOwed).toEqual(["chat-1"]);
+    // Doc-less with no per-message owner: Tandem's Claude's while present.
+    const tandem = inboxOwnership.begin({ ownerId: TANDEM_OWNER_ID }, [], 0);
+    expect(tandem.chatScopeOf("chat-1", undefined)).toBe("owns");
+  });
+
+  it("with Tandem's Claude not present, the retired record's documents go unowned", () => {
+    setTandemPresenceSource(() => false);
+    transport("m1", "spawn:3", "unbound-child");
+    setDocOwner("d1", { ownerId: "spawn:3", kind: "claimed" }, "claim", "spawn:3");
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+    expect(getDocOwner("d1")).toBeUndefined();
+  });
+
+  it("the current spawn's own record is not retired", () => {
+    const a = transport("m1", "spawn:3", "unbound-child");
+    setDocOwner("d1", { ownerId: "spawn:3", kind: "claimed" }, "claim", "spawn:3");
+    noteOwnSpawnStarted({ n: 3, sessionId: SPAWN_ID });
+    expect(a.ownerId).toBe("spawn:3");
+    expect(getDocOwner("d1")?.ownerId).toBe("spawn:3");
+  });
+
+  it("a plain claude record holding the new spawn's id is demoted: transports to the spawn's unbound-child record, documents to the default rule", () => {
+    const key = `claude:${SPAWN_ID.toLowerCase()}`;
+    const t = transport("m5", key, "claude");
+    const other = transport("m6", "claude:someone-else", "claude");
+    setDocOwner("d2", { ownerId: key, kind: "opened" }, "take", key);
+    setDocOwner("d3", { ownerId: "claude:someone-else", kind: "opened" }, "take", "x");
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID.toUpperCase() });
+    expect(getOwnerRecord(key)).toBeUndefined();
+    expect(t.ownerId).toBe("spawn:4");
+    expect(getOwnerRecord("spawn:4")?.recordKind).toBe("unbound-child");
+    expect(getDocOwner("d2")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(other.ownerId).toBe("claude:someone-else");
+    expect(getDocOwner("d3")?.ownerId).toBe("claude:someone-else");
+    expectNoDanglingOwners();
+  });
+
+  it("a spawn's teardown re-points its bound transports to private records; tandem keeps its documents", () => {
+    const bind = registerSpawn({ handle: `th_${"L".repeat(32)}`, sessionId: SPAWN_ID });
+    markSpawnStarted(bind);
+    expect(confirmBind({ serial: bind.serial }, "m7")).toBe(true);
+    const bound = transport("m7", TANDEM_OWNER_ID, "tandem");
+    const notBound = transport("m8", TANDEM_OWNER_ID, "tandem");
+    const child = transport("m9", "spawn:3", "unbound-child");
+    setDocOwner("d4", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
+    endSpawn(bind);
+    expect(bound.ownerId).toBe("private:m7");
+    expect(getOwnerRecord("private:m7")?.recordKind).toBe("child-private");
+    expect(notBound.ownerId).toBe(TANDEM_OWNER_ID);
+    expect(child.ownerId).toBe("spawn:3");
+    expect(getDocOwner("d4")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expectNoDanglingOwners();
+  });
+
+  describe("a stopped child's own leftovers start nothing (Bryan, 2026-11-23: 'No, its own lapse starts nothing')", () => {
+    function lapseOf(entry: TransportViewEntry): void {
+      view.splice(view.indexOf(entry), 1);
+      noteTransportChanged(entry.ownerId);
+      vi.advanceTimersByTime(10 * DEFAULT_GRACE_MS);
+    }
+    function departures(run: () => void): number {
+      let n = 0;
+      setWakeObserverForTests((cause) => {
+        if (cause === "departure") n += 1;
+      });
+      try {
+        run();
+      } finally {
+        setWakeObserverForTests(undefined);
+      }
+      return n;
+    }
+
+    it("a private record its teardown made lapses without the departure re-ask", () => {
+      const bind = registerSpawn({ handle: `th_${"P".repeat(32)}`, sessionId: SPAWN_ID });
+      markSpawnStarted(bind);
+      expect(confirmBind({ serial: bind.serial }, "m7")).toBe(true);
+      const bound = transport("m7", TANDEM_OWNER_ID, "tandem");
+      endSpawn(bind);
+      expect(bound.ownerId).toBe("private:m7");
+      expect(departures(() => lapseOf(bound))).toBe(0);
+    });
+
+    it("an earlier spawn's unbound-child record lapses without the re-ask; the current spawn's does re-ask (a --resume terminal still counts)", () => {
+      const old = transport("m1", "spawn:2", "unbound-child");
+      expect(departures(() => lapseOf(old))).toBe(0);
+      const current = transport("m2", "spawn:3", "unbound-child");
+      expect(departures(() => lapseOf(current))).toBe(1);
+    });
+
+    it("anchor: an ordinary terminal's lapse still re-asks", () => {
+      const t = transport("m3", "claude:terminal", "claude");
+      expect(departures(() => lapseOf(t))).toBe(1);
+    });
+  });
+
+  it("seam unset or flag off: a spawn's start and teardown change nothing and log nothing", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const run = () => {
+      const a = transport("m1", "spawn:3", "unbound-child");
+      const key = `claude:${SPAWN_ID.toLowerCase()}`;
+      transport("m5", key, "claude");
+      const t = transport("m7", TANDEM_OWNER_ID, "tandem");
+      setDocOwner("d1", { ownerId: "spawn:3", kind: "claimed" }, "claim", "spawn:3");
+      setDocOwner("d2", { ownerId: key, kind: "opened" }, "take", key);
+      const before = JSON.stringify([view, ownershipSnapshotForTests()]);
+      const bind = registerSpawn({ handle: `th_${"L".repeat(32)}`, sessionId: SPAWN_ID });
+      markSpawnStarted(bind);
+      confirmBind({ serial: bind.serial }, "m7");
+      noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+      endSpawn(bind);
+      expect(JSON.stringify([view, ownershipSnapshotForTests()])).toBe(before);
+      expect(a.ownerId).toBe("spawn:3");
+      expect(t.ownerId).toBe(TANDEM_OWNER_ID);
+    };
+    setOwnSpawnSource(undefined);
+    run();
+    resetOwnershipForTests();
+    view = [];
+    setTransportView(() => view);
+    setTandemPresenceSource(() => true);
+    setOwnSpawnSource(() => spawn, isOwnChild);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(ownSpawnRoutingActive()).toBe(false);
+    // A registry entry as a flag-off server never writes one, so the only
+    // thing that could move it is the teardown listener the seam registered.
+    const stray: TransportViewEntry = { sessionId: "m7", ownerId: TANDEM_OWNER_ID, openStreams: 0 };
+    view.push(stray);
+    const bind = registerSpawn({ handle: `th_${"M".repeat(32)}`, sessionId: SPAWN_ID });
+    markSpawnStarted(bind);
+    confirmBind({ serial: bind.serial }, "m7");
+    noteOwnSpawnStarted({ n: 4, sessionId: SPAWN_ID });
+    endSpawn(bind);
+    expect(stray.ownerId).toBe(TANDEM_OWNER_ID);
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+    expect(errors).not.toHaveBeenCalled();
+  });
+});
+
+describe("the unbound-child refusal and the take guard (#2358 PR 3b-2b3b; design §3.1, §5.3)", () => {
+  const SPAWN_ID = "AbCd-Spawn-1";
+  const CHILD = "spawn:3";
+  const PRIVATE = "private:m3";
+  const TERMINAL = "claude:someone-else";
+
+  beforeEach(() => {
+    setOwnSpawnSource(
+      () => ({ n: 3, sessionId: SPAWN_ID }),
+      () => true,
+    );
+    setTandemPresenceSource(() => true);
+    register(CHILD, "unbound-child");
+    register(PRIVATE, "child-private");
+    register(TERMINAL, "claude");
+    setDocOwner("tandems", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
+  });
+
+  it.each([CHILD, PRIVATE])(
+    "%s is refused on Tandem's Claude's document, for a write and a take",
+    (caller) => {
+      expect(checkWrite("tandems", caller)).toMatchObject({ ok: false, reason: "unbound-child" });
+      expect(decideTake("tandems", caller)).toMatchObject({ ok: false, reason: "unbound-child" });
+      expect(takeDocument("tandems", caller)).toMatchObject({
+        ok: false,
+        reason: "unbound-child",
+      });
+      expect(getDocOwner("tandems")?.ownerId).toBe(TANDEM_OWNER_ID);
+      // Even an `opened` one: the copy replaces `held`'s.
+      setDocOwner("tandems", { ownerId: TANDEM_OWNER_ID, kind: "opened" }, "take", TANDEM_OWNER_ID);
+      expect(checkWrite("tandems", caller)).toMatchObject({ reason: "unbound-child" });
+      expect(decideTake("tandems", caller)).toMatchObject({ reason: "unbound-child" });
+    },
+  );
+
+  it("an ordinary terminal on the same document is answered as before (default, and its take stands)", () => {
+    expect(checkWrite("tandems", TERMINAL)).toMatchObject({ ok: false, reason: "default" });
+    expect(decideTake("tandems", TERMINAL)).toEqual({ ok: true, next: "opened" });
+  });
+
+  it("elsewhere a child record is a terminal: it claims an unowned document and meets another terminal's in the ordinary way", () => {
+    expect(checkWrite("nobodys", CHILD)).toEqual({ ok: true, claim: "claimed" });
+    expect(decideTake("nobodys", CHILD)).toEqual({ ok: true, next: "opened" });
+    setDocOwner("terms", { ownerId: TERMINAL, kind: "opened" }, "take", TERMINAL);
+    expect(checkWrite("terms", CHILD)).toMatchObject({ ok: false, reason: "held" });
+    expect(decideTake("terms", CHILD)).toMatchObject({ ok: false, reason: "held" });
+    setDocOwner("terms", { ownerId: TERMINAL, kind: "claimed" }, "claim", TERMINAL);
+    expect(checkWrite("terms", CHILD)).toMatchObject({ ok: false, reason: "claimed" });
+    expect(decideTake("terms", CHILD)).toEqual({ ok: true, next: "opened" });
+  });
+
+  it("the answered row gives way to it on Tandem's Claude's document, and stands elsewhere", () => {
+    recordAnswerer("tandems", "a1", "root", TANDEM_OWNER_ID);
+    expect(otherAnswererOf("tandems", "a1", "root", CHILD)).toBeUndefined();
+    expect(otherAnswererOf("tandems", "a1", "root", TERMINAL)).toBeDefined();
+    recordAnswerer("nobodys", "a1", "root", TERMINAL);
+    expect(otherAnswererOf("nobodys", "a1", "root", CHILD)).toBeDefined();
+  });
+
+  describe("the message half", () => {
+    const rows = new Map<string, ChatMessageFacts>([
+      ["docless", { documentOpen: false, localPeriod: false }],
+      ["on-tandems", { documentId: "tandems", documentOpen: true, localPeriod: false }],
+      ["on-terms", { documentId: "terms", documentOpen: true, localPeriod: false }],
+    ]);
+    const docs = { isOpen: () => true, activeDocumentId: () => undefined };
+    const reply = (ownerId: string, replyTo: string) =>
+      inboxOwnership.replyGate({ ownerId }, { replyTo }, docs);
+
+    beforeEach(() => {
+      setOwnershipChatSide({
+        handledKeys: () => new Set(),
+        messagesOn: () => [],
+        unhandledKeys: () => [],
+        message: (key) => rows.get(key),
+        reOwe: () => {},
+        settleCandidates: () => [],
+        addSettles: () => [],
+        owedToFreshReader: () => [],
+      });
+      setDocOwner("terms", { ownerId: TERMINAL, kind: "opened" }, "take", TERMINAL);
+    });
+
+    it.each(["docless", "on-tandems"])(
+      "a reply naming a message Tandem's Claude owns (%s) is refused with unbound-child",
+      (key) => {
+        const gate = reply(CHILD, key);
+        expect(gate).toMatchObject({ kind: "refused", code: "NOT_DOC_OWNER" });
+        const refused = gate as Extract<typeof gate, { kind: "refused" }>;
+        expect(refused.details?.reason).toBe("unbound-child");
+        expect(refused.message).toContain("Tandem's Claude answers this message.");
+        expect(reply(PRIVATE, key)).toMatchObject({ details: { reason: "unbound-child" } });
+        expect(reply(TERMINAL, key)).toMatchObject({ details: { reason: "chat" } });
+      },
+    );
+
+    it("a reply naming another terminal's message is refused in the ordinary way", () => {
+      expect(reply(CHILD, "on-terms")).toMatchObject({ details: { reason: "chat" } });
+    });
+
+    it("a post naming Tandem's Claude's document is refused with unbound-child", () => {
+      const gate = inboxOwnership.replyGate({ ownerId: CHILD }, { documentId: "tandems" }, docs);
+      expect(gate).toMatchObject({ kind: "refused", details: { reason: "unbound-child" } });
+    });
   });
 });

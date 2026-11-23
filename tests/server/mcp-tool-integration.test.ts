@@ -176,6 +176,46 @@ function setMode(mode: "solo" | "tandem") {
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode));
 }
 
+/** A fresh temp document path for a sidecar-writing export. */
+function uniqueDocPath(prefix = "tandem-export"): string {
+  return join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+}
+
+// Every sidecar a spec registers is removed after it, whichever describe ran.
+afterEach(async () => {
+  for (const f of sidecarTempFiles.splice(0)) await fs.rm(f, { force: true });
+});
+
+/** The single paragraph's Y.XmlText. */
+function paragraphText(ydoc: Y.Doc): Y.XmlText {
+  return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
+}
+
+/**
+ * Delete and re-insert "world" (offsets 6–11): every anchor on it collapses
+ * while its text still matches its snapshot — the spurious collapse #1764
+ * reports as `degraded`.
+ */
+function collapseWorld(ydoc: Y.Doc): void {
+  withInternal(ydoc, () => {
+    const xt = paragraphText(ydoc);
+    xt.delete(6, 5);
+    xt.insert(6, "world");
+  });
+}
+
+/** The reload shape: content replaced with identical text, so every relRange is dead (`repaired`). */
+function rebuildIdentical(ydoc: Y.Doc): void {
+  const text = extractText(ydoc);
+  withInternal(ydoc, () => {
+    const fragment = ydoc.getXmlFragment("default");
+    fragment.delete(0, fragment.length);
+    const el = new Y.XmlElement("paragraph");
+    fragment.insert(0, [el]);
+    el.insert(0, [new Y.XmlText(text)]);
+  });
+}
+
 describe("MCP tool integration — document tools", () => {
   it("tandem_getTextContent returns text for open document", async () => {
     setupDoc("mcp-doc-1", "Hello world");
@@ -1109,16 +1149,6 @@ describe("MCP tool integration — author authority (#1770)", () => {
 });
 
 describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)", () => {
-  afterEach(async () => {
-    for (const f of sidecarTempFiles.splice(0)) {
-      await fs.rm(f, { force: true });
-    }
-  });
-
-  function uniqueDocPath(): string {
-    return join(tmpdir(), `tandem-export-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
-  }
-
   it("writes a JSON sidecar next to the document and omits notes (ADR-027)", async () => {
     const docPath = uniqueDocPath();
     const sidecarPath = `${docPath}.annotations.json`;
@@ -1824,13 +1854,15 @@ describe("MCP tool integration — awareness tools", () => {
       const background = setupDoc("mcp-aw-replythrow-bg", "Background text");
       seedOpenComment(background, "u_replythrow_bg", "do not lose me");
       setupDoc("mcp-aw-replythrow-fg", "Foreground text");
-      const real = YDocStore.prototype.listReplies;
-      const spy = vi.spyOn(YDocStore.prototype, "listReplies").mockImplementation(function (
+      // The fault goes on `reconciled()`, the entry point of every Claude-facing
+      // reply read (the reply gate requires its token); `listReplies` is the raw
+      // accessor and is no longer on that path.
+      const real = YDocStore.prototype.reconciled;
+      const spy = vi.spyOn(YDocStore.prototype, "reconciled").mockImplementation(function (
         this: YDocStore,
-        id: string,
       ) {
         if (this.documentId === "mcp-aw-replythrow-bg") throw new Error("reply read failed");
-        return real.call(this, id);
+        return real.call(this);
       });
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       onTestFinished(() => err.mockRestore());
@@ -2972,6 +3004,64 @@ describe("checkInbox stamps the pull path", () => {
 });
 
 /**
+ * An annotation's identity is its Y.Map key. A note stored under key K with a
+ * stale `id: X`, beside the real comment X, used to collapse onto X: an older
+ * client filed the user's note-thread reply under X, non-private, and
+ * `tandem_getAnnotations` handed it to Claude in comment X's thread (ADR-027).
+ * REGRESSION: drives only the tool, an API that exists on master.
+ */
+describe("MCP tool integration — annotation key identity", () => {
+  it("REGRESSION: a note-thread reply filed under a stale id never reaches Claude", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const ydoc = setupDoc("key-identity-leak", "Hello world test");
+    withInternal(ydoc, () => {
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      map.set("X", {
+        id: "X",
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "the real comment at X",
+        status: "pending",
+        timestamp: 1_700_000_000_000,
+        rev: 1,
+      });
+      map.set("K", {
+        id: "X",
+        author: "user",
+        type: "note",
+        audience: "private",
+        range: { from: 6, to: 11 },
+        content: "a private note",
+        status: "pending",
+        timestamp: 1_700_000_500_000,
+        rev: 1,
+      });
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r-note", {
+        id: "r-note",
+        annotationId: "X",
+        author: "user",
+        text: "my private thought about the note",
+        timestamp: 1_700_000_600_000,
+      });
+    });
+
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+
+    expect(parsed.error).toBe(false);
+    expect(JSON.stringify(parsed.data)).not.toContain("my private thought about the note");
+    const ids = (parsed.data.annotations as Array<{ id: string }>).map((a) => a.id);
+    expect(ids).toEqual(["X"]);
+  });
+});
+
+/**
  * #1764 — the degradation verdict `refreshRange` produces has been computed
  * since ADR-032 and discarded by every MCP consumer. `tandem_getAnnotations`
  * now carries it as `anchor`, and ONLY on degradation: `updated` fires for
@@ -2979,11 +3069,6 @@ describe("checkInbox stamps the pull path", () => {
  * any reload, so emitting those would bury the one signal this exists for.
  */
 describe("MCP tool integration — anchor degradation on tandem_getAnnotations (#1764)", () => {
-  /** The single paragraph's Y.XmlText. */
-  function paragraphText(ydoc: Y.Doc): Y.XmlText {
-    return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
-  }
-
   async function annotations(): Promise<Array<Record<string, unknown>>> {
     const parsed = parseResult(
       await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
@@ -3018,15 +3103,7 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
       arguments: { from: 6, to: 11, text: "on world" },
     });
 
-    // The reload shape: content replaced with identical text, so every
-    // relRange is dead and every stored range is exactly right.
-    withInternal(ydoc, () => {
-      const fragment = ydoc.getXmlFragment("default");
-      fragment.delete(0, fragment.length);
-      const el = new Y.XmlElement("paragraph");
-      fragment.insert(0, [el]);
-      el.insert(0, [new Y.XmlText("Hello world test")]);
-    });
+    rebuildIdentical(ydoc);
 
     const anns = await annotations();
     expect(anns).toHaveLength(1);
@@ -3044,14 +3121,7 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
       arguments: { from: 6, to: 11, text: "on world" },
     });
 
-    // Delete and re-insert "world": both of that record's anchors resolve onto
-    // one offset while its annotated text is still present and still matches
-    // its snapshot — the spurious collapse #1764 refuses to persist.
-    withInternal(ydoc, () => {
-      const xt = paragraphText(ydoc);
-      xt.delete(6, 5);
-      xt.insert(6, "world");
-    });
+    collapseWorld(ydoc);
 
     const anns = await annotations();
     expect(anns).toHaveLength(2);
@@ -3059,6 +3129,230 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
     expect(byContent.get("on world")?.anchor).toBe("degraded");
     expect(byContent.get("on world")?.range).toEqual({ from: 6, to: 11 });
     expect(byContent.get("on Hello")?.anchor).toBeUndefined();
+  });
+});
+
+/**
+ * #1823 item 4 — `tandem_exportAnnotations` carries the same `anchor` verdict
+ * as `tandem_getAnnotations` (#1764): in the JSON (response and sidecar) and
+ * as an `Anchor:` line in the markdown, for `degraded`/`failed` only. The
+ * filters that run before serialization are unchanged, so a degraded record
+ * the user keeps private, or Solo holds, is still absent.
+ */
+describe("MCP tool integration — anchor verdict on tandem_exportAnnotations (#1823)", () => {
+  const TEXT = "Hello world test";
+
+  /**
+   * A raw record with a live `relRange` and a `textSnapshot` — the two things
+   * the collapse arm needs to answer `degraded` rather than write a point.
+   */
+  function seed(
+    ydoc: Y.Doc,
+    key: string,
+    from: number,
+    to: number,
+    extra: Record<string, unknown>,
+  ): void {
+    const anchored = rangeOf(from, to, ydoc);
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(key, {
+        id: key,
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: anchored.range,
+        relRange: anchored.relRange,
+        textSnapshot: TEXT.slice(from, to),
+        content: `content ${key}`,
+        status: "pending",
+        timestamp: Date.now(),
+        rev: 1,
+        ...extra,
+      }),
+    );
+  }
+
+  async function exportJson(args: Record<string, unknown> = {}) {
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_exportAnnotations",
+        arguments: { format: "json", ...args },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data as {
+      annotations: Array<Record<string, unknown>>;
+      count: number;
+      writtenPath?: string;
+      heldFromExport?: number;
+      privateExcluded?: number;
+    };
+  }
+
+  async function exportMarkdown(args: Record<string, unknown> = {}) {
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_exportAnnotations", arguments: args }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data as { markdown: string; writtenPath?: string };
+  }
+
+  it("carries anchor: degraded in the JSON response and the sidecar, only on that record", async () => {
+    const docPath = uniqueDocPath("tandem-anchor");
+    sidecarTempFiles.push(`${docPath}.annotations.json`);
+    const ydoc = setupDocAtPath("export-anchor-json", TEXT, docPath);
+    seed(ydoc, "on-hello", 0, 5, {});
+    seed(ydoc, "on-world", 6, 11, {});
+    collapseWorld(ydoc);
+
+    const data = await exportJson({ writeToDisk: true });
+    const onDisk = JSON.parse(await fs.readFile(data.writtenPath as string, "utf-8"));
+
+    const lists: Array<[string, Array<Record<string, unknown>>]> = [
+      ["response", data.annotations],
+      ["sidecar", onDisk.annotations],
+    ];
+    for (const [where, list] of lists) {
+      const byId = new Map(list.map((a) => [a.id, a]));
+      expect(byId.get("on-world")?.anchor, where).toBe("degraded");
+      expect(byId.get("on-world")?.range, where).toEqual({ from: 6, to: 11 });
+      expect(byId.get("on-hello"), where).not.toHaveProperty("anchor");
+    }
+  });
+
+  it("writes one Anchor line, under the degraded item, in the markdown and its sidecar", async () => {
+    const docPath = uniqueDocPath("tandem-anchor");
+    sidecarTempFiles.push(`${docPath}.annotations.md`);
+    const ydoc = setupDocAtPath("export-anchor-md", TEXT, docPath);
+    seed(ydoc, "on-hello", 0, 5, {});
+    seed(ydoc, "on-world", 6, 11, {});
+    collapseWorld(ydoc);
+
+    const { markdown, writtenPath } = await exportMarkdown({ writeToDisk: true });
+    expect(await fs.readFile(writtenPath as string, "utf-8")).toBe(markdown);
+
+    const lines = markdown.split("\n");
+    const anchorLines = lines.filter((l) => l.includes("Anchor:"));
+    expect(anchorLines).toHaveLength(1);
+    expect(anchorLines[0]).toMatch(/^ {2}- Anchor: Degraded — /);
+    const worldItem = lines.findIndex((l) => l.startsWith('- **"world"**'));
+    expect(lines[worldItem + 2]).toBe(anchorLines[0]);
+  });
+
+  it("never echoes a stored anchor key as a verdict, in either tool", async () => {
+    const ydoc = setupDoc("export-anchor-stray", TEXT);
+    // Healthy records carrying a client-written `anchor`: a plausible value and
+    // one outside getAnnotations' declared enum. `sanitizeAnnotation`'s
+    // allowlist drops both on read; this pins that end to end, so adding
+    // `anchor` to the allowlist turns it red.
+    seed(ydoc, "stray-failed", 0, 5, { anchor: "failed" });
+    seed(ydoc, "stray-bogus", 6, 11, { anchor: "bogus" });
+
+    const data = await exportJson();
+    expect(data.annotations).toHaveLength(2);
+    for (const a of data.annotations) expect(a).not.toHaveProperty("anchor");
+
+    const { markdown } = await exportMarkdown();
+    expect(markdown).not.toContain("Anchor:");
+
+    const got = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(got.error).toBe(false);
+    expect(got.data.annotations).toHaveLength(2);
+    for (const a of got.data.annotations) expect(a).not.toHaveProperty("anchor");
+  });
+
+  it("keeps degraded private, note and Solo-held records out, and their replies", async () => {
+    const docPath = uniqueDocPath("tandem-anchor");
+    sidecarTempFiles.push(`${docPath}.annotations.json`, `${docPath}.annotations.md`);
+    const ydoc = setupDocAtPath("export-anchor-privacy", TEXT, docPath);
+    seed(ydoc, "claude-world", 6, 11, {});
+    seed(ydoc, "note-world", 6, 11, { author: "user", type: "note", audience: "private" });
+    seed(ydoc, "private-world", 6, 11, { author: "user", audience: "private" });
+    seed(ydoc, "user-world", 6, 11, { author: "user" });
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("user-reply", {
+        id: "user-reply",
+        annotationId: "claude-world",
+        author: "user",
+        text: "held reply text",
+        timestamp: Date.now(),
+        rev: 1,
+      }),
+    );
+    collapseWorld(ydoc);
+    setMode("solo");
+
+    const data = await exportJson({ writeToDisk: true });
+    expect(data.annotations.map((a) => a.id)).toEqual(["claude-world"]);
+    expect(data.annotations[0].anchor).toBe("degraded");
+    expect(data.annotations[0].replies).toEqual([]);
+    expect(data.heldFromExport).toBe(1);
+    expect(data.privateExcluded).toBe(1);
+
+    const { markdown } = await exportMarkdown({ writeToDisk: true });
+    const sidecars = [
+      await fs.readFile(`${docPath}.annotations.json`, "utf-8"),
+      await fs.readFile(`${docPath}.annotations.md`, "utf-8"),
+      markdown,
+    ];
+    for (const text of sidecars) {
+      for (const hidden of [
+        "content note-world",
+        "content private-world",
+        "content user-world",
+        "held reply text",
+      ]) {
+        expect(text).not.toContain(hidden);
+      }
+    }
+    expect(markdown.split("\n").filter((l) => l.includes("Anchor:"))).toHaveLength(1);
+  });
+
+  it("gives no anchor after a shifting edit (updated) or a byte-exact rebuild (repaired)", async () => {
+    const ydoc = setupDoc("export-anchor-routine", TEXT);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    await client.callTool({ name: "tandem_edit", arguments: { from: 0, to: 5, newText: "Hi" } });
+    const afterEdit = await exportJson();
+    expect(afterEdit.annotations).toHaveLength(1);
+    expect(afterEdit.annotations[0]).not.toHaveProperty("anchor");
+
+    rebuildIdentical(ydoc);
+    const afterRebuild = await exportJson();
+    expect(afterRebuild.annotations).toHaveLength(1);
+    expect(afterRebuild.annotations[0]).not.toHaveProperty("anchor");
+    expect((await exportMarkdown()).markdown).not.toContain("Anchor:");
+  });
+
+  it("reads each record's own verdict when two stored records share an id", async () => {
+    const ydoc = setupDoc("export-anchor-dup", TEXT);
+    // A healthy comment, then a degraded NOTE stored under another key but
+    // carrying the comment's id. An id-keyed verdict map would hand the
+    // comment the note's verdict — one bit about a private note.
+    seed(ydoc, "shared-id", 0, 5, {});
+    seed(ydoc, "note-key", 6, 11, {
+      id: "shared-id",
+      author: "user",
+      type: "note",
+      audience: "private",
+    });
+    collapseWorld(ydoc);
+
+    const data = await exportJson();
+    expect(data.annotations.map((a) => a.id)).toEqual(["shared-id"]);
+    expect(data.annotations[0].content).toBe("content shared-id");
+    expect(data.annotations[0]).not.toHaveProperty("anchor");
+
+    const got = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(got.data.annotations).toHaveLength(1);
+    expect(got.data.annotations[0]).not.toHaveProperty("anchor");
   });
 });
 

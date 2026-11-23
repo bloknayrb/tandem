@@ -230,3 +230,21 @@ export function sanitizeAnnotation(
   emit({ kind: "unknown-type", id: ann.id, rawType: ann.type });
   return { ...base, type: "comment" } as Annotation;
 }
+
+/**
+ * An annotation's identity is its Y.Map key, never its stored `id`.
+ *
+ * Every minting path stores a record under its own id, but a browser CRDT
+ * update, a session blob or the `.docx` drift path can leave a record under
+ * key K whose stored `id` is X. A reader that took `value.id` as identity then
+ * misdirected every write keyed by it onto the record really stored at X.
+ *
+ * Returns `rec` itself when the ids agree: well-formed data keeps its exact
+ * reference, which object-keyed callers rely on. Always stamp AFTER
+ * `sanitizeAnnotation` (`atMapKey(key, sanitizeAnnotation(value, …))`), never
+ * sanitize a stamped copy: sanitize may return the raw value, and its
+ * `onLossy` events deliberately still name the stored id.
+ */
+export function atMapKey<T extends { id: string }>(key: string, rec: T): T {
+  return rec.id === key ? rec : { ...rec, id: key };
+}

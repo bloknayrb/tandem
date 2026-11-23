@@ -1028,6 +1028,10 @@ export function refreshRange(
  * transaction with the appropriate origin. Used by `repairClonedAnchors`
  * (`documents/annotation-wiring.ts`), which runs inside a transaction it has
  * already tagged.
+ *
+ * **A caller passing `map` must pass records from `collectAnnotations`**, whose
+ * ids are their map keys. Every write here is `map.set(ann.id, …)`, so a record
+ * carrying a stale stored id would be written over the record at that id.
  */
 export function refreshAllRanges(
   annotations: Annotation[],

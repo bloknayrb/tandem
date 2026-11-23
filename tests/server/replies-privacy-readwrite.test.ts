@@ -21,6 +21,7 @@
  * client-side `getVisibleReplies` mirror).
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { reconcileAnnotationKeys } from "../../src/server/annotations/key-identity.js";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
 import {
   channelVisibleReplies,
@@ -68,9 +69,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
 
     // ...but the Claude-facing read path returns nothing for a note parent.
     const note = map.get(annId) as Annotation;
-    expect(
-      channelVisibleReplies(note, (id) => collectRepliesForAnnotation(repliesMap, id)),
-    ).toEqual([]);
+    expect(channelVisibleReplies(reconcileAnnotationKeys(ydoc), note)).toEqual([]);
   });
 
   it("(b2) rejects a CLAUDE reply on a note parent (ADR-027: Claude never touches notes)", () => {
@@ -259,7 +258,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     }, MCP_ORIGIN);
 
     const ann = map.get(annId) as Annotation;
-    const out = channelVisibleReplies(ann, (id) => collectRepliesForAnnotation(repliesMap, id));
+    const out = channelVisibleReplies(reconcileAnnotationKeys(ydoc), ann);
     expect(out.map((r) => r.id)).toEqual(["rpl_visible"]);
   });
 
@@ -268,12 +267,9 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
     addUserReply(ydoc, annId, "thought", noRelay);
-    const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
     const ann = map.get(annId) as Annotation;
-    expect(channelVisibleReplies(ann, (id) => collectRepliesForAnnotation(repliesMap, id))).toEqual(
-      [],
-    );
+    expect(channelVisibleReplies(reconcileAnnotationKeys(ydoc), ann)).toEqual([]);
   });
 
   it("(e) PROMOTION LEAK: a note's private replies stay hidden after note→comment promotion", () => {
@@ -308,9 +304,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     const promoted = map.get(annId) as Annotation;
     expect(promoted.type).toBe("comment");
 
-    const out = channelVisibleReplies(promoted, (id) =>
-      collectRepliesForAnnotation(repliesMap, id),
-    );
+    const out = channelVisibleReplies(reconcileAnnotationKeys(ydoc), promoted);
     // Only the post-promotion reply surfaces; the pre-promotion private + import
     // replies remain hidden from Claude.
     expect(out).toHaveLength(1);
@@ -365,9 +359,7 @@ describe("#2460: channelVisibleReplies fails closed", () => {
       });
     });
     const ann = map.get(annId) as Annotation;
-    return channelVisibleReplies(ann, (id) => collectRepliesForAnnotation(repliesMap, id)).map(
-      (r) => r.id,
-    );
+    return channelVisibleReplies(reconcileAnnotationKeys(ydoc), ann).map((r) => r.id);
   }
 
   it.each(NON_BOOLEAN)("B1: hides a user reply whose private is %s", (_label, value) => {

@@ -23,6 +23,7 @@ import type { FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { dropAliasLedger, forgetKeyMismatchReports } from "../annotations/key-identity.js";
 import { closeStore, createStore } from "../annotations/store.js";
 import {
   mergeEnvelopeForward,
@@ -89,7 +90,7 @@ import {
   undoClientChatWrites,
 } from "../sessions/ownership.js";
 import { addStartupNotice, beginStartupRestore, endStartupRestore } from "../startup-notices.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { carriedOverCandidates } from "./chat-handled.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
@@ -1913,6 +1914,13 @@ export async function closeDocumentById(
     console.error("[Tandem] closeDocumentById: closeStore failed for %s:", safeId, err);
   }
   clearFileSyncContext(safeId);
+
+  // The key-identity alias ledger and its deduplicated warnings live until the
+  // document closes, here and nowhere else: `clearFileSyncContext` also runs on
+  // `tandem_open force`, which must keep the ledger for its re-merge.
+  const closingYDoc = getDocument(safeId);
+  if (closingYDoc) dropAliasLedger(closingYDoc);
+  forgetKeyMismatchReports(docHash(docState.filePath));
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
   savingDocs.delete(safeId);
