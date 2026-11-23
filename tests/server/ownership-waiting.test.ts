@@ -46,6 +46,7 @@ import {
   registerAwarenessTools,
   resetInbox,
   setInboxResponseCorruptorForTests,
+  setWaitingWrittenSinceForTests,
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -324,6 +325,9 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
 }
 
 beforeEach(async () => {
+  // These suites judge the waiting rules on fake clocks; the restart
+  // cutoff ("written since boot", #2358) has its own cases.
+  setWaitingWrittenSinceForTests(undefined);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-waiting-"));
   await buildWorld();
 });
