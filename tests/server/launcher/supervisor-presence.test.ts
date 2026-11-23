@@ -3567,3 +3567,84 @@ describe("3b-2e1: status() reports a failed bind (ownership design §8.7)", () =
     vi.stubEnv("TANDEM_OWNERSHIP", "1");
   });
 });
+
+describe("3b-2e2: wokenAt, for the stall banner's hide (the owner's 2026-11-17 answer 3)", () => {
+  /** Spin on real `Date.now()` until it has moved past `t`, so two reads of
+   * the clock taken either side of this cannot be equal. No timer: the file
+   * fakes `setTimeout`, and `Date` stays real. */
+  function pastMs(t: number): number {
+    while (Date.now() <= t + 1) {
+      // busy wait, a couple of milliseconds at most
+    }
+    return Date.now();
+  }
+
+  it("reads the bootstrap turn's write time while it runs, and null once its result lands", async () => {
+    const h = makeSupervisor();
+    const before = Date.now();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    const after = Date.now();
+    const at = h.sup.wokenAt?.();
+    expect(typeof at).toBe("number");
+    expect(at as number).toBeGreaterThanOrEqual(before);
+    expect(at as number).toBeLessThanOrEqual(after);
+    // The same value on a later read: the write time, not the read time.
+    pastMs(after);
+    expect(h.sup.wokenAt?.()).toBe(at);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    const status = h.sup.status();
+    expect(status.running && status.busy).toBe(false);
+    expect(h.sup.wokenAt?.()).toBeNull();
+  });
+
+  it("a wake written to an idle child reads its own write time", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(h.sup.wokenAt?.()).toBeNull();
+    const before = pastMs(Date.now());
+    h.emit(annotationEvent());
+    expect(c1.stdin.writes.at(-1)).toContain(SUPERVISOR_WAKE_PROMPT);
+    const at = h.sup.wokenAt?.() as number;
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a wake queued behind the turn in flight reads as woken now, not at that turn's write", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const bootstrapAt = h.sup.wokenAt?.() as number;
+    const before = pastMs(bootstrapAt);
+    // Mid-bootstrap: the event can only queue its wake behind the turn.
+    h.emit(annotationEvent());
+    const at = h.sup.wokenAt?.() as number;
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeGreaterThan(bootstrapAt);
+  });
+
+  it("null with no child, and null once the child is gone", async () => {
+    const h = makeSupervisor();
+    expect(h.sup.wokenAt?.()).toBeNull();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    expect(h.sup.wokenAt?.()).not.toBeNull();
+    await h.sup.stop();
+    await settle();
+    expect(h.sup.wokenAt?.()).toBeNull();
+  });
+
+  it("flag off: null, even while a turn is in flight", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const status = h.sup.status();
+    expect(status.running && status.busy).toBe(true);
+    expect(h.sup.wokenAt?.()).toBeNull();
+  });
+});

@@ -49,4 +49,4 @@ $effect(() => {
      from a test is a non-tracking read: it proves the logic but would keep
      passing if the getter were ever collapsed into a value computed once at
      construction, which freezes the banner while every assertion stays green. -->
-<WakeStallBanner stalledMs={readiness.deliveryStalledMs} />
+<WakeStallBanner stalledMs={readiness.deliveryStalledMs} keyed={readiness.deliveryKeyed} />

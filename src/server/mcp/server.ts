@@ -31,7 +31,7 @@ import { OWNER_HANDLE_HEADER } from "../../shared/owner-handle.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
-import { getDeliveryState } from "../events/delivery-state.js";
+import { deliveryRoundsKeyed, getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
 import { attachWakeSocket } from "../events/wake-socket.js";
@@ -1324,6 +1324,10 @@ export async function startMcpServerHttp(
       // #1521: the one licence decision, read in a file that already imports it.
       aiRefused: () => aiRefusal() !== null,
       isShuttingDown,
+      // #2358 PR 3b-2e2: the stall banner's flag-on wording and hide. The
+      // seam answers false on every dark server, so nothing below is asked.
+      deliveryRoundsKeyed,
+      tandemClaudeWokenAt: () => launcher?.getSupervisor()?.wokenAt?.() ?? null,
     }),
   );
 

@@ -55,6 +55,48 @@ export interface HealthHandlerDeps {
    * `server/shutdown-state.ts` for why it is the field and not the status code.
    */
   isShuttingDown: () => boolean;
+  /**
+   * Whether delivery rounds are keyed (#2358 PR 3b-2e2): the ownership flag,
+   * read through the delivery-round seam (`deliveryRoundsKeyed`). While it
+   * answers true the loopback `delivery` object gains `keyed: true`, and
+   * `tandemClaudeWoken: true` when Tandem's Claude was woken after the oldest
+   * waiting round opened (`wokenAt` below). Absent or false — every dark
+   * server — the object is exactly `getDeliveryState`'s. Optional so the
+   * route tests' deps need not supply it.
+   */
+  deliveryRoundsKeyed?: () => boolean;
+  /**
+   * `Supervisor.wokenAt` of the live supervisor, or `null` without one
+   * (#2358 PR 3b-2e2). Asked only while rounds are keyed and a round waits.
+   */
+  tandemClaudeWokenAt?: () => number | null;
+}
+
+/**
+ * The flag-on extras of `delivery` (#2358 PR 3b-2e2, the owner's 2026-11-17
+ * answer 3). `keyed: true` tells the client its stall banner may not promise
+ * that the next check-in sees the message. `tandemClaudeWoken: true` says
+ * Tandem's Claude is being woken for something that arrived no earlier than
+ * the oldest waiting round: a turn written at or after the round opened is in
+ * flight, or a wake is queued behind the current turn. The banner hides
+ * meanwhile. A boolean, never the turn's time: the comparison is made here,
+ * against the same read's `waitingMs`. Any throw reads as not woken.
+ */
+function keyedDeliveryExtras(
+  delivery: DeliveryState,
+  deps: HealthHandlerDeps,
+  now: number,
+): { keyed: true; tandemClaudeWoken?: true } {
+  if (delivery.state !== "awaiting-poll" || delivery.waitingMs === null) return { keyed: true };
+  let wokenAt: number | null = null;
+  try {
+    wokenAt = deps.tandemClaudeWokenAt?.() ?? null;
+  } catch {
+    wokenAt = null;
+  }
+  return wokenAt !== null && wokenAt >= now - delivery.waitingMs
+    ? { keyed: true, tandemClaudeWoken: true }
+    : { keyed: true };
 }
 
 /**
@@ -152,7 +194,18 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // Read once and shared, so `push.subscribers` and the join's re-evaluation
       // can never disagree within a single response — which is the exact
       // contradiction ("subscribers: 0" beside "awaiting-poll") this fixes.
-      body.delivery = applyAiRefusal(deps.getDeliveryState(subscribers), deps.aiRefused);
+      const now = Date.now();
+      const delivery = applyAiRefusal(deps.getDeliveryState(subscribers), deps.aiRefused);
+      // Flag on only (#2358 PR 3b-2e2): a dark server sends the object as is.
+      let keyed = false;
+      try {
+        keyed = deps.deliveryRoundsKeyed?.() === true;
+      } catch {
+        keyed = false;
+      }
+      body.delivery = keyed
+        ? { ...delivery, ...keyedDeliveryExtras(delivery, deps, now) }
+        : delivery;
     }
 
     res.json(body);
