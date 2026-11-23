@@ -28,6 +28,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DELIVERY_STALL_MS } from "../../shared/constants.js";
 
 import type { TandemEvent } from "../../shared/events/types.js";
 import { isStartWorthy, isWakeWorthy } from "../../shared/events/wake-scope.js";
@@ -916,7 +917,7 @@ export interface Supervisor {
    * hide (#2358 PR 3b-2e2, the owner's 2026-11-17 answer 3): the time the
    * latest turn still in flight was written, or now when a wake is queued
    * behind that turn (it is written when the turn ends). `null` with no turn
-   * in flight, with no live child, while a local model answers chat, and
+   * in flight, once the turn in flight has run for `DELIVERY_STALL_MS`, with no live child, while a local model answers chat, and
    * whenever ownership is off. Says nothing about WHICH item the turn serves.
    * Never throws. Optional for the same reason as `tandemPresence`.
    */
@@ -3536,13 +3537,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       requestWake: requestWakeOnSpawn,
       // A wake queued behind the turn in flight is written when that turn
       // ends (`flushPendingWake`), so it reads as woken now. Not while a local
-      // model answers chat: the flush writes nothing then.
-      wokenAt: () =>
-        !turnInFlight || tornDown || localHeld()
-          ? null
-          : pendingWake
-            ? Date.now()
-            : lastTurnWrittenAt,
+      // model answers chat: the flush writes nothing then. And not once the
+      // turn in flight has run as long as the stall threshold: a stuck turn
+      // would otherwise hide the banner until the wake latch fired, and again
+      // for each message sent meanwhile, so the hide is capped at one
+      // threshold per written turn.
+      wokenAt: () => {
+        if (!turnInFlight || tornDown || localHeld()) return null;
+        const now = Date.now();
+        if (now - lastTurnWrittenAt >= DELIVERY_STALL_MS) return null;
+        return pendingWake ? now : lastTurnWrittenAt;
+      },
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a

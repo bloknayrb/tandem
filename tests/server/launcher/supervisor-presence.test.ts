@@ -33,6 +33,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { DELIVERY_STALL_MS } from "../../../src/shared/constants.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -3625,6 +3626,27 @@ describe("3b-2e2: wokenAt, for the stall banner's hide (the owner's 2026-11-17 a
     const at = h.sup.wokenAt?.() as number;
     expect(at).toBeGreaterThanOrEqual(before);
     expect(at).toBeGreaterThan(bootstrapAt);
+  });
+
+  it("null once the turn in flight has run as long as the stall threshold, even with a wake queued behind it", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const bootstrapAt = h.sup.wokenAt?.() as number;
+    h.emit(annotationEvent());
+    expect(h.sup.wokenAt?.()).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(bootstrapAt + DELIVERY_STALL_MS - 1);
+      expect(h.sup.wokenAt?.()).toBe(bootstrapAt + DELIVERY_STALL_MS - 1);
+      nowSpy.mockReturnValue(bootstrapAt + DELIVERY_STALL_MS);
+      expect(h.sup.wokenAt?.()).toBeNull();
+      // Another message meanwhile does not bring the hide back.
+      h.emit(annotationEvent());
+      expect(h.sup.wokenAt?.()).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("null with no child, and null once the child is gone", async () => {
