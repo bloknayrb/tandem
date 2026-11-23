@@ -24,7 +24,11 @@
  * Closed, kept for the record: *the setup-entry change shipped in an earlier
  * release than the flip* (the plan's flip row waited for it). It shipped in
  * v0.31.0 (CHANGELOG, 2026-11-11: "Claude Code now reaches Tandem through
- * Tandem's bridge"), so it is not a row.
+ * Tandem's bridge"), so it is not a row. Likewise *the queue wait bound's
+ * uncovered half* (1c's review, 2026-11-11): the stdio bridge now sends
+ * `notifications/cancelled` wherever it answers a forwarded request itself
+ * (ADR-054 as amended 2026-11-23, Bryan's pick "Build it"; it ships live), so
+ * its row was deleted in that change.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -243,17 +247,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
       "the bridge's replay, or a documented restart), decided there.",
-  },
-  {
-    gap:
-      "Queue wait bound, the uncovered half (the plan's flip row, gate (a), recorded by 1c's " +
-      "review 2026-11-11): the stdio bridge signals cancellation (`notifications/cancelled`) on " +
-      "every path where it answers a request for the server (its request timer, a session swap, " +
-      "an unreachable upstream).",
-    closedBy:
-      "That bridge change (the bridge ships live, so it is its own change, not part of the dark " +
-      "series), or Bryan accepts that a bridge call can run up to 20 seconds after the bridge " +
-      "reported it failed, so a retry can land twice.",
   },
   {
     gap:

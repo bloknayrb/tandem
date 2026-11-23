@@ -6,10 +6,13 @@
  * Centralising here ensures changes propagate everywhere and avoids drift.
  */
 
+import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { withInternal } from "../../src/shared/origins.js";
 
 /**
  * Creates (or reuses) a Y.Doc for `id`, populates it with `text`, registers
@@ -17,12 +20,21 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
  *
  * Returns the Y.Doc.
  */
-export function setupDoc(id: string, text: string) {
+export function setupDoc(
+  id: string,
+  text: string,
+  load: (doc: Y.Doc, text: string) => void = populateYDoc,
+) {
   const ydoc = getOrCreateDocument(id);
-  populateYDoc(ydoc, text);
+  load(ydoc, text);
   addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
   setActiveDocId(id);
   return ydoc;
+}
+
+/** `setupDoc` with `text` parsed as markdown by the real loader. */
+export function setupMarkdownDoc(id: string, md: string) {
+  return setupDoc(id, md, (doc, text) => withInternal(doc, () => loadMarkdown(doc, text)));
 }
 
 /**

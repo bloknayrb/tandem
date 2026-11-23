@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import {
-  getElementTextLength,
   getOrCreateXmlText,
-  mergeInlineTail,
+  replaceFlatRangeAcrossBlocks,
   replaceFlatRangeInElement,
 } from "../../src/server/mcp/document-model.js";
 import { off } from "../helpers/positions.js";
@@ -17,9 +16,8 @@ afterEach(() => {
 });
 
 /**
- * Replicate tandem_edit logic for testing. MUST mirror the real branches in
- * `mcp/document.ts` (the multi-Y.XmlText helpers), not the pre-#1206 first-XmlText
- * path — otherwise these tests validate a stale copy instead of the fix.
+ * Replicate tandem_edit's branch selection for testing. Both arms call the same
+ * document-model helpers `mcp/document.ts` does, so only the selection is mirrored.
  * Returns null on success, or an error string on failure.
  */
 function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): string | null {
@@ -37,29 +35,14 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
 
   if (startPos.elementIndex !== endPos.elementIndex) {
     doc.transact(() => {
-      const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-      replaceFlatRangeInElement(
-        startNode,
+      replaceFlatRangeAcrossBlocks(
+        fragment,
+        startPos.elementIndex,
         startPos.textOffset,
-        getElementTextLength(startNode),
-        "",
+        endPos.elementIndex,
+        endPos.textOffset,
+        newText,
       );
-
-      const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-      for (let i = 0; i < deleteCount; i++) {
-        fragment.delete(startPos.elementIndex + 1, 1);
-      }
-
-      const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-      replaceFlatRangeInElement(endNode, 0, endPos.textOffset, "");
-
-      if (newText.length > 0) {
-        const joinAt = startPos.textOffset;
-        replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
-      }
-      mergeInlineTail(startNode, endNode);
-
-      fragment.delete(startPos.elementIndex + 1, 1);
     });
   } else {
     doc.transact(() => {

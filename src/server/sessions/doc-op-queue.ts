@@ -65,9 +65,11 @@
 /**
  * How long an operation waits for its turn before its caller is told the
  * document is busy. Below the stdio bridge's own 30 s request timeout
- * (`STDIO_BRIDGE_REQUEST_TIMEOUT_MS` in `shared/constants.ts`, used by `src/cli/mcp-stdio.ts`), which gives up without telling the server: a
- * waiting call is refused here first, and can never start later than this
- * after it was queued. `tests/server/doc-op-queue.test.ts` pins the relation.
+ * (`STDIO_BRIDGE_REQUEST_TIMEOUT_MS` in `shared/constants.ts`, used by `src/cli/mcp-stdio.ts`). The bridge
+ * cancels upstream what it answers itself (`notifications/cancelled`, ADR-054
+ * as amended 2026-11-23), but a cancellation can be lost, so a waiting call
+ * is refused here first, and can never start later than this after it was
+ * queued. `tests/server/doc-op-queue.test.ts` pins the relation.
  */
 export const DOC_OP_WAIT_MS = 20_000;
 

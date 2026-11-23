@@ -47,6 +47,15 @@
  * prevent. `shutdown(1)` keeps only two triggers: stdio death and upstream
  * `onclose`. A failed startup preflight retries in the background instead
  * (#1805).
+ *
+ * A request the bridge answers itself after forwarding it is cancelled
+ * upstream (#2358, ADR-054 as amended 2026-11-23). Every path that answers a
+ * forwarded request on the server's behalf — the request timer, a session
+ * swap, a failed send, the answers synthesized on a failed re-initialize, a
+ * licence refusal or shutdown — sends `notifications/cancelled` for that id to
+ * the session it was POSTed on, so a write the client was told failed cannot
+ * still run from the server's queue. Best-effort and silent on stdout: a
+ * cancellation that cannot be delivered is logged to stderr and nothing else.
  */
 
 import { randomUUID } from "node:crypto";
@@ -123,6 +132,12 @@ const STDIO_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.TANDEM_REQUEST_TIMEO
  * a 30-minute `TANDEM_REQUEST_TIMEOUT_MS` cannot wedge a reconnect.
  */
 const REPLAY_DEADLINE_MS = Math.min(STDIO_REQUEST_TIMEOUT_MS, 15_000);
+
+/**
+ * How long a synthesizing shutdown waits for the cancellations it just sent
+ * (`cancelUpstream`) before closing. Short, and inside shutdown's 2 s hard exit.
+ */
+const CANCEL_FLUSH_MS = 500;
 
 /** Reconnect backoff ladder: 1s, doubling, capped. */
 const BACKOFF_INITIAL_MS = 1_000;
@@ -530,10 +545,17 @@ export async function runMcpStdio(): Promise<void> {
    * required rather than restarting this one, which `close()` cannot undo
    * anyway: it aborts the controller without clearing it, so `start()` throws
    * "already started" on a reused instance.
+   *
+   * `cancelSession` is the one exception, and builds a throwaway transport
+   * that is never started or promoted: `cancelUpstream` uses it to POST one
+   * `notifications/cancelled` to the session a request was sent on, which may
+   * no longer be the live one (a swap after a lost stream leaves the old
+   * session open on the server).
    */
-  function createUpstream(): StreamableHTTPClientTransport {
+  function createUpstream(cancelSession?: string): StreamableHTTPClientTransport {
     return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: { headers: upstreamHeaders },
+      ...(cancelSession !== undefined ? { sessionId: cancelSession } : {}),
       // Never through an environment proxy for a `127.0.0.1` / `[::1]` URL (#2422).
       fetch: loopbackFetch,
     });
@@ -546,6 +568,18 @@ export async function runMcpStdio(): Promise<void> {
   // stays alive and retries (#1805). Value is the per-request timeout handle so
   // we can cancel it on response.
   const pendingRequests = new Map<string | number, ReturnType<typeof setTimeout>>();
+  /**
+   * For a forwarded request with no answer yet: the upstream session it was
+   * POSTed on. What `cancelUpstream` reads, and the record that the server may
+   * hold the request. Entered at send (never for `initialize`, which the MCP
+   * spec forbids cancelling, nor for a send with no session yet, which the
+   * server refuses before dispatch); removed when the server answers, when a
+   * `404 -32001` proves the request was never dispatched, and when the
+   * bridge cancels it. So a request is cancelled at most once.
+   */
+  const sentOn = new Map<string | number, string>();
+  /** Cancellations still in flight; `shutdown` gives them a moment before exiting. */
+  const inFlightCancels = new Set<Promise<void>>();
   // Messages arriving before httpReady flips; either drained and forwarded
   // on success, or each request answered with -32000 on preflight/http-start
   // failure.
@@ -680,6 +714,49 @@ export async function runMcpStdio(): Promise<void> {
     }
   }
 
+  /**
+   * Tell the server the bridge has answered `requestId` itself, so a call
+   * still waiting in a document's queue does not run later (#2358, ADR-054 as
+   * amended 2026-11-23). Every path that answers a forwarded request on the
+   * server's behalf calls this. A no-op for a request that was never POSTed
+   * on a session, or whose dispatch a `404 -32001` already ruled out.
+   *
+   * Sent to the session the request went to, on a throwaway transport, never
+   * through `http`: after a swap the live transport holds a different session,
+   * whose server-side handlers do not know this id. Total: it never throws,
+   * never writes stdout, and a failure is one stderr line (an unreachable
+   * server has nothing queued to cancel).
+   */
+  function cancelUpstream(requestId: string | number, reason: string): void {
+    const session = sentOn.get(requestId);
+    if (session === undefined) return;
+    sentOn.delete(requestId);
+    const report = (err: unknown) => {
+      try {
+        process.stderr.write(
+          `[tandem mcp-stdio] could not cancel request ${String(requestId)} upstream: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+      } catch {
+        // Nowhere left to report to.
+      }
+    };
+    try {
+      const sent = createUpstream(session)
+        .send({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId, reason },
+        })
+        .catch(report);
+      inFlightCancels.add(sent);
+      void sent.finally(() => inFlightCancels.delete(sent));
+    } catch (err) {
+      report(err);
+    }
+  }
+
   /** Arm (or re-arm) the per-request `-32000` deadline for one request id. */
   function armRequestTimer(requestId: string | number): void {
     // Clear any existing timer for this id (duplicate/retry scenario).
@@ -689,6 +766,7 @@ export async function runMcpStdio(): Promise<void> {
     const timeoutHandle = setTimeout(() => {
       // Atomic: delete returns false if synthesizePending already drained the map.
       if (!pendingRequests.delete(requestId)) return;
+      cancelUpstream(requestId, "the Tandem bridge's request timer fired");
       void sendErrorResponse(
         requestId,
         "Tandem HTTP upstream not responding (half-open)",
@@ -701,7 +779,15 @@ export async function runMcpStdio(): Promise<void> {
   function forwardToUpstream(msg: JSONRPCMessage): void {
     if (shuttingDown) return;
     const requestId = getRequestId(msg);
-    if (requestId !== undefined) armRequestTimer(requestId);
+    if (requestId !== undefined) {
+      armRequestTimer(requestId);
+      // Read here, in the same tick as the send below: the SDK sets the header
+      // from this same field, and it changes only when a response arrives.
+      const session = http.sessionId;
+      const method = (msg as { method?: unknown }).method;
+      if (session !== undefined && method !== "initialize") sentOn.set(requestId, session);
+      else sentOn.delete(requestId);
+    }
     const gen = generation;
     http.send(msg).catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
@@ -723,6 +809,8 @@ export async function runMcpStdio(): Promise<void> {
         // double-mutate the document — so those take the -32000 below.
         const key = `${gen}:${String(requestId)}`;
         const sessionNotFound = carriedSessionNotFound(err);
+        // Refused before dispatch, so the server holds nothing to cancel.
+        if (sessionNotFound && requestId !== undefined) sentOn.delete(requestId);
         // A 404 whose body we could not recognize is worth one line, because
         // the two things that produce it are the two things hardest to
         // diagnose from the outside: something other than Tandem is answering
@@ -770,6 +858,9 @@ export async function runMcpStdio(): Promise<void> {
         if (handle !== undefined) {
           pendingRequests.delete(requestId);
           clearTimeout(handle);
+          // The send can fail after the server already has the request (a
+          // connection dropped mid-response), so it is cancelled too.
+          cancelUpstream(requestId, "the Tandem bridge could not reach the server");
           void sendErrorResponse(requestId, "Tandem HTTP upstream unreachable", detail);
         }
       }
@@ -804,6 +895,9 @@ export async function runMcpStdio(): Promise<void> {
     process.stderr.write(
       `[tandem mcp-stdio] request ${String(requestId)} cancelled by session swap\n`,
     );
+    // The old session can still be open on the server (a swap after a lost
+    // stream does not close it), with this request queued in it.
+    cancelUpstream(requestId, "the Tandem bridge replaced its upstream session");
     void sendErrorResponse(
       requestId,
       "Tandem HTTP upstream session was replaced while this request was in flight",
@@ -891,6 +985,7 @@ export async function runMcpStdio(): Promise<void> {
     // Timer callbacks that are already queued observe empty map and return early.
     for (const handle of pendingRequests.values()) clearTimeout(handle);
     pendingRequests.clear();
+    for (const id of ids) cancelUpstream(id, `the Tandem bridge answered: ${error.message}`);
     await Promise.all(ids.map((id) => sendUpstreamError(id, error)));
   }
 
@@ -925,6 +1020,11 @@ export async function runMcpStdio(): Promise<void> {
       if (synth) {
         await synthesizeBuffered(synth.message, synth.detail);
         await synthesizePending(bridgeError(synth.message, synth.detail));
+        // The cancellations just sent are best-effort, but exiting at once
+        // would abort them mid-POST. Bounded well inside the 2 s hard exit.
+        if (inFlightCancels.size > 0) {
+          await Promise.race([Promise.allSettled([...inFlightCancels]), sleep(CANCEL_FLUSH_MS)]);
+        }
       }
       await http.close().catch((err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err);
@@ -1111,6 +1211,7 @@ export async function runMcpStdio(): Promise<void> {
     }
     captureNegotiated(msg);
     if (responseId !== undefined) {
+      sentOn.delete(responseId);
       const handle = pendingRequests.get(responseId);
       if (handle !== undefined) {
         clearTimeout(handle);
