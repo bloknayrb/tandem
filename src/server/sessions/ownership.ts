@@ -82,6 +82,7 @@ import {
   type PostRefusalInput,
   type PostRefusalReason,
   postRefusal,
+  unlinkedReplyRefusal,
 } from "./ownership-refusal.js";
 
 /**
@@ -2943,18 +2944,37 @@ export function pushStreamAdmits(
  * (3) anything else, or no header, is unmapped. **Pure**: creates nothing.
  */
 function pushStreamRecord(claudeSessionId: string | undefined): string | undefined {
+  return mapSessionHeader(claudeSessionId)?.ownerId;
+}
+
+/**
+ * How an `X-Claude-Session-Id` maps (ownership design §9.1's order), shared
+ * by the push stream ({@link pushStreamRecord}) and `/api/channel-reply`
+ * ({@link channelReplyGate}), so the two cannot drift apart. `currentChild` is
+ * rule 1's arm: the header is the current spawn's session id, which a reply
+ * never acts as (ownership design §9.2, R3.3). Undefined is unmapped.
+ * **Pure**: creates nothing.
+ */
+function mapSessionHeader(
+  claudeSessionId: string | undefined,
+): { readonly ownerId: string; readonly currentChild: boolean } | undefined {
   if (claudeSessionId === undefined) return undefined;
   const key = claudeIdKey(claudeSessionId);
   if (ownSpawnSource !== undefined) {
     const spawn = ownSpawnSource();
     if (spawn !== null && claudeIdKey(spawn.sessionId) === key) {
-      return isTandemPresent() ? TANDEM_OWNER_ID : `spawn:${spawn.n}`;
+      return {
+        ownerId: isTandemPresent() ? TANDEM_OWNER_ID : `spawn:${spawn.n}`,
+        currentChild: true,
+      };
     }
     if (ownChildCheck?.(claudeSessionId) === true) return undefined;
   }
   const ownerId = `claude:${key}`;
   const record = records.get(ownerId);
-  return record !== undefined && record.lapsed !== true ? ownerId : undefined;
+  return record !== undefined && record.lapsed !== true
+    ? { ownerId, currentChild: false }
+    : undefined;
 }
 
 /**
@@ -3650,6 +3670,50 @@ function claimForReply(key: string, documentId: string, callerId: string): void 
   setDocOwner(documentId, { ownerId: callerId, kind: standing.claim }, "reply-claim", callerId);
   const record = records.get(callerId);
   if (record && ownerByDoc.get(documentId)?.ownerId === callerId) rejudge(record);
+}
+
+/**
+ * The `/api/channel-reply` permit (#2358 PR 4b; ownership design §9.2, §9.3,
+ * R1.3, R3.3, R4.8): the same decision as `tandem_reply`'s gate, for a caller
+ * the route maps itself from the shim's `X-Claude-Session-Id`, in §9.1's
+ * order ({@link mapSessionHeader}). Decided **without writing anything**
+ * beyond what {@link replyGate} itself may (the `tandem` record made so a
+ * refusal can name it); the route appends and then calls `apply`, with no
+ * `await` between, exactly as `tandem_reply` does.
+ *
+ * - **Tandem's Claude's session id** (rule 1, bound or not): refused with
+ *   `unlinked`. A header is never enough to act as Tandem's Claude (R3.3):
+ *   the bound child answers through the `tandem` server's `tandem_reply`,
+ *   where its transport's bind is what identifies it.
+ * - **A live `claude:<id>` record**: judged as that record by `replyGate`,
+ *   replies and posts alike (ownership design §7.3, §5.5).
+ * - **Unmapped** (no header, no live record, or an id an earlier child of
+ *   Tandem's used): refused, with `chat` naming Tandem's Claude when the
+ *   message `replyTo` names is Tandem's Claude's (one refusal instead of
+ *   two), and otherwise `unlinked` (ownership design §9.3: an unmigrated
+ *   direct-HTTP terminal's shim is never linked). A post names no message,
+ *   so it is `unlinked`.
+ *
+ * `legacy` while ownership is off, so the route runs master's path.
+ */
+export function channelReplyGate(
+  claudeSessionId: string | undefined,
+  request: { replyTo?: string; inProgress?: boolean; documentId?: string },
+  docs: ReplyGateDocuments,
+): ReplyGate {
+  if (!ownershipEnabled()) return LEGACY_REPLY;
+  const mapped = mapSessionHeader(claudeSessionId);
+  if (mapped !== undefined && !mapped.currentChild) return replyGate(mapped.ownerId, request, docs);
+  const key = request.replyTo;
+  const facts = key === undefined ? undefined : chatSide.message(key);
+  if (mapped === undefined && key !== undefined && facts !== undefined) {
+    if (ownsMessage(key, TANDEM_OWNER_ID)) {
+      ensureRecord(TANDEM_OWNER_ID, "tandem");
+      return chatRefused("chat", viewOf(TANDEM_OWNER_ID), facts, "holder");
+    }
+  }
+  const { message, details } = unlinkedReplyRefusal(facts?.documentId);
+  return { kind: "refused", stage: "ownership", code: "NOT_DOC_OWNER", message, details };
 }
 
 /**

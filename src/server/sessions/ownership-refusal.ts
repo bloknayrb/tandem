@@ -20,7 +20,8 @@
  * this caller's to answer now) and the posts PR's `post` with every other form a
  * chat post can get ({@link postRefusal}: a post names no message and may be
  * about an unowned document or about none, so it has forms of its own where
- * the document forms would be false for it); `unlinked` arrives with the shim's identity (PR 4),
+ * the document forms would be false for it); `unlinked` ({@link unlinkedReplyRefusal}) is
+ * `/api/channel-reply`'s, since the shim's permit (PR 4b),
  * `unbound-child` is here since PR 3b-2b3b (reached only while rule 0 routes: flag on, since 3b-2b4a's switch-on), and the `released` and `assigned`
  * causes of `lost` with the controls (PR 5). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b-2; their copy is here
@@ -351,7 +352,7 @@ const CHAT_BUSY =
 export interface ChatReplyRefusal {
   message: string;
   details: {
-    reason: "chat" | "not-present" | "answered" | "unbound-child";
+    reason: "chat" | "not-present" | "answered" | "unbound-child" | "unlinked";
     holder: HolderView | null;
     documentId?: string;
   };
@@ -376,6 +377,32 @@ export function chatReplyRefusal(input: {
         ? { label: input.holder.label, displayKind: input.holder.displayKind }
         : null,
       ...(input.documentId !== undefined ? { documentId: input.documentId } : {}),
+    },
+  };
+}
+
+/**
+ * The `unlinked` copy (ownership design §5.3, §9.2, §9.3): a `/api/channel-reply`
+ * from a shim the server cannot match to a record, or one carrying Tandem's
+ * Claude's own session id, which never acts as Tandem's Claude (R3.3). The
+ * remedy is the `tandem` server's `tandem_reply`, where the caller is judged
+ * as its own record.
+ */
+export const UNLINKED_REPLY =
+  "This reply could not be matched to your Tandem session. Nothing was sent. Send it with the `tandem` server's `tandem_reply` tool instead.";
+
+/**
+ * Build the `unlinked` refusal (#2358 PR 4b): no holder, since the caller has
+ * no record to judge; `documentId` is the named message's document, when it
+ * has one.
+ */
+export function unlinkedReplyRefusal(documentId?: string): ChatReplyRefusal {
+  return {
+    message: UNLINKED_REPLY,
+    details: {
+      reason: "unlinked",
+      holder: null,
+      ...(documentId !== undefined ? { documentId } : {}),
     },
   };
 }

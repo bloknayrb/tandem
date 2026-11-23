@@ -152,6 +152,8 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    // PR 4b: master's channel route pinned dark, with one flag-on case.
+    "tests/server/chat-reply-ack.test.ts",
     "tests/server/inbox-cursor.test.ts",
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
@@ -169,6 +171,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-bound-transports.test.ts",
     "tests/server/ownership-change-notices-http.test.ts",
     "tests/server/ownership-change-notices.test.ts",
+    // PR 4b: the /api/channel-reply permit, flag on with a dark row.
+    "tests/server/ownership-channel-reply.test.ts",
     "tests/server/ownership-chat-client-undo.test.ts",
     "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
@@ -228,6 +232,9 @@ describe("tests and the flag", () => {
     // wired. PR 3b-2b4b's one (`ownership-take-back.test.ts`): take-back and
     // the Solo-release check, with a dark case run with every seam wired.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
+      // PR 4b: master's /api/channel-reply pinned dark (its describe), with
+      // one flag-on case showing the permit is reached.
+      "tests/server/chat-reply-ack.test.ts",
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
@@ -241,6 +248,8 @@ describe("tests and the flag", () => {
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      // PR 4b: the /api/channel-reply permit, flag on, with a dark row.
+      "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
@@ -279,6 +288,8 @@ describe("tests and the flag", () => {
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
+      // PR 4b: the permit's one flag-on case beside master's route.
+      "tests/server/chat-reply-ack.test.ts",
       // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
@@ -296,6 +307,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices-http.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      // PR 4b: the /api/channel-reply permit.
+      "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
