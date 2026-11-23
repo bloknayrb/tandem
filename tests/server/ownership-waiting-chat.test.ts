@@ -57,6 +57,7 @@ import {
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
+  setWaitingWrittenSinceForTests,
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -373,6 +374,9 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
 }
 
 beforeEach(async () => {
+  // These suites judge the waiting rules on fake clocks; the restart
+  // cutoff ("written since boot", #2358) has its own cases.
+  setWaitingWrittenSinceForTests(undefined);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-waiting-chat-"));
   await buildWorld();
 });
@@ -1203,6 +1207,12 @@ describe("chatRowsOwedToFreshReader, the module alone", () => {
     expect(owed(msg("k", { anchor: { from: 0, to: 1, textSnapshot: "H" }, replyTo: "x" }))).toEqual(
       ["k"],
     );
+  });
+
+  it("writtenSince (#2358, the restart row): a row written before it is not owed; at or after it, owed; unset, owed", () => {
+    expect(owed(msg("k", { timestamp: 99 }), { writtenSince: 100 })).toEqual([]);
+    expect(owed(msg("k", { timestamp: 100 }), { writtenSince: 100 })).toEqual(["k"]);
+    expect(owed(msg("k", { timestamp: 99 }))).toEqual(["k"]);
   });
 
   it("refuses each exclusion once", () => {

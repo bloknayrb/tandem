@@ -69,6 +69,7 @@ import {
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
+  setWaitingWrittenSinceForTests,
 } from "../../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../../src/server/mcp/document-service.js";
@@ -258,6 +259,9 @@ async function writeIntegration(present = true): Promise<void> {
 }
 
 beforeEach(async () => {
+  // These suites judge the waiting rules on fake clocks; the restart
+  // cutoff ("written since boot", #2358) has its own cases.
+  setWaitingWrittenSinceForTests(undefined);
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
   vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   vi.stubEnv("NODE_ENV", "test");
@@ -1752,6 +1756,61 @@ describe("3b-2b2: the re-ask when a session stops counting", () => {
       }
     });
   }
+
+  describe("written since boot (#2358, the restart row; Bryan's pick)", () => {
+    function commentEvent(e: Doc, c: string): TandemEvent {
+      return {
+        id: `evt_${c}`,
+        type: "annotation:created",
+        timestamp: Date.now(),
+        documentId: e.id,
+        payload: { annotationId: c, annotationType: "comment", content: "look", textSnippet: "x" },
+      } as TandemEvent;
+    }
+
+    it("WB1: a claimable comment written before boot does not start a stopped Tandem's Claude; one written after does", async () => {
+      const { h } = await idleStopped();
+      const e = mkDoc("e");
+      const old = comment(e.ydoc, key("old"));
+      setWaitingWrittenSinceForTests(clock + 1_000); // boot after the old comment
+      expect(tandemWorkWaiting()).toBe(false);
+      h.emit(commentEvent(e, old));
+      await lockBarrier(h);
+      await settle();
+      expect(children).toHaveLength(1);
+      clock += 2_000;
+      const fresh = comment(e.ydoc, key("new"));
+      expect(tandemWorkWaiting()).toBe(true);
+      h.emit(commentEvent(e, fresh));
+      await lockBarrier(h);
+      await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+    });
+
+    it("WB2: a comment written before boot and edited after it waits", () => {
+      const e = mkDoc("e");
+      comment(e.ydoc, key("old"), { editedAt: clock + 5_000 });
+      setWaitingWrittenSinceForTests(clock + 1_000);
+      expect(tandemWorkWaiting()).toBe(true);
+    });
+
+    it("WB3: a lapse in the window: B lapses after a restart with only pre-boot claimable work: the re-ask is forwarded and starts nothing", async () => {
+      const h = makeSupervisor();
+      const c1 = await runningIdle(h);
+      register(B);
+      const e = mkDoc("e");
+      comment(e.ydoc, key("old"));
+      userChat(key("oldchat"), e.id);
+      setWaitingWrittenSinceForTests(clock + 1_000);
+      const writes = c1.stdin.writes.length;
+      lapse(B);
+      expect(departureSink.mock.calls).toEqual([["departure"]]);
+      await lockBarrier(h);
+      expect(c1.stdin.writes).toHaveLength(writes);
+      expect(tandemWorkWaiting()).toBe(false);
+    });
+  });
 
   it("D4, flag off: B lapses with a claimable comment waiting: nothing forwarded, nothing written", async () => {
     const h = makeSupervisor();

@@ -548,20 +548,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "After a server restart every ownership record is gone, so a Claude Code session that is " +
-      "still open is not seen as connected until it next initializes (after a 404 on its next " +
-      "request). Until then the decision (3b-2b1b-claimable) counts every open, unowned document " +
-      "as claimable, and with the restart row every old pending comment reads as waiting. " +
-      "3b-2b1c's pass (workWaiting: tandemWorkWaiting) is the first consumer of the decision, " +
-      "so Tandem's Claude could start for old comments while the user's terminal is open; and a " +
-      "session holding a document that goes away in that window can start or wake Tandem's " +
-      "Claude beside the still-open terminal (3b-2b1c).",
-    closedBy:
-      "3b-2b2's boot quiet period or 'written since boot' condition, extended to a lapse in " +
-      "that window, with a test of each.",
-  },
-  {
-    gap:
       "Answered work starts Tandem's Claude (3b-2b1c). A handover retires the document's " +
       "delivery entries and nothing yet tells answered from unanswered, so after any handover, " +
       "at the next forward, every pending user comment, every settled one " +
