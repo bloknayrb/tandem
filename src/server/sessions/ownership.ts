@@ -68,10 +68,13 @@ import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-regist
 import { ownershipEnabled } from "../ownership-flag.js";
 import { runOutsideMcpContext } from "./context.js";
 import {
+  DocOpCancelled,
+  DocOpWaitExpired,
   docOpBusySince,
   docOpQueueSizeForTests,
   docOpWaitLimitMs,
   resetDocOpQueuesForTests,
+  runDocOp,
   runWhenDocIdle,
 } from "./doc-op-queue.js";
 import { setSpawnEndedListener } from "./owner-handle-bind.js";
@@ -113,8 +116,10 @@ export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "o
  * `ownership-refusal.ts` (`CHANGE_CAUSE_FACTS`), a `Record` over this type,
  * and the output schema's enum is this list, so no word can be queued that
  * the schema does not list. A cause no production path makes today (Tandem's
- * Claude's gains and losses, Release, Assign) is not here: each joins with
- * the PR that produces it. A chat post's claim joined with the posts PR
+ * Claude's gains and losses) is not here: each joins with the PR that
+ * produces it. Release and Assign joined with #2358 PR 5a (the ownership
+ * route): a released session is told only that the document was released,
+ * never that the user chose it (ownership design §11.3). A chat post's claim joined with the posts PR
  * (R1.8); a terminal's loss to Tandem's Claude (a take-back, or its own
  * `tandem_open`: the `taken back` loss) with #2358 PR 3b-2b4c. None equals
  * an internal {@link OwnershipChangeCause}.
@@ -129,6 +134,9 @@ export const CHANGE_CAUSES = [
   "its tab was closed",
   "Tandem stopped counting this session as attached",
   "Tandem's Claude took it back",
+  "it was released",
+  "it was assigned to another session",
+  "it was assigned to this session",
 ] as const;
 export type ChangeCause = (typeof CHANGE_CAUSES)[number];
 
@@ -172,7 +180,9 @@ export type OwnershipKind = "default" | "claimed" | "opened" | "assigned";
  * Tandem's Claude becoming present (an open document with no entry goes to
  * `default`) or ceasing to be (each document it holds goes unowned), each at
  * the document's turn in its queue (#2358 PR 3b-2b4a, {@link noteTandemPresence};
- * ownership design §4.2).
+ * ownership design §4.2). `release` and `assign` are the user's controls
+ * (#2358 PR 5a, `POST /api/ownership`; ownership design §10.1), each at the
+ * document's turn in its queue ({@link controlDocumentOwner}).
  */
 export type OwnershipChangeCause =
   | "user-open"
@@ -184,14 +194,18 @@ export type OwnershipChangeCause =
   | "stale"
   | "poll-claim"
   | "reply-claim"
-  | "post-claim";
+  | "post-claim"
+  | "release"
+  | "assign";
 
 /**
  * Why a record lost a document, for the causes that block it from claiming
- * the document again without a `tandem_open` (ownership design §5.3). PR 5
- * adds `released` and `assigned` with the controls that cause them.
+ * the document again without a `tandem_open` (ownership design §5.3).
+ * `released` and `assigned` came with the controls that cause them (#2358 PR
+ * 5a). `released` is the one recorded on a change to unowned: Release must
+ * last while Tandem's Claude is not present (ownership design §5.3).
  */
-export type LossCause = "taken" | "taken back";
+export type LossCause = "taken" | "taken back" | "released" | "assigned";
 
 /** What a refusal may say about a record: its label and display kind, never its id. */
 export interface HolderView {
@@ -1662,7 +1676,7 @@ export function setDocOwner(
     if (previousId !== next?.ownerId) {
       compositeObserver?.("loss", documentId);
       lossByDoc.delete(documentId);
-      const lost = next === null ? undefined : lossCauseOf(cause, next.ownerId);
+      const lost = lossCauseOf(cause, next?.ownerId);
       if (previousId !== undefined && lost !== undefined) {
         lossByDoc.set(documentId, { ownerId: previousId, cause: lost });
       }
@@ -2505,8 +2519,20 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
 // fall back to "allowed". No thrown message and no log line here carries an
 // owner id: an `http:` owner id is that transport's bearer session id.
 
-/** Which loss, if any, a change of owner records on the previous owner. */
-function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCause | undefined {
+/**
+ * Which loss, if any, a change of owner records on the previous owner.
+ * `nextOwnerId` is undefined for a change to unowned, which records a loss
+ * only for a Release (#2358 PR 5a; ownership design §5.3: "This makes Release
+ * last while Tandem's Claude is not present"). A take and a take-back always
+ * name their next owner.
+ */
+function lossCauseOf(
+  cause: OwnershipChangeCause,
+  nextOwnerId: string | undefined,
+): LossCause | undefined {
+  if (cause === "release") return "released";
+  if (cause === "assign") return "assigned";
+  if (nextOwnerId === undefined) return undefined;
   if (cause === "take-back") return "taken back";
   if (cause === "take") return nextOwnerId === TANDEM_OWNER_ID ? "taken back" : "taken";
   return undefined;
@@ -2520,7 +2546,9 @@ function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCaus
  * combination no path makes (a claim never moves a document away from an
  * existing record). A loss whose loss record is `taken back`
  * (`lossCauseOf`: a take-back, or Tandem's Claude's own `tandem_open`) has
- * its own word (#2358 PR 3b-2b4c). Undefined queues nothing, so no word
+ * its own word (#2358 PR 3b-2b4c). Release and Assign (#2358 PR 5a) have
+ * theirs: a Release is told only as "it was released", never that the user
+ * chose it (ownership design §11.3). Undefined queues nothing, so no word
  * outside the schema can be queued.
  */
 function changeCauseOf(
@@ -2534,8 +2562,11 @@ function changeCauseOf(
     if (cause === "reply-claim") return "a chat reply of yours claimed it";
     if (cause === "post-claim") return "a chat post of yours claimed it";
     if (cause === "take") return "you opened or created it";
+    if (cause === "assign") return "it was assigned to this session";
     return undefined;
   }
+  if (cause === "release") return "it was released";
+  if (cause === "assign") return "it was assigned to another session";
   if (nextOwnerId !== undefined && lossCauseOf(cause, nextOwnerId) === "taken back") {
     return "Tandem's Claude took it back";
   }
@@ -2646,11 +2677,11 @@ function refusalFor(
   // Before every other row: for such a record it replaces their copy (ownership design §5.3).
   if (guardsTandem(entry, callerId)) return { ok: false, reason: "unbound-child", holder };
   // "The first row wins" (ownership design §5.3): a caller that lost this document is told so
-  // before it is told who holds it now. With no entry this row is unreachable
-  // today: `setDocOwner` deletes the loss record on every change of owner,
-  // going to unowned included, so a loss never stands on an unowned document.
-  // It is kept for PR 5's `released` cause (design §5.3: Release lasts while
-  // Tandem's Claude is not present), and `setLossForTests` reaches it.
+  // before it is told who holds it now. With no entry this row is reached only
+  // by a Release: `setDocOwner` deletes the loss record on every change of
+  // owner, going to unowned included, and records only `released` on one
+  // (#2358 PR 5a; design §5.3: Release lasts while Tandem's Claude is not
+  // present). `setLossForTests` reaches it too.
   const loss = lossByDoc.get(documentId);
   if (loss?.ownerId === callerId) return { ok: false, reason: "lost", cause: loss.cause, holder };
   if (!entry) return undefined;
@@ -3876,6 +3907,181 @@ export function heldDocumentIds(ownerId: string): string[] {
   for (const [documentId, entry] of ownerByDoc)
     if (entry.ownerId === ownerId) held.push(documentId);
   return held;
+}
+
+// ---------------------------------------------------------------------------
+// The user's controls: Release and Assign of a document, and the owners list
+// (#2358 PR 5a; ownership design §10.1). Reached only from the ownership
+// route (`mcp/routes/ownership.ts`), which is registered only while ownership
+// is on. Nothing here is an AI surface: the AI effect of a change (step 5's
+// start-or-wake and the `ownership` frame) is refused downstream, by the
+// supervisor and by each frame writer (Critical Rule 9; design §10.1, §11.5).
+
+/**
+ * How long a Release or Assign waits for the document's turn in its queue
+ * before the route answers `409 busy` (ownership design §10.1: v4.1's
+ * 10-second wait). Shorter than the tools' 20-second bound (`DOC_OP_WAIT_MS`)
+ * on purpose: a person is waiting on a click, and a refused click changes
+ * nothing, so trying again is cheap. A refused change is never queued. Never
+ * longer than the queue's own limit either (`docOpWaitLimitMs`), so a test
+ * that shortens that limit shortens this wait with it.
+ */
+export const OWNERSHIP_CONTROL_WAIT_MS = 10_000;
+
+/** The two controls on a document (ownership design §10.1). */
+export type OwnershipControlAction = "release" | "assign";
+
+/**
+ * What a Release or Assign did, for the route's answer (ownership design
+ * §10.1; stories OWN-CTL-05, -07, -10): `changed` and `unchanged` are 200s
+ * (`{changed}`), `unknown-owner` a 404, `owner-detached` and `busy` 409s,
+ * `not-open` a 404, `cancelled` the caller went away before the turn (nothing
+ * changed and nobody is answered).
+ */
+export type OwnershipControlOutcome =
+  | "changed"
+  | "unchanged"
+  | "unknown-owner"
+  | "owner-detached"
+  | "not-open"
+  | "busy"
+  | "cancelled";
+
+/** The live record carrying `label`, or undefined. Labels are unique among live records. */
+function recordByLabel(label: string): OwnerRecord | undefined {
+  for (const record of records.values()) if (record.label === label) return record;
+  return undefined;
+}
+
+/**
+ * Whether a record can be given a document now (ownership design §10.2,
+ * `canTake`): Tandem's Claude only while present; stdio's one `local` record
+ * whenever it exists; any other record only while it is attached and has not
+ * lapsed, so a session in its grace (just disconnected) is never handed a
+ * document it is about to drop (story OWN-CTL-10).
+ */
+function canTakeNow(record: OwnerRecord): boolean {
+  if (record.recordKind === "tandem") return isTandemPresent();
+  if (record.recordKind === "local") return true;
+  return record.lapsed !== true && isAttached(record.ownerId);
+}
+
+/**
+ * One entry of the owners list (`GET /api/ownership/owners`; ownership design
+ * §10.1): a record by its label and display kind, never its owner id, with
+ * the ids of the documents it holds (the route turns them into basenames) and
+ * whether it can be given a document now.
+ */
+export interface OwnerListing {
+  readonly label: string;
+  readonly displayKind: DisplayKind;
+  readonly holds: readonly string[];
+  readonly canTake: boolean;
+}
+
+/**
+ * The owners list (ownership design §10.1): every attached record, and
+ * Tandem's Claude while present, in no promised order. Empty while ownership
+ * is off. A reader: it writes nothing.
+ */
+export function ownersList(): OwnerListing[] {
+  if (!ownershipEnabled()) return [];
+  return total("ownersList", [] as OwnerListing[], () => {
+    const listed: OwnerListing[] = [];
+    for (const record of records.values()) {
+      if (!canTakeNow(record)) continue;
+      listed.push({
+        label: record.label,
+        displayKind: displayKindOf(record),
+        holds: heldDocumentIds(record.ownerId),
+        canTake: true,
+      });
+    }
+    return listed;
+  });
+}
+
+/**
+ * Release or Assign one open document (#2358 PR 5a; ownership design §4.2,
+ * §10.1), at its turn in the document's queue, waiting at most
+ * {@link OWNERSHIP_CONTROL_WAIT_MS}. The caller is the user, never a record,
+ * so step 5 of {@link setDocOwner} treats the new owner as someone else's
+ * choice: Tandem's Claude is started or woken for waiting work through the
+ * forward, any other new owner (or none) gets the `ownership` frame.
+ *
+ * - **Release** applies the default rule ({@link defaultRuleOwner}) and
+ *   records a blocking `released` loss on the record it leaves, which lasts
+ *   while the document is unowned (ownership design §5.3). A no-op
+ *   (`unchanged`) on an unowned document and where the default rule would
+ *   leave the entry as it is (a `default` document while Tandem's Claude is
+ *   present).
+ * - **Assign** gives the document to the live record carrying `ownerLabel`
+ *   as `assigned`, recording a blocking `assigned` loss on the record it
+ *   leaves. `unknown-owner` when no live record carries the label,
+ *   `owner-detached` when it cannot take a document now
+ *   ({@link canTakeNow}). A no-op only when that record already holds it as
+ *   `assigned`; a holder that holds it some other way is upgraded to
+ *   `assigned` (no handover, no notice: the holder is the same record), so
+ *   Assign also pins a document against take-back and a `tandem_open` take.
+ *
+ * `isOpen` is the registry's answer (this module never imports the
+ * registry), asked at the turn: a document closed while the control waited
+ * is `not-open` and gets no entry. Every decision is made at the turn, never
+ * before it, so two windows' controls are serialised and the second answers
+ * from the first's result (story OWN-CTL-08).
+ */
+export async function controlDocumentOwner(
+  documentId: string,
+  action: OwnershipControlAction,
+  ownerLabel: string | undefined,
+  isOpen: () => boolean,
+  signal?: AbortSignal,
+): Promise<OwnershipControlOutcome> {
+  if (!ownershipEnabled()) return "not-open";
+  try {
+    return await runDocOp(documentId, () => applyControl(documentId, action, ownerLabel, isOpen), {
+      waitMs: Math.min(OWNERSHIP_CONTROL_WAIT_MS, docOpWaitLimitMs()),
+      ...(signal !== undefined ? { signal } : {}),
+    });
+  } catch (err) {
+    if (err instanceof DocOpWaitExpired) return "busy";
+    if (err instanceof DocOpCancelled) return "cancelled";
+    throw err;
+  }
+}
+
+/** The control's decision and write, at the document's turn. Synchronous. */
+function applyControl(
+  documentId: string,
+  action: OwnershipControlAction,
+  ownerLabel: string | undefined,
+  isOpen: () => boolean,
+): OwnershipControlOutcome {
+  if (!isOpen()) return "not-open";
+  const entry = liveEntry(documentId);
+  if (action === "release") {
+    if (entry === undefined) return "unchanged";
+    const next = defaultRuleOwner();
+    if (next !== null && next.ownerId === entry.ownerId && next.kind === entry.kind) {
+      return "unchanged";
+    }
+    setDocOwner(documentId, next, "release");
+    const after = ownerByDoc.get(documentId);
+    if (next === null ? after !== undefined : after?.ownerId !== next.ownerId) {
+      throw new Error("the ownership entry for this document could not be written");
+    }
+    return "changed";
+  }
+  const target = ownerLabel === undefined ? undefined : recordByLabel(ownerLabel);
+  if (target === undefined) return "unknown-owner";
+  if (!canTakeNow(target)) return "owner-detached";
+  if (entry?.ownerId === target.ownerId && entry.kind === "assigned") return "unchanged";
+  setDocOwner(documentId, { ownerId: target.ownerId, kind: "assigned" }, "assign");
+  const after = ownerByDoc.get(documentId);
+  if (after?.ownerId !== target.ownerId || after.kind !== "assigned") {
+    throw new Error("the ownership entry for this document could not be written");
+  }
+  return "changed";
 }
 
 // ---------------------------------------------------------------------------

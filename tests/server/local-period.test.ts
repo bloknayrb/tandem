@@ -344,6 +344,21 @@ const TAKE_BACK_CAUSE_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> =
   ],
 ];
 
+/**
+ * #2358 PR 5a's change to the flag-on schema: three new cause words, Release
+ * and Assign's, in the enum and in the cause description.
+ */
+const RELEASE_ASSIGN_CAUSE_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    '"Tandem\'s Claude took it back"\n',
+    '"Tandem\'s Claude took it back",\n"it was released",\n"it was assigned to another session",\n"it was assigned to this session"\n',
+  ],
+  [
+    'when a run of it started or when it opened the document"',
+    'when a run of it started or when it opened the document; \\"it was released\\": it was released from this session; \\"it was assigned to another session\\": it was assigned to another session; \\"it was assigned to this session\\": it was assigned to this session"',
+  ],
+];
+
 /** The chat owners PR's second session, and who the next tool call runs as. */
 const LP_OTHER = "claude:lp-other";
 let lpCaller = "test:caller";
@@ -1523,6 +1538,7 @@ describe("the dark guard", () => {
           ...POSTS_SCHEMA_CHANGES,
           ...TAKE_BACK_SCHEMA_CHANGES,
           ...TAKE_BACK_CAUSE_SCHEMA_CHANGES,
+          ...RELEASE_ASSIGN_CAUSE_SCHEMA_CHANGES,
         ]) {
           expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
           masterText = masterText.replace(before, after);

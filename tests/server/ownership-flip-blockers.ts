@@ -136,21 +136,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document is " +
-      "not its to answer (the named one, or on a default poll every open document it left out) (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
-      "decision 4). Since the change-notice PR, `ownership.changed` and the summary's loss " +
-      "sentence also tell it that another session's open took a document it held, without " +
-      "identifying that session: where `notYours` says only that another session 'may' be " +
-      "answering, `changed` says it definitely, and to within one poll interval. A " +
-      "'its tab was closed' entry tells it that some local actor (the user, or any process " +
-      "through POST /api/close) closed a tab it held. And anything presenting the same identity " +
-      "shares one queue, so any local process presenting a session's identity can drain the " +
-      "explanations meant for that session (a destructive read; `holding` is unaffected; within " +
-      "D4, coordination not security). It is not yet in docs/security.md's register.",
-    closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
-  },
-  {
-    gap:
       "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
       "stays open, so the stall banner reports it: until a restart for a user row a client " +
       "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
@@ -228,14 +213,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
       "the bridge's replay, or a documented restart), decided there.",
-  },
-  {
-    gap:
-      "Change-notice causes PR 5 owes (R7.2): lost by Release and by Assign, gained by Assign, " +
-      "each a past-tense fact with no instruction (Ruling 10); a released session is told only " +
-      "that the document was released, never that the user chose it (design §11.3). Until then " +
-      "such a change is told only through `holding`.",
-    closedBy: "PR 5: the causes, with tests through their production paths.",
   },
   {
     gap:

@@ -86,6 +86,14 @@ export function holderPhrase(holder: HolderView | null): string {
   }
 }
 
+/**
+ * `lost` with cause `released` (#2358 PR 5a; ownership design §5.3): the
+ * design's text. It says only that the document was released, never that the
+ * user chose it (ownership design §11.3).
+ */
+const RELEASED =
+  "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
+
 const ONLY_THE_USER =
   "Only the user can reassign it, from the owner badge on its tab. You can still read it. Do not retry on this document.";
 const IF_ASKED = "only if the user asked you, in your own conversation, to work on it";
@@ -216,6 +224,9 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
     "Tandem stopped counting this session as attached, and this session stopped holding it",
   "Tandem's Claude took it back":
     "Tandem's Claude took it from this session, when a run of it started or when it opened the document",
+  "it was released": "it was released from this session",
+  "it was assigned to another session": "it was assigned to another session",
+  "it was assigned to this session": "it was assigned to this session",
 });
 
 /** The flag-on `ownership.changed` field's description (Requirement 1.3, Ruling 10). */
@@ -283,6 +294,7 @@ function body(input: NotDocOwnerInput): string {
       if (input.cause === "taken back") {
         return "Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
       }
+      if (input.cause === "released") return RELEASED;
       return `${holder} has this document now. ${ONLY_THE_USER}`;
     case "held":
       return `${holder} is working on this document. ${ONLY_THE_USER}`;
@@ -470,6 +482,7 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
       if (input.cause === "taken back") {
         return `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;
       }
+      if (input.cause === "released") return `${RELEASED} ${POST_OUTLET}`;
       return input.holder
         ? `${holder} has this document now. ${ONLY_THE_USER} ${POST_OUTLET}`
         : `You lost this document, and nobody holds it now. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;

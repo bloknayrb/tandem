@@ -57,6 +57,19 @@ describe("one sentence per reason, each with its remedy", () => {
     );
   });
 
+  it("lost, cause released (PR 5a): the design's text, with or without a holder, never that the user chose it", () => {
+    const released =
+      "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
+    expect(message({ reason: "lost", cause: "released", holder: null })).toBe(released);
+    expect(message({ reason: "lost", cause: "released", holder: tandem })).toBe(released);
+  });
+
+  it("lost, cause assigned (PR 5a): names the new holder, as taken does", () => {
+    const text = message({ reason: "lost", cause: "assigned" });
+    expect(text).toContain("The terminal session owner-k7qx has this document now.");
+    expect(text).toContain("Only the user can reassign it");
+  });
+
   it("lost, when the recipient is Tandem's Claude", () => {
     expect(message({ reason: "lost", cause: "taken", callerIsTandem: true })).toBe(
       "A session the user is working with has this document now; leave it.",
@@ -234,6 +247,12 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
   it("lost, taken back (PR 3b-2): true for a post", () => {
     expect(postRefusal({ reason: "lost", holder: tandem, cause: "taken back" }).message).toBe(
       `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${OUTLET}`,
+    );
+  });
+
+  it("lost, released (PR 5a): true for a post", () => {
+    expect(postRefusal({ reason: "lost", holder: null, cause: "released" }).message).toBe(
+      `This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${OUTLET}`,
     );
   });
 

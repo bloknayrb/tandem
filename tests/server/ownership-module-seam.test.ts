@@ -60,7 +60,12 @@ describe("ownership flag module seam", () => {
       // boot sweep) rather than taking an injected boolean, so a forgotten
       // wiring cannot make tests and production disagree.
       "src/server/launcher/supervisor.ts",
+      // PR 5a: the ownership routes are registered only while the flag is on
+      // (a registered path answers OPTIONS even when its handlers skip), and
+      // their gate skips them per request for a flag read after registration.
+      "src/server/mcp/api-routes.ts",
       "src/server/mcp/owned-op.ts",
+      "src/server/mcp/routes/ownership.ts",
       "src/server/mcp/server.ts",
       "src/server/sessions/caller.ts",
       "src/server/sessions/log-id.ts",
@@ -177,6 +182,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
+    // PR 5a: the ownership routes, flag on, with a dark row that boots flag off.
+    "tests/server/ownership-control-route.test.ts",
     "tests/server/ownership-dark-enforcement.test.ts",
     "tests/server/ownership-default-rule.test.ts",
     "tests/server/ownership-delivery-rounds.test.ts",
@@ -252,6 +259,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
+      // PR 5a: the routes booted flag off, compared with an unknown path.
+      "tests/server/ownership-control-route.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-delivery-rounds.test.ts",
@@ -313,6 +322,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
+      "tests/server/ownership-control-route.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-delivery-rounds.test.ts",
