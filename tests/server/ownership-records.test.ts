@@ -369,7 +369,10 @@ describe("what a record holds", () => {
       graceArmedAt: 0,
       lapsed: true,
       changeNotices: [],
+      fromOwnTeardown: true,
     };
+    // `fromOwnTeardown` (3b-2b5): provenance, not state the record holds, so
+    // NOT counted by recordHoldsState; it only skips the departure re-ask.
     // `changeNotices` (the change-notice PR): NOT counted by
     // recordHoldsState (Ruling 6), pinned by the next test. The chat owners
     // PR adds no field: per-message owners and "handed" memory live in the
@@ -378,6 +381,7 @@ describe("what a record holds", () => {
     expect(Object.keys(full).sort()).toEqual([
       "changeNotices",
       "clientName",
+      "fromOwnTeardown",
       "graceArmedAt",
       "graceTimer",
       "label",
