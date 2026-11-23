@@ -394,16 +394,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
-      "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
-      "each ownership change that reaches step 5's probe; and when the probe answers false, step 5 " +
-      "(3b-2b1b-chat-step5) also clones every user chat row and parses each unhandled, unread, " +
-      "non-local-period one (chatRowsOwedToFreshReader) against the chat schema, inside " +
-      "setDocOwner.",
-    closedBy: "3b-2b4's measurement.",
-  },
-  {
-    gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
       "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
       "session is connected (after a restart every restored document is unowned), every pending " +
@@ -427,7 +417,13 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "that passes its caller check and departure gate, at the release loop and at " +
       "dropChatOwners, none at setMessageOwner; a deleted record releasing N keys, handled ones " +
       "included, runs up to N such scans.",
-    closedBy: "3b-2b4's measurement.",
+    closedBy:
+      "Measured by 3b-2b4c (ADR-054's 3b-2b4c amendment; tests/server/ownership-waiting-cost.test.ts): " +
+      "about 87 ms per decision at 50 held documents of 200 annotations and 500 chat rows, " +
+      "nothing waiting, almost all of it the per-document probe (about 1.7 ms each), and about " +
+      "1 to 1.5 ms per chat scan, so a release of N keys can cost N such scans. Closed by a " +
+      "cheaper decision (for example a cached or incremental waiting answer), with the " +
+      "measurement re-run, or Bryan accepting that cost.",
   },
   {
     gap:
