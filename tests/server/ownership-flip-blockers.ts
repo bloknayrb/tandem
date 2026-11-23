@@ -266,19 +266,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
-      "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
-      "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
-      "present) and Tandem's Claude's lost entry when it stops being present. Each must follow " +
-      "Ruling 10 (a past-tense fact with no instruction, the change-notice PR's R7.3 and R7.4). " +
-      "Until then a session holding a document those paths move is told only through `holding`. " +
-      "Note: `changeCauseOf` (sessions/ownership.ts) today maps every `take` loss to 'another " +
-      "session took it'; a take by Tandem's Claude, which `lossCauseOf` calls 'taken back', must " +
-      "get its own word then.",
-    closedBy: "PR 3b: the causes, with tests through their production paths.",
-  },
-  {
-    gap:
       "Change-notice causes PR 5 owes (R7.2): lost by Release and by Assign, gained by Assign, " +
       "each a past-tense fact with no instruction (Ruling 10); a released session is told only " +
       "that the document was released, never that the user chose it (design §11.3). Until then " +
@@ -391,16 +378,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Waiting's cost is unmeasured (3b-2b1b): documentWaiting reads one document's annotations, " +
-      "scans the replies of each Claude-facing comment, and makes one schema parse per item, at " +
-      "each ownership change that reaches step 5's probe; and when the probe answers false, step 5 " +
-      "(3b-2b1b-chat-step5) also clones every user chat row and parses each unhandled, unread, " +
-      "non-local-period one (chatRowsOwedToFreshReader) against the chat schema, inside " +
-      "setDocOwner.",
-    closedBy: "3b-2b4's measurement.",
-  },
-  {
-    gap:
       "After a server restart the delivery registry is empty, so on a document Tandem's Claude " +
       "holds, and (3b-2b1b-claimable) on every open document nobody holds while no other " +
       "session is connected (after a restart every restored document is unowned), every pending " +
@@ -424,7 +401,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "that passes its caller check and departure gate, at the release loop and at " +
       "dropChatOwners, none at setMessageOwner; a deleted record releasing N keys, handled ones " +
       "included, runs up to N such scans.",
-    closedBy: "3b-2b4's measurement.",
+    closedBy:
+      "Measured by 3b-2b4c (ADR-054's 3b-2b4c amendment; tests/server/ownership-waiting-cost.test.ts): " +
+      "about 87 ms per decision at 50 held documents of 200 annotations and 500 chat rows, " +
+      "nothing waiting, almost all of it the per-document probe (about 1.7 ms each), and about " +
+      "1 to 1.5 ms per chat scan, so a release of N keys can cost N such scans. Closed by a " +
+      "cheaper decision (for example a cached or incremental waiting answer), with the " +
+      "measurement re-run, or Bryan accepting that cost.",
+    acceptedFor:
+      "Bryan picked 'Accept (Recommended)' for the measured cost of about 87 ms per decision, " +
+      "picked from options, 2026-11-23; tracked as #2358.",
   },
   {
     gap:
@@ -531,16 +517,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
       "line.",
-  },
-  {
-    gap:
-      "When Tandem's Claude stops being present (3b-2b4a), only its per-message chat owners are " +
-      "released and re-owed. Doc-less and closed-document chat it held by presence alone, with no " +
-      "per-message owner, is not re-owed as ownership design §7.2 asks, so a message it was " +
-      "handed but did not answer can stay read and unanswered for whoever owns it next.",
-    closedBy:
-      "A change that re-owes, when presence ends, the doc-less and closed-document chat Tandem's " +
-      "Claude held by presence alone, with a test.",
   },
 ];
 

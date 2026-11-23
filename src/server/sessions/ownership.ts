@@ -112,9 +112,11 @@ export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "o
  * `ownership-refusal.ts` (`CHANGE_CAUSE_FACTS`), a `Record` over this type,
  * and the output schema's enum is this list, so no word can be queued that
  * the schema does not list. A cause no production path makes today (Tandem's
- * Claude's gains and losses, its take-back, Release, Assign) is not here:
- * each joins with the PR that produces it. A chat post's claim joined with
- * the posts PR (R1.8). None equals an internal {@link OwnershipChangeCause}.
+ * Claude's gains and losses, Release, Assign) is not here: each joins with
+ * the PR that produces it. A chat post's claim joined with the posts PR
+ * (R1.8); a terminal's loss to Tandem's Claude (a take-back, or its own
+ * `tandem_open`: the `taken back` loss) with #2358 PR 3b-2b4c. None equals
+ * an internal {@link OwnershipChangeCause}.
  */
 export const CHANGE_CAUSES = [
   "your write claimed it",
@@ -125,6 +127,7 @@ export const CHANGE_CAUSES = [
   "another session took it",
   "its tab was closed",
   "Tandem stopped counting this session as attached",
+  "Tandem's Claude took it back",
 ] as const;
 export type ChangeCause = (typeof CHANGE_CAUSES)[number];
 
@@ -1816,7 +1819,10 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
  *   dropped (the flip-blocker row this closed): a message not handled is
  *   re-owed, and an acknowledgement's owner goes even when its message is
  *   handled (the chat side re-owes only what is not handled). Its record
- *   never lapses, so nothing else would drop them.
+ *   never lapses, so nothing else would drop them. Then the doc-less and
+ *   closed-document chat it held by presence alone, with no per-message
+ *   owner, is re-owed too (ownership design §7.2; 3b-2b4c), never a
+ *   carried-over or handled message.
  */
 export function noteTandemPresence(present: boolean): void {
   if (!ownershipEnabled()) return;
@@ -1843,13 +1849,41 @@ export function noteTandemPresence(present: boolean): void {
           logLimited("throw:noteTandemPresence", `[ownership] presence failed: ${errorText(err)}`),
       );
     }
+    // Read before the per-message owners go, so a message released below is
+    // not counted again here.
+    const presenceOnly = presenceOnlyChat();
     const handled = ownerByMessage.size > 0 ? handledKeysOrNone() : new Set<string>();
     releaseMessageOwners(
       TANDEM_OWNER_ID,
       (key, owner) =>
         owner.origin === "acknowledgement" || (!handled.has(key) && !carriedOver.has(key)),
     );
+    if (presenceOnly.length > 0) reOweChat(presenceOnly);
   });
+}
+
+/**
+ * The chat Tandem's Claude held by presence alone (#2358 PR 3b-2b4c;
+ * ownership design §7.2): each unhandled, non-local-period user message that
+ * is doc-less or on a closed document, has no per-message owner whose record
+ * exists, and was not carried over. Read once presence has ended, from the
+ * facts alone (`messageStanding` would no longer name Tandem's Claude).
+ * Never throws: a failed read re-owes nothing.
+ */
+function presenceOnlyChat(): string[] {
+  try {
+    return chatSide.unhandledKeys().filter((key) => {
+      if (carriedOver.has(key)) return false;
+      const own = ownerByMessage.get(key);
+      if (own && records.has(own.ownerId)) return false;
+      const facts = chatSide.message(key);
+      if (facts === undefined || facts.localPeriod) return false;
+      return facts.documentId === undefined || !facts.documentOpen;
+    });
+  } catch {
+    logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+    return [];
+  }
 }
 
 /**
@@ -2035,15 +2069,19 @@ function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCaus
 
 /**
  * The cause word an ownership change gives the record it reaches, or
- * undefined when it gives none: a cause no production path makes today
- * (`user-open`, `take-back`), the clearing of a stale entry (its record is
- * gone), or a combination no path makes (a claim never moves a document away
- * from an existing record). Undefined queues nothing, so no word outside the
- * schema can be queued.
+ * undefined when it gives none: a gain by Tandem's Claude (its record is
+ * never told: `noticeRecord`), a cause with no word yet (`user-open`,
+ * `presence`), the clearing of a stale entry (its record is gone), or a
+ * combination no path makes (a claim never moves a document away from an
+ * existing record). A loss whose loss record is `taken back`
+ * (`lossCauseOf`: a take-back, or Tandem's Claude's own `tandem_open`) has
+ * its own word (#2358 PR 3b-2b4c). Undefined queues nothing, so no word
+ * outside the schema can be queued.
  */
 function changeCauseOf(
   cause: OwnershipChangeCause,
   change: "gained" | "lost",
+  nextOwnerId: string | undefined,
 ): ChangeCause | undefined {
   if (change === "gained") {
     if (cause === "claim") return "your write claimed it";
@@ -2052,6 +2090,9 @@ function changeCauseOf(
     if (cause === "post-claim") return "a chat post of yours claimed it";
     if (cause === "take") return "you opened or created it";
     return undefined;
+  }
+  if (nextOwnerId !== undefined && lossCauseOf(cause, nextOwnerId) === "taken back") {
+    return "Tandem's Claude took it back";
   }
   if (cause === "take") return "another session took it";
   if (cause === "lapse") return "Tandem stopped counting this session as attached";
@@ -2090,7 +2131,7 @@ function queueChangeNotices(
       [nextId, "gained"],
     ] as const) {
       const record = noticeRecord(ownerId);
-      const word = changeCauseOf(cause, change);
+      const word = changeCauseOf(cause, change, nextId);
       if (record && word !== undefined) pushNotice(record, { documentId, change, cause: word });
     }
   } catch {

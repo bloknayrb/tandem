@@ -175,6 +175,8 @@ describe("tools/list while dark", () => {
       '"settles"',
       '"superseded"',
       '"a chat post of yours claimed it"',
+      // #2358 PR 3b-2b4c: a loss to Tandem's Claude.
+      `"Tandem's Claude took it back"`,
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }

@@ -212,6 +212,8 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
   "its tab was closed": "its tab was closed",
   "Tandem stopped counting this session as attached":
     "Tandem stopped counting this session as attached, and this session stopped holding it",
+  "Tandem's Claude took it back":
+    "Tandem's Claude took it from this session, when a run of it started or when it opened the document",
 });
 
 /** The flag-on `ownership.changed` field's description (Requirement 1.3, Ruling 10). */
