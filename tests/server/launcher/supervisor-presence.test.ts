@@ -3062,3 +3062,28 @@ describe("3b-2b2: a new user comment or any user thread reply asks start-or-wake
     expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
   });
 });
+
+describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; not wired by index.ts)", () => {
+  it("ownSpawn names the live child's spawn and id; a resumed spawn has the same id and a new number; isOwnChildSession folds case", async () => {
+    const h = makeSupervisor();
+    expect(h.sup.ownSpawn?.()).toBeNull();
+    const c1 = await boundFreshRun(h);
+    const id = argAfter(c1, "--session-id") as string;
+    expect(h.sup.ownSpawn?.()).toEqual({ n: 1, sessionId: id });
+    expect(h.sup.isOwnChildSession?.(id.toUpperCase())).toBe(true);
+    expect(h.sup.isOwnChildSession?.("someone-else")).toBe(false);
+    await crashToResumed(c1);
+    expect(h.sup.ownSpawn?.()).toEqual({ n: 2, sessionId: id });
+    await h.sup.stop();
+    expect(h.sup.ownSpawn?.()).toBeNull();
+    expect(h.sup.isOwnChildSession?.(id)).toBe(true);
+  });
+
+  it("flag off: no spawn is named", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    expect(h.sup.ownSpawn?.()).toBeNull();
+  });
+});

@@ -884,6 +884,16 @@ export interface Supervisor {
    * production path reaches until presence or the `tandem` record is wired.
    */
   startOrWake?(cause: StartOrWakeCause): void;
+  /**
+   * The own-spawn seam's two reads (#2358 PR 3b-2b3a), for ownership's
+   * `setOwnSpawnSource`, which `index.ts` does not call until 3b-2b4 (a
+   * source pin holds that). `ownSpawn`: the live child's spawn number and
+   * session id, null with no live child, flag off, or once its spawn is torn
+   * down. `isOwnChildSession`: whether any child of this supervisor ever used
+   * `sessionId`, case-folded. Optional for the same reason as `tandemPresence`.
+   */
+  ownSpawn?(): { n: number; sessionId: string } | null;
+  isOwnChildSession?(sessionId: string): boolean;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -1683,6 +1693,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const key = sessionId.toLowerCase();
     for (const id of ownChildSessionIds) if (id.toLowerCase() === key) return true;
     return false;
+  }
+
+  /** The own-spawn seam's spawn read (#2358 PR 3b-2b3a; see `Supervisor`). */
+  function ownSpawn(): { n: number; sessionId: string } | null {
+    const rec = latestRecord;
+    if (child === null || rec === null || rec.tornDown || currentSessionId === undefined) {
+      return null;
+    }
+    return { n: rec.n, sessionId: currentSessionId };
   }
 
   /** Read the marker; any failure reads as not owed (see `greeting.ts`). In
@@ -5044,6 +5063,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     tandemPresence: () => presenceSeam,
     requestWake,
     startOrWake,
+    ownSpawn,
+    isOwnChildSession,
   };
 }
 

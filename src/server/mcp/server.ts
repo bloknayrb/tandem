@@ -63,6 +63,7 @@ import {
 import {
   noteTransportChanged,
   noteTransportRegistered,
+  ownSpawnRoutingActive,
   resolveTransportRecord,
   setTransportView,
 } from "../sessions/ownership.js";
@@ -618,15 +619,20 @@ async function openSession(
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
       // The bind fact (#2358 PR 3a, R3.9) was judged BEFORE the record is
-      // resolved (in the POST handler), so 3b's rule 0 can use it without
-      // reopening this callback. Nothing here reads it to choose a record
-      // (Ruling A).
+      // resolved (in the POST handler). While rule 0 routes (#2358 PR
+      // 3b-2b3a: flag on and the own-spawn seam set, which nothing in `src`
+      // sets until 3b-2b4), the record is chosen only after the bind is
+      // confirmed below, so a candidate revoked at confirm never lands on
+      // `tandem`. Otherwise the record is chosen here, as before.
       // Ownership (#2358, ADR-054): which record this transport belongs to.
       // Undefined while ownership is off, and then nothing below differs from
       // before. The record itself is created only once `add` has resolved
       // (`noteTransportRegistered`), because `add` may first await an LRU
       // eviction whose removal re-judges the same record.
-      const owner = resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId });
+      const routeAfterBind = ownSpawnRoutingActive();
+      const owner = routeAfterBind
+        ? undefined
+        : resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId });
       await registry.add({
         sessionId,
         server,
@@ -642,8 +648,18 @@ async function openSession(
           `${claudeSessionId ? ` (claude session ${sessionIdForLog(claudeSessionId)})` : ""}` +
           `${clientName ? ` (client ${clientName})` : ""} — ${registry.size} live`,
       );
-      if (ownerHandle !== undefined)
+      const bound =
+        ownerHandle !== undefined &&
         noteOwnerHandleBind(registry, sessionId, ownerHandle.candidate);
+      // Synchronous from `add` to here, so the entry is never seen unrouted.
+      const entry = routeAfterBind ? registry.get(sessionId) : undefined;
+      const routed =
+        entry &&
+        resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId, bound });
+      if (entry && routed) {
+        entry.ownerId = routed.ownerId;
+        noteTransportRegistered(routed.ownerId, { recordKind: routed.recordKind, clientName });
+      }
     },
     // Fires on DELETE /mcp. Dropping the entry here (rather than only in the
     // DELETE route) also covers session closes the SDK initiates itself.
@@ -682,20 +698,21 @@ function noteOwnerHandleBind(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   sessionId: string,
   candidate: BindCandidate | null,
-): void {
+): boolean {
   const entry = registry.get(sessionId);
   if (candidate !== null && entry !== undefined && confirmBind(candidate, sessionId)) {
     entry.boundSpawn = candidate.serial;
     console.error(
       `[Tandem] MCP session ${sessionIdForLog(sessionId)} bound to Tandem's Claude's current run`,
     );
-    return;
+    return true;
   }
   if (shouldLogUnboundHandle()) {
     console.error(
       `[Tandem] MCP session ${sessionIdForLog(sessionId)} presented an owner handle that does not bind (stale, unknown, malformed, or its session id does not match); it connects as usual`,
     );
   }
+  return false;
 }
 
 /**
