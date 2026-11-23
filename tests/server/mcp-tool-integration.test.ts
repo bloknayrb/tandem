@@ -2983,7 +2983,9 @@ describe("checkInbox stamps the pull path", () => {
 describe("MCP tool integration — annotation key identity", () => {
   it("REGRESSION: a note-thread reply filed under a stale id never reaches Claude", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const ydoc = setupDoc("key-identity-leak", "Hello world test");
     withInternal(ydoc, () => {
       const map = ydoc.getMap(Y_MAP_ANNOTATIONS);

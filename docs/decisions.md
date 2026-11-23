@@ -3814,6 +3814,8 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 - **Flip-blocker rows closed:** the E2E error-envelope row and the `probeRefusal` regex row.
 - **Also in this change (not ownership):** `supervisor-turn-delivery.test.ts`' "cancels a crash restart that is only scheduled" used a 150 ms restart backoff, which a loaded Windows runner outran before `updateSettings` landed (vitest-windows on #2520); it now uses 2 s and asserts the Off standby before waiting.
 
+**Amended 2026-11-23 (annotation key identity) — the "one sanitised `id` under two map keys" residual is closed.** The 3b-2b1b amendment above accepted that two records in a document's annotation map carrying one sanitised `id` under different map keys (client-writable) let the later one stand in for both in the poll's refresh step. An annotation's identity is now its map key: `collectAnnotations` stamps it (`atMapKey`), so the refresh step, `documentWaiting` and the poll read two records, and `reconcileAnnotationKeys` repairs the stored id after quarantining the replies filed under the stale one. That amendment is not edited; this one supersedes its residual. Rules: [gotchas.md](gotchas.md#yjs--crdt).
+
 **Cross-references:** #2358, design v5 (`docs/spikes/multi-session-ownership/README.md`), the plan (`docs/plans/2358-ownership.md`), ADR-011, ADR-040 and ADR-053 (the flag pattern), ADR-045, ADR-049, ADR-051, ADR-056, #1906, #1952.
 
 ## ADR-055: Cowork Setup Ships Dark
