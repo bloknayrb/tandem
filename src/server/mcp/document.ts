@@ -864,7 +864,7 @@ export function registerDocumentTools(server: McpServer): void {
       "INVALID_RANGE naming the two ranges to edit separately. A range whose start, end or " +
       'interior overlaps heading markup such as "## " returns INVALID_RANGE; split the edit at the ' +
       "heading. A to at the first character of that markup counts as overlapping, so end the range " +
-      "before the newline that precedes a heading. newText is inserted literally, never parsed as Markdown (use tandem_appendContent or " +
+      "before the newline that precedes a heading. newText is inserted literally, never parsed as Markdown, except inside raw markdown source such as [^1], which it joins (use tandem_appendContent or " +
       "tandem_editList for new block structure); a newline in it is refused with INVALID_ARGUMENT in a " +
       "plain-text (.txt) document and otherwise stays a literal line break inside the same " +
       "block (a heading saves it as a space). Returns " +

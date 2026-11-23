@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Claude's edits next to a footnote reference no longer turn into markdown syntax (#1823).** Text Claude put right after raw markdown source the editor shows verbatim, such as a footnote reference `[^1]`, became part of that source. So `*x*` was saved as emphasis rather than as the characters `*x*`. Typing there in the editor, or accepting a suggestion, did the same. New text beside such a run now stays plain and is escaped on save. Text typed *inside* the run still joins it. Claude's edits now also format their new text the way the editor does: rewording a whole bold word or a link's text keeps it bold, or linked, where before the formatting was lost.
+- **Claude's edits next to a footnote reference no longer turn into markdown syntax (#1823).** Text Claude put right after raw markdown source the editor shows verbatim, such as a footnote reference `[^1]`, became part of that source. So `*x*` was saved as emphasis rather than as the characters `*x*`. Typing there in the editor, or accepting a suggestion, did the same. New text beside such a run now stays plain and is escaped on save. Text typed *inside* the run, or between two adjacent ones such as `[^1][^2]`, still joins it. Claude's edits now also format their new text the way the editor does: rewording a whole bold word or a link's text keeps it bold, or linked, where before the formatting was lost.
 
 ## [0.32.0] - 2026-11-20
 

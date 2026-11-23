@@ -8,7 +8,7 @@ import { Mark } from "@tiptap/core";
  * on save, so it round-trips byte-exact (#981 / ADR-042).
  *
  * The mark `name` MUST byte-match the server delta-attribute key
- * (`RAW_MARKDOWN_MARK` in `src/server/file-io/mdast-ydoc.ts`) or y-prosemirror
+ * (`RAW_MARKDOWN_MARK` in `src/shared/constants.ts`) or y-prosemirror
  * will drop it on the way to/from the Y.Doc.
  *
  * Renders `<span class="tandem-raw-md">` so the editor.css visibility toggle
