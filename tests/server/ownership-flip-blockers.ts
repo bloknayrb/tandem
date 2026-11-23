@@ -199,18 +199,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A poll's claim through chat with outcome 'changed' (setDocOwner ran but the caller does " +
-      "not hold the document after it: only a re-entrant lapse, which needs the detached cap " +
-      "to lapse the claimant inside its own claim) is handled by code that excludes the " +
-      "document's chat from the stamp and retires the entries the poll created, so the message " +
-      "stays unread, undelivered and unregistered for its new owner; but no test reaches that " +
-      "outcome on chat (the chat owners PR, R4.4; review round 1, item 20).",
-    closedBy:
-      "A test that drives a re-entrant lapse through the cap inside a chat claim, or a seam " +
-      "that forces the outcome, showing the message reachable by its new owner.",
-  },
-  {
-    gap:
       "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
       "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead. " +
       "A channel-reply final reply handles its message (an unmapped shim session can answer a " +
@@ -338,11 +326,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), but a " +
+      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), and " +
+      "rule 0's records are computed (3b-2b3a), but the own-spawn seam is unset, so a " +
       "transport bound to the current spawn still sits on its `claude:<id>` record, not the " +
-      "`tandem` record, and there are no unbound-child records, no private records for other " +
-      "own-child ids, and no retirement or demotion at a spawn.",
-    closedBy: "PR 3b-2.",
+      "`tandem` record, no transport reaches an unbound-child or private record, and there is " +
+      "no retirement or demotion at a spawn.",
+    closedBy: "3b-2b3b and 3b-2b4's switch-on.",
   },
   {
     gap:
@@ -557,20 +546,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
-  },
-  {
-    gap:
-      "After a server restart every ownership record is gone, so a Claude Code session that is " +
-      "still open is not seen as connected until it next initializes (after a 404 on its next " +
-      "request). Until then the decision (3b-2b1b-claimable) counts every open, unowned document " +
-      "as claimable, and with the restart row every old pending comment reads as waiting. " +
-      "3b-2b1c's pass (workWaiting: tandemWorkWaiting) is the first consumer of the decision, " +
-      "so Tandem's Claude could start for old comments while the user's terminal is open; and a " +
-      "session holding a document that goes away in that window can start or wake Tandem's " +
-      "Claude beside the still-open terminal (3b-2b1c).",
-    closedBy:
-      "3b-2b2's boot quiet period or 'written since boot' condition, extended to a lapse in " +
-      "that window, with a test of each.",
   },
   {
     gap:

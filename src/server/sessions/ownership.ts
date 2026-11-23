@@ -79,8 +79,22 @@ import {
   postRefusal,
 } from "./ownership-refusal.js";
 
-/** How a record was identified (ownership design §2, §3.1). Server-derived. */
-export type RecordKind = "tandem" | "claude" | "bridge" | "http" | "local";
+/**
+ * How a record was identified (ownership design §2, §3.1). Server-derived.
+ * `unbound-child` (one per spawn, owner id `spawn:<n>`) and `child-private`
+ * (one per transport, owner id `private:<Mcp-Session-Id>`) are rule 0's
+ * records for Tandem's own children that did not bind (#2358 PR 3b-2b3a);
+ * only {@link resolveTransportRecord} makes them, and only while the
+ * own-spawn seam is set ({@link setOwnSpawnSource}).
+ */
+export type RecordKind =
+  | "tandem"
+  | "claude"
+  | "bridge"
+  | "http"
+  | "local"
+  | "unbound-child"
+  | "child-private";
 
 /** What the badge may call a record (ownership design §10.3): a closed list. */
 export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "other app";
@@ -471,6 +485,9 @@ const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
 let transportMode: "http" | "stdio" | undefined;
 let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
+/** The own-spawn seam (#2358 PR 3b-2b3a): unset until 3b-2b4 wires it. */
+let ownSpawnSource: (() => OwnSpawn | null) | undefined;
+let ownChildCheck: ((sessionId: string) => boolean) | undefined;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
 let startOrWakeSink: (cause: "document" | "message" | "departure") => void = () => {};
 let openDocumentIds: () => Iterable<string> = () => [];
@@ -535,12 +552,43 @@ export function setOwnershipTransportMode(mode: "http" | "stdio"): void {
     if (transportMode === undefined) {
       transportMode = mode;
       if (mode === "stdio") ensureRecord(LOCAL_OWNER_ID, "local");
+      // #2358 PR 3b-2b3a: an HTTP-mode boot has Tandem's Claude's record from
+      // the start, as stdio has `local`. Stdio mode makes it only lazily.
+      else ensureRecord(TANDEM_OWNER_ID, "tandem");
       return;
     }
     if (transportMode !== mode) {
       logLimited("mode", `[ownership] transport mode is ${transportMode}; ignoring ${mode}`);
     }
   });
+}
+
+/** The current spawn of Tandem's own Claude, as the supervisor numbers it. */
+export interface OwnSpawn {
+  readonly n: number;
+  readonly sessionId: string;
+}
+
+/**
+ * The own-spawn seam (#2358 PR 3b-2b3a): the supervisor's current spawn and
+ * its test for any session id one of its children ever used. While it is set
+ * (and the flag is on), {@link resolveTransportRecord} applies rule 0 and the
+ * MCP server chooses a transport's record after its bind is confirmed.
+ * **Nothing in `src` sets it until 3b-2b4**, which wires it together with
+ * presence's consumer (Bryan, 2026-11-23); a source pin holds that. Undefined
+ * clears it; `resetOwnershipForTests` clears it too.
+ */
+export function setOwnSpawnSource(
+  source: (() => OwnSpawn | null) | undefined,
+  isOwnChild?: (sessionId: string) => boolean,
+): void {
+  ownSpawnSource = source;
+  ownChildCheck = source === undefined ? undefined : isOwnChild;
+}
+
+/** Whether rule 0 routes (flag on and the own-spawn seam set). */
+export function ownSpawnRoutingActive(): boolean {
+  return ownershipEnabled() && ownSpawnSource !== undefined;
 }
 
 /** The transport mode a boot set, or undefined. */
@@ -678,8 +726,15 @@ function handOver(documentId: string): void {
 
 /**
  * Which record an MCP transport belongs to, from what its `initialize` carried
- * (ownership design §3.1 rules 1–3; rule 0's routing of a transport bound by PR 3a's
- * handle bind is PR 3b-2's).
+ * (ownership design §3.1 rules 0–3). Rule 0 (#2358 PR 3b-2b3a) applies only
+ * while the own-spawn seam is set ({@link setOwnSpawnSource}); unset, the
+ * answer is exactly rules 1–3, and `bound` is ignored. Under rule 0: a
+ * transport whose bind to the current spawn was confirmed is `tandem`; one
+ * that did not bind but carries the current spawn's session id is that
+ * spawn's `unbound-child` record (`spawn:<n>`, one per spawn, so a resumed
+ * spawn with the same id gets a new one); one carrying any other id a child
+ * of Tandem's ever used is a `child-private` record of its own
+ * (`private:<Mcp-Session-Id>`). Nothing but a confirmed bind is ever `tandem`.
  * **Pure**: it creates nothing. `noteTransportRegistered` creates the record
  * once the transport is actually in the registry, so a record cannot be
  * removed in the window between the two (the registry's `add` awaits an LRU
@@ -689,10 +744,16 @@ export function resolveTransportRecord(identity: {
   mcpSessionId: string;
   claudeSessionId?: string;
   clientId?: string;
+  /** The bind outcome: confirmed bound to the current spawn (rule 0 only). */
+  bound?: boolean;
 }): { ownerId: string; recordKind: RecordKind } | undefined {
   if (!ownershipEnabled()) return undefined;
   const byTransport = { ownerId: `http:${identity.mcpSessionId}`, recordKind: "http" as const };
   return total("resolveTransportRecord", byTransport, () => {
+    if (ownSpawnSource !== undefined) {
+      const ruleZero = ownSpawnRecord(ownSpawnSource, identity);
+      if (ruleZero) return ruleZero;
+    }
     if (identity.claudeSessionId !== undefined) {
       return { ownerId: `claude:${claudeIdKey(identity.claudeSessionId)}`, recordKind: "claude" };
     }
@@ -701,6 +762,24 @@ export function resolveTransportRecord(identity: {
     }
     return byTransport;
   });
+}
+
+/** Rule 0's answer, or undefined to fall through to rules 1–3. */
+function ownSpawnRecord(
+  source: () => OwnSpawn | null,
+  identity: { mcpSessionId: string; claudeSessionId?: string; bound?: boolean },
+): { ownerId: string; recordKind: RecordKind } | undefined {
+  if (identity.bound === true) return { ownerId: TANDEM_OWNER_ID, recordKind: "tandem" };
+  if (identity.claudeSessionId === undefined) return undefined;
+  const key = claudeIdKey(identity.claudeSessionId);
+  const spawn = source();
+  if (spawn !== null && claudeIdKey(spawn.sessionId) === key) {
+    return { ownerId: `spawn:${spawn.n}`, recordKind: "unbound-child" };
+  }
+  if (ownChildCheck?.(identity.claudeSessionId) === true) {
+    return { ownerId: `private:${identity.mcpSessionId}`, recordKind: "child-private" };
+  }
+  return undefined;
 }
 
 /**
@@ -834,7 +913,8 @@ const CHAT_CLOSE_FAILED =
 /**
  * Display kind (ownership design §10.3), record kind first: only the `tandem`
  * record is "Tandem's Claude"; a `claude` record is a terminal whatever name
- * its client sends; a name decides only among the other two kinds. Nothing
+ * its client sends, and so are rule 0's `unbound-child` and `child-private`
+ * records (a `--resume` terminal is the expected one, #2358 PR 3b-2b3a); a name decides only among the other two kinds. Nothing
  * renders it before PR 5.
  */
 export function displayKindOf(record: Pick<OwnerRecord, "recordKind" | "clientName">): DisplayKind {
@@ -843,6 +923,8 @@ export function displayKindOf(record: Pick<OwnerRecord, "recordKind" | "clientNa
       return "Tandem's Claude";
     case "claude":
     case "local":
+    case "unbound-child":
+    case "child-private":
       return "terminal";
     case "bridge":
       return record.clientName === CLAUDE_DESKTOP_CLIENT_NAME ? "Claude Desktop" : "other app";
@@ -2152,6 +2234,8 @@ const drainedFrom = new WeakMap<InboxChangeBatch, OwnerRecord>();
 export type InboxClaimCheck = "claimable" | "open" | "unowned" | "record" | "scope";
 
 let claimCheckForTests: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined;
+/** Runs right after a poll claim's `setDocOwner`, for {@link setPollClaimAppliedForTests}. */
+let pollClaimAppliedForTests: ((documentId: string) => void) | undefined;
 
 let scopeReadForTests: typeof inboxScopeOf | undefined;
 
@@ -2211,6 +2295,9 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         const kind = standing.claim;
         changed = true;
         setDocOwner(documentId, { ownerId: callerId, kind }, "poll-claim", callerId, sinceSeq);
+        // Tests only: what a re-entrant lapse through the detached cap does
+        // here (`rejudge` below), at the one point it can happen.
+        pollClaimAppliedForTests?.(documentId);
         const entry = ownerByDoc.get(documentId);
         if (entry?.ownerId !== callerId || entry.kind !== kind) {
           logLimited("poll-claim-not-applied", POLL_CLAIM_NOT_APPLIED);
@@ -2911,6 +2998,9 @@ const OPEN_DOCUMENTS_FAILED =
  * the idle reaper). A lapsed record stays lapsed until attached again, even if
  * it claims while detached: not connected. Tandem's own launched Claude counts
  * until its transports reach the `tandem` record (3b-2b3; flip-blocker row).
+ * Rule 0's `unbound-child` and `child-private` records count (#2358 PR
+ * 3b-2b3a; Bryan, 2026-11-23: "A --resume terminal counts"), which also
+ * counts a stray unbound bridge of the current child (accepted in ADR-054).
  * Unlike the supervisor's `otherAiAttached` (#2196), which judges registry
  * entries by session id and a 60-second recency. Pure.
  */
@@ -3206,6 +3296,18 @@ export function setHandoverSeqForTests(documentId: string, seq: number): void {
  * The checks cannot fail while the commit stays synchronous except through
  * re-entrancy, which an ESM spy cannot reach. Undefined clears it.
  */
+/**
+ * Tests only (#2358 flip-blocker row, the chat claim's `"changed"` outcome):
+ * run `hook` right after a poll claim's `setDocOwner`, where a re-entrant
+ * lapse through the detached cap can move the document away. Reset by
+ * `resetOwnershipForTests`.
+ */
+export function setPollClaimAppliedForTests(
+  hook: ((documentId: string) => void) | undefined,
+): void {
+  pollClaimAppliedForTests = hook;
+}
+
 export function setInboxClaimCheckForTests(
   hook: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined,
 ): void {
@@ -3241,12 +3343,15 @@ export function resetOwnershipForTests(): void {
   compositeObserver = undefined;
   noticeFaultForTests = undefined;
   claimCheckForTests = undefined;
+  pollClaimAppliedForTests = undefined;
   scopeReadForTests = undefined;
   resetDocOpQueuesForTests();
   lastLogAt.clear();
   transportMode = undefined;
   transportView = () => [];
   presenceSource = () => false;
+  ownSpawnSource = undefined;
+  ownChildCheck = undefined;
   waitingProbe = () => false;
   openDocumentIds = () => [];
   seqSource = () => 0;

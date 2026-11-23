@@ -23,6 +23,7 @@ import {
   getOwnerRecord,
   heldDocumentIds,
   resetOwnershipForTests,
+  setOwnSpawnSource,
   TANDEM_OWNER_ID,
 } from "../../src/server/sessions/ownership.js";
 import { allocPort } from "../helpers/alloc-port.js";
@@ -342,5 +343,89 @@ describe("flag off: the server ignores the header", () => {
     expect(boundLines()).toHaveLength(0);
     expect(unboundLines()).toHaveLength(0);
     expect(ownerHandleBindSnapshotForTests().spawns[0].bound).toEqual([]);
+  });
+});
+
+describe("rule 0 with the own-spawn seam set: the record is chosen after the bind (#2358 PR 3b-2b3a)", () => {
+  // Nothing in `src` sets the seam in 3b-2b3a; these set it to prove the
+  // routing that 3b-2b4 switches on.
+  const seam = () =>
+    setOwnSpawnSource(
+      () => ({ n: 7, sessionId: SID }),
+      (id) => id === SID,
+    );
+  const normalized = () => logs.map((l) => l.replace(/#[0-9a-f]{8}/g, "#<id>"));
+
+  it("a bound transport lands on tandem; an unbound one with the spawn's id on spawn:<n>", async () => {
+    await boot("1");
+    seam();
+    startedSpawn();
+    const bound = await initialize(withHandle(LIVE, SID));
+    const forger = await initialize({ "X-Claude-Session-Id": SID.toUpperCase() });
+    const owners = new Map(
+      mcpSessionBindsForTests().map((b, i) => [b.sessionId, mcpSessionOwnerIdsForTests()[i]]),
+    );
+    expect(owners.get(bound)).toBe(TANDEM_OWNER_ID);
+    expect(owners.get(forger)).toBe("spawn:7");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
+    expect(getOwnerRecord("spawn:7")?.recordKind).toBe("unbound-child");
+  });
+
+  it("a candidate revoked at confirm (teardown during registry.add's await) never lands on tandem", async () => {
+    await boot("1");
+    seam();
+    const spawn = startedSpawn();
+    for (let i = 0; i < 16; i++) await initialize({});
+    vi.mocked(console.error).mockImplementation((...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      if (line.includes("evicting least-recently-used")) endSpawn(spawn);
+      logs.push(line);
+    });
+    const id = await initialize(withHandle(LIVE, SID));
+    expect(bindOf(id)).toBeNull();
+    const owners = mcpSessionOwnerIdsForTests();
+    expect(owners).not.toContain(TANDEM_OWNER_ID);
+    expect(owners).toContain("spawn:7");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+  });
+
+  it("the routed path logs exactly what the unrouted one does", async () => {
+    await boot("1");
+    logs.length = 0;
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize(withHandle(handle("R"), SID));
+    const unrouted = normalized();
+    await closeMcpSession();
+    resetOwnerHandleBindForTests();
+    logs.length = 0;
+    seam();
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize(withHandle(handle("R"), SID));
+    expect(normalized()).toEqual(unrouted);
+    expect(mcpSessionOwnerIdsForTests()).toEqual([TANDEM_OWNER_ID, "spawn:7"]);
+  });
+
+  it("flag off with the seam set: no owner ids, no records, the same logs as without it", async () => {
+    await boot("");
+    logs.length = 0;
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize({ "X-Claude-Session-Id": SID });
+    const unset = [...logs];
+    await closeMcpSession();
+    resetOwnerHandleBindForTests();
+    logs.length = 0;
+    seam();
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize({ "X-Claude-Session-Id": SID });
+    // Flag off, `sessionIdForLog` passes raw ids through: compare by shape.
+    const shape = (ls: string[]) => ls.map((l) => l.replace(/[0-9a-f-]{36}/g, "<id>"));
+    expect(shape(logs)).toEqual(shape(unset));
+    expect(mcpSessionOwnerIdsForTests().every((o) => o === undefined)).toBe(true);
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+    expect(getOwnerRecord("spawn:7")).toBeUndefined();
   });
 });

@@ -14,16 +14,21 @@ import {
   noteTransportChanged,
   noteTransportRegistered,
   type OwnerRecord,
+  type OwnSpawn,
   ownershipSnapshotForTests,
+  ownSpawnRoutingActive,
   recordHoldsState,
   resetOwnershipForTests,
   resolveTransportRecord,
   setDocOwner,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  setOwnSpawnSource,
+  setStartOrWakeSink,
   setTandemPresenceSource,
   setTransportView,
   setWaitingProbe,
+  startOrWake,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
 } from "../../src/server/sessions/ownership.js";
@@ -123,6 +128,11 @@ describe("labels and display kinds", () => {
       "terminal",
     );
     expect(displayKindOf({ recordKind: "local" })).toBe("terminal");
+    // #2358 PR 3b-2b3a: rule 0's records read as a terminal, whatever the name.
+    expect(
+      displayKindOf({ recordKind: "unbound-child", clientName: CLAUDE_DESKTOP_CLIENT_NAME }),
+    ).toBe("terminal");
+    expect(displayKindOf({ recordKind: "child-private" })).toBe("terminal");
     expect(displayKindOf({ recordKind: "bridge", clientName: CLAUDE_DESKTOP_CLIENT_NAME })).toBe(
       "Claude Desktop",
     );
@@ -578,5 +588,184 @@ describe("review gaps (#2371): behaviours a mutation could remove unnoticed", ()
     expect(displayKindOf({ recordKind: "http", clientName: CLAUDE_DESKTOP_CLIENT_NAME })).toBe(
       "Claude Desktop",
     );
+  });
+});
+
+describe("rule 0: the spawn's records, computed and not routed (#2358 PR 3b-2b3a)", () => {
+  const SPAWN_ID = "AbCd-Spawn-1";
+  const OLD_CHILD_ID = "Old-Child-2";
+  let spawn: OwnSpawn | null;
+  const ownChildren = new Set([SPAWN_ID.toLowerCase(), OLD_CHILD_ID.toLowerCase()]);
+  const isOwnChild = (id: string) => ownChildren.has(id.toLowerCase());
+
+  beforeEach(() => {
+    spawn = { n: 3, sessionId: SPAWN_ID };
+    setOwnSpawnSource(() => spawn, isOwnChild);
+  });
+
+  const resolve = (identity: Parameters<typeof resolveTransportRecord>[0]) =>
+    resolveTransportRecord(identity);
+
+  it.each([
+    [
+      "a transport bound to the current spawn is tandem",
+      { mcpSessionId: "m1", claudeSessionId: SPAWN_ID, bound: true },
+      { ownerId: TANDEM_OWNER_ID, recordKind: "tandem" },
+    ],
+    [
+      "an unbound transport with the current spawn's id is that spawn's unbound-child record",
+      { mcpSessionId: "m1", claudeSessionId: SPAWN_ID, bound: false },
+      { ownerId: "spawn:3", recordKind: "unbound-child" },
+    ],
+    [
+      "a forger with the spawn's id and no handle is the unbound-child record, never tandem",
+      { mcpSessionId: "m9", claudeSessionId: SPAWN_ID },
+      { ownerId: "spawn:3", recordKind: "unbound-child" },
+    ],
+    [
+      "the spawn's id in another case is the same unbound-child record",
+      { mcpSessionId: "m2", claudeSessionId: SPAWN_ID.toUpperCase() },
+      { ownerId: "spawn:3", recordKind: "unbound-child" },
+    ],
+    [
+      "another own-child id is a private record of the transport",
+      { mcpSessionId: "m3", claudeSessionId: OLD_CHILD_ID },
+      { ownerId: "private:m3", recordKind: "child-private" },
+    ],
+    [
+      "another own-child id in another case is still private",
+      { mcpSessionId: "m4", claudeSessionId: OLD_CHILD_ID.toUpperCase() },
+      { ownerId: "private:m4", recordKind: "child-private" },
+    ],
+    [
+      "a session id that is no child's is a claude record (rule 1)",
+      { mcpSessionId: "m5", claudeSessionId: "Someone-Else" },
+      { ownerId: "claude:someone-else", recordKind: "claude" },
+    ],
+    [
+      "no session id and not bound falls through to rules 2-3",
+      { mcpSessionId: "m6", clientId: "b1" },
+      { ownerId: "bridge:b1", recordKind: "bridge" },
+    ],
+  ] as const)("%s", (_name, identity, expected) => {
+    expect(resolve(identity)).toEqual(expected);
+  });
+
+  it("two transports of one other own-child id are two private records", () => {
+    const a = resolve({ mcpSessionId: "m1", claudeSessionId: OLD_CHILD_ID });
+    const b = resolve({ mcpSessionId: "m2", claudeSessionId: OLD_CHILD_ID });
+    expect(a?.recordKind).toBe("child-private");
+    expect(a?.ownerId).not.toBe(b?.ownerId);
+  });
+
+  it("a resumed spawn (same id, new number) gets a new unbound-child record", () => {
+    const before = resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID });
+    spawn = { n: 4, sessionId: SPAWN_ID };
+    const after = resolve({ mcpSessionId: "m2", claudeSessionId: SPAWN_ID });
+    expect(before?.ownerId).toBe("spawn:3");
+    expect(after).toEqual({ ownerId: "spawn:4", recordKind: "unbound-child" });
+  });
+
+  it("with no live spawn, the spawn's old id is a private record (it is an own-child id)", () => {
+    spawn = null;
+    expect(resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID })).toEqual({
+      ownerId: "private:m1",
+      recordKind: "child-private",
+    });
+  });
+
+  it("a throwing source is logged and falls back to the transport's own record, never tandem", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setOwnSpawnSource(() => {
+      throw new Error("boom");
+    });
+    expect(resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID })).toEqual({
+      ownerId: "http:m1",
+      recordKind: "http",
+    });
+    spy.mockRestore();
+  });
+
+  it("seam unset: exactly master's records, the bind outcome ignored", () => {
+    setOwnSpawnSource(undefined);
+    expect(ownSpawnRoutingActive()).toBe(false);
+    expect(resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID, bound: true })).toEqual({
+      ownerId: "claude:abcd-spawn-1",
+      recordKind: "claude",
+    });
+    expect(resolve({ mcpSessionId: "m3", claudeSessionId: OLD_CHILD_ID })).toEqual({
+      ownerId: "claude:old-child-2",
+      recordKind: "claude",
+    });
+  });
+
+  it("is pure, and the new records are attached and lapse like any other", () => {
+    const owner = resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID });
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+    const e = register(owner?.ownerId as string, owner?.recordKind);
+    expect(getOwnerRecord("spawn:3")?.recordKind).toBe("unbound-child");
+    remove(e);
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS);
+    expect(getOwnerRecord("spawn:3")).toBeUndefined();
+  });
+
+  it("reset clears the seam", () => {
+    expect(ownSpawnRoutingActive()).toBe(true);
+    resetOwnershipForTests();
+    expect(ownSpawnRoutingActive()).toBe(false);
+  });
+
+  it("flag off: the seam set changes nothing and creates nothing", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(ownSpawnRoutingActive()).toBe(false);
+    expect(resolve({ mcpSessionId: "m1", claudeSessionId: SPAWN_ID, bound: true })).toBeUndefined();
+    setOwnershipTransportMode("http");
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+  });
+});
+
+describe("the tandem record at an HTTP-mode boot (#2358 PR 3b-2b3a)", () => {
+  it("an HTTP mode-set creates it, flag on", () => {
+    setOwnershipTransportMode("http");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
+    expect(getOwnerRecord(LOCAL_OWNER_ID)).toBeUndefined();
+  });
+
+  it("flag off it is not created", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    setOwnershipTransportMode("http");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+  });
+
+  it("stdio mode does not create it eagerly; its lazy creation still works", () => {
+    setOwnershipTransportMode("stdio");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+    setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
+  });
+});
+
+describe("another session is connected: rule 0's kinds count, tandem does not (#2358 PR 3b-2b3a)", () => {
+  // Observed through the lapse gate (Bryan's pick 2): a lapse forwards to the
+  // sink only while no other session is connected.
+  let sink: ReturnType<typeof vi.fn<(cause: "document" | "message" | "departure") => void>>;
+  beforeEach(() => {
+    sink = vi.fn<(cause: "document" | "message" | "departure") => void>();
+    setStartOrWakeSink(sink);
+  });
+
+  it("only the tandem record (made at an HTTP-mode boot): not another session", () => {
+    setOwnershipTransportMode("http");
+    startOrWake("lapse");
+    expect(sink.mock.calls).toEqual([["document"]]);
+  });
+
+  it.each([
+    ["unbound-child", "spawn:3"],
+    ["child-private", "private:m1"],
+  ] as const)("a %s record counts (a --resume terminal counts)", (kind, ownerId) => {
+    register(ownerId, kind);
+    startOrWake("lapse");
+    expect(sink).not.toHaveBeenCalled();
   });
 });
