@@ -291,7 +291,7 @@ function annotationWithRepliesSchemaFor(localModelMark: boolean) {
       .enum(ANCHOR_VERDICTS)
       .optional()
       .describe(
-        'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+        'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. "failed": the anchor resolved inverted, so its position cannot be trusted; the range shown is the last one stored and may be wrong. Absent on every healthy refresh.',
       ),
     replies: z.array(
       localModelMark
