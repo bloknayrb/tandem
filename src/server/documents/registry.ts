@@ -50,6 +50,7 @@ import {
   Y_MAP_OPEN_DOCUMENTS,
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
+import { publishedOwnerFields } from "../sessions/ownership.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
 export interface OpenDoc {
@@ -160,9 +161,14 @@ export function toDocListEntry(d: OpenDoc) {
  * prevent — the mutators already broadcast.
  */
 export function broadcastOpenDocs(): void {
-  const docList = Array.from(openDocs.values()).map(toDocListEntry);
+  const docs = Array.from(openDocs.values());
+  const docList = docs.map(toPublishedEntry);
   const id = activeDocId;
   const epoch = activeDocEpoch;
+  // What this broadcast publishes, for the owner fields' republish and
+  // restore (#2358 PR 5a-3). Copies, so a later in-place change of an entry
+  // is not published before its own broadcast. Only read flag on.
+  publishedDocs = docs.map((d) => ({ ...d }));
 
   try {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -190,6 +196,103 @@ export function broadcastOpenDocs(): void {
       console.error("[Tandem] broadcastOpenDocs: failed to update doc %s:", docId, err);
     }
   }
+  notifyOpenDocsWritten();
+}
+
+// ---------------------------------------------------------------------------
+// The owner fields (#2358 PR 5a-3; ownership design §10.2, §10.3). Flag off
+// none of this changes a write: `publishedOwnerFields` answers undefined, so
+// each published entry is exactly `toDocListEntry`'s, and nothing calls the
+// republish or the restore.
+
+/**
+ * The docs the last {@link broadcastOpenDocs} published, as copies, or null
+ * before the first. The republish and the restore rebuild the list from this,
+ * never from `openDocs` directly: an open in progress
+ * ({@link openDocumentWhenReady}) is in `openDocs` before it is ready, and an
+ * ownership change during its `prepare` must not publish it early.
+ */
+let publishedDocs: OpenDoc[] | null = null;
+
+/** Told after each broadcast (`ownership-publish.ts` attaches its guards). */
+let openDocsWrittenListener: (() => void) | undefined;
+
+/**
+ * Set the listener told after each {@link broadcastOpenDocs} (#2358 PR
+ * 5a-3): `ownership-publish.ts` guards the rooms the broadcast wrote. Only
+ * stored; set only by a flag-on start of publishing.
+ */
+export function setOpenDocsWrittenListener(listener: (() => void) | undefined): void {
+  openDocsWrittenListener = listener;
+}
+
+function notifyOpenDocsWritten(): void {
+  try {
+    openDocsWrittenListener?.();
+  } catch (err) {
+    console.error("[Tandem] broadcastOpenDocs: the owner-field guard could not attach:", err);
+  }
+}
+
+/**
+ * An entry as the `Y_MAP_OPEN_DOCUMENTS` broadcast publishes it: the tool
+ * shape ({@link toDocListEntry}, which `tandem_listDocuments` also returns and
+ * which therefore never carries owner fields) plus, flag on, the owner fields
+ * (`publishedOwnerFields`). Flag off it is exactly the tool shape.
+ */
+function toPublishedEntry(d: OpenDoc) {
+  const owner = publishedOwnerFields(d.id);
+  return owner === undefined ? toDocListEntry(d) : { ...toDocListEntry(d), ...owner };
+}
+
+/** The ids of the rooms the last broadcast wrote: `CTRL_ROOM` and each published document still open. */
+export function publishedRoomIds(): string[] {
+  return [CTRL_ROOM, ...(publishedDocs ?? []).filter((d) => openDocs.has(d.id)).map((d) => d.id)];
+}
+
+/**
+ * Write the published list, with owner fields computed now, into each of
+ * `rooms` (`CTRL_ROOM` or a published document's room) whose
+ * `Y_MAP_OPEN_DOCUMENTS` differs from it, under `withInternal`, and nothing
+ * else (the active id and its epoch are left as the last broadcast wrote
+ * them, so no client reads a focus event). Returns how many rooms it wrote.
+ * Before the first broadcast the list is empty and only `CTRL_ROOM` is a room.
+ *
+ * The one writer of the owner fields besides {@link broadcastOpenDocs}: step
+ * 4's republish, the stale tick and the restore against a client write
+ * (ownership design §10.3) all come here (`ownership-publish.ts`). The
+ * restore therefore rebuilds from server state, never from the map, which by
+ * then holds the forgery; and `withInternal` is Bryan's pick "Yes, emit them
+ * (Recommended)" (2026-11-23): the ctrl-meta observer derives `document:*`
+ * from this key for every origin but `mcp` (#2069), so a restore that undoes
+ * a forged id emits the event that undoes the forgery's own.
+ */
+export function writePublishedOpenDocs(rooms: readonly string[] = publishedRoomIds()): number {
+  const docList = (publishedDocs ?? []).map(toPublishedEntry);
+  const wanted = JSON.stringify(docList);
+  const allowed = new Set(publishedRoomIds());
+  let written = 0;
+  for (const room of rooms) {
+    if (!allowed.has(room)) continue;
+    try {
+      const ydoc = getOrCreateDocument(room);
+      const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
+      if (JSON.stringify(meta.get(Y_MAP_OPEN_DOCUMENTS) ?? null) === wanted) continue;
+      withInternal(ydoc, () => {
+        meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
+      });
+      written++;
+    } catch (err) {
+      console.error("[Tandem] the owner fields could not be republished to a room:", err);
+    }
+  }
+  return written;
+}
+
+/** @internal Test seam: forget what the last broadcast published, and the listener. */
+export function unsafeResetPublished(): void {
+  publishedDocs = null;
+  openDocsWrittenListener = undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -71,7 +71,12 @@ import {
   seenBy,
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
-import { chatRowsOwedToFreshReader, isDocumentWaiting } from "./inbox-selection.js";
+import {
+  chatRowsOwedToFreshReader,
+  type DocumentWaitingInput,
+  isDocumentWaiting,
+  oldestDocumentWaitingAt,
+} from "./inbox-selection.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -614,26 +619,55 @@ const DOCUMENT_WAITING_FAILED =
  */
 export function documentWaiting(documentId: string): boolean {
   try {
-    const doc = getCurrentDoc(documentId);
-    const ydoc = getDocument(documentId);
-    if (!doc || !ydoc) return false;
-    const store = new YDocStore(ydoc, doc.filePath, doc.id);
-    const reconciled = store.reconciled();
-    return isDocumentWaiting({
-      documentId,
-      annotations: structuredClone(store.listAnnotations()),
-      repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
-      mode: readModeState(),
-      handedAtOrAbove: (kind, id, editedAt) =>
-        deliveryRegistry
-          .versionsOf(kind, ledgerKey(documentId, id))
-          .some((entry) => entry.acked && entry.editedAt >= editedAt),
-      isLocalModelRecord,
-      writtenSince: waitingWrittenSince,
-    });
+    const input = documentWaitingInput(documentId);
+    return input !== null && isDocumentWaiting(input);
   } catch {
     console.error(DOCUMENT_WAITING_FAILED);
     return false;
+  }
+}
+
+/** The waiting rule's inputs for an open document, or null when it is not open. May throw. */
+function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
+  const doc = getCurrentDoc(documentId);
+  const ydoc = getDocument(documentId);
+  if (!doc || !ydoc) return null;
+  const store = new YDocStore(ydoc, doc.filePath, doc.id);
+  const reconciled = store.reconciled();
+  return {
+    documentId,
+    annotations: structuredClone(store.listAnnotations()),
+    repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
+    mode: readModeState(),
+    handedAtOrAbove: (kind, id, editedAt) =>
+      deliveryRegistry
+        .versionsOf(kind, ledgerKey(documentId, id))
+        .some((entry) => entry.acked && entry.editedAt >= editedAt),
+    isLocalModelRecord,
+    writtenSince: waitingWrittenSince,
+  };
+}
+
+/** Fixed text: nothing from the error, no record and no document. */
+const OLDEST_WAITING_FAILED =
+  "[Tandem] a document's oldest waiting item could not be computed; it is read as nothing waiting.";
+
+/**
+ * When the oldest item {@link documentWaiting} counts on `documentId` was last
+ * written, or null when it counts none (#2358 PR 5a-3; ownership design
+ * §10.2's stale flag and hints). The same inputs and rule
+ * (`oldestDocumentWaitingAt`), the same reads and no Y.Doc write. Reached
+ * only through the ownership module's seam (`setOldestWaitingProbe`), which
+ * only a flag-on publish asks. Total: a throw answers null with one fixed
+ * line, rate-limited by the ownership module's caller.
+ */
+export function oldestDocumentWaiting(documentId: string): number | null {
+  try {
+    const input = documentWaitingInput(documentId);
+    return input === null ? null : oldestDocumentWaitingAt(input);
+  } catch {
+    console.error(OLDEST_WAITING_FAILED);
+    return null;
   }
 }
 

@@ -49,7 +49,12 @@ const ALLOWED = new Set([
   "src/server/documents/registry-testing.ts",
 ]);
 
-const UNSAFE_NAMES = ["unsafeAddDoc", "unsafeRemoveDoc", "unsafeSetActiveDocId"] as const;
+const UNSAFE_NAMES = [
+  "unsafeAddDoc",
+  "unsafeRemoveDoc",
+  "unsafeResetPublished",
+  "unsafeSetActiveDocId",
+] as const;
 
 /**
  * Every source file under `src/`, whatever its extension.
@@ -172,9 +177,17 @@ describe("registry primitives stay out of production code", () => {
       "openDocument",
       "openDocumentWhenReady",
       "updateDocumentWhenReady",
+      // #2358 PR 5a-3: the owner fields' republish and restore, which write only
+      // `Y_MAP_OPEN_DOCUMENTS` from what the last broadcast published (never
+      // `openDocs` or `activeDocId`), the rooms it wrote, and the listener the
+      // guard attaches through.
+      "publishedRoomIds",
+      "setOpenDocsWrittenListener",
+      "writePublishedOpenDocs",
       // The declared escape hatch, reachable only through registry-testing.ts.
       "unsafeAddDoc",
       "unsafeRemoveDoc",
+      "unsafeResetPublished",
       "unsafeSetActiveDocId",
     ].sort();
 

@@ -3670,3 +3670,76 @@ describe("3b-2e2: wokenAt, for the stall banner's hide (the owner's 2026-11-17 a
     expect(h.sup.wokenAt?.()).toBeNull();
   });
 });
+
+describe("the published state's launcher facts (#2358 PR 5a-3)", () => {
+  it("a bound run: running, nothing pending, startable; each change is told after presence", async () => {
+    const h = makeSupervisor();
+    const told: string[] = [];
+    h.seam.onFactsChanged(() => told.push(h.seam.isPresent() ? "present" : "not-present"));
+    await boundFreshRun(h);
+    await settle();
+    expect(h.seam.launcherFacts()).toEqual({
+      running: true,
+      startPending: false,
+      off: false,
+      notSetUp: false,
+      stayingDown: false,
+      bindFailed: false,
+      startable: true,
+    });
+    // Told at least once, and the last notice already reads presence as announced.
+    expect(told.length).toBeGreaterThan(0);
+    expect(told.at(-1)).toBe("present");
+  });
+
+  it("Off: off, not running, still startable", async () => {
+    const h = makeSupervisor();
+    await boundFreshRun(h);
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.seam.launcherFacts()).toMatchObject({ off: true, running: false, startable: true });
+  });
+
+  it("no integration configured: not set up, not startable", async () => {
+    const h = makeSupervisor();
+    await boundFreshRun(h);
+    await writeIntegration(false);
+    await h.sup.refreshConfigured();
+    await settle();
+    expect(h.seam.launcherFacts()).toMatchObject({ notSetUp: true, startable: false });
+  });
+
+  it("a failed bind: bindFailed, not startable", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    advance(WINDOW);
+    await settle();
+    expect(h.log).toEqual(["failed:window-expired"]);
+    expect(h.seam.launcherFacts()).toMatchObject({ bindFailed: true, startable: false });
+  });
+
+  it("a crash with a restart scheduled: a start is pending, not staying down", async () => {
+    const h = makeSupervisor({ restartBackoffsMs: [1e9] });
+    const c1 = await boundFreshRun(h);
+    c1.exitWith(1, null);
+    await settle();
+    expect(h.seam.launcherFacts()).toMatchObject({
+      running: false,
+      startPending: true,
+      stayingDown: false,
+    });
+  });
+
+  it("flag off: null, and nothing is told", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    const told: number[] = [];
+    h.seam.onFactsChanged(() => told.push(1));
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    await settle();
+    expect(h.seam.launcherFacts()).toBeNull();
+    expect(told).toEqual([]);
+  });
+});

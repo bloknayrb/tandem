@@ -67,6 +67,9 @@ describe("ownership flag module seam", () => {
       "src/server/mcp/owned-op.ts",
       "src/server/mcp/routes/ownership.ts",
       "src/server/mcp/server.ts",
+      // PR 5a-3: the published state's guard, republish and stale tick attach
+      // nothing, arm no timer and write no key while the flag is off.
+      "src/server/ownership-publish.ts",
       "src/server/sessions/caller.ts",
       "src/server/sessions/log-id.ts",
       "src/server/sessions/ownership.ts",
@@ -200,6 +203,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-presence.test.ts",
+    // PR 5a-3: the published state flag on, with a dark row that turns it off.
+    "tests/server/ownership-published-state.test.ts",
     // PR 4a: the push stream's narrowing and the ownership-changed nudge.
     "tests/server/ownership-push-narrowing.test.ts",
     "tests/server/ownership-records.test.ts",
@@ -280,6 +285,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
+      // PR 5a-3: the published state flag on, with a dark row that turns it off.
+      "tests/server/ownership-published-state.test.ts",
       // PR 4a's one: the push stream's narrowing and the ownership-changed
       // nudge flag on, with dark rows (every stream gets every event byte for
       // byte; a lapse nudges nothing).
@@ -343,6 +350,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
+      // PR 5a-3: the published state flag on, with a dark row that turns it off.
+      "tests/server/ownership-published-state.test.ts",
       // PR 4a: the push stream's narrowing and the ownership-changed nudge.
       "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",

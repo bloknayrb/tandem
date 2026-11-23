@@ -69,6 +69,7 @@ import {
   registerSpawn,
   type SpawnBind,
 } from "../sessions/owner-handle-bind.js";
+import type { LauncherFacts } from "../sessions/ownership.js";
 import {
   buildRunMcpConfig,
   buildRunSettings,
@@ -520,6 +521,18 @@ export interface TandemPresenceSeam {
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
   /** The live `standby !== "off"` read (design §8.1's widening arm). */
   standbyNotOff(): boolean;
+  /**
+   * The launcher's facts for ownership's published state (#2358 PR 5a-3):
+   * the badge's hints and stale flag and the `CTRL_ROOM` summary. Null while
+   * ownership is off.
+   */
+  launcherFacts(): LauncherFacts | null;
+  /**
+   * Each change (or possible change) of those facts, coalesced to one call
+   * per synchronous run of writes. Returns an unsubscribe fn. Flag off never
+   * called.
+   */
+  onFactsChanged(cb: () => void): () => void;
   /** Test-only diagnostics. */
   diagnosticsForTests(): {
     recomputes: number;
@@ -1884,6 +1897,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // lock operation queued before it, as on master.
       if (messageStartQueued) return;
       messageStartQueued = true;
+      markFactsDirty();
       // `startForMessage` catches what it can; this catches the rest, because
       // an unhandled rejection exits the server (#2125).
       startForMessage(true).catch((err: unknown) => {
@@ -1906,6 +1920,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * only when today's arm did not start. */
   async function startForMessage(owedByMessage: boolean): Promise<void> {
     passesQueued += 1;
+    markFactsDirty();
     await withLock(async () => {
       // What start-or-wake owes is consumed here, at the pass's read (R2.7).
       // Flag off it is never raised, so the pass below is master's.
@@ -1951,6 +1966,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // this one still reads as Starting.
       if (owedByMessage) messageStartQueued = false;
       passesQueued -= 1;
+      markFactsDirty();
       // Start-or-wake raised again while passes were in flight: exactly one
       // more pass, queued by the last of them to end (R2.7, R3.3). A pass
       // still queued reads it first. Never raised flag off.
@@ -2168,6 +2184,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *  `failBind` (so flag on only), cleared only by a run start. Unlike
    *  `lastRunBound`, false at boot, so a run not yet judged reports nothing. */
   let bindFailedLatch = false;
+  /** `onFactsChanged` listeners (#2358 PR 5a-3), and whether a notice is queued. */
+  const factsListeners = new Set<() => void>();
+  let factsNotifyQueued = false;
   /** Every spawn that reached `child = spawned` (flag on), numbered in order. */
   let spawnRecordSeq = 0;
   /** The spawn record with the highest number: the latest spawn (Terms). */
@@ -2205,7 +2224,61 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     queueMicrotask(() => {
       presenceRecomputeQueued = false;
       recomputePresence(false);
+      // After the recompute, so a listener reads presence as announced.
+      markFactsDirty();
     });
+  }
+
+  /**
+   * The published state's facts changed, or may have (#2358 PR 5a-3): tell
+   * each `onFactsChanged` listener once, after the current synchronous run of
+   * writes (a queued microtask). Called by every presence setter (through
+   * `markPresenceDirty`) and where `child`, the queued-start state or the
+   * failed-bind latch changes. Flag off, or with no listener, nothing is
+   * queued.
+   */
+  function markFactsDirty(): void {
+    if (!ownershipEnabled() || factsNotifyQueued || factsListeners.size === 0) return;
+    factsNotifyQueued = true;
+    queueMicrotask(() => {
+      factsNotifyQueued = false;
+      notifyEach(factsListeners, "facts");
+    });
+  }
+
+  /**
+   * The launcher's facts for ownership's published state (#2358 PR 5a-3;
+   * ownership design §10.2, ADR-054's 5a-3 amendment). Null while ownership
+   * is off. A reader: it writes nothing (the licence read is `decideRefusal`,
+   * as `status()` reads it).
+   */
+  function launcherFacts(): LauncherFacts | null {
+    if (!ownershipEnabled()) return null;
+    const failedBind = bindFailed();
+    // Start cannot help these (ownership design §10.2, "Where Start can
+    // help"): a sign-in, licence or missing-CLI refusal. A tripped breaker
+    // and Off still count: Start resets the one and leaves the other.
+    const blocked =
+      lastError === "needs-login" ||
+      lastError === "unlicensed" ||
+      lastError === "cli-unusable" ||
+      lastError === "binary-not-found";
+    return {
+      running: child !== null && !child.killed,
+      startPending:
+        messageStartQueued || passesQueued > 0 || launching > 0 || restartTimer !== null,
+      off: standby === "off",
+      notSetUp: configured === false,
+      stayingDown:
+        breakerTripped || (lastError !== undefined && restartTimer === null && launching === 0),
+      bindFailed: failedBind,
+      startable:
+        !shuttingDown &&
+        configured !== false &&
+        !blocked &&
+        !failedBind &&
+        decideRefusal() === null,
+    };
   }
 
   function cancelSettle(): void {
@@ -2322,6 +2395,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     rec.judged = true;
     try {
       bindFailedLatch = true;
+      markFactsDirty();
       setLastRunBound(false);
       console.error(`[Launcher] Tandem's Claude's spawn did not bind: ${reason} (ownership)`);
       if (!presenceSuppressed) notifyEach(failedBindListeners, "failed-bind", reason);
@@ -3047,6 +3121,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       throw err;
     }
     child = spawned;
+    markFactsDirty();
     if (run) {
       // The child is started: this spawn is now the current one (Terms), and
       // only now can its handle bind. Its own exit or error ends it, attached
@@ -3800,6 +3875,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // erase the handle of the process that replaced it.
       if (wasCurrent) {
         child = null;
+        markFactsDirty();
         currentCwd = undefined;
         currentSessionId = undefined;
         currentSpawnedAt = undefined;
@@ -3857,6 +3933,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // sit inside the identity guard for that reason.
       if (wasCurrent) {
         child = null;
+        markFactsDirty();
 
         // Cancel the confirmation timer — the process has already exited.
         if (confirmTimer) {
@@ -4636,6 +4713,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       judgeActiveAtRelease();
       releaseTurnDelivery();
       child = null;
+      markFactsDirty();
       currentCwd = undefined;
       currentSessionId = undefined;
       currentSpawnedAt = undefined;
@@ -4683,6 +4761,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     judgeActiveAtRelease();
     releaseTurnDelivery();
     child = null;
+    markFactsDirty();
     currentCwd = undefined;
     currentSessionId = undefined;
     currentSpawnedAt = undefined;
@@ -5154,6 +5233,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return () => failedBindListeners.delete(cb);
     },
     standbyNotOff: () => ownershipEnabled() && standby !== "off",
+    launcherFacts,
+    onFactsChanged: (cb) => {
+      factsListeners.add(cb);
+      return () => factsListeners.delete(cb);
+    },
     diagnosticsForTests: () => ({
       recomputes: presenceRecomputes,
       settlePending: settleTimer !== null,

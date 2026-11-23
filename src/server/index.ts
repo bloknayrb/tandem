@@ -46,6 +46,7 @@ import { installLogRedaction } from "./log-redact.js";
 import {
   documentWaiting,
   handOverDocumentInbox,
+  oldestDocumentWaiting,
   onTandemReply,
   ownershipChatSide,
 } from "./mcp/awareness.js";
@@ -73,6 +74,7 @@ import {
 } from "./mcp/server.js";
 import { readModeState } from "./mode.js";
 import { pushNotification } from "./notifications.js";
+import { requestOwnershipPublish, startOwnershipPublishing } from "./ownership-publish.js";
 import {
   decideStartupAction,
   freePort,
@@ -102,10 +104,13 @@ import {
   noteTandemRunStart,
   replayModeKnownAfterSupervisorStart,
   setDeliveryRoundOpener,
+  setLauncherFactsSource,
+  setOldestWaitingProbe,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipFrameSink,
   setOwnershipInboxHandover,
+  setOwnershipPublishSink,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
   setOwnSpawnSource,
@@ -263,6 +268,13 @@ async function startLauncherSupervisor(): Promise<void> {
     // work it left unowned. `noteFailedBind` defers itself, so nothing runs
     // inside the supervisor's emit.
     sup.tandemPresence?.().onFailedBind(noteFailedBind);
+    // The published state's launcher facts (#2358 PR 5a-3; ownership design
+    // §10.2): the badge's hints and stale flag and the composer summary read
+    // them, and each change asks a republish. Flag off the facts are null and
+    // no change is ever told.
+    setLauncherFactsSource(() => launcherSupervisor?.tandemPresence?.().launcherFacts() ?? null);
+    sup.tandemPresence?.().onFactsChanged(requestOwnershipPublish);
+    requestOwnershipPublish();
     setOwnSpawnSource(
       () => sup.ownSpawn?.() ?? null,
       (id) => sup.isOwnChildSession?.(id) === true,
@@ -957,6 +969,15 @@ async function main() {
   // reopened document, through this seam. Only a flag-on ownership change,
   // run start or reopen calls it, and it opens nothing while not keyed.
   setDeliveryRoundOpener(openRoundsForOwedWork);
+  // The published state (#2358 PR 5a-3; ownership design §10.2, §10.3): the
+  // oldest waiting item behind the badge's stale flag and hints (the waiting
+  // probe's rule), step 4's republish, and the guard and the stale tick.
+  // After the restores, so the first republish sees the restored tabs. Flag
+  // off the probe is never asked, the sink never called, and
+  // `startOwnershipPublishing` attaches nothing and arms no timer.
+  setOldestWaitingProbe(oldestDocumentWaiting);
+  setOwnershipPublishSink(requestOwnershipPublish);
+  startOwnershipPublishing();
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
@@ -964,6 +985,8 @@ async function main() {
     // A literal per branch, never the env string: `TANDEM_TRANSPORT=sse` takes
     // the stdio branch below. A no-op while ownership is off.
     setOwnershipTransportMode("http");
+    // The composer summary is written only in HTTP mode (#2358 PR 5a-3).
+    requestOwnershipPublish();
     // Refresh only a standalone skill that Tandem setup already installed.
     // This is intentionally outside every launcher branch: hand-started
     // Claude sessions are the population that needs the current instructions,

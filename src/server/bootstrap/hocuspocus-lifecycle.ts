@@ -26,6 +26,7 @@ import { setDirtyMirrorEligibility } from "../documents/dirty.js";
 import { getOpenDocs, isDirtyMirrorEligible } from "../documents/registry.js";
 import { detachObservers, reattachCtrlObservers, reattachObservers } from "../events/queue.js";
 import { getGenerationId } from "../mcp/document-service.js";
+import { guardOwnershipRoom } from "../ownership-publish.js";
 import type { HocuspocusLifecycle } from "../yjs/lifecycle.js";
 import { installHocuspocusLifecycle } from "../yjs/provider.js";
 
@@ -43,6 +44,12 @@ export function createHocuspocusLifecycle(): HocuspocusLifecycle {
     },
 
     onDocSwapped(docName, newDoc, oldDoc) {
+      // The published ownership state's guard (#2358 PR 5a-3; ownership
+      // design §10.3): the swapped-in Y.Doc is a new object, so it is guarded
+      // again. Flag off it attaches nothing.
+      if (docName === CTRL_ROOM || getOpenDocs().has(docName)) {
+        guardOwnershipRoom(docName, newDoc);
+      }
       if (docName === CTRL_ROOM) {
         reattachCtrlObservers();
         return;

@@ -23,5 +23,6 @@
 export {
   unsafeAddDoc as addDoc,
   unsafeRemoveDoc as removeDoc,
+  unsafeResetPublished as resetPublished,
   unsafeSetActiveDocId as setActiveDocId,
 } from "./registry.js";

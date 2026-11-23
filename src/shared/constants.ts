@@ -457,6 +457,14 @@ export const Y_MAP_AUTHORSHIP = "authorship";
 // Y.Map sub-keys: userAwareness
 export const Y_MAP_SELECTION = "selection";
 export const Y_MAP_ACTIVITY = "activity";
+/**
+ * CTRL_ROOM's ownership composer summary (#2358 PR 5a-3; ownership design
+ * §10.2), an `OwnershipSummary` (`shared/ownership-published.ts`). Written only
+ * by a flag-on HTTP-mode server with a launcher, under `withInternal`, from
+ * `src/server/ownership-publish.ts`; a client write to it is restored from
+ * server state (ownership design §10.3). A dark server never writes it.
+ */
+export const Y_MAP_OWNERSHIP_SUMMARY = "ownershipSummary";
 // Y.Map sub-keys: awareness (Claude focus)
 export const Y_MAP_CLAUDE = "claude";
 // Y.Map sub-keys: documentMeta

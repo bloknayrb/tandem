@@ -186,6 +186,33 @@ export function isDocumentWaiting(input: DocumentWaitingInput): boolean {
   return false;
 }
 
+/**
+ * When the oldest item {@link isDocumentWaiting} counts was last written
+ * (created, or edited after), or null when it counts none (#2358 PR 5a-3; the
+ * badge's stale flag and hints, ownership design §10.2). The same rule item
+ * by item, so `oldestDocumentWaitingAt(x) !== null` exactly when
+ * `isDocumentWaiting(x)` (`tests/server/ownership-published-state.test.ts`
+ * holds the two together). Pure.
+ */
+export function oldestDocumentWaitingAt(input: DocumentWaitingInput): number | null {
+  if (input.mode !== "tandem") return null;
+  let oldest: number | null = null;
+  const consider = (item: { timestamp?: number; editedAt?: number }) => {
+    const at = writtenAt(item);
+    if (oldest === null || at < oldest) oldest = at;
+  };
+  for (const ann of input.annotations) {
+    if (commentWaits(input, ann)) consider(ann);
+  }
+  for (const ann of input.annotations) {
+    if (input.isLocalModelRecord(ann)) continue;
+    for (const reply of input.repliesOf(ann)) {
+      if (replyWaits(input, ann, reply)) consider(reply);
+    }
+  }
+  return oldest;
+}
+
 // ---------------------------------------------------------------------------
 // The chat half (#2358 PR 3b-2b1b-chat).
 
