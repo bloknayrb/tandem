@@ -66,15 +66,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
-      "items are owed.",
-    closedBy:
-      "PR 3b, where the re-owe's wake can open the round (moved there from the 'chat, rounds " +
-      "and the greeting' PR by the delivery-rounds PR's brief). 3b-2b1c-a lands the re-owe's " +
-      "start-or-wake for Tandem's Claude but opens no round.",
-  },
-  {
-    gap:
       "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
       "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
       "another session's polls never hide its items from you' (with inbox scope, only the " +
@@ -142,16 +133,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "explanations meant for that session (a destructive read; `holding` is unaffected; within " +
       "D4, coordination not security). It is not yet in docs/security.md's register.",
     closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
-  },
-  {
-    gap:
-      "Flag on, a document's close drops its delivery round and a reopen opens none (the reopen " +
-      "merges annotations with withFileSync, which the channel skips), while the document's " +
-      "items may still be owed, so /health can read idle with items owed (the delivery-rounds " +
-      "PR, R3.1).",
-    closedBy:
-      "PR 3b: a wake that opens the round when it wakes someone (3b-2b1c-a's start-or-wake " +
-      "opens none).",
   },
   {
     gap:

@@ -384,18 +384,22 @@ describe("the handover is wired in a running server, and reachable only through 
     // Private: not exported, and no other file names it.
     expect(ownership).not.toMatch(/export\s+(?:async\s+)?function\s+handOver\b/);
     expect(filesNaming(/\bhandOver\(/)).toEqual(["src/server/sessions/ownership.ts"]);
-    for (const declaration of [
-      "export function setDocOwner(",
-      "export function onDocumentClosed(",
-      "export function noteTandemRunStart(",
-    ]) {
+    // `setDocOwner` returns the chat keys its handover re-owed (#2358 PR
+    // 3b-2b5, for the run start's delivery rounds), so its flag return
+    // returns none.
+    for (const [declaration, head] of [
+      [
+        "export function setDocOwner(",
+        "): readonly string[] {\n  if (!ownershipEnabled()) return [];\n",
+      ],
+      ["export function onDocumentClosed(", "): void {\n  if (!ownershipEnabled()) return;\n"],
+      ["export function noteTandemRunStart(", "): void {\n  if (!ownershipEnabled()) return;\n"],
+    ] as const) {
       const body = functionBody(declaration);
-      const open = body.indexOf("): void {\n");
+      const open = body.indexOf(head.slice(0, head.indexOf("\n") + 1));
       expect(open, declaration).toBeGreaterThan(-1);
       // The first statement of the function is the flag return.
-      expect(body.slice(open).startsWith("): void {\n  if (!ownershipEnabled()) return;\n")).toBe(
-        true,
-      );
+      expect(body.slice(open).startsWith(head), declaration).toBe(true);
       expect(body.match(/\bhandOver\(documentId\)/g), declaration).toHaveLength(1);
       // One synchronous step with the ownership change (R1.6).
       expect(body).not.toMatch(/\bawait\b|\basync\b|\.then\(/);
@@ -1044,13 +1048,14 @@ describe("the supervisor's start-or-wake and requestWake are wired from ownershi
       expect([".", "["]).not.toContain(site.prev);
     }
     expect(text).toMatch(
-      /export function startOrWake\(cause: WakeCause, admit\?: \(\) => boolean\): void \{/,
+      // 3b-2b5: it answers whether the sink was called.
+      /export function startOrWake\(cause: WakeCause, admit\?: \(\) => boolean\): boolean \{/,
     );
     // R5's one call (3b-2b1c-b): no admit without a change.
     expect(text).toContain(
       'startOrWake("message-owner", change === undefined ? undefined : admit);',
     );
-    expect(text).toMatch(/\bstartOrWake\(cause\);/);
+    expect(text).toMatch(/\bif \(startOrWake\(cause\) && leavesRecord\)/);
     expect(text).toContain('startOrWake("departure");');
   });
 });
@@ -1143,7 +1148,10 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     const calls = [...text.matchAll(/\bmessageOwnerChanged\(([^)]*)\)/g)].map((m) => m[1]);
     // The definition's parameter list, then the three sites.
     expect(calls).toHaveLength(4);
-    expect(fnBody("releaseMessageOwners")).toContain("messageOwnerChanged({ key });");
+    // 3b-2b5: the release notes whether any key was forwarded, for its rounds.
+    expect(fnBody("releaseMessageOwners")).toContain(
+      "if (messageOwnerChanged({ key })) forwarded = true;",
+    );
     expect(text).toMatch(
       /dropChatOwners: \(out\) => \{[\s\S]*?messageOwnerChanged\(\{ key, caller: callerId \}\);/,
     );
@@ -1234,7 +1242,8 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // 3b-2b4b: and asked once by the run start's wake (`noteTandemRunStart`).
     expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(2);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
-    expect(text).toContain("if (tandemWorkWaiting()) wakeTandem();");
+    // 3b-2b5: the wake opens the delivery rounds of what the run start re-owed.
+    expect(text).toMatch(/if \(tandemWorkWaiting\(\)\) \{\s*wakeTandem\(\);\s*openOwedRounds\(/);
     expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(4);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
@@ -1247,8 +1256,8 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // Defined once and called twice: step 5, and a deferred take-back's wake
     // (3b-2b4b), which step 5 does not forward.
     expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(3);
-    expect(text).toContain(
-      "if (deferred && waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) wakeTandem();",
+    expect(text).toMatch(
+      /\} else if \(waitingAtDocumentChange\(documentId, TANDEM_OWNER_ID\)\) \{\s*wakeTandem\(\);/,
     );
     const setDocOwner = text.slice(
       text.indexOf("export function setDocOwner("),
@@ -1256,7 +1265,7 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     );
     expect(text.indexOf("export function setDocOwner(")).toBeGreaterThanOrEqual(0);
     expect(setDocOwner).toMatch(
-      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*startOrWake\(cause\);/,
+      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
     );
     expect(setDocOwner).not.toContain("waitingProbe(");
     // The re-owe precedes step 5.
@@ -1402,6 +1411,9 @@ describe("the switch-on: index.ts wires the own-spawn seam and presence's consum
     ["noteOwnSpawnStarted", OWNERSHIP, 2],
     ["noteTandemPresence", OWNERSHIP, 2],
     ["onSpawnStarted", SUPERVISOR, 1],
+    // The failed-bind wake (#2358 PR 3b-2b5; ownership design §8.7).
+    ["noteFailedBind", OWNERSHIP, 2],
+    ["onFailedBind", SUPERVISOR, 1],
   ] as const)(
     "%s is named only by its module and index.ts, whose one use sits in the setup",
     (name, owner, inIndex) => {
@@ -1411,6 +1423,37 @@ describe("the switch-on: index.ts wires the own-spawn seam and presence's consum
       expect(setup).toMatch(new RegExp(`\\b${name}\\b`));
     },
   );
+
+  it("the failed-bind subscriber is ownership's own, which defers its work out of the supervisor's emit (#2358 PR 3b-2b5)", () => {
+    expect(setup).toContain("sup.tandemPresence?.().onFailedBind(noteFailedBind);");
+    const own = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    const from = own.indexOf("export function noteFailedBind(): void {");
+    expect(from).toBeGreaterThan(-1);
+    const body = own.slice(from, own.indexOf("\n}\n", from));
+    expect(
+      body.startsWith(
+        "export function noteFailedBind(): void {\n  if (!ownershipEnabled()) return;\n",
+      ),
+    ).toBe(true);
+    // Nothing but the deferral runs in the emit; the wake is inside it.
+    const deferred = body.indexOf("setImmediate(");
+    expect(deferred).toBeGreaterThan(-1);
+    expect(body.indexOf("wakeTandem(")).toBeGreaterThan(deferred);
+    expect(body.indexOf("strandedWorkWaiting()")).toBeGreaterThan(deferred);
+  });
+
+  it("the round opener is index.ts's one wiring of queue.ts's openRoundsForOwedWork, before either transport branch (#2358 PR 3b-2b5)", () => {
+    expect(filesMentioning("setDeliveryRoundOpener")).toEqual([INDEX, OWNERSHIP]);
+    expect(filesMentioning("openRoundsForOwedWork")).toEqual(["src/server/events/queue.ts", INDEX]);
+    expect(filesMentioning("openOwedDeliveryRounds")).toEqual([
+      "src/server/events/delivery-state.ts",
+      "src/server/events/queue.ts",
+    ]);
+    expect(index).toContain("  setDeliveryRoundOpener(openRoundsForOwedWork);");
+    expect(index.indexOf("  setDeliveryRoundOpener(openRoundsForOwedWork);")).toBeLessThan(
+      index.indexOf('setOwnershipTransportMode("http");'),
+    );
+  });
 
   it("only ownership listens for a spawn's end", () => {
     expect(filesMentioning("setSpawnEndedListener")).toEqual([

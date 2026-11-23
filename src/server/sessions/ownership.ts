@@ -321,6 +321,17 @@ const ownerByDoc = new Map<string, OwnershipEntry>();
  */
 const handoverSeq = new Map<string, number>();
 /**
+ * Documents closed this server run whose reopen has not yet been seen
+ * (#2358 PR 3b-2b5, the reopen round): its delivery round was dropped at the
+ * close, and the close's handover re-owed what its holder was handed, so its
+ * reopen opens the round of the items still owed ({@link noteReopened}).
+ * Added by a flag-on {@link onDocumentClosed}; taken by the first of a user
+ * open's default rule ({@link applyUserOpenDefault}) or the first entry
+ * written for it (a `tandem_open` take, a claim). Bounded by the documents
+ * closed and not reopened this run.
+ */
+const reopenRoundOwed = new Set<string>();
+/**
  * Claims by writes whose outcome is not known yet (PR 2a). **Nothing reads
  * this to decide who holds or may claim a document**: no reader, no check, no
  * take, `recordHoldsState` and no scope predicate. Only the settle of the
@@ -520,6 +531,9 @@ let startOrWakeSink: (cause: "document" | "message" | "departure" | "solo-releas
   () => {};
 let requestWakeSink: () => void = () => {};
 let ownershipFrameSink: () => void = () => {};
+let roundOpener:
+  | ((owed: { documents: readonly string[]; messages: readonly string[] }) => void)
+  | undefined;
 let openDocumentIds: () => Iterable<string> = () => [];
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
@@ -1210,12 +1224,17 @@ function releaseMessageOwners(
     return;
   }
   if (record !== undefined) clearReOweRetry(ownerId);
+  let forwarded = false;
   for (const [key] of dropped) {
     ownerByMessage.delete(key);
-    messageOwnerChanged({ key });
+    if (messageOwnerChanged({ key })) forwarded = true;
   }
+  const keys = dropped.map(([key]) => key);
   // The `ownership` frame (3b-2d): once for the whole release, never per key.
-  if (frameOwedForMessages(dropped.map(([key]) => key))) sendOwnershipFrame();
+  const framed = frameOwedForMessages(keys);
+  if (framed) sendOwnershipFrame();
+  // Handover gap (d) (3b-2b5): a wake went out for what was re-owed.
+  if (forwarded || framed) openOwedRounds([], keys);
 }
 
 const REOWE_RETRIES_SLOWED =
@@ -1278,15 +1297,15 @@ function reOweChat(keys: readonly string[]): boolean {
  * caller: the release loop's lapse, deleted record and re-owe retry) finds no
  * other session connected (R1.7's gate, before the scan), and the changed
  * message is waiting for Tandem's Claude, owned by it and not claimable
- * (`tandemChatWaiting` on that key alone).
+ * (`tandemChatWaiting` on that key alone). Returns whether it was forwarded.
  */
-function messageOwnerChanged(change?: { key: string; caller?: string }): void {
+function messageOwnerChanged(change?: { key: string; caller?: string }): boolean {
   const admit = (): boolean =>
     change !== undefined &&
     change.caller !== TANDEM_OWNER_ID &&
     (change.caller !== undefined || !anotherSessionConnected()) &&
     tandemChatWaiting((k) => k === change.key);
-  startOrWake("message-owner", change === undefined ? undefined : admit);
+  return startOrWake("message-owner", change === undefined ? undefined : admit);
 }
 
 /**
@@ -1573,9 +1592,9 @@ export function setDocOwner(
   cause: OwnershipChangeCause,
   caller?: string,
   sinceSeq?: number,
-): void {
-  if (!ownershipEnabled()) return;
-  total("setDocOwner", undefined, () => {
+): readonly string[] {
+  if (!ownershipEnabled()) return [];
+  return total("setDocOwner", [] as readonly string[], () => {
     // Read before anything is changed, so a source that throws leaves every
     // map as it was. Only for an entry about to be written: removing one (a
     // lapse to unowned, the stale-entry backstop) must not depend on it.
@@ -1613,7 +1632,7 @@ export function setDocOwner(
     // The chat half of the handover (ownership design §6.5, R6.1): the
     // unanswered chat that follows this document is owed again. Its own
     // catch: the change above stands and the steps below still run.
-    if (leavesRecord) reOweDocumentChat(documentId);
+    const reOwed = leavesRecord ? reOweDocumentChat(documentId) : [];
     // Step 3, change notices. Its own catch: the change above stands.
     compositeObserver?.("notices", documentId);
     if (previousId !== next?.ownerId) {
@@ -1627,6 +1646,9 @@ export function setDocOwner(
     // chat the handover has just owed again counts. For any other owner, or
     // none, the `ownership` frame (3b-2d, `frameOwedAtDocumentChange`).
     compositeObserver?.("wake", documentId);
+    // Handover gap (d) (#2358 PR 3b-2b5): when the wake is sent for a change
+    // that owed items again, their delivery rounds open, so `/health` does
+    // not read idle while they wait. Not for a change that re-owed nothing.
     if (
       next !== null &&
       next.ownerId === TANDEM_OWNER_ID &&
@@ -1634,10 +1656,15 @@ export function setDocOwner(
       cause !== "take-back" &&
       waitingAtDocumentChange(documentId, next.ownerId)
     ) {
-      startOrWake(cause);
+      if (startOrWake(cause) && leavesRecord) openOwedRounds([documentId], reOwed);
     } else if (frameOwedAtDocumentChange(documentId, previousId, next, cause, caller)) {
       sendOwnershipFrame();
+      if (leavesRecord) openOwedRounds([documentId], reOwed);
     }
+    // The reopen round (3b-2b5): the first entry of a document reopened by a
+    // `tandem_open` take or a claim, before any user open's default rule.
+    if (previousId === undefined && next !== null) noteReopened(documentId);
+    return reOwed;
   });
 }
 
@@ -1645,17 +1672,20 @@ export function setDocOwner(
  * The chat half of a handover of `documentId` (R6.1): each unanswered,
  * non-local-period message on it that has no per-message owner follows the
  * document, so it is re-owed. Never the old owner's doc-less chat, and never
- * a message with a per-message owner. Never throws.
+ * a message with a per-message owner. Returns the keys handed to the re-owe
+ * (none when it threw). Never throws.
  */
-function reOweDocumentChat(documentId: string): void {
+function reOweDocumentChat(documentId: string): string[] {
   try {
     chatFaultForTests?.("re-owe");
     const keys = chatSide
       .messagesOn(documentId)
       .filter((key) => !ownerByMessage.has(key) && !carriedOver.has(key));
     if (keys.length > 0) chatSide.reOwe(keys);
+    return keys;
   } catch {
     logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+    return [];
   }
 }
 
@@ -1689,24 +1719,26 @@ const FORWARD_FAILED =
  * for waiting work on those documents even with another session connected. The sink runs outside any MCP request context (a forward can
  * run inside another client's request: an eviction in its `initialize`,
  * `closeEntry`), in its own catch: a throw logs one fixed line and is never
- * rethrown, so the caller's change stands.
+ * rethrown, so the caller's change stands. Returns whether the sink was
+ * called (#2358 PR 3b-2b5: a forward that went out opens the delivery
+ * round of what it was for); the supervisor may still drop it.
  */
-export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
-  if (!ownershipEnabled()) return;
+export function startOrWake(cause: WakeCause, admit?: () => boolean): boolean {
+  if (!ownershipEnabled()) return false;
   wakeObserverForTests?.(cause);
   // An open is never a reason on its own (Bryan's pick 1, "No, never by
   // itself (Recommended)", picked from options); this also covers the boot, whose restored and startup documents
   // get the default rule with this cause. A later Off-to-On default rule
   // (3b-2b4; design flip-change 13) must not reuse "user-open", or this drop
   // loses its start. That default rule is `presence` (3b-2b4a), forwarded below.
-  if (cause === "user-open") return;
+  if (cause === "user-open") return false;
   try {
     // The message forward (3b-2b1c-b, R5): only an admitted change, and the
     // admit runs here, inside this catch (its scan may throw).
     if (cause === "message-owner") {
-      if (admit?.() !== true) return;
+      if (admit?.() !== true) return false;
       runOutsideMcpContext(() => startOrWakeSink("message"));
-      return;
+      return true;
     }
     // One gate toward Bryan's pick 2 ("Only if no other session is open
     // (Recommended)", picked from options): a
@@ -1718,10 +1750,12 @@ export function startOrWake(cause: WakeCause, admit?: () => boolean): void {
     // its own rule. A `departure` (the lapse's re-ask, 3b-2b2) is gated the
     // same way and keeps its own name at the sink. `presence` is not gated
     // (Bryan, 2026-11-23: "Yes, start anyway (Recommended)").
-    if ((cause === "lapse" || cause === "departure") && anotherSessionConnected()) return;
+    if ((cause === "lapse" || cause === "departure") && anotherSessionConnected()) return false;
     runOutsideMcpContext(() => startOrWakeSink(cause === "departure" ? "departure" : "document"));
+    return true;
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
+    return false;
   }
 }
 
@@ -1759,6 +1793,51 @@ export function setRequestWakeSink(sink: () => void): void {
  */
 export function setOwnershipFrameSink(sink: () => void): void {
   ownershipFrameSink = sink;
+}
+
+/**
+ * Where the delivery rounds of owed work are opened (#2358 PR 3b-2b5;
+ * handover gap (d), the reopen round): `src/server/index.ts` sets
+ * `events/queue.ts`'s `openRoundsForOwedWork`, which opens nothing while rounds are
+ * not keyed. A seam because this module never imports `events/`. Only
+ * stored; called only by a flag-on change of owner, run start or reopen.
+ */
+export function setDeliveryRoundOpener(
+  open: (owed: { documents: readonly string[]; messages: readonly string[] }) => void,
+): void {
+  roundOpener = open;
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const ROUNDS_FAILED =
+  "[ownership] the delivery round of work owed again could not be opened; /health may read idle while it waits.";
+
+/**
+ * Open the delivery rounds of work just owed again (#2358 PR 3b-2b5): each of
+ * `documentIds` whose items a fresh reader would be handed now (the waiting
+ * probe, for whoever holds it, or nobody), and each of `keys` a fresh reader
+ * would be handed and that was not carried over. Called only where a wake has
+ * been sent for that work (step 5's forward or frame, a release's, the run
+ * start's) or where a document is reopened, so no round opens for work
+ * nobody is told of, a reopen aside. Outside any MCP request context and in
+ * its own catch, so the change it follows stands.
+ */
+function openOwedRounds(documentIds: readonly string[], keys: readonly string[]): void {
+  // Unwired (a unit test that sets no opener), nothing is read: the probe and
+  // the chat side are asked only for a round that can be opened.
+  const open = roundOpener;
+  if (open === undefined) return;
+  try {
+    const documents = documentIds.filter((documentId) =>
+      waitingProbe(documentId, ownerByDoc.get(documentId)?.ownerId ?? ""),
+    );
+    const owed = keys.length > 0 ? new Set(chatSide.owedToFreshReader()) : new Set<string>();
+    const messages = keys.filter((key) => owed.has(key) && !carriedOver.has(key));
+    if (documents.length === 0 && messages.length === 0) return;
+    runOutsideMcpContext(() => open({ documents, messages }));
+  } catch {
+    logLimited("rounds-failed", ROUNDS_FAILED);
+  }
 }
 
 /** Fixed text: no id, no record, nothing from the error. */
@@ -1875,12 +1954,18 @@ function frameOwedForMessages(keys: readonly string[]): boolean {
 const WAKE_FAILED =
   "[ownership] Tandem's Claude could not be woken for work it took back at its run start; it reaches the work at its next look.";
 
-/** The run start's wake, outside any MCP request context, in its own catch. */
-function wakeTandem(): void {
+const FAILED_BIND_WAKE_FAILED =
+  "[ownership] Tandem's Claude's unbound run could not be woken for work its failed bind left unowned; a session reaches the work at its next poll.";
+
+/**
+ * The supervisor's `requestWake` through the sink (the run start's wake, and
+ * the failed-bind wake), outside any MCP request context, in its own catch.
+ */
+function wakeTandem(failed: string = WAKE_FAILED): void {
   try {
     runOutsideMcpContext(() => requestWakeSink());
   } catch {
-    logLimited("wake-failed", WAKE_FAILED);
+    logLimited("wake-failed", failed);
   }
 }
 
@@ -1902,8 +1987,24 @@ export function applyUserOpenDefault(documentId: string): void {
     atTurnWhileUnowned(documentId, "applyUserOpenDefault", () => {
       const next = defaultRuleOwner();
       if (next) setDocOwner(documentId, next, "user-open");
+      // The reopen round (#2358 PR 3b-2b5), once it has its owner, or none
+      // (the entry just written already took it).
+      noteReopened(documentId);
     });
   });
+}
+
+/**
+ * The reopen round (#2358 PR 3b-2b5): if `documentId` was closed this run
+ * and this is the first sign of its reopen (a user open's default rule, or
+ * the first entry written for it), its items still owed open its delivery
+ * round again ({@link openOwedRounds}: none when nothing is owed). The close
+ * dropped that round, and the close's handover owed again what its holder
+ * was handed. A reopen wakes nobody by itself (Bryan's pick 1; `user-open`
+ * is dropped in `startOrWake`). Chat rounds survive a close.
+ */
+function noteReopened(documentId: string): void {
+  if (reopenRoundOwed.delete(documentId)) openOwedRounds([documentId], []);
 }
 
 /**
@@ -1990,6 +2091,7 @@ export function noteTandemPresence(present: boolean): void {
     // The `ownership` frame (3b-2d): chat held by presence alone is claimable now.
     if (presenceOnly.length > 0 && reOweChat(presenceOnly) && frameOwedForMessages(presenceOnly)) {
       sendOwnershipFrame();
+      openOwedRounds([], presenceOnly);
     }
   });
 }
@@ -2048,7 +2150,9 @@ export function noteTandemRunStart(): void {
   if (!ownershipEnabled()) return;
   total("noteTandemRunStart", undefined, () => {
     for (const documentId of heldDocumentIds(TANDEM_OWNER_ID)) handOver(documentId);
-    reOweTandemChat();
+    // The chat each re-owe step owed again, for the wake's delivery rounds
+    // (#2358 PR 3b-2b5; handover gap (d)).
+    const reOwed = reOweTandemChat();
     for (const documentId of [...openDocumentIds()]) {
       if (!takeBackApplies(documentId)) continue;
       let deferred = false;
@@ -2057,19 +2161,34 @@ export function noteTandemRunStart(): void {
         () => {
           if (!takeBackApplies(documentId) || !isTandemPresent()) return;
           if (deferred && ![...openDocumentIds()].includes(documentId)) return;
-          setDocOwner(documentId, { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
-          if (deferred && waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) wakeTandem();
+          const keys = setDocOwner(
+            documentId,
+            { ownerId: TANDEM_OWNER_ID, kind: "default" },
+            "take-back",
+          );
+          if (!deferred) {
+            reOwed.push(...keys);
+          } else if (waitingAtDocumentChange(documentId, TANDEM_OWNER_ID)) {
+            wakeTandem();
+            openOwedRounds([documentId], keys);
+          }
         },
         (err) => logLimited("throw:takeBack", `[ownership] take-back failed: ${errorText(err)}`),
       );
       deferred = true;
     }
-    if (tandemWorkWaiting()) wakeTandem();
+    if (tandemWorkWaiting()) {
+      wakeTandem();
+      openOwedRounds(heldDocumentIds(TANDEM_OWNER_ID), reOwed);
+    }
   });
 }
 
-/** §6.5 over the unanswered chat Tandem's Claude owns (the self re-owe). Never throws. */
-function reOweTandemChat(): void {
+/**
+ * §6.5 over the unanswered chat Tandem's Claude owns (the self re-owe).
+ * Returns the keys it re-owed (none when the re-owe failed). Never throws.
+ */
+function reOweTandemChat(): string[] {
   try {
     const keys = chatSide.unhandledKeys().filter((key) => {
       if (carriedOver.has(key)) return false;
@@ -2078,9 +2197,10 @@ function reOweTandemChat(): void {
       const standing = messageStanding(key, facts);
       return standing.kind === "owned" && standing.ownerId === TANDEM_OWNER_ID;
     });
-    if (keys.length > 0) reOweChat(keys);
+    return keys.length > 0 && reOweChat(keys) ? keys : [];
   } catch {
     logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+    return [];
   }
 }
 
@@ -2107,6 +2227,75 @@ export function noteSoloReleased(): void {
 }
 
 /**
+ * The failed-bind wake (#2358 PR 3b-2b5; ownership design §8.7, R2.5):
+ * `src/server/index.ts` subscribes it to the supervisor's failed-bind event.
+ * That event is emitted synchronously from the judging site (the child's
+ * exit, a stop's release, the bind window's timer), before the presence
+ * announcement it causes, so the work is deferred to a later turn of the
+ * event loop (`setImmediate`): by then presence has ended (3b-2b4a), the
+ * documents Tandem's Claude held went unowned at their turn (each idle
+ * queue's at once; one behind a running operation later), and step 5 sent
+ * the unscoped `ownership` frame (3b-2d) for each with work waiting, which
+ * covers other sessions. Then, unless Tandem's Claude is present again (a
+ * later spawn bound), and only if work is stranded for a session to claim
+ * ({@link strandedWorkWaiting}, which holds a Solo-held item back), the
+ * supervisor's `requestWake` through the sink: it wakes a live child only
+ * (the window's expiry leaves the unbound spawn running; an exit leaves
+ * none) and asks the licence at its writer (Critical Rule 9), so the child,
+ * as its `unbound-child` record, may claim and answer the stranded item. A
+ * document still held behind a running operation is not counted yet; its
+ * own step 5 frame reaches attached sessions when it moves. Flag off:
+ * nothing (the supervisor emits no failed-bind event flag off either).
+ */
+export function noteFailedBind(): void {
+  if (!ownershipEnabled()) return;
+  total("noteFailedBind", undefined, () => {
+    runOutsideMcpContext(() =>
+      setImmediate(() => {
+        total("noteFailedBind", undefined, () => {
+          if (isTandemPresent()) return;
+          if (strandedWorkWaiting()) wakeTandem(FAILED_BIND_WAKE_FAILED);
+        });
+      }),
+    );
+  });
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const STRANDED_FAILED =
+  "[ownership] whether a failed bind left work stranded could not be read; the unbound run was not woken.";
+
+/**
+ * Whether work waits that a session other than Tandem's Claude may claim
+ * (#2358 PR 3b-2b5, the failed-bind wake): an open document nobody holds
+ * with items a fresh reader would be handed (the waiting probe, read for no
+ * owner, after every privacy gate), or a user chat message a fresh reader
+ * would be handed, not carried over, that follows such a document or is
+ * claimable per message. Each half in its own catch: false, one fixed line.
+ */
+function strandedWorkWaiting(): boolean {
+  try {
+    for (const documentId of [...openDocumentIds()]) {
+      if (readEntry(documentId) === undefined && waitingProbe(documentId, "")) return true;
+    }
+  } catch {
+    logLimited("stranded-waiting", STRANDED_FAILED);
+  }
+  try {
+    for (const key of chatSide.owedToFreshReader()) {
+      if (carriedOver.has(key)) continue;
+      const facts = chatSide.message(key);
+      if (facts === undefined) continue;
+      const standing = messageStanding(key, facts);
+      if (standing.kind === "with-document" || standing.kind === "per-message") return true;
+    }
+  } catch {
+    logLimited("stranded-waiting", STRANDED_FAILED);
+  }
+  return false;
+}
+
+/**
  * The tab-close point (ownership design §4.2): the entry and the loss record
  * go, and a claim still pending on a write is cancelled, so a document closed
  * during a write gets no entry even if it is reopened before the write
@@ -2122,6 +2311,7 @@ export function onDocumentClosed(documentId: string, filePath?: string): void {
   total("onDocumentClosed", undefined, () => {
     const heldBy = ownerByDoc.get(documentId)?.ownerId;
     const held = heldBy !== undefined;
+    reopenRoundOwed.add(documentId);
     ownerByDoc.delete(documentId);
     lossByDoc.delete(documentId);
     for (const pending of [...pendingClaims]) {
@@ -3880,5 +4070,7 @@ export function resetOwnershipForTests(): void {
   startOrWakeSink = () => {};
   requestWakeSink = () => {};
   ownershipFrameSink = () => {};
+  roundOpener = undefined;
+  reopenRoundOwed.clear();
   graceMs = DEFAULT_GRACE_MS;
 }

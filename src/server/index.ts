@@ -27,7 +27,7 @@ import { setChatRowsDeletedListener } from "./chat-row-deletions.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import { setDeliveryRoundSeam } from "./events/delivery-state.js";
-import { attachCtrlObservers } from "./events/queue.js";
+import { attachCtrlObservers, openRoundsForOwedWork } from "./events/queue.js";
 import { requestOwnershipFrame } from "./events/wake-socket.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
@@ -95,9 +95,11 @@ import {
   applyUserOpenDefaultToDocuments,
   forgetChatMessageOwners,
   keyedDeliveryRounds,
+  noteFailedBind,
   noteOwnSpawnStarted,
   noteTandemPresence,
   noteTandemRunStart,
+  setDeliveryRoundOpener,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipFrameSink,
@@ -254,6 +256,11 @@ async function startLauncherSupervisor(): Promise<void> {
     // Take-back, the self re-owe and their wake at each run start (#2358 PR
     // 3b-2b4b), after presence's announcement in the same synchronous run.
     sup.tandemPresence?.().onRunStart(noteTandemRunStart);
+    // The failed-bind wake (#2358 PR 3b-2b5; ownership design §8.7): once a
+    // later turn sees presence ended, the live unbound child is woken for the
+    // work it left unowned. `noteFailedBind` defers itself, so nothing runs
+    // inside the supervisor's emit.
+    sup.tandemPresence?.().onFailedBind(noteFailedBind);
     setOwnSpawnSource(
       () => sup.ownSpawn?.() ?? null,
       (id) => sup.isOwnChildSession?.(id) === true,
@@ -932,6 +939,11 @@ async function main() {
     keyed: keyedDeliveryRounds,
     isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
   });
+  // Handover gap (d) and the reopen round (#2358 PR 3b-2b5): ownership opens
+  // the delivery rounds of work it owed again and woke someone for, or of a
+  // reopened document, through this seam. Only a flag-on ownership change,
+  // run start or reopen calls it, and it opens nothing while not keyed.
+  setDeliveryRoundOpener(openRoundsForOwedWork);
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that

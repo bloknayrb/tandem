@@ -29,6 +29,8 @@ import {
   isUnansweredAsk,
   noteExternalConsumerAttached,
   noteExternalConsumersGone,
+  type OwedDeliveryRounds,
+  openOwedDeliveryRounds,
   type PendingDeliveryItem,
   recordWakeForward,
   resetDeliveryStateForTests,
@@ -526,6 +528,19 @@ export function _pushEventForTests(event: TandemEvent): void {
  */
 export function getSubscriberCount(): number {
   return externalSubscribers.size;
+}
+
+/**
+ * Open the delivery rounds of work ownership owed again and woke someone for,
+ * or of a reopened document with items owed (#2358 PR 3b-2b5; handover gap
+ * (d), the reopen round). Here rather than in `delivery-state.ts` because the
+ * round is marked abandoned when no external consumer is attached, and this
+ * module holds that count. Reached only through ownership's
+ * `setDeliveryRoundOpener` seam (`index.ts`), which a flag-on ownership change
+ * calls; `openOwedDeliveryRounds` does nothing while rounds are not keyed.
+ */
+export function openRoundsForOwedWork(owed: OwedDeliveryRounds): void {
+  openOwedDeliveryRounds(owed, externalSubscribers.size === 0);
 }
 
 /**
