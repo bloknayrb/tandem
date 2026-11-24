@@ -2817,7 +2817,7 @@ const marginReplies = createAnnotationReplies({
 const heldCount = $derived.by(() => {
   let n = 0;
   for (const a of visibleAnnotations) {
-    if (a.heldInSolo === true) n++;
+    if (isHeldInSoloMarker(a.heldInSolo)) n++;
     if (a.type === "comment") {
       const replies = marginReplies.byId.get(a.id);
       if (replies) for (const r of replies) if (isHeldInSoloMarker(r.heldInSolo)) n++;
