@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   composerLine,
+  ownerFieldsFromList,
   readOwnerFields,
   readOwnershipSummary,
 } from "../../src/client/ownership/owner-view";
@@ -57,14 +58,9 @@ function darkEntry(tab: OpenTab) {
   };
 }
 
-/** What yjsSync builds from a list: only entries that carry owner fields. */
-function ownersFrom(entries: unknown[]): Map<string, PublishedOwnerFields> {
-  const map = new Map<string, PublishedOwnerFields>();
-  for (const e of entries) {
-    const f = readOwnerFields(e);
-    if (f) map.set((e as { id: string }).id, f);
-  }
-  return map;
+/** What yjsSync builds from a list (the same function). */
+function ownersFrom(entries: Array<{ id: string }>): ReadonlyMap<string, PublishedOwnerFields> {
+  return ownerFieldsFromList(entries, new Map());
 }
 
 const SUMMARY: OwnershipSummary = {

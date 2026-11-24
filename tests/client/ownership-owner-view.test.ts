@@ -14,6 +14,7 @@ import {
   holderName,
   mayAssign,
   NO_AI_BIND_FAILED_TEXT,
+  ownerFieldsFromList,
   ownershipErrorText,
   readOwnerFields,
   readOwnershipSummary,
@@ -124,6 +125,37 @@ describe("readOwnerFields", () => {
         waitingSince: "1",
       }),
     ).toEqual({ owner: null, stale: null, hint: null, waitingSince: null });
+  });
+});
+
+describe("ownerFieldsFromList (what yjsSync keeps)", () => {
+  it("is empty for a dark server's list", () => {
+    const prev = new Map<string, PublishedOwnerFields>();
+    const out = ownerFieldsFromList([DARK_ENTRY, { ...DARK_ENTRY, id: "d2" }], prev);
+    expect(out.size).toBe(0);
+    expect(out).toBe(prev);
+  });
+
+  it("keeps only the entries that carry owner fields", () => {
+    const out = ownerFieldsFromList(
+      [
+        DARK_ENTRY,
+        { ...DARK_ENTRY, id: "d2", owner: TERMINAL, stale: null, hint: null, waitingSince: null },
+      ],
+      new Map(),
+    );
+    expect([...out.keys()]).toEqual(["d2"]);
+    expect(out.get("d2")?.owner).toEqual(TERMINAL);
+  });
+
+  it("returns the previous map when nothing changed, and a new one when anything did", () => {
+    const list = [{ ...DARK_ENTRY, owner: TERMINAL, stale: null, hint: null, waitingSince: null }];
+    const first = ownerFieldsFromList(list, new Map());
+    expect(ownerFieldsFromList(list, first)).toBe(first);
+    const moved = ownerFieldsFromList([{ ...list[0], stale: "disconnected" }], first);
+    expect(moved).not.toBe(first);
+    expect(moved.get("d1")?.stale).toBe("disconnected");
+    expect(ownerFieldsFromList([DARK_ENTRY], first).size).toBe(0);
   });
 });
 

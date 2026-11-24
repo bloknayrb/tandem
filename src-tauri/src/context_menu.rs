@@ -785,7 +785,10 @@ mod tab_context_menu_tests {
         r.owner_assign = true;
         let spec = build_tab_context_menu_spec(&r, "linux");
         let ids = custom_ids(&spec);
-        assert_eq!(&ids[ids.len() - 2..], &["ctx:tab:release", "ctx:tab:assign"]);
+        assert_eq!(
+            &ids[ids.len() - 2..],
+            &["ctx:tab:release", "ctx:tab:assign"]
+        );
         assert_eq!(
             label_of(&spec, "ctx:tab:release"),
             Some("Release — Back to Tandem's Claude")
@@ -795,7 +798,10 @@ mod tab_context_menu_tests {
         r.owner_release_to_tandem = false;
         r.owner_assign = false;
         let spec = build_tab_context_menu_spec(&r, "linux");
-        assert_eq!(label_of(&spec, "ctx:tab:release"), Some("Release — Unassigned"));
+        assert_eq!(
+            label_of(&spec, "ctx:tab:release"),
+            Some("Release — Unassigned")
+        );
         assert!(!custom_ids(&spec).contains(&"ctx:tab:assign"));
 
         r.owner_release = false;

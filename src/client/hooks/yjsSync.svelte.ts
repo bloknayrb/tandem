@@ -23,12 +23,7 @@ import type { OwnershipSummary, PublishedOwnerFields } from "../../shared/owners
 import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { ReplyBaseline } from "../notifications/thread-answer-detector";
-import {
-  readOwnerFields,
-  readOwnershipSummary,
-  sameOwnerFields,
-  sameSummary,
-} from "../ownership/owner-view";
+import { ownerFieldsFromList, readOwnershipSummary, sameSummary } from "../ownership/owner-view";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
 import { MCP_BASE_URL, WS_URL } from "../utils/backend-ports.js";
 import { installIdFromStoragePath } from "../utils/install-id.js";
@@ -497,18 +492,8 @@ export function createYjsSync(opts?: {
 
     // #2358 PR 5b: the owner fields ride on the same entries. Replaced only
     // when one changed, so a republish that changed nothing re-renders nothing.
-    const nextOwners = new Map<string, PublishedOwnerFields>();
-    for (const d of docList) {
-      const fields = readOwnerFields(d);
-      if (fields) nextOwners.set(d.id, fields);
-    }
-    const prevOwners = ownerFieldsState;
-    if (
-      nextOwners.size !== prevOwners.size ||
-      [...nextOwners].some(([id, f]) => !sameOwnerFields(prevOwners.get(id), f))
-    ) {
-      ownerFieldsState = nextOwners;
-    }
+    const nextOwners = ownerFieldsFromList(docList, ownerFieldsState);
+    if (nextOwners !== ownerFieldsState) ownerFieldsState = nextOwners;
 
     // Once tabs state catches up, drop pending tracking for IDs that are now real tabs.
     // (In React this happened during render; here we do it on each reconcile.)

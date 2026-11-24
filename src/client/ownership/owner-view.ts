@@ -99,6 +99,28 @@ export function readOwnerFields(entry: unknown): PublishedOwnerFields | undefine
   return { owner, stale, hint, waitingSince };
 }
 
+/**
+ * The owner fields of a whole `Y_MAP_OPEN_DOCUMENTS` list, by document id,
+ * holding only the entries that carry them (so a dark server's list gives an
+ * empty map). Returns `prev` itself when nothing changed, so a republish that
+ * changed nothing re-renders nothing.
+ */
+export function ownerFieldsFromList(
+  list: ReadonlyArray<{ id: string }>,
+  prev: ReadonlyMap<string, PublishedOwnerFields>,
+): ReadonlyMap<string, PublishedOwnerFields> {
+  const next = new Map<string, PublishedOwnerFields>();
+  for (const entry of list) {
+    const fields = readOwnerFields(entry);
+    if (fields) next.set(entry.id, fields);
+  }
+  if (next.size !== prev.size) return next;
+  for (const [id, fields] of next) {
+    if (!sameOwnerFields(prev.get(id), fields)) return next;
+  }
+  return prev;
+}
+
 /** The composer summary under `Y_MAP_OWNERSHIP_SUMMARY`, or null when absent or malformed. */
 export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
   if (!isRecord(v)) return null;
