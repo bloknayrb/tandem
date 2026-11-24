@@ -13,6 +13,7 @@
  * Y.Doc: every change goes through `POST /api/ownership` `{messageId, action,
  * ownerLabel?}`, and the result arrives as the server's republish.
  */
+import { tick } from "svelte";
 import {
   holderName,
   type MessageControlView,
@@ -40,45 +41,86 @@ let choices = $state<OwnerChoice[] | null>(null);
 let assignEl: HTMLButtonElement | null = $state(null);
 let menuEl: HTMLDivElement | null = $state(null);
 
+// Bumped on every open and close, so an owners list fetched for an earlier
+// opening never fills a later one (5b's late-result rule for the badge popover).
+let menuGeneration = 0;
+
+/** Whether focus sits nowhere: it was in something that has just left the DOM. */
+function focusLost(): boolean {
+  return document.activeElement === null || document.activeElement === document.body;
+}
+
+/**
+ * Close the owners list. With `refocus`, and only when focus then sits
+ * nowhere (it was on a row of the list that has just gone), focus goes back
+ * to "Assign…", as 5b's badge popover hands it back to its badge.
+ */
+async function closeMenu(refocus = false) {
+  if (menuAt === null) return;
+  menuGeneration++;
+  menuAt = null;
+  if (!refocus) return;
+  await tick();
+  if (focusLost() && assignEl?.isConnected) assignEl.focus();
+}
+
 async function run(action: "release" | "assign", ownerLabel?: string) {
   if (pending) return;
   pending = true;
   error = null;
   const result = await postMessageOwnership(messageId, action, ownerLabel);
   pending = false;
-  if (result.ok) menuAt = null;
-  else error = messageOwnershipErrorText(result.error);
+  if (result.ok) {
+    await closeMenu(true);
+    return;
+  }
+  error = messageOwnershipErrorText(result.error);
+  // The pressed control was disabled while the request ran, which dropped
+  // focus; a refusal keeps the line (and an open list) up, so focus comes back.
+  await tick();
+  if (!focusLost()) return;
+  const firstChoice = menuEl?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+  (firstChoice ?? assignEl)?.focus();
 }
+
+/** The menu's widest box (`max-width` below) plus the 8px margin it keeps from the window's edge. */
+const MENU_MAX_WIDTH = 320;
+const EDGE = 8;
 
 function toggleMenu() {
   if (menuAt !== null || assignEl === null) {
-    menuAt = null;
+    void closeMenu();
     return;
   }
   // Fixed, so the messages list's overflow does not clip it; opened upward
-  // when the line sits in the lower half of the window (the composer is below).
+  // when the line sits in the lower half of the window (the composer is below),
+  // and kept inside the window's right edge (the chat panel usually sits there).
   const r = assignEl.getBoundingClientRect();
+  const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - MENU_MAX_WIDTH - EDGE));
   menuAt =
     r.bottom > window.innerHeight / 2
-      ? { left: r.left, top: null, bottom: window.innerHeight - r.top + 4 }
-      : { left: r.left, top: r.bottom + 4, bottom: null };
+      ? { left, top: null, bottom: window.innerHeight - r.top + 4 }
+      : { left, top: r.bottom + 4, bottom: null };
   choices = null;
+  const generation = ++menuGeneration;
   void fetchOwnerChoices().then((list) => {
-    if (menuAt !== null) choices = list ?? [];
+    if (generation === menuGeneration && menuAt !== null) choices = list ?? [];
   });
 }
 
 $effect(() => {
   if (menuAt === null) return;
+  // A scroll anywhere outside the list closes it too: it is fixed, so it would
+  // otherwise stay put while its line scrolls away (a new message's autoscroll).
   const stopOutside = onOutsideEvent(
     () => menuEl,
-    ["mousedown"],
+    ["mousedown", "scroll"],
     (e) => {
-      if (!assignEl?.contains(e.target as Node)) menuAt = null;
+      if (!assignEl?.contains(e.target as Node)) void closeMenu();
     },
   );
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") menuAt = null;
+    if (e.key === "Escape") void closeMenu(true);
   };
   document.addEventListener("keydown", onKey);
   return () => {
@@ -188,7 +230,7 @@ $effect(() => {
   }
   .message-owner-menu {
     position: fixed;
-    z-index: 60;
+    z-index: var(--tandem-z-popover);
     min-width: 200px;
     max-width: 320px;
     padding: var(--tandem-space-1);

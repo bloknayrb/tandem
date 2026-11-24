@@ -3112,20 +3112,22 @@ type MessageStanding =
 function messageStanding(
   key: string,
   facts: ChatMessageFacts,
-  releasedFrom?: string,
+  afterRelease?: { readonly lost: string | undefined },
 ): MessageStanding {
   if (facts.localPeriod) return { kind: "none" };
-  // `releasedFrom` (#2358 PR 5e): the standing a Release would leave, read
+  // `afterRelease` (#2358 PR 5e): the standing a Release would leave, read
   // without the per-message owner and with the loss `applyMessageControl`
-  // then records against it, so the published destination is the route's.
-  const own = releasedFrom === undefined ? ownerByMessage.get(key) : undefined;
+  // then leaves (`lost`: the owner it records the loss against, or undefined
+  // for the stale backstop, which records none and so clears any), so the
+  // published destination is the route's.
+  const own = afterRelease === undefined ? ownerByMessage.get(key) : undefined;
   if (own && records.has(own.ownerId)) {
     return { kind: "owned", ownerId: own.ownerId, perMessage: true };
   }
   // A message's loss record (#2358 PR 5a-2; ownership design §10.2): where the
   // table would give the message back to the record it was released or
   // reassigned from, it is claimable per message by anyone else instead.
-  const lost = releasedFrom ?? lossByMessage.get(key)?.ownerId;
+  const lost = afterRelease === undefined ? lossByMessage.get(key)?.ownerId : afterRelease.lost;
   if (facts.documentId !== undefined && facts.documentOpen) {
     const entry = readEntry(facts.documentId);
     if (entry) {
@@ -4684,7 +4686,7 @@ function messageControl(
       heldBy: "message",
       holder: standing.ownerId,
       perMessageOwner: standing.ownerId,
-      releaseTo: releaseDestination(messageStanding(key, facts, standing.ownerId)),
+      releaseTo: releaseDestination(messageStanding(key, facts, { lost: standing.ownerId })),
     };
   }
   return { heldBy: followsDocument ? "document" : "presence", holder: standing.ownerId };
@@ -5411,12 +5413,14 @@ function lookAtChat(now: number): ChatPublishState {
       // Exactly what `controlMessageOwner`'s Release acts on: a per-message
       // owner, or one whose record is gone (its stale backstop drops it,
       // since it holds nothing but would block every later take). The stale
-      // case records no loss, so its destination is the standing it already
-      // reads (`messageStanding` skips a record that is gone).
+      // case records no loss, and so clears any the message had, so its
+      // destination is the standing read with no loss at all.
       release: control.perMessageOwner !== undefined || staleRelease,
       releaseTo:
         control.releaseTo ??
-        (staleRelease ? releaseDestination(messageStanding(key, facts)) : null),
+        (staleRelease
+          ? releaseDestination(messageStanding(key, facts, { lost: undefined }))
+          : null),
       assign: control.heldBy !== "document",
       since,
       stale,

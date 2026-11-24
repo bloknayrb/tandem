@@ -354,6 +354,68 @@ describe("the control line under each unanswered message", () => {
     expect(queryByTestId("chat-message-owner-menu")).toBeNull();
   });
 
+  it("keeps the owners list inside the window's right edge", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const { getByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts()]]), SUMMARY),
+    });
+    const assign = getByTestId("chat-message-owner-assign-m");
+    const right = window.innerWidth - 40;
+    assign.getBoundingClientRect = () =>
+      ({ left: right, right: right + 30, top: 10, bottom: 20, width: 30, height: 10 }) as DOMRect;
+    await fireEvent.click(assign);
+    await settle();
+    const left = Number.parseFloat(getByTestId("chat-message-owner-menu").style.left);
+    expect(left + 320).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it("an owners list fetched for an earlier opening never fills a later one", async () => {
+    const resolvers: Array<(r: unknown) => void> = [];
+    fetchMock.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+    const { getByTestId, queryByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts()]]), SUMMARY),
+    });
+    const assign = getByTestId("chat-message-owner-assign-m");
+    await fireEvent.click(assign);
+    await fireEvent.click(assign);
+    await fireEvent.click(assign);
+    await settle();
+    expect(resolvers).toHaveLength(2);
+    resolvers[0]?.(
+      jsonResponse(200, {
+        data: [{ label: "owner-old", displayKind: "terminal", holds: [], canTake: true }],
+      }),
+    );
+    await settle();
+    expect(queryByTestId("chat-message-owner-choice-owner-old")).toBeNull();
+    resolvers[1]?.(
+      jsonResponse(200, {
+        data: [{ label: "owner-new", displayKind: "terminal", holds: [], canTake: true }],
+      }),
+    );
+    await settle();
+    expect(getByTestId("chat-message-owner-choice-owner-new")).toBeTruthy();
+  });
+
+  it("Escape from a row of the list hands focus back to Assign…", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        data: [{ label: "owner-p2zt", displayKind: "terminal", holds: [], canTake: true }],
+      }),
+    );
+    const { getByTestId, queryByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts()]]), SUMMARY),
+    });
+    const assign = getByTestId("chat-message-owner-assign-m");
+    await fireEvent.click(assign);
+    await settle();
+    getByTestId("chat-message-owner-choice-owner-p2zt").focus();
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await settle();
+    expect(queryByTestId("chat-message-owner-menu")).toBeNull();
+    expect(document.activeElement).toBe(assign);
+  });
+
   it("an empty owners list says so", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
     const { getByTestId } = render(ChatPanel, {
