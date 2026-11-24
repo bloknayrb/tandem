@@ -64,7 +64,7 @@ import {
 } from "./constants.js";
 import type { TandemEvent } from "./events/types.js";
 import { parseTandemEvent } from "./events/types.js";
-import { isWakeWorthy } from "./events/wake-scope.js";
+import { isWakeWorthy, OWNERSHIP_CHANGED_SSE_EVENT } from "./events/wake-scope.js";
 import { describeFetchError, fetchWithTimeout } from "./fetch-with-timeout.js";
 import { LICENSE_REQUIRED } from "./license-copy.js";
 import { type ChannelErrorCode, type TandemMode, TandemModeSchema } from "./types.js";
@@ -227,6 +227,15 @@ export interface EventConsumerOptions {
    * the model learns why its wakes stopped. Default is a noop.
    */
   onLicenseRefused?: (message: string) => void;
+  /**
+   * Called for each `ownership-changed` frame (#2358 PR 4a; ownership design
+   * §8.6, §9.1): work changed hands, so the host should wake its session to
+   * poll `tandem_checkInbox`. The frame carries nothing and no `id:`, so it
+   * never moves `Last-Event-ID`, and a failure here is logged and dropped
+   * (there is nothing to replay; pull is the backstop). Default is a noop,
+   * which drops the frame silently.
+   */
+  onOwnershipChanged?: () => Promise<void> | void;
 }
 
 // --- Module-level state ---
@@ -579,10 +588,24 @@ export async function connectAndStreamOnce(
 
         let eventId: string | undefined;
         let data: string | undefined;
+        let eventName: string | undefined;
 
         for (const line of frame.split("\n")) {
           if (line.startsWith("id: ")) eventId = line.slice(4);
           else if (line.startsWith("data: ")) data = line.slice(6);
+          else if (line.startsWith("event: ")) eventName = line.slice(7);
+        }
+
+        // The payload-free ownership nudge (#2358 PR 4a): not an event, so it
+        // is never parsed, Solo-gated or checkpointed. A consumer older than it
+        // ignores the `event:` line and logs one validation failure for `{}`.
+        if (eventName === OWNERSHIP_CHANGED_SSE_EVENT) {
+          try {
+            await opts.onOwnershipChanged?.();
+          } catch (err) {
+            console.error(`${opts.logPrefix} ownership-changed delivery failed:`, err);
+          }
+          continue;
         }
 
         if (!data) continue;

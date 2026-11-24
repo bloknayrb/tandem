@@ -230,6 +230,17 @@ export function noteChatMessageRowKey(event: TandemEvent, chatKey: string): void
 }
 
 /**
+ * The chat-map key the CTRL chat observer noted for a pushed `chat:message`,
+ * or undefined when none was noted (rounds not keyed, or an event that did
+ * not come from the observer). For the push stream's narrowing (#2358 PR 4a):
+ * the event's `messageId` is the row's client-writable `id` field, not its
+ * key (R1.1), so ownership must be asked about this instead.
+ */
+export function chatMessageRowKeyOf(event: TandemEvent): string | undefined {
+  return chatRowKeyOf.get(event);
+}
+
+/**
  * The key of the round a forward of `event` opens or joins, or undefined while
  * rounds are not keyed (master's path, which ignores it). A `chat:message` is
  * keyed by its message whatever document it names (R1.1); an annotation item

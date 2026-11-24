@@ -28,6 +28,7 @@ import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import { setDeliveryRoundSeam } from "./events/delivery-state.js";
 import { attachCtrlObservers, openRoundsForOwedWork } from "./events/queue.js";
+import { requestOwnershipChangedEvent } from "./events/sse.js";
 import { requestOwnershipFrame } from "./events/wake-socket.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
@@ -915,8 +916,16 @@ async function main() {
   // §4.4, §8.6, §8.7): a change of owner that leaves work waiting for a
   // session other than Tandem's Claude, or for nobody. The writer asks the
   // licence when it writes. In stdio mode no wake socket is attached, so a
-  // request does nothing. Only a flag-on change of owner calls it.
-  setOwnershipFrameSink(requestOwnershipFrame);
+  // request does nothing. Only a flag-on change of owner calls it. The same
+  // change nudges every `/api/events` stream with the payload-free
+  // `ownership-changed` event (#2358 PR 4a; ownership design §8.6, §9.1), so
+  // a session reached only by a push stream (the channel shim, the plugin
+  // monitor) polls too; its writer asks the licence when it writes, and with
+  // no stream open a request does nothing.
+  setOwnershipFrameSink(() => {
+    requestOwnershipFrame();
+    requestOwnershipChangedEvent();
+  });
   // The open documents, for the waiting decision's claimable work (#2358 PR
   // 3b-2b1b-claimable): an open document nobody holds counts for Tandem's
   // Claude while no other session is connected. Beside the probe for the same
