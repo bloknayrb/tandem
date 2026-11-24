@@ -338,6 +338,33 @@ describe("flag on: Release", () => {
     expect(text).not.toMatch(/the user (released|chose)/i);
     expect(getDocOwner("rel-write")).toBeUndefined();
   });
+
+  it("the released session's polls say an earlier request no longer counts, as the released refusal does", async () => {
+    await boot("1");
+    const session = await initialize();
+    openDoc("rel-poll");
+    await callTool(session, "tandem_comment", {
+      from: 0,
+      to: 5,
+      text: "claims it",
+      documentId: "rel-poll",
+    });
+    expect((await post({ documentId: "rel-poll", action: "release" })).status).toBe(200);
+
+    // A default poll leaves it out and names it as released.
+    const all = await callTool(session, "tandem_checkInbox", { cursor: "start" });
+    expect(String(all.summary)).toContain(
+      "released from you, so an earlier request from the user does not count for it: call tandem_open on it only if the user asks you again after that.",
+    );
+    // A named poll says it of this document.
+    const named = await callTool(session, "tandem_checkInbox", { documentId: "rel-poll" });
+    expect(String(named.summary)).toContain(
+      "This document was released from you, so an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.",
+    );
+    // Neither claims Tandem's Claude took it.
+    expect(String(all.summary)).not.toContain("Tandem's Claude took");
+    expect(String(named.summary)).not.toContain("Tandem's Claude took");
+  });
 });
 
 describe("flag on: Assign", () => {

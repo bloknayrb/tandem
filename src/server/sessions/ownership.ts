@@ -3144,6 +3144,12 @@ export interface InboxPollScope {
    * texts. Empty for a caller with no record id, and while ownership is off.
    */
   takenBack(documentIds: readonly string[]): string[];
+  /**
+   * Of `documentIds`, those the user released from the caller, read live: a
+   * standing `released` loss (#2358 PR 5a), for the exclusion texts. Empty
+   * for a caller with no record id, and while ownership is off.
+   */
+  released(documentIds: readonly string[]): string[];
 }
 
 /** What a poll's `commitChat` changed, filled as it goes so a throw part-way still reports it. */
@@ -3177,6 +3183,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   drainChanges: () => ({ notices: [] }),
   giveBack: () => {},
   takenBack: () => [],
+  released: () => [],
 });
 
 /** Which record each drained batch came from, so a give-back reaches only that record. */
@@ -3364,6 +3371,11 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       documentIds.filter((id) => {
         const loss = lossByDoc.get(id);
         return callerId !== undefined && loss?.ownerId === callerId && loss.cause === "taken back";
+      }),
+    released: (documentIds) =>
+      documentIds.filter((id) => {
+        const loss = lossByDoc.get(id);
+        return callerId !== undefined && loss?.ownerId === callerId && loss.cause === "released";
       }),
   };
   return scope;

@@ -324,7 +324,7 @@ const POSTS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
 const TAKE_BACK_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
   [
     'An item Tandem handed or pushed to you is not such a request."',
-    "An item Tandem handed or pushed to you is not such a request. If Tandem's Claude took one back from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.\"",
+    "An item Tandem handed or pushed to you is not such a request. If Tandem's Claude took one back from you, or the user released it from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.\"",
   ],
 ];
 
