@@ -1354,16 +1354,30 @@ export const SIDECAR_SIGNAL_ENV_KEYS = ["TANDEM_OPEN_FILE", "TANDEM_DEFER_LAUNCH
  *
  * A copy, never a mutation of `process.env` — this server still needs the
  * data-dir variables for its own `resolveAppDataDir()`, and the token.
+ *
+ * On Windows the match ignores case. Win32 looks a variable up without regard
+ * to case, so a `tandem_auth_token` set in the user's own environment is read
+ * as `TANDEM_AUTH_TOKEN` (and a later set of that name may keep the existing
+ * spelling), while `{ ...process.env }` copies each name as it was spelled. An
+ * exact-case delete would leave that copy in the launched Claude's environment.
+ * Elsewhere names are case-sensitive, so only the exact names are removed.
  */
 export function childEnv(
   base: NodeJS.ProcessEnv = process.env,
   argv: readonly string[] = process.argv,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
-  for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
-  for (const key of SIDECAR_SIGNAL_ENV_KEYS) delete env[key];
-  if (isTauriSidecar(argv)) delete env.NODE_ENV;
+  const strip = new Set<string>([
+    ...DESKTOP_ONLY_ENV_KEYS,
+    ...TANDEM_SECRET_ENV_KEYS,
+    ...SIDECAR_SIGNAL_ENV_KEYS,
+  ]);
+  if (isTauriSidecar(argv)) strip.add("NODE_ENV");
+  const ignoreCase = platform === "win32";
+  for (const key of Object.keys(env)) {
+    if (strip.has(ignoreCase ? key.toUpperCase() : key)) delete env[key];
+  }
   return env;
 }
 

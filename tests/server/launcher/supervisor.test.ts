@@ -1439,6 +1439,35 @@ describe("childEnv — the launched session must not inherit the desktop's app-d
   });
 
   /**
+   * Win32 reads environment names without regard to case, so a secret or a
+   * start-up signal the user spelled in mixed case is still that variable.
+   * `{ ...process.env }` keeps the spelling, so the Windows strip must match
+   * case-insensitively; on POSIX a differently-cased name is a different
+   * variable and must survive.
+   */
+  it("strips every listed key regardless of case on Windows, and only exact names elsewhere", () => {
+    const base = {
+      tandem_auth_token: "tok",
+      Tandem_Owner_Handle: "th_x",
+      tandem_open_file: "/home/u/Documents/private.md",
+      Tandem_App_Data_Dir: "C:\\x",
+      Node_Env: "production",
+      Path: "C:\\Windows",
+      SOME_USER_TOOL_CONFIG: "keep-me",
+    };
+    const sidecarArgv = ["node", "server.js", "--tauri-sidecar"];
+    expect(childEnv(base, sidecarArgv, "win32")).toEqual({
+      Path: "C:\\Windows",
+      SOME_USER_TOOL_CONFIG: "keep-me",
+    });
+    expect(childEnv(base, sidecarArgv, "linux")).toEqual(base);
+    // Positive anchor: the exact upper-case names go on every platform.
+    expect(childEnv({ TANDEM_AUTH_TOKEN: "tok", PATH: "/bin" }, [], "linux")).toEqual({
+      PATH: "/bin",
+    });
+  });
+
+  /**
    * #1822 item 6 sets `NODE_ENV=production` on the packaged sidecar. Inherited
    * by the launched Claude it would make an `npm install` skip devDependencies,
    * so the sidecar strips it — keyed on argv, which grandchildren do not
