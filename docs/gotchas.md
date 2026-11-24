@@ -57,8 +57,9 @@ channel event queue skips `mcp`, `file-sync`, `internal`, `reload` and `mode-rel
 **only `browser` writes generate channel events**, with one keyed exception: CTRL_ROOM
 `documentMeta`'s tab-list keys (`openDocuments`, `activeDocumentId`) derive `document:opened` /
 `closed` / `switched` for every origin except `mcp` (`shouldSkipDocumentLifecycle` in
-`origins.ts`, #2069). Their only writer is `broadcastOpenDocs`, under `withInternal`, so under the
-general rule those events never fired. The observer seeds its last-seen tab list from the map when
+`origins.ts`, #2069). Their writers are `broadcastOpenDocs` and, flag on, the ownership published-state republish and
+restore (`writePublishedOpenDocs`, #2358 PR 5a-3), all under `withInternal`, so under the general
+rule those events never fired. The observer seeds its last-seen tab list from the map when
 it attaches, or every attach (startup, a CTRL_ROOM swap) would replay a burst of `document:opened`.
 
 **Client origins never cross the wire, and two shipped comments got this wrong (#1482).** Two

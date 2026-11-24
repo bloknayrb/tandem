@@ -89,8 +89,9 @@ export function makeCtrlMetaObserver(deps: {
   };
 
   const metaObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    // NOT `shouldSkipChannel`: the tab list's only writer is `broadcastOpenDocs`,
-    // under `withInternal`, which that predicate skips — so `document:*` never
+    // NOT `shouldSkipChannel`: the tab list's writers (`broadcastOpenDocs` and,
+    // flag on, `writePublishedOpenDocs`) write under `withInternal`, which that
+    // predicate skips — so `document:*` never
     // fired (#2069). See `shouldSkipDocumentLifecycle` for the exception's scope.
     // This observer reads only the two tab-list keys below.
     if (shouldSkipDocumentLifecycle(txn.origin)) return;
