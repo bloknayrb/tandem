@@ -27,6 +27,13 @@ import {
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const MCP_ACCEPT = "application/json, text/event-stream";
 const CLAUDE = "5d8b0a3f-2c4e-4f60-9b7c-1d2e3f4a5b6c";
@@ -92,6 +99,7 @@ async function callTool(
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
+  if (name === "tandem_checkInbox") expectDeliveryRoundsLive();
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers: {

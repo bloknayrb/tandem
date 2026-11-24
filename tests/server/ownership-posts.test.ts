@@ -86,9 +86,16 @@ import { CTRL_ROOM, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal, withMcp } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 /** Set to make the next `resolveDeliveryRound` throw: a throw after the chat commit. Since the
  * delivery-rounds PR the round's close is the poll's last step, after the
@@ -213,6 +220,7 @@ async function as(owner: string | undefined, tool: string, args: Record<string, 
 
 async function pollAs(owner: string, args: Record<string, unknown> = {}): Promise<Inbox> {
   callingAs = owner;
+  expectDeliveryRoundsLive();
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
   expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
   return inboxSchema.parse((result as { structuredContent: unknown }).structuredContent);

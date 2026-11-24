@@ -78,8 +78,15 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const A = "claude:waiting-cost-a";
 const TANDEM = TANDEM_OWNER_ID;
@@ -129,6 +136,7 @@ function comment(ydoc: Y.Doc, id: string, author: "user" | "claude"): void {
 
 async function pollAs(owner: string, args: Record<string, unknown>): Promise<void> {
   callingAs = owner;
+  expectDeliveryRoundsLive();
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
   expect(parseResult(result).error, JSON.stringify(result).slice(0, 500)).toBe(false);
 }

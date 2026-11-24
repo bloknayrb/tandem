@@ -85,8 +85,15 @@ import { CTRL_ROOM, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal, withMcp } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 class LoopbackOriginWebSocket extends WebSocket {
   constructor(url: string | URL) {
@@ -286,6 +293,7 @@ async function pollChat(
   cursor?: string,
 ): Promise<{ ids: string[]; cursor: string }> {
   callingAs = owner;
+  expectDeliveryRoundsLive();
   const result = await client.callTool({
     name: "tandem_checkInbox",
     arguments: cursor === undefined ? {} : { cursor },

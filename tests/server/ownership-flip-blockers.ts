@@ -244,26 +244,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Flag-on suites that drive ownership but read no delivery-round state run with the " +
-      "delivery-round seam unwired, so their polls run master's one global round, which no " +
-      "flag-on server runs: ownership-chat, ownership-posts and ownership-change-notices mock " +
-      "delivery-state.js with a pass-through that makes resolveDeliveryRound throw on demand; " +
-      "health-route injects its own getDeliveryState; and the same holds for every other " +
-      "suite that polls the inbox without wiring the seam (every suite runs flag-on in the " +
-      "ownership-on job). The set, over-approximated (a file that only names the tool is in " +
-      "it) and possibly incomplete (a suite that polls through a helper without naming the " +
-      "tool is missed): the test files that name tandem_checkInbox and name neither setDeliveryRoundSeam " +
-      "nor registerTestCallerRecord, i.e. grep -rlE 'tandem_checkInbox' tests --include=*.test.ts " +
-      "| xargs grep -LE 'setDeliveryRoundSeam|registerTestCallerRecord' (38 files when this row " +
-      "was written). A change that makes their polls open or close a keyed round wrongly is " +
-      "not seen there, although every tandem_checkInbox poll reaches the round (its " +
-      "resolveDeliveryRound call in awareness.ts).",
-    closedBy:
-      "Wiring the suites of that set that poll the inbox, each with a live check, or a test " +
-      "that drives their paths keyed.",
-  },
-  {
-    gap:
       "#2439: on Windows the launcher folder's owner and access-list checks run once per server " +
       "process (verifiedWindowsDirs, src/server/launcher/run-files.ts), so an entry new files do " +
       "not inherit, added after the first check, is not seen again in that process. Bryan accepted " +

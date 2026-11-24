@@ -38,8 +38,15 @@ import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
 import { type McpRequestContext, runWithMcpContext } from "../../src/server/sessions/context.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult as parsed, setupMcpServer } from "../helpers/mcp-harness.js";
 import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const mockedGetWakeEndpoint = vi.mocked(getWakeEndpoint);
 const LIVE_WAKE_URL = "ws://127.0.0.1:41999/api/wake";
@@ -72,6 +79,7 @@ afterEach(async () => {
  * than assuming it, because without it every ABSENT spec below would be vacuous.
  */
 function callAs(ctx: McpRequestContext | undefined, name: string, args: Record<string, unknown>) {
+  if (name === "tandem_checkInbox") expectDeliveryRoundsLive();
   const call = () => client.callTool({ name, arguments: args });
   return ctx === undefined ? call() : runWithMcpContext(ctx, call);
 }

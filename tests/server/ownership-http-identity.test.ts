@@ -13,6 +13,13 @@ import {
   setGraceMsForTests,
 } from "../../src/server/sessions/ownership.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 /**
  * Owner records through the real HTTP server (#2358, ADR-054; ownership design
@@ -76,6 +83,7 @@ async function initialize(headers: Record<string, string>, clientName = "probe")
 }
 
 async function callTool(sessionId: string, name: string, args: Record<string, unknown> = {}) {
+  if (name === "tandem_checkInbox") expectDeliveryRoundsLive();
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers: {
