@@ -231,6 +231,11 @@ describe("tools/list while dark", () => {
     ).properties.documents.items;
     expect(Object.keys(listItem.properties)).toContain("owner");
     expect(listItem.required ?? []).not.toContain("owner");
+    // `tandem_switchDocument` carries the same label flag on (Bryan,
+    // 2026-11-24) but declares no output schema, so only its description
+    // differs (below), as before 5c.
+    expect(on.get("tandem_switchDocument")?.outputSchema).toBeUndefined();
+    expect(off.get("tandem_switchDocument")?.outputSchema).toBeUndefined();
     for (const name of ["tandem_close", "tandem_open", "tandem_switchDocument"]) {
       expect(on.get(name)?.description, name).toContain(off.get(name)?.description as string);
       expect(on.get(name)?.inputSchema, name).toEqual(off.get(name)?.inputSchema);

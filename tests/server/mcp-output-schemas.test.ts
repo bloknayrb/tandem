@@ -195,6 +195,8 @@ describe("tools/list advertises outputSchema", () => {
       .filter((t) => t.outputSchema !== undefined)
       .map((t) => t.name)
       .sort();
+    // Flag on or off: `tandem_switchDocument`'s owner label (#2358 PR 5c,
+    // Bryan 2026-11-24) rides in its text result and declares no schema.
     expect(withSchema).toEqual([
       "tandem_checkInbox",
       "tandem_diagnostics",

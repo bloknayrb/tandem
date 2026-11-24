@@ -602,7 +602,7 @@ List all open documents with their IDs, file paths, and formats.
 }
 ```
 
-**Owner labels ship dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054's 5c amendment): a release build returns exactly the shape above, and its output schema has no `owner` field. With ownership on, each listed document also carries `owner` (ownership design §5.7). `owner` is `{ label, displayKind, kind, you }`, or `null` when no session holds the document: `label` is the holding session's server-minted label (e.g. `owner-k7qx`), `displayKind` one of `"Tandem's Claude"`, `"terminal"`, `"Claude Desktop"` or `"other app"`, `kind` how it holds the document (`default`, `claimed`, `opened` or `assigned`), and `you` whether that session is the caller. It names no owner id, owner handle or session id. A read never claims a document, so calling the tool changes no owner. `tandem_switchDocument`'s result is unchanged.
+**Owner labels ship dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054's 5c amendment): a release build returns exactly the shape above, and its output schema has no `owner` field. With ownership on, each listed document also carries `owner` (ownership design §5.7). `owner` is `{ label, displayKind, kind, you }`, or `null` when no session holds the document: `label` is the holding session's server-minted label (e.g. `owner-k7qx`), `displayKind` one of `"Tandem's Claude"`, `"terminal"`, `"Claude Desktop"` or `"other app"`, `kind` how it holds the document (`default`, `claimed`, `opened` or `assigned`), and `you` whether that session is the caller. It names no owner id, owner handle or session id. A read never claims a document, so calling the tool changes no owner. `tandem_switchDocument`'s result carries the same `owner` for the document it switched to.
 
 ---
 
@@ -620,6 +620,8 @@ Switch the active document. Tools will operate on this document by default.
 ```
 
 **Errors:** `NO_DOCUMENT` if document ID not found among open documents.
+
+**The owner label ships dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054's 5c amendment): a release build returns exactly the shape above. With ownership on, the result also carries `owner` for the document switched to, the same `{ label, displayKind, kind, you }` or `null` as a `tandem_listDocuments` entry. A switch never claims, and a switch to a document another session holds is refused, so a switch that succeeds reads either the caller's own label (`you: true`) or `null`. The tool declares no output schema, so `tools/list` is unchanged either way.
 
 ---
 

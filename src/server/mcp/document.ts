@@ -1950,6 +1950,11 @@ export function registerDocumentTools(server: McpServer): void {
     ),
   );
 
+  // The same owner label as `tandem_listDocuments`' entries (#2358 PR 5c,
+  // Bryan 2026-11-24), decided at registration as that tool's is, so a dark
+  // registration's output stays exactly as before. The tool declares no
+  // output schema, so `tools/list` is unchanged either way.
+  const switchOwnerLabel = ownershipOn();
   server.tool(
     "tandem_switchDocument",
     "Switch the active document. Tools will operate on this document by default." +
@@ -1966,9 +1971,13 @@ export function registerDocumentTools(server: McpServer): void {
       const refused = switchRefusal(caller, "tandem_switchDocument", documentId);
       if (refused) return refused;
       activateDocument(documentId);
+      // Read after the switch, which never claims: the caller's own label, or
+      // null, since another holder was refused above.
+      const owner = switchOwnerLabel ? ownerLabelFor(caller, documentId) : undefined;
       return mcpSuccess({
         activeDocumentId: documentId,
         ...toDocListEntry(openDocs.get(documentId)!),
+        ...(owner !== undefined ? { owner } : {}),
       });
     }),
   );

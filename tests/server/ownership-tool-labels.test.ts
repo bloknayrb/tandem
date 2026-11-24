@@ -1,6 +1,7 @@
 /**
  * The owner labels on `tandem_getAnnotations` and `tandem_listDocuments`
- * (#2358 PR 5c, ADR-054's 5c amendment; ownership design §5.7): each document
+ * (#2358 PR 5c, ADR-054's 5c amendment; ownership design §5.7), and on
+ * `tandem_switchDocument`'s result (Bryan, 2026-11-24): each document
  * is labelled `owner: {label, displayKind, kind, you}`, or `null` when nobody
  * holds it. `you` says whether the holder is the calling session; nothing
  * names an owner id, a handle or a session id (ownership design §10.3).
@@ -162,6 +163,40 @@ async function annotationsAs(owner: string, documentId?: string): Promise<Data> 
   return structured;
 }
 
+/**
+ * `tandem_switchDocument` as `owner`: it declares no output schema, so its
+ * result is the text part's data alone (no structuredContent).
+ */
+async function switchAs(
+  owner: string,
+  documentId: string,
+): Promise<{ data: Data; raw: string; structured: unknown }> {
+  callingAs = owner;
+  const result = (await client.callTool({
+    name: "tandem_switchDocument",
+    arguments: { documentId },
+  })) as {
+    isError?: boolean;
+    structuredContent?: Data;
+    content: Array<{ type: string; text?: string }>;
+  };
+  expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+  const raw = result.content.find((c) => c.type === "text")?.text ?? "null";
+  const envelope = JSON.parse(raw) as { error: boolean; data: Data };
+  expect(envelope.error).toBe(false);
+  return { data: envelope.data, raw, structured: result.structuredContent };
+}
+
+const SWITCH_KEYS = [
+  "activeDocumentId",
+  "fileName",
+  "filePath",
+  "format",
+  "id",
+  "readOnly",
+  "source",
+].sort();
+
 const labelOf = (ownerId: string) => getOwnerRecord(ownerId)?.label as string;
 
 // ---------------------------------------------------------------------------
@@ -282,7 +317,40 @@ describe("flag on: tandem_getAnnotations labels the document it read", () => {
   });
 });
 
-describe("dark: both tools are exactly today's", () => {
+describe("flag on: tandem_switchDocument carries the switched-to document's label (Bryan 2026-11-24)", () => {
+  it("the caller's own document: the same label as its tandem_listDocuments entry, `you: true`", async () => {
+    await buildWorld("1");
+    const listed = (await listAs(A)).get(ids.a)?.owner;
+    const { data, structured } = await switchAs(A, ids.a);
+    expect(data.owner).toEqual({
+      label: labelOf(A),
+      displayKind: "terminal",
+      kind: "opened",
+      you: true,
+    });
+    expect(data.owner).toEqual(listed);
+    expect(Object.keys(data).sort()).toEqual([...SWITCH_KEYS, "owner"].sort());
+    expect(structured, "no structured output: the tool declares no schema").toBeUndefined();
+  });
+
+  it("an unowned document reads null, and the switch claims nothing", async () => {
+    await buildWorld("1");
+    const { data } = await switchAs(C, ids.u);
+    expect(data.owner).toBeNull();
+    expect(data.activeDocumentId).toBe(ids.u);
+    expect(getDocOwner(ids.u)).toBeUndefined();
+    expect((await listAs(C)).get(ids.u)?.owner).toBeNull();
+  });
+
+  it("names no owner id, handle or session id", async () => {
+    await buildWorld("1");
+    const { raw } = await switchAs(B, ids.b);
+    for (const id of [A, B, C, TANDEM_OWNER_ID]) expect(raw).not.toContain(id);
+    expect(raw).not.toMatch(/th_[A-Za-z0-9_-]{8}/);
+  });
+});
+
+describe("dark: the three tools are exactly today's", () => {
   it("a flag-off server sends no owner key and advertises none", async () => {
     await buildWorld("");
     const list = await callAs(A, "tandem_listDocuments");
@@ -296,11 +364,16 @@ describe("dark: both tools are exactly today's", () => {
     expect(annotations.raw).not.toContain('"owner"');
     expect(Object.keys(annotations.structured).sort()).toEqual(["annotations", "count"]);
 
+    const switched = await switchAs(A, ids.u);
+    expect(switched.raw).not.toContain('"owner"');
+    expect(Object.keys(switched.data).sort()).toEqual(SWITCH_KEYS);
+
     const { tools } = await client.listTools();
     for (const name of ["tandem_listDocuments", "tandem_getAnnotations"]) {
       const tool = tools.find((t) => t.name === name);
       expect(JSON.stringify(tool?.outputSchema), name).not.toContain('"owner"');
     }
+    expect(tools.find((t) => t.name === "tandem_switchDocument")?.outputSchema).toBeUndefined();
   });
 
   it("a server registered flag-off and called flag-on still sends no owner key", async () => {
@@ -310,6 +383,7 @@ describe("dark: both tools are exactly today's", () => {
     expect((await callAs(A, "tandem_getAnnotations", { documentId: ids.a })).raw).not.toContain(
       '"owner"',
     );
+    expect((await switchAs(A, ids.a)).raw).not.toContain('"owner"');
   });
 
   it("a server registered flag-on and called flag-off answers within its schema, with no owner key", async () => {
@@ -319,5 +393,6 @@ describe("dark: both tools are exactly today's", () => {
     expect((await callAs(A, "tandem_getAnnotations", { documentId: ids.a })).raw).not.toContain(
       '"owner"',
     );
+    expect((await switchAs(A, ids.a)).raw).not.toContain('"owner"');
   });
 });
