@@ -256,6 +256,18 @@ describe("flag on: Release", () => {
     expect(getDocOwner("noop-1")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
   });
 
+  it("a release of an entry whose record is gone clears it and applies the default rule: changed", async () => {
+    await boot("1");
+    setTandemPresenceSource(() => true);
+    openDoc("rel-stale");
+    // An entry for a record that does not exist (the stale backstop's case).
+    setDocOwner("rel-stale", { ownerId: "bridge:gone", kind: "opened" }, "take", "bridge:gone");
+    expect(getOwnerRecord("bridge:gone")).toBeUndefined();
+    const res = await post({ documentId: "rel-stale", action: "release" });
+    expect(res.json).toEqual({ data: { changed: true } });
+    expect(getDocOwner("rel-stale")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+  });
+
   it("a release that leaves Tandem's Claude the holder (assigned to default) starts or wakes nothing and sends no frame", async () => {
     // Bryan's pick "Skip the wake (Recommended)" (2026-11-23): only a change
     // of holder forwards or frames.

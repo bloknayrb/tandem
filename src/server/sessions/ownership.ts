@@ -4023,7 +4023,9 @@ export function ownersList(): OwnerListing[] {
  *   while the document is unowned (ownership design §5.3). A no-op
  *   (`unchanged`) on an unowned document and where the default rule would
  *   leave the entry as it is (a `default` document while Tandem's Claude is
- *   present). A Release of a document Tandem's Claude holds some other way,
+ *   present). An entry whose record is gone is cleared at the turn
+ *   (`liveEntry`) and the default rule applied: `changed`. A Release of a
+ *   document Tandem's Claude holds some other way,
  *   while it is present, falls back to `default` with the same holder:
  *   `changed`, but step 5 starts or wakes nothing and sends no frame, since
  *   the holder did not change (Bryan's pick "Skip the wake (Recommended)").
@@ -4069,9 +4071,19 @@ function applyControl(
   isOpen: () => boolean,
 ): OwnershipControlOutcome {
   if (!isOpen()) return "not-open";
+  // `liveEntry` clears an entry whose record is gone (the stale backstop),
+  // and that clearing is itself a change of owner. A Release then still
+  // applies the default rule and answers `changed`, rather than leaving the
+  // document unowned beside a present Tandem's Claude and saying nothing moved.
+  const hadEntry = ownerByDoc.has(documentId);
   const entry = liveEntry(documentId);
   if (action === "release") {
-    if (entry === undefined) return "unchanged";
+    if (entry === undefined) {
+      if (!hadEntry) return "unchanged";
+      const fallback = defaultRuleOwner();
+      if (fallback !== null) setDocOwner(documentId, fallback, "release");
+      return "changed";
+    }
     const next = defaultRuleOwner();
     if (next !== null && next.ownerId === entry.ownerId && next.kind === entry.kind) {
       return "unchanged";
