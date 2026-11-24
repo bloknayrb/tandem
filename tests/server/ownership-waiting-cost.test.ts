@@ -297,8 +297,8 @@ describe("the waiting decision's cost (3b-2b4c's measurement)", () => {
   }, 120_000);
 });
 
-describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Republish on check-in')", () => {
-  it(`records the republish a holder's tandem_checkInbox asks for, over ${DOCUMENTS + 1} published documents`, async () => {
+describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Republish on check-in', then 'Recompute own docs (Recommended)')", () => {
+  it(`records a check-in's republish for a session holding 1 document and for one holding ${DOCUMENTS}, over ${DOCUMENTS + 1} published documents`, async () => {
     // The same check-in with no published state wired, for comparison.
     const baseline: number[] = [];
     for (let run = 0; run < 5; run++) {
@@ -307,51 +307,73 @@ describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Repu
       await Promise.resolve();
       baseline.push(performance.now() - t0);
     }
-    // The lines of `src/server/index.ts` for the published state.
-    setOldestWaitingProbe(oldestDocumentWaiting);
+    // The lines of `src/server/index.ts` for the published state, the scan counted.
+    let scans = 0;
+    setOldestWaitingProbe((documentId) => {
+      scans += 1;
+      return oldestDocumentWaiting(documentId);
+    });
     let asked = 0;
-    setOwnershipPublishSink(() => {
+    setOwnershipPublishSink((documentIds) => {
       asked += 1;
-      requestOwnershipPublish();
+      requestOwnershipPublish(documentIds);
     });
     startOwnershipPublishing();
     broadcastOpenDocs();
     await Promise.resolve();
-    // One check-in by a holder asks one republish.
-    asked = 0;
-    noteRecordPoll(TANDEM);
-    expect(asked).toBe(1);
-    await Promise.resolve();
-    // The republish itself, as the microtask runs it: every published
-    // entry's owner fields recomputed (each document's oldest-waiting scan
-    // at its worst, nothing waiting) and compared in every room; nothing
-    // changed, so nothing is written.
-    const samples: number[] = [];
-    for (let run = 0; run < RUNS; run++) samples.push(timed(() => runOwnershipTickForTests()).ms);
-    // And a whole holder's check-in through the real tool, for scale.
+
+    /** One check-in's republish, as the microtask runs it after `noteRecordPoll`. */
+    async function checkIn(owner: string): Promise<number> {
+      const t0 = performance.now();
+      noteRecordPoll(owner);
+      await Promise.resolve();
+      return performance.now() - t0;
+    }
+    // The terminal holds one document; Tandem's Claude holds the other fifty.
+    const one: number[] = [];
+    const all: number[] = [];
+    for (let run = 0; run < RUNS; run++) {
+      scans = 0;
+      one.push(await checkIn(A));
+      expect(scans, "the terminal's check-in scans its one document").toBe(1);
+      scans = 0;
+      all.push(await checkIn(TANDEM));
+      expect(scans, "Tandem's Claude's check-in scans its fifty").toBe(DOCUMENTS);
+    }
+    // The full republish (step 4, the tick), for reference.
+    const full: number[] = [];
+    for (let run = 0; run < 5; run++) full.push(timed(() => runOwnershipTickForTests()).ms);
+    // And a whole check-in through the real tool (`response.ts` calls
+    // `noteRecordPoll` for every tandem_checkInbox): each asks one.
     const polls: number[] = [];
     asked = 0;
     for (let run = 0; run < 5; run++) {
       const t0 = performance.now();
-      await pollAs(TANDEM, {});
+      await pollAs(A, {});
       await Promise.resolve();
       polls.push(performance.now() - t0);
     }
-    // Through the real tool too (`response.ts` calls `noteRecordPoll` for
-    // every tandem_checkInbox): each holder's check-in asked one.
     expect(asked, "one republish asked per real check-in").toBe(5);
-    const republish = stats(samples);
-    const poll = stats(polls);
     const before = stats(baseline);
+    const oneDoc = stats(one);
+    const allDocs = stats(all);
+    const whole = stats(full);
+    const poll = stats(polls);
     record(
       `a holder's cursor-less tandem_checkInbox without the published state: median ${fmt(before.median)} ms, max ${fmt(before.max)} ms`,
     );
     record(
-      `republish (${DOCUMENTS + 1} published documents, ${DOCUMENTS} held by Tandem's Claude): median ${fmt(republish.median)} ms, max ${fmt(republish.max)} ms`,
+      `check-in republish, holding 1 document: median ${fmt(oneDoc.median)} ms, max ${fmt(oneDoc.max)} ms`,
     );
     record(
-      `a holder's cursor-less tandem_checkInbox with the republish: median ${fmt(poll.median)} ms, max ${fmt(poll.max)} ms`,
+      `check-in republish, holding ${DOCUMENTS} documents: median ${fmt(allDocs.median)} ms, max ${fmt(allDocs.max)} ms`,
     );
-    expect(republish.max).toBeLessThan(LOOSE_BOUND_MS);
+    record(
+      `full republish (${DOCUMENTS + 1} published documents): median ${fmt(whole.median)} ms, max ${fmt(whole.max)} ms`,
+    );
+    record(
+      `the terminal's tandem_checkInbox with its check-in republish: median ${fmt(poll.median)} ms, max ${fmt(poll.max)} ms`,
+    );
+    expect(allDocs.max).toBeLessThan(LOOSE_BOUND_MS);
   }, 120_000);
 });

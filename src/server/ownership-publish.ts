@@ -62,6 +62,10 @@ const restoreRooms = new Set<string>();
 let summaryRestoreOwed = false;
 let restoreScheduled: ReturnType<typeof setImmediate> | undefined;
 let publishQueued = false;
+/** A full republish is owed by the queued microtask. */
+let fullOwed = false;
+/** The documents a narrow republish (a holder's check-in) owes, when no full one is. */
+const narrowOwed = new Set<string>();
 let tick: ReturnType<typeof setInterval> | undefined;
 let restoresForTests = 0;
 
@@ -176,15 +180,43 @@ function publishNow(): void {
 /**
  * Ask for a republish (step 4 of `setDocOwner` and the other askers in the
  * module doc), one microtask later and once however often it is asked in one
- * synchronous run. Flag off it does nothing.
+ * synchronous run. With `documentIds` (a holder's check-in) only those
+ * entries are recomputed, unless a full republish is also asked in the same
+ * run, which subsumes it. Flag off it does nothing.
  */
-export function requestOwnershipPublish(): void {
-  if (!ownershipEnabled() || publishQueued) return;
+export function requestOwnershipPublish(documentIds?: readonly string[]): void {
+  if (!ownershipEnabled()) return;
+  if (documentIds === undefined) fullOwed = true;
+  else for (const id of documentIds) narrowOwed.add(id);
+  if (publishQueued) return;
   publishQueued = true;
   queueMicrotask(() => {
     publishQueued = false;
-    publishNow();
+    const full = fullOwed;
+    const narrow = new Set(narrowOwed);
+    fullOwed = false;
+    narrowOwed.clear();
+    // A full republish owed in the same run subsumes the narrow one.
+    if (full) publishNow();
+    else if (narrow.size > 0) publishDocsNow(narrow);
   });
+}
+
+/**
+ * The narrow republish (#2358 PR 5a-3; Bryan, 2026-11-24: "Recompute own
+ * docs (Recommended)"): only `documentIds`' entries are recomputed, every
+ * other entry keeps what was last published, and only `Y_MAP_OPEN_DOCUMENTS`
+ * is written, where it differs, under `withInternal`
+ * (`writePublishedOpenDocs`'s narrow form). The summary is not touched: a
+ * check-in changes nothing it reads.
+ */
+function publishDocsNow(documentIds: ReadonlySet<string>): void {
+  if (!ownershipEnabled()) return;
+  try {
+    writePublishedOpenDocs(undefined, documentIds);
+  } catch {
+    console.error(PUBLISH_FAILED);
+  }
 }
 
 /**
@@ -213,6 +245,8 @@ export function stopOwnershipPublishingForTests(): void {
   restoreRooms.clear();
   summaryRestoreOwed = false;
   publishQueued = false;
+  fullOwed = false;
+  narrowOwed.clear();
   restoresForTests = 0;
   setOpenDocsWrittenListener(undefined);
 }

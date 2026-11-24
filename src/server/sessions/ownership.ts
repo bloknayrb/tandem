@@ -629,7 +629,7 @@ let startOrWakeSink: (
 ) => void = () => {};
 let requestWakeSink: () => void = () => {};
 let ownershipFrameSink: () => void = () => {};
-let publishSink: () => void = () => {};
+let publishSink: (documentIds?: readonly string[]) => void = () => {};
 let launcherFactsSource: () => LauncherFacts | null | undefined = () => undefined;
 let oldestWaitingProbe: (documentId: string) => number | null = () => null;
 let roundOpener:
@@ -1105,11 +1105,13 @@ export function noteRecordPoll(ownerId: string | undefined): void {
   // "Republish on check-in"), so a "not-checking-in" flag clears without
   // waiting for the tick. After the poll time is recorded, before the handler
   // runs: the republish is a microtask later, so it reads this time, and a
-  // claim the poll then makes asks its own through step 4. Only for a record
-  // holding a document, the only case where `lastPollAt` changes anything
-  // published (no other field reads it); coalesced, written only where
-  // something changed.
-  if (heldDocumentIds(ownerId).length > 0) requestPublish();
+  // claim the poll then makes asks its own through step 4. Only the
+  // documents this record holds are recomputed (Bryan, 2026-11-24:
+  // "Recompute own docs (Recommended)"): `lastPollAt` is read by nothing
+  // published but its own holder's stale flag, so no other entry can change.
+  // None held, nothing asked. Coalesced, written only where something changed.
+  const held = heldDocumentIds(ownerId);
+  if (held.length > 0) requestPublish(held);
 }
 
 /** The record for `ownerId`, or undefined. */
@@ -4874,9 +4876,12 @@ export interface LauncherFacts {
 /**
  * Step 4's publish (#2358 PR 5a-3). `src/server/index.ts` wires it to
  * `requestOwnershipPublish` (`ownership-publish.ts`). Only stored; called by
- * a flag-on change of owner and by a holder's grace starting or ending.
+ * a flag-on change of owner, a record's grace starting or ending, presence,
+ * a new session, and a holder's check-in. With `documentIds` (a check-in
+ * only) it asks for those documents' entries alone; without, the full
+ * republish.
  */
-export function setOwnershipPublishSink(sink: () => void): void {
+export function setOwnershipPublishSink(sink: (documentIds?: readonly string[]) => void): void {
   publishSink = sink;
 }
 
@@ -4898,9 +4903,10 @@ export function setOldestWaitingProbe(probe: (documentId: string) => number | nu
 const PUBLISH_FAILED =
   "[ownership] the owner fields could not be republished; the next change or tick republishes them.";
 
-function requestPublish(): void {
+function requestPublish(documentIds?: readonly string[]): void {
   try {
-    publishSink();
+    if (documentIds === undefined) publishSink();
+    else publishSink(documentIds);
   } catch {
     logLimited("publish-failed", PUBLISH_FAILED);
   }

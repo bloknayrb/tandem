@@ -163,6 +163,7 @@ export function toDocListEntry(d: OpenDoc) {
 export function broadcastOpenDocs(): void {
   const docs = Array.from(openDocs.values());
   const docList = docs.map(toPublishedEntry);
+  lastPublishedList = docList;
   const id = activeDocId;
   const epoch = activeDocEpoch;
   // What this broadcast publishes, for the owner fields' republish and
@@ -213,6 +214,13 @@ export function broadcastOpenDocs(): void {
  * ownership change during its `prepare` must not publish it early.
  */
 let publishedDocs: OpenDoc[] | null = null;
+
+/**
+ * The list last written by the broadcast or the republish, entry for entry
+ * with {@link publishedDocs}: what a narrow republish keeps for every entry it
+ * does not recompute. Server memory, never read from a map.
+ */
+let lastPublishedList: Array<ReturnType<typeof toPublishedEntry>> | null = null;
 
 /** Told after each broadcast (`ownership-publish.ts` attaches its guards). */
 let openDocsWrittenListener: (() => void) | undefined;
@@ -267,8 +275,22 @@ export function publishedRoomIds(): string[] {
  * from this key for every origin but `mcp` (#2069), so a restore that undoes
  * a forged id emits the event that undoes the forgery's own.
  */
-export function writePublishedOpenDocs(rooms: readonly string[] = publishedRoomIds()): number {
-  const docList = (publishedDocs ?? []).map(toPublishedEntry);
+export function writePublishedOpenDocs(
+  rooms: readonly string[] = publishedRoomIds(),
+  onlyDocumentIds?: ReadonlySet<string>,
+): number {
+  const docs = publishedDocs ?? [];
+  // Narrow (a holder's check-in): only those entries are rebuilt, with the
+  // same builder; every other entry is the one last published. With nothing
+  // published yet, or an entry missing, it falls back to the full build.
+  const last = onlyDocumentIds === undefined ? undefined : lastPublishedList;
+  const kept = new Map((last ?? []).map((e) => [e.id, e]));
+  const docList = docs.map((d) =>
+    onlyDocumentIds === undefined || onlyDocumentIds.has(d.id) || !kept.has(d.id)
+      ? toPublishedEntry(d)
+      : (kept.get(d.id) as ReturnType<typeof toPublishedEntry>),
+  );
+  lastPublishedList = docList;
   const wanted = JSON.stringify(docList);
   const allowed = new Set(publishedRoomIds());
   let written = 0;
@@ -292,6 +314,7 @@ export function writePublishedOpenDocs(rooms: readonly string[] = publishedRoomI
 /** @internal Test seam: forget what the last broadcast published, and the listener. */
 export function unsafeResetPublished(): void {
   publishedDocs = null;
+  lastPublishedList = null;
   openDocsWrittenListener = undefined;
 }
 

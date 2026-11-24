@@ -369,9 +369,9 @@ describe("in process", () => {
       setDocOwner("st-e", { ownerId: T, kind: "claimed" }, "claim", T);
       await settle();
       const asked: number[] = [];
-      setOwnershipPublishSink(() => {
+      setOwnershipPublishSink((documentIds) => {
         asked.push(1);
-        requestOwnershipPublish();
+        requestOwnershipPublish(documentIds);
       });
       noteRecordPoll(U);
       expect(asked, "a record holding nothing").toEqual([]);
@@ -382,6 +382,123 @@ describe("in process", () => {
       getOrCreateDocument(CTRL_ROOM).on("update", () => updates.push(1));
       await settle();
       expect(updates, "nothing changed, so nothing is written").toEqual([]);
+    });
+
+    it("a check-in recomputes only the poller's documents; a full republish in the same run subsumes it", async () => {
+      startOwnershipPublishing();
+      for (const id of ["n-a", "n-b", "n-c", "n-d"]) open(id);
+      register(T);
+      register(U);
+      setDocOwner("n-a", { ownerId: T, kind: "claimed" }, "claim", T);
+      setDocOwner("n-b", { ownerId: U, kind: "claimed" }, "claim", U);
+      await settle();
+      const scanned: string[] = [];
+      setOldestWaitingProbe((id) => {
+        scanned.push(id);
+        return oldest.get(id) ?? null;
+      });
+      noteRecordPoll(T);
+      await settle();
+      expect(scanned).toEqual(["n-a"]);
+      scanned.length = 0;
+      noteRecordPoll(T);
+      setDocOwner("n-c", { ownerId: U, kind: "claimed" }, "claim", U);
+      await settle();
+      expect([...scanned].sort(), "the full republish ran instead").toEqual([
+        "n-a",
+        "n-b",
+        "n-c",
+        "n-d",
+      ]);
+    });
+
+    it("after a check-in's narrow refresh the published list equals a full rebuild, state after state", async () => {
+      startOwnershipPublishing();
+      for (const id of ["ag-a", "ag-b", "ag-c", "ag-d"]) open(id);
+      present = true;
+      register(T);
+      register(U);
+      setDocOwner("ag-a", { ownerId: T, kind: "claimed" }, "claim", T);
+      setDocOwner("ag-b", { ownerId: T, kind: "assigned" }, "assign");
+      setDocOwner("ag-c", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "presence");
+      await settle();
+      const old = Date.now() - OWNERSHIP_STALE_AFTER_MS - MIN;
+      const states: Array<[string, () => void]> = [
+        ["nothing changed", () => {}],
+        [
+          "T's documents stale, published by the tick",
+          () => {
+            oldest.set("ag-a", old);
+            oldest.set("ag-b", old);
+            runOwnershipTickForTests();
+          },
+        ],
+        ["T's own item newer than its poll", () => oldest.set("ag-a", Date.now() + 1000)],
+        ["T's item gone", () => oldest.delete("ag-b")],
+      ];
+      for (const [name, arrange] of states) {
+        arrange();
+        noteRecordPoll(T);
+        await settle();
+        const narrow = JSON.stringify(listIn(CTRL_ROOM));
+        // The full rebuild, written only where it differs: it must find nothing.
+        const updates: number[] = [];
+        const ctrl = getOrCreateDocument(CTRL_ROOM);
+        const onUpdate = () => updates.push(1);
+        ctrl.on("update", onUpdate);
+        runOwnershipTickForTests();
+        ctrl.off("update", onUpdate);
+        expect(updates, name).toEqual([]);
+        expect(JSON.stringify(listIn(CTRL_ROOM)), name).toBe(narrow);
+        for (const room of ["ag-a", "ag-b", "ag-c", "ag-d"]) {
+          expect(JSON.stringify(listIn(room)), `${name}: ${room}`).toBe(narrow);
+        }
+      }
+      // The narrow write wrote nothing but the tab list, and as the server.
+      expect(meta(CTRL_ROOM).get(Y_MAP_ACTIVE_DOCUMENT_ID)).toBe("ag-d");
+    });
+
+    it("a narrow refresh keeps every other entry as last published, and writes as the server's own (the guard leaves it)", async () => {
+      startOwnershipPublishing();
+      open("k-a");
+      open("k-b");
+      register(T);
+      register(U);
+      setDocOwner("k-a", { ownerId: T, kind: "claimed" }, "claim", T);
+      setDocOwner("k-b", { ownerId: U, kind: "claimed" }, "claim", U);
+      await settle();
+      const otherBefore = entryIn(CTRL_ROOM, "k-b");
+      // U's document turns stale, but only T checks in: U's entry is kept.
+      oldest.set("k-b", Date.now() - OWNERSHIP_STALE_AFTER_MS - MIN);
+      oldest.set("k-a", Date.now() - OWNERSHIP_STALE_AFTER_MS - MIN);
+      const restores = ownershipRestoresForTests();
+      noteRecordPoll(T);
+      await settle();
+      expect(entryIn(CTRL_ROOM, "k-b")).toEqual(otherBefore);
+      expect(entryIn(CTRL_ROOM, "k-a")?.stale).toBeNull();
+      expect(ownershipRestoresForTests(), "no restore of the server's own write").toBe(restores);
+      // The next full republish brings U's entry up to date.
+      runOwnershipTickForTests();
+      expect(entryIn(CTRL_ROOM, "k-b")?.stale).toBe("not-checking-in");
+    });
+
+    it("what a broadcast published is what a later narrow refresh keeps", async () => {
+      startOwnershipPublishing();
+      open("bk-a");
+      open("bk-b");
+      register(T);
+      register(U);
+      setDocOwner("bk-a", { ownerId: T, kind: "claimed" }, "claim", T);
+      setDocOwner("bk-b", { ownerId: U, kind: "claimed" }, "claim", U);
+      await settle();
+      // U's document turns stale, and a broadcast (a new tab) publishes it.
+      oldest.set("bk-b", Date.now() - OWNERSHIP_STALE_AFTER_MS - MIN);
+      open("bk-c");
+      expect(entryIn(CTRL_ROOM, "bk-b")?.stale).toBe("not-checking-in");
+      // T's check-in keeps U's entry as that broadcast published it.
+      noteRecordPoll(T);
+      await settle();
+      expect(entryIn(CTRL_ROOM, "bk-b")?.stale).toBe("not-checking-in");
     });
 
     it("a poll before the item arrived does not count", () => {
