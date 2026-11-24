@@ -23,6 +23,7 @@ import {
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
+  SIDECAR_SIGNAL_ENV_KEYS,
   sessionCwdMatches,
   shouldClearSession,
   TANDEM_SECRET_ENV_KEYS,
@@ -1407,6 +1408,35 @@ describe("childEnv — the launched session must not inherit the desktop's app-d
       }
     },
   );
+
+  /**
+   * #2479: the desktop shell's one-shot start-up signals are this server's
+   * alone. `TANDEM_TAURI_SIDECAR` stays inherited, so a kept
+   * `TANDEM_DEFER_LAUNCHER` would defer the launcher of a `tandem` started
+   * from the session's shell, and a kept `TANDEM_OPEN_FILE` would reopen the
+   * cold-start document there. The port variables are pinned as survivors:
+   * this strip is the two signals, not a general `TANDEM_*` sweep.
+   */
+  it("strips the sidecar's one-shot start-up signals and nothing beside them", () => {
+    const env = childEnv(
+      {
+        TANDEM_OPEN_FILE: "/home/u/Documents/private.md",
+        TANDEM_DEFER_LAUNCHER: "1",
+        TANDEM_TAURI_SIDECAR: "1",
+        TANDEM_PORT: "3478",
+        TANDEM_MCP_PORT: "3479",
+        SOME_USER_TOOL_CONFIG: "keep-me",
+      },
+      [],
+    );
+    expect(env).toEqual({
+      TANDEM_TAURI_SIDECAR: "1",
+      TANDEM_PORT: "3478",
+      TANDEM_MCP_PORT: "3479",
+      SOME_USER_TOOL_CONFIG: "keep-me",
+    });
+    expect([...SIDECAR_SIGNAL_ENV_KEYS]).toEqual(["TANDEM_OPEN_FILE", "TANDEM_DEFER_LAUNCHER"]);
+  });
 
   /**
    * #1822 item 6 sets `NODE_ENV=production` on the packaged sidecar. Inherited

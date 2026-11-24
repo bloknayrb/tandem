@@ -1316,8 +1316,33 @@ export const TANDEM_SECRET_ENV_KEYS = [
 ] as const;
 
 /**
+ * One-shot start-up signals the desktop shell hands THIS server, which mean
+ * nothing to the launched Claude Code (#2479).
+ *
+ * - `TANDEM_OPEN_FILE` — the document the user double-clicked to cold-start
+ *   the app (`sidecar.rs`, first spawn only; an npm `tandem` honours a
+ *   hand-exported one the same way, `.env.example`, and the strip covers
+ *   that too). Inherited, a `tandem` started from the launched session's
+ *   shell would open that document again, and every command the session runs
+ *   could read a path the user never gave it.
+ * - `TANDEM_DEFER_LAUNCHER` — the start-at-login deferral (#1236). It is
+ *   honoured only beside `TANDEM_TAURI_SIDECAR=1`, which is deliberately
+ *   still inherited (see {@link DESKTOP_ONLY_ENV_KEYS}), so a `tandem` started
+ *   from the launched session's shell would read both and hold its own
+ *   launcher for a Start its user has no reason to press.
+ *
+ * Both are read only by `src/server/index.ts` and
+ * `launcher/initial-reason.ts`, at this server's own start. This is not the
+ * fix for third-party variables in the user's environment: whether those
+ * reach the launched session is #2479's open decision, and
+ * `docs/spikes/launcher-child-env.md` holds its facts.
+ */
+export const SIDECAR_SIGNAL_ENV_KEYS = ["TANDEM_OPEN_FILE", "TANDEM_DEFER_LAUNCHER"] as const;
+
+/**
  * The environment the launched Claude Code is spawned with: ours, minus
- * {@link DESKTOP_ONLY_ENV_KEYS} and {@link TANDEM_SECRET_ENV_KEYS} — and, for
+ * {@link DESKTOP_ONLY_ENV_KEYS}, {@link TANDEM_SECRET_ENV_KEYS} and
+ * {@link SIDECAR_SIGNAL_ENV_KEYS} — and, for
  * the Tauri sidecar only, minus `NODE_ENV`.
  *
  * `NODE_ENV` is set to `production` on the packaged sidecar by `sidecar.rs`
@@ -1337,6 +1362,7 @@ export function childEnv(
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
   for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
+  for (const key of SIDECAR_SIGNAL_ENV_KEYS) delete env[key];
   if (isTauriSidecar(argv)) delete env.NODE_ENV;
   return env;
 }
