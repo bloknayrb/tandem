@@ -74,6 +74,13 @@ describe("no release workflow can apply a staging overlay", () => {
         expect(m[1].trim(), `${f}: \`args:\` must be a single-line value`).not.toMatch(/^([|>]|$)/);
         expect(m[1], `${f}: ${m[0].trim()}`).not.toMatch(/(^|[\s"'])(--config|-c)(?=[\s=]|$)/);
       }
+      // A `run:` step calling the CLI directly, or an `args` key inside a flow
+      // mapping, never reaches the `args:` scan above.
+      for (const line of text.split("\n")) {
+        if (/\btauri\s+build\b|[{,]\s*args\s*:/.test(line)) {
+          expect(line, `${f}: ${line.trim()}`).not.toMatch(/(^|[\s"'])(--config|-c)(?=[\s=]|$)/);
+        }
+      }
     });
   }
 

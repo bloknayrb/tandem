@@ -79,7 +79,8 @@ npm view tandem-editor dist-tags --prefer-online
 These need Bryan's npm login with two-factor authentication. Trusted Publishing (OIDC, in
 `publish.yml`) authorizes `npm publish` only, so CI cannot do this.
 
-**Do not `npm unpublish`.** It is possible only within 72 hours, it burns the version number
+**Do not `npm unpublish`.** It is freely allowed only within 72 hours (after that only under
+npm's narrower conditions), it burns the version number
 anyway, and it breaks every Claude config that already pins `tandem-editor@<BAD version>`
 outright, where a deprecation only warns.
 
@@ -193,7 +194,8 @@ Windows. Nothing here touches the real `latest` pointer.
 
 1. **Staging repo.** Create the staging repository with one commit (a README is enough: a release
    needs a commit to tag). In it, create two releases named after two
-   real stable releases, `vOLD` and `vNEW` (for example the last two). Each holds only that
+   real stable releases, `vOLD` and `vNEW` (for example the last two; `vOLD` must already
+   contain `scripts/staging-update/`, because step 2 builds from it). Each holds only that
    release's `latest.json`:
 
    ```bash
@@ -204,11 +206,13 @@ Windows. Nothing here touches the real `latest` pointer.
    ```
 
    `vOLD` goes first, so `vNEW` is created last and is `latest`; it plays `vBAD`.
-2. **Staging build.** `npm run build:tauri:staging -- --manifest-url https://github.com/<owner>/tandem-update-staging/releases/latest/download/latest.json`.
-   Install it on a fresh test machine or VM snapshot (step 6 installs `vOLD`, which is older than
-   the checkout you built from, so it must not inherit data a newer build wrote: #1792). The
-   installed app's version (Settings → Apps, or Get Info) reads `0.0.1`; About shows the
-   checkout's own version, not `0.0.1`.
+2. **Staging build.** From a checkout of the `vOLD` tag, run
+   `npm run build:tauri:staging -- --manifest-url https://github.com/<owner>/tandem-update-staging/releases/latest/download/latest.json`.
+   Install it on a fresh test machine or VM snapshot. Both halves matter: the staging build runs
+   on that machine before step 6 installs `vOLD`, so a staging build from a newer checkout would
+   itself write data that the older `vOLD` then reads, and a non-fresh machine may hold such data
+   already (#1792). The installed app's version (Settings → Apps, or Get Info) reads `0.0.1`;
+   About shows the checkout's own version (`vOLD`'s), not `0.0.1`.
 3. **See the bad release offered.** Tray → Check for Updates. Pass: the update to `vNEW` is
    offered. Don't install it.
 4. **Run step 1 against the staging repo**, with `--repo <owner>/tandem-update-staging` on both

@@ -46,7 +46,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -167,9 +167,13 @@ function main() {
   console.log(`staging overlay: ${overlayPath}\n${json}`);
 
   const run = (cmd, cmdArgs) => execFileSync(cmd, cmdArgs, { cwd: repoRoot, stdio: "inherit" });
-  run(process.execPath, ["scripts/download-node-sidecar.mjs"]);
-  run(process.execPath, ["scripts/build-reaper.mjs"]);
-  run("cargo", ["tauri", "build", "--config", overlayPath]);
+  try {
+    run(process.execPath, ["scripts/download-node-sidecar.mjs"]);
+    run(process.execPath, ["scripts/build-reaper.mjs"]);
+    run("cargo", ["tauri", "build", "--config", overlayPath]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
   console.log(
     `\nStaging build done: version ${STAGING_VERSION}, updater -> ${overlay.plugins.updater.endpoints[0]}.\n` +
       "Install it on a TEST machine only: it shares the real app's identifier and data directory.",

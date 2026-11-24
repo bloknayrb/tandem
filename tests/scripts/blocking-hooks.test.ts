@@ -153,10 +153,9 @@ describe("check-token-violation.sh worktree guard", () => {
   });
 
   bashOnly("still runs the scanner for a file inside the project", () => {
-    // A fixed project dir, not ROOT: the guard skips every path under
-    // `.claude/worktrees/`, so with ROOT the case went red whenever the suite
-    // itself ran from an agent worktree, which says nothing about the guard.
-    const project = "/home/dev/tandem";
+    // The describe's fixed project dir, not ROOT: the guard skips every path
+    // under `.claude/worktrees/`, so with ROOT the case went red whenever the
+    // suite itself ran from an agent worktree, which says nothing about the guard.
     const run = runBashHook(
       "check-token-violation.sh",
       editEvent(`${project}/src/client/does-not-exist.ts`),
