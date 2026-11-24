@@ -311,15 +311,18 @@ async function handleReplaceAll() {
   partialWarning = null;
   replaceProgress = { replaced: 0, total: currentCount };
 
-  const { replaced, partial } = await replaceAll(ed.view, replaceText, (r, t) => {
-    replaceProgress = { replaced: r, total: t };
-  });
-
-  replaceProgress = null;
-  isReplacing = false;
-
-  if (partial) {
-    partialWarning = `Replaced ${replaced} of ${currentCount}; re-run to continue`;
+  try {
+    const { replaced, partial } = await replaceAll(ed.view, replaceText, (r, t) => {
+      replaceProgress = { replaced: r, total: t };
+    });
+    if (partial) {
+      partialWarning = `Replaced ${replaced} of ${currentCount}; re-run to continue`;
+    }
+  } finally {
+    // The busy flag now goes up before the dialog, so a throwing replace must
+    // not leave Replace / Replace All disabled until the bar remounts.
+    replaceProgress = null;
+    isReplacing = false;
   }
 }
 </script>

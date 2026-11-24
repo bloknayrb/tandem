@@ -145,16 +145,22 @@ $effect(() => {
   }
 });
 
-// A close the user CANCELS (an unsaved-content confirm answered "Cancel")
-// leaves the tab in the list, so the cleanup effect above never fires for it;
-// the id must come out here or that tab's X stays dead until reload. An
+// A close that does not end in THIS tab going away must release its id here,
+// or the cleanup effect above never fires for it (the id never leaves `tabs`)
+// and the tab's X stays dead until reload. Two such outcomes: the user
+// CANCELLED (an unsaved-content confirm answered "Cancel", or the close
+// failed), or the tab was REPLACED under the same id while the dialog was open
+// (same path reopened: a new Y.Doc, which the funnel declines to close). An
 // accepted close keeps its id until the server's broadcast removes the tab:
 // the set is what stops a double-click in that window from closing twice.
 async function guardedClose(tabId: string) {
   if (closingIds.has(tabId)) return;
+  const ydoc = tabs.find((t) => t.id === tabId)?.ydoc;
   closingIds.add(tabId);
   try {
-    if ((await onTabClose(tabId)) === false) closingIds.delete(tabId);
+    const closed = await onTabClose(tabId);
+    const live = tabs.find((t) => t.id === tabId);
+    if (closed === false || (live && live.ydoc !== ydoc)) closingIds.delete(tabId);
   } catch (err) {
     closingIds.delete(tabId);
     console.warn("[Tandem] tab close failed", err);
@@ -206,13 +212,13 @@ async function runTabAction(id: TabContextMenuActionId) {
       void guardedClose(tabId);
       return;
     case "ctx:tab:closeLeft":
-      onCloseToLeft?.(tabId);
+      void onCloseToLeft?.(tabId);
       return;
     case "ctx:tab:closeOthers":
-      onCloseOthers?.(tabId);
+      void onCloseOthers?.(tabId);
       return;
     case "ctx:tab:closeRight":
-      onCloseToRight?.(tabId);
+      void onCloseToRight?.(tabId);
       return;
     case "ctx:tab:rename":
       if (isRenamable(tab)) startRename(tabId);
