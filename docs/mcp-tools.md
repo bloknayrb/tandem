@@ -602,6 +602,8 @@ List all open documents with their IDs, file paths, and formats.
 }
 ```
 
+**Owner labels ship dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054's 5c amendment): a release build returns exactly the shape above, and its output schema has no `owner` field. With ownership on, each listed document also carries `owner` (ownership design §5.7). `owner` is `{ label, displayKind, kind, you }`, or `null` when no session holds the document: `label` is the holding session's server-minted label (e.g. `owner-k7qx`), `displayKind` one of `"Tandem's Claude"`, `"terminal"`, `"Claude Desktop"` or `"other app"`, `kind` how it holds the document (`default`, `claimed`, `opened` or `assigned`), and `you` whether that session is the caller. It names no owner id, owner handle or session id. A read never claims a document, so calling the tool changes no owner. `tandem_switchDocument`'s result is unchanged.
+
 ---
 
 ### tandem_switchDocument
@@ -725,6 +727,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 ```
 
 `notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
+
+**The owner label ships dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054's 5c amendment): a release build returns exactly the shape above, and its output schema has no `owner` field. With ownership on, the response also carries a top-level `owner` for the document it read (the named one, or the active one when `documentId` is omitted), as `tandem_listDocuments` does (ownership design §5.7). `owner` is `{ label, displayKind, kind, you }`, or `null` when no session holds the document: `label` is the holding session's server-minted label (e.g. `owner-k7qx`), `displayKind` one of `"Tandem's Claude"`, `"terminal"`, `"Claude Desktop"` or `"other app"`, `kind` how it holds the document (`default`, `claimed`, `opened` or `assigned`), and `you` whether that session is the caller. It names no owner id, owner handle or session id. A read never claims a document, so calling the tool changes no owner. It is about the document, not any record, so it is sent whatever the filters leave, an empty `annotations` included.
 
 `anchor` is present on an individual annotation **only when its CRDT anchor is untrustworthy** ([#1764](https://github.com/bloknayrb/tandem/issues/1764)): `"degraded"` means the anchor no longer describes this text and the `range` shown is the last one the server trusted, `"failed"` means the anchor resolved inverted. It is absent on every healthy refresh, so its absence is the normal case and carries no information.
 
