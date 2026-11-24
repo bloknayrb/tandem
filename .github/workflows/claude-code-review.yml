@@ -138,10 +138,14 @@ jobs:
         env:
           BASE_REF: ${{ steps.recheck.outputs.base_ref }}
           HEAD_SHA: ${{ steps.recheck.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          # --text --no-textconv --no-ext-diff: a PR's .gitattributes must not
-          # hide a file from the review as "binary" or through a diff driver.
-          git -C pr diff --text --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
+          # Attributes come from the default branch, not the PR, so a PR's
+          # .gitattributes cannot mark a source file binary (-diff) to hide it.
+          # Real binaries still show as "Binary files differ". No textconv or
+          # external diff drivers, which a PR could also name.
+          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
+            --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
           node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
           mkdir pr/.review-input
           cp inputs/pr.diff inputs/pr.json pr/.review-input/

@@ -22,15 +22,15 @@ import {
   BODY_CAP,
   bodyOnly,
   buildItem,
-  cap,
   commentableLines,
   FINDING_CAP,
+  fence,
   HEADER_RE,
   header,
   httpStatus,
   inlineCountLine,
   postItem,
-  sanitize,
+  wrap,
 } from "../../.github/claude-review/post.mjs";
 
 /**
@@ -191,22 +191,71 @@ describe("classify: outcomes", () => {
   });
 });
 
-describe("post: sanitising and placement", () => {
-  it("strips HTML comments, images and raw HTML, and defuses @mentions", () => {
-    const out = sanitize(
-      "Hi @bloknayrb and @org/team <!-- hidden --> ![x](http://e/i.png) <img src=x> <b>b</b> `@code`",
-    );
-    expect(out).not.toMatch(/<!--|!\[|<img|<b>/);
-    expect(out).toContain("`@bloknayrb`");
-    expect(out).toContain("`@org/team`");
-    expect(out).toContain("`@code`");
-  });
+describe("post: everything untrusted is fenced", () => {
+  /** The content between an item's code fences, with the fences' own lengths. */
+  const blocks = (md: string) =>
+    [...md.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gm)].map((m) => ({ fence: m[1], body: m[2] }));
+  /** Markdown outside any fenced block: the only part GitHub interprets. */
+  const outsideFences = (md: string) => md.replace(/^(`{3,})text\n[\s\S]*?\n\1$/gm, "");
 
-  it("cannot let model text forge a header, because the header is prepended after sanitising", () => {
-    const forged = { summary: "", findings: [] };
+  const hostile =
+    "hi @bloknayrb and org/team, see #12 and o/r#3 <img src=x> <!-- c --> ![i](http://e/p.png) " +
+    "&#64;x \\@y `code` ```` fence ```` \n\nblank line, then `x\n\n@after-blank";
+
+  it("puts the whole summary, findings and their paths inside a fence they cannot close", () => {
     const item = buildItem({
       outcome: { outcome: "posted" },
-      findings: { ...forged, summary: header("abcdef1", 999, 1) },
+      findings: {
+        summary: hostile,
+        findings: [{ path: "weird`name @x #5.md", line: 9, severity: "nit", body: hostile }],
+      },
+      diffText: "",
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+    });
+    const outside = outsideFences(item.body);
+    expect(outside).not.toMatch(/@|#\d|<img|<!--|!\[|&#|bloknayrb|weird/);
+    const bs = blocks(item.body);
+    expect(bs).toHaveLength(2);
+    for (const b of bs) {
+      // The fence is longer than every backtick run inside it.
+      const longest = Math.max(0, ...[...b.body.matchAll(/`+/g)].map((m) => m[0].length));
+      expect(b.fence.length).toBeGreaterThan(longest);
+    }
+    expect(bs[0].body).toContain("@after-blank");
+  });
+
+  it("fences each inline comment body, and keeps generics and comparisons verbatim", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -0,0 +1 @@",
+      "+x",
+    ].join("\n");
+    const item = buildItem({
+      outcome: { outcome: "posted" },
+      findings: {
+        summary: "s",
+        findings: [{ path: "a.ts", line: 1, severity: "important", body: "Map<K, V> and a<b @z" }],
+      },
+      diffText: diff,
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+    });
+    expect(item.comments).toHaveLength(1);
+    expect(item.comments?.[0]?.body).toBe(fence("[important] Map<K, V> and a<b @z"));
+    expect(outsideFences(item.comments?.[0]?.body ?? "")).toBe("");
+  });
+
+  it("cannot let model text forge a header: the header is ours and comes first", () => {
+    const item = buildItem({
+      outcome: { outcome: "posted" },
+      findings: { summary: header("abcdef1", 999, 1), findings: [] },
       diffText: "",
       sha: "1234567",
       runId: 42,
@@ -218,21 +267,7 @@ describe("post: sanitising and placement", () => {
     expect(m?.[3]).toBe("2");
   });
 
-  it("sanitises the summary as well as the findings", () => {
-    const item = buildItem({
-      outcome: { outcome: "posted" },
-      findings: { summary: "cc @someone <!-- x --> ![i](http://e/p.png)", findings: [] },
-      diffText: "",
-      sha: "1234567",
-      runId: 1,
-      attempt: 1,
-      pr: 5,
-    });
-    expect(item.body).toContain("`@someone`");
-    expect(item.body).not.toMatch(/<!--|!\[/);
-  });
-
-  it("maps findings onto right-hand diff lines and folds the rest into the body", () => {
+  it("maps findings onto right-hand diff lines, folds the rest into the body, and states the inline count", () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",
       "--- a/src/a.ts",
@@ -262,9 +297,9 @@ describe("post: sanitising and placement", () => {
     });
     expect(item.kind).toBe("review");
     expect(item.comments).toEqual([
-      { path: "src/a.ts", line: 2, side: "RIGHT", body: "**important:** in diff" },
+      { path: "src/a.ts", line: 2, side: "RIGHT", body: fence("[important] in diff") },
     ]);
-    expect(item.body).toContain("`src/b.ts:9` **nit:** outside");
+    expect(item.body).toContain("[nit] src/b.ts:9\noutside");
     // The gate checks it fetched every inline comment against this line.
     expect(item.body.split("\n\n")[1]).toBe(inlineCountLine(1));
   });
@@ -283,8 +318,7 @@ describe("post: sanitising and placement", () => {
     expect(item.body).toContain("No findings.");
   });
 
-  it("caps the combined body and each inline body", () => {
-    expect(cap("x".repeat(BODY_CAP + 10), BODY_CAP)).toHaveLength(BODY_CAP);
+  it("caps each section inside its fence, keeping every fence closed and the body under GitHub's limit", () => {
     const many = Array.from({ length: 30 }, (_, i) => ({
       path: "z.ts",
       line: i + 1,
@@ -293,7 +327,7 @@ describe("post: sanitising and placement", () => {
     }));
     const item = buildItem({
       outcome: { outcome: "posted" },
-      findings: { summary: "s", findings: many },
+      findings: { summary: "s".repeat(50_000), findings: many },
       diffText: "",
       sha: "1234567",
       runId: 1,
@@ -301,6 +335,8 @@ describe("post: sanitising and placement", () => {
       pr: 5,
     });
     expect(item.body.length).toBeLessThanOrEqual(BODY_CAP);
+    expect(blocks(item.body)).toHaveLength(2);
+    expect(item.bodyOnlyBody?.length).toBeLessThanOrEqual(BODY_CAP);
     const big = buildItem({
       outcome: { outcome: "posted" },
       findings: {
@@ -314,7 +350,18 @@ describe("post: sanitising and placement", () => {
       pr: 5,
     });
     expect(big.comments).toHaveLength(1);
-    expect(big.comments?.[0]?.body.length).toBeLessThanOrEqual(FINDING_CAP);
+    expect(
+      blocks(big.comments?.[0]?.body ?? "")[0]?.body.replace(/\n/g, "").length,
+    ).toBeLessThanOrEqual(FINDING_CAP);
+  });
+
+  it("soft-wraps long lines at spaces, and hard-wraps a line with none", () => {
+    expect(wrap("aaa bbb ccc", 7)).toBe("aaa bbb\nccc");
+    expect(wrap("x".repeat(15), 7)).toBe("xxxxxxx\nxxxxxxx\nx");
+  });
+
+  it("drops carriage returns, so every fenced line ends where the fence counting assumed", () => {
+    expect(fence("a\rb\r\nc")).not.toContain("\r");
   });
 
   it("posts fixed text for withheld and incomplete, with the header first", () => {
@@ -340,15 +387,25 @@ describe("post: sanitising and placement", () => {
   });
 
   it("on a 422 posts the prepared body-only form, on anything else reports the failure", () => {
-    const item = {
-      kind: "review",
-      body: `H\n\n${inlineCountLine(1)}\n\nB`,
-      comments: [{ path: "a", line: 1, side: "RIGHT", body: "c" }],
-      commit_id: "1234567",
-    };
+    const diff = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -0,0 +1 @@",
+      "+x",
+    ].join("\n");
+    const item = buildItem({
+      outcome: { outcome: "posted" },
+      findings: { summary: "s", findings: [{ path: "a.ts", line: 1, severity: "nit", body: "c" }] },
+      diffText: diff,
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+    });
     const fallback = bodyOnly(item);
     expect(fallback?.comments).toEqual([]);
-    expect(fallback?.body).toContain("`a:1` c");
+    expect(fallback?.body).toContain("[nit] a.ts:1\nc");
     expect(fallback?.body).toContain(inlineCountLine(0));
     const calls: string[] = [];
     const res = postItem(
@@ -367,7 +424,8 @@ describe("post: sanitising and placement", () => {
       },
     );
     expect(res.status).toBe(0);
-    expect(JSON.parse(calls[1])).toMatchObject({ body: fallback?.body, comments: [] });
+    expect(JSON.parse(calls[0] ?? "{}")).not.toHaveProperty("bodyOnlyBody");
+    expect(JSON.parse(calls[1] ?? "{}")).toMatchObject({ body: fallback?.body, comments: [] });
     let tries = 0;
     const serverError = postItem(
       { item, fallback },
@@ -381,31 +439,17 @@ describe("post: sanitising and placement", () => {
     expect(tries).toBe(1);
     expect(httpStatus("x (HTTP 422)")).toBe("422");
   });
+
+  it("main sends item.json as classify.mjs wrote it, rebuilding nothing", () => {
+    const src = readFileSync(path.join(SCRIPTS, "post.mjs"), "utf8");
+    const main = src.slice(src.indexOf("function main()"));
+    expect(main).toContain('"item.json"');
+    expect(main).toContain("postItem(prepared,");
+    expect(main).not.toMatch(/buildItem\(|fence\(|bodyOnly\(|wrap\(|cap\(/);
+  });
 });
 
-describe("post: sanitising keeps code and refuses splicing", () => {
-  it("keeps generics and comparisons, in code spans and in prose", () => {
-    expect(sanitize("Use `Map<string, number>` here")).toBe("Use `Map<string, number>` here");
-    const prose = sanitize("if a<b && c>d then Promise<void>");
-    expect(prose).toContain("a&lt;b");
-    expect(prose).toContain("Promise&lt;void>");
-  });
-
-  it("replaces removed constructs with a space, so they cannot rejoin a split string", () => {
-    expect(sanitize("abc<!-- x -->def")).toBe("abc def");
-    expect(sanitize("abc![i](u)def")).toBe("abc def");
-  });
-
-  it("defuses a mention after a lone backtick, and wraps issue cross-references", () => {
-    const out = sanitize("a`@someone and see #123 or org/repo#9");
-    // The lone backtick becomes a quote, so it cannot pair with the wrap's
-    // opening backtick and leave the mention outside a code span.
-    expect(out).toContain("a'`@someone`");
-    expect(out).not.toContain("``");
-    expect(out).toContain("`#123`");
-    expect(out).toContain("`org/repo#9`");
-  });
-
+describe("post: the diff parser", () => {
   it("does not take an added line starting '++ ' for a file header", () => {
     const diff = [
       "diff --git a/f.ts b/f.ts",

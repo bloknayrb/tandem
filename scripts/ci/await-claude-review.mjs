@@ -193,13 +193,25 @@ export async function run(pr, deps = {}) {
   const log = deps.log ?? ((s) => console.error(s));
   const opts = { ...DEFAULTS, ...deps.opts };
 
-  const meta = ghJson(gh, ["pr", "view", String(pr), "--json", "headRefName,headRefOid,files"]);
+  const meta = ghJson(gh, ["pr", "view", String(pr), "--json", "headRefName,headRefOid"]);
   const repoMeta = ghJson(gh, ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"]);
   const repo = repoMeta.nameWithOwner;
   const defaultBranch = repoMeta.defaultBranchRef?.name;
   if (!defaultBranch) throw new Error("could not resolve the default branch");
 
-  const touched = touchesReview((meta.files ?? []).map((f) => f.path));
+  // The REST files list, paginated: `gh pr view --json files` stops at 100
+  // files, and only REST gives a rename's old name. Both names are checked, so
+  // renaming the workflow away does not escape the check. This reads the PR's
+  // files now, not at the reviewed SHA: a PR that edits the workflow, gets a
+  // green run, then reverts the edit is the push-access bound, not this check.
+  const changed = ghLines(gh, [
+    "api",
+    "--paginate",
+    `repos/${repo}/pulls/${pr}/files`,
+    "--jq",
+    ".[] | {filename: .filename, previous: .previous_filename}",
+  ]).flatMap((f) => [f.filename, f.previous].filter(Boolean));
+  const touched = touchesReview(changed);
   if (touched.length) {
     return {
       exit: 2,

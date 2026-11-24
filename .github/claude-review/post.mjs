@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // Posts the single PR item for one Claude review run (#1831).
 //
-// Two halves. The pure half (buildItem, bodyOnly, sanitize) is called by
+// Two halves. The pure half (buildItem, bodyOnly, fence) is called by
 // classify.mjs, which builds the exact bytes to post and secret-scans them.
-// Everything the model wrote is sanitised before the header is prepended, so
-// model text can neither forge a header nor ping people, link other issues,
-// load images or smuggle raw HTML. The posting half (main) runs in its own
-// step holding GH_TOKEN and never the subscription token, and sends
-// inputs/item.json exactly as classify.mjs wrote it. No npm dependencies.
+// Everything the model wrote, and every PR-chosen path, is placed inside a
+// fenced code block whose fence is longer than any backtick run in it, so
+// GitHub renders it literally: no mentions, issue links, images, HTML or
+// escapes, and no way to close the block early. Only our own fixed text is
+// Markdown. The posting half (main) runs in its own step holding GH_TOKEN and
+// never the subscription token, and sends inputs/item.json exactly as
+// classify.mjs wrote it. No npm dependencies.
 //
 // Usage: node post.mjs <inputs-dir>
 // Env:   GH_TOKEN, GITHUB_REPOSITORY
@@ -19,6 +21,9 @@ import { pathToFileURL } from "node:url";
 
 export const BODY_CAP = 60_000;
 export const FINDING_CAP = 8_000;
+export const SUMMARY_CAP = 20_000;
+export const FINDINGS_BLOCK_CAP = 35_000;
+export const WRAP = 100;
 const TRUNCATED = "\n\n…(truncated)";
 const GH_TIMEOUT_MS = 120_000;
 
@@ -43,36 +48,36 @@ export function cap(text, limit) {
   return text.length <= limit ? text : text.slice(0, limit - TRUNCATED.length) + TRUNCATED;
 }
 
-/**
- * Sanitise one stretch of prose that is not inside a code span. Removed
- * constructs become a space, never nothing, so a removal can never splice two
- * halves of a string back together (the secret scan runs on this output, but
- * a splice-free rewrite keeps that true by construction too).
- */
-function sanitizeProse(text) {
-  return text
-    .replace(/<!--[\s\S]*?(-->|$)/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/!\[[^\]]*\]\[[^\]]*\]/g, " ")
-    .replace(/</g, "&lt;")
-    .replace(/`/g, "'") // a lone backtick here is unmatched: it must not open a span around what follows
-    .replace(/(^|[^\w])@([A-Za-z0-9][\w-]*(?:\/[\w.-]+)?)/g, "$1`@$2`")
-    .replace(/(^|[^\w`])((?:[\w.-]+\/[\w.-]+)?#\d+)/g, "$1`$2`");
+/** Soft-wrap long lines at a space (code blocks do not wrap on GitHub). */
+export function wrap(text, width = WRAP) {
+  const out = [];
+  for (let line of text.split("\n")) {
+    while (line.length > width) {
+      let at = line.lastIndexOf(" ", width);
+      if (at <= 0) at = width;
+      out.push(line.slice(0, at));
+      line = line.slice(at).replace(/^ /, "");
+    }
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 /**
- * Neutralise model-written Markdown before it is posted. Code spans are kept
- * verbatim: GitHub renders them literally (no HTML, images or mentions), and
- * escaping inside them would show `&lt;` where a finding quotes `Map<K, V>`.
- * Outside them, `<` is escaped rather than tag-shaped text deleted, so
- * `a < b` and generics in prose survive while raw HTML cannot render.
+ * Put untrusted text in a fenced code block that it cannot close: the fence is
+ * one backtick longer than the longest backtick run in the text (at least
+ * three), and a closing fence must be at least as long as the opening one.
+ * GitHub renders code blocks literally, so nothing inside becomes a mention,
+ * an issue reference, an image, HTML or an entity/escape.
  */
-export function sanitize(text) {
-  return String(text)
-    .split(/(`+[^`]*`+)/)
-    .map((part, i) => (i % 2 === 1 ? part : sanitizeProse(part)))
-    .join("");
+export function fence(text) {
+  const clean = String(text).replace(/\r/g, "");
+  const longest = Math.max(0, ...[...clean.matchAll(/`+/g)].map((m) => m[0].length));
+  const f = "`".repeat(Math.max(3, longest + 1));
+  return `${f}text\n${wrap(clean)}\n${f}`;
 }
+
+const findingText = (f) => `[${f.severity}] ${f.path}:${f.line}\n${f.body}`;
 
 /**
  * Lines that can carry an inline comment: every right-hand (new-file) line
@@ -152,22 +157,33 @@ export function buildItem({ outcome, findings, diffText, sha, runId, attempt, pr
   }
   const lines = commentableLines(diffText);
   const inline = [];
-  const fallback = [];
+  const outside = [];
   for (const f of findings.findings) {
-    const filePath = sanitize(f.path).replace(/`/g, "");
-    const body = cap(`**${f.severity}:** ${sanitize(f.body)}`, FINDING_CAP);
     if (lines.get(f.path)?.has(f.line)) {
-      inline.push({ path: f.path, line: f.line, side: "RIGHT", body });
+      // The path is a real path from the diff (it matched commentableLines);
+      // it goes to the API as a field, never into Markdown.
+      inline.push({ path: f.path, line: f.line, side: "RIGHT", body: fence(cap(`[${f.severity}] ${f.body}`, FINDING_CAP)) });
     } else {
-      fallback.push(`- \`${filePath}:${f.line}\` ${body}`);
+      outside.push(f);
     }
   }
-  const summary = sanitize(findings.summary).trim();
-  const parts = [head, inlineCountLine(inline.length), summary || ""];
-  if (findings.findings.length === 0) parts.push("No findings.");
-  if (fallback.length) parts.push("**Findings outside the diff:**", fallback.join("\n"));
-  const body = cap(parts.filter(Boolean).join("\n\n"), BODY_CAP);
-  return { kind: "review", body, comments: inline, commit_id: sha };
+  const summary = findings.summary.trim();
+  const assemble = (count, listed, heading) => {
+    const parts = [head, inlineCountLine(count)];
+    if (summary) parts.push(fence(cap(summary, SUMMARY_CAP)));
+    if (findings.findings.length === 0) parts.push("No findings.");
+    if (listed.length) parts.push(heading, fence(cap(listed.map(findingText).join("\n\n"), FINDINGS_BLOCK_CAP)));
+    return parts.join("\n\n");
+  };
+  return {
+    kind: "review",
+    body: assemble(inline.length, outside, "**Findings outside the diff:**"),
+    comments: inline,
+    commit_id: sha,
+    // The 422 fallback (see bodyOnly), built here from the raw findings so it
+    // is fenced the same way and scanned with everything else.
+    bodyOnlyBody: assemble(0, findings.findings, "**Findings:**"),
+  };
 }
 
 function gh(args, input) {
@@ -188,12 +204,7 @@ export function httpStatus(stderr) {
  */
 export function bodyOnly(item) {
   if (item.kind !== "review") return null;
-  const allInBody = item.comments.map((c) => `- \`${c.path}:${c.line}\` ${c.body}`).join("\n");
-  const body = cap(
-    [item.body.replace(INLINE_COUNT_RE, inlineCountLine(0)), allInBody].filter(Boolean).join("\n\n"),
-    BODY_CAP,
-  );
-  return { kind: "review", body, comments: [], commit_id: item.commit_id };
+  return { kind: "review", body: item.bodyOnlyBody, comments: [], commit_id: item.commit_id };
 }
 
 /**

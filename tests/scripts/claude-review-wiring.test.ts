@@ -264,10 +264,14 @@ describe("workspace", () => {
     expect(run.indexOf('"$left"')).toBeLessThan(copy);
   });
 
-  it("diffs as text, without textconv or external diff drivers a PR could set", () => {
-    expect(stepNamed("Prepare review inputs").run).toContain(
-      'git -C pr diff --text --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff',
+  it("diffs with the default branch's attributes, without textconv or external diff drivers", () => {
+    const prep = stepNamed("Prepare review inputs");
+    expect(prep.run).toContain(
+      'git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \\\n' +
+        '  --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff',
     );
+    expect(prep.run).not.toContain("--text");
+    expect(prep.env?.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
   });
 
   it("keeps the step order the controls depend on", () => {

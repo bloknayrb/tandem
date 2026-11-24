@@ -74,8 +74,9 @@ repeat the same loop on the fixes.
 
 **Before merging a same-repo, non-bot PR, wait for the cloud Claude review (#1831).** Run the
 gate **from `origin/master`, never from the PR's checkout** (a PR that edits it would judge
-itself): `git fetch origin master && git show origin/master:scripts/ci/await-claude-review.mjs >
-"$TMPDIR/gate.mjs" && node "$TMPDIR/gate.mjs" <pr>`, and act on its exit code. **0**: read the
+itself). In the Bash tool (git-bash; in PowerShell use `$env:TEMP`): `git fetch origin master && git
+show origin/master:scripts/ci/await-claude-review.mjs > "$TMPDIR/gate.mjs" && node "$TMPDIR/gate.mjs"
+<pr>`, and act on its exit code. **0**: read the
 review and inline comments it prints, and fix or answer each finding on the PR. **4** (the review
 did not complete) or **3** (no run, skipped, or refused): note it in the PR and proceed. **2** (an
 attempt went red: a withheld review, a review system that is down, a broken or timed-out run, or
