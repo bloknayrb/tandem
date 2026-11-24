@@ -235,7 +235,11 @@ test("with another AI attached, a chat promises nothing (#2196)", async ({ page 
   await expect(page.locator("[data-testid='chat-pickup-status']")).toBeVisible();
   await expect(page.locator("[data-testid='chat-tandem-claude-resuming']")).toHaveCount(0);
   // The send toast is NOT held back here — the control for the test above.
-  await expect(page.getByText("nothing will answer")).toBeVisible({ timeout: 5_000 });
+  // Scoped to the toast: the screen-reader announcer (#2489) carries the same
+  // text, so an unscoped getByText matches two elements.
+  await expect(
+    page.getByTestId(/^toast-ai-not-ready-chat-/).getByText("nothing will answer"),
+  ).toBeVisible({ timeout: 5_000 });
 });
 
 test("the greeting that never came shows how to fix it, and only while late (#2197)", async ({
