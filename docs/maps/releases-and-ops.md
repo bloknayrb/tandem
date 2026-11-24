@@ -23,6 +23,10 @@ the [docs hub](../README.md).
 - [macOS signing and notarization runbook](../428-macos-notarization-runbook.md) answers "why do
   Macs say Tandem is damaged, and how do I fix the certificates?" Read it when a certificate
   expires or notarization fails.
+- [Bad-release recovery runbook](../bad-release-runbook.md) answers "a release is broken, how do I
+  stop it?" It moves the desktop `latest` pointer and the npm dist-tag back, and holds the staging
+  update channel (`npm run build:tauri:staging`) used to rehearse that and to run the RC
+  forward-update check.
 - [Stacked PRs](../stacked-prs.md) covers chaining dependent pull requests before a release.
 
 ## Gates toward v1.0
