@@ -1,8 +1,13 @@
 //! Start-at-login: the OS registration commands and the launch-mode
 //! detection that reads what they wrote (#1236, ADR-046).
 //!
-//! Thin wrappers over `tauri-plugin-autostart` rather than the plugin's own JS
-//! API. Two reasons the indirection earns its keep:
+//! Thin wrappers over the OS registration rather than the plugin's own JS
+//! API. On macOS and Linux the registration is `tauri-plugin-autostart`'s; on
+//! **Windows it is Tandem's own** (`autostart_win.rs`, #2160), because the
+//! plugin's `auto-launch` 0.6 writes the machine-wide `HKLM` Run key from any
+//! elevated launch and the plugin offers no way to stop it. The plugin is not
+//! even a dependency on Windows (`Cargo.toml`), so no Windows code path can
+//! reach it. Two reasons the indirection earns its keep:
 //!
 //! 1. **Readback-after-write.** The plugin's `enable()` returning `Ok` does not
 //!    prove a registration exists. An MSIX/Store package cannot write HKCU Run
@@ -22,7 +27,48 @@
 //! grant and no `@tauri-apps/plugin-autostart` npm dependency.
 
 use serde::Serialize;
-use tauri_plugin_autostart::ManagerExt;
+
+/// The OS registration backend. One seam, so `autostart_get_status`,
+/// `autostart_set_enabled` and `refresh_registration` cannot disagree about
+/// where the registration lives.
+#[cfg(not(target_os = "windows"))]
+mod os {
+    use tauri_plugin_autostart::ManagerExt;
+
+    pub(super) type Error = tauri_plugin_autostart::Error;
+
+    pub(super) fn is_enabled(app: &tauri::AppHandle) -> Result<bool, Error> {
+        app.autolaunch().is_enabled()
+    }
+
+    pub(super) fn enable(app: &tauri::AppHandle) -> Result<(), Error> {
+        app.autolaunch().enable()
+    }
+
+    pub(super) fn disable(app: &tauri::AppHandle) -> Result<(), Error> {
+        app.autolaunch().disable()
+    }
+}
+
+/// Windows: Tandem's own `HKCU`-only registration (#2160). See
+/// `autostart_win.rs` for why the plugin is not used here.
+#[cfg(target_os = "windows")]
+mod os {
+    pub(super) type Error = std::io::Error;
+
+    pub(super) fn is_enabled(_app: &tauri::AppHandle) -> Result<bool, Error> {
+        crate::autostart_win::LIVE.is_enabled()
+    }
+
+    pub(super) fn enable(_app: &tauri::AppHandle) -> Result<(), Error> {
+        let command = crate::autostart_win::command_for_this_launch()?;
+        crate::autostart_win::LIVE.enable(&command)
+    }
+
+    pub(super) fn disable(_app: &tauri::AppHandle) -> Result<(), Error> {
+        crate::autostart_win::LIVE.disable()
+    }
+}
 
 /// Path-free error codes. The strings are the cross-process contract with
 /// `src/client/tauri/autostart-invoke.ts` — renaming one desyncs the UI.
@@ -64,11 +110,20 @@ impl AutostartStatus {
 /// `tauri_plugin_autostart::Error` is either `Io` or a stringified `Anyhow`
 /// carrying whatever `auto_launch` produced — both can name the registration
 /// path, so neither is ever forwarded verbatim.
-pub fn autostart_error_code(err: &tauri_plugin_autostart::Error) -> &'static str {
+#[cfg(not(target_os = "windows"))]
+pub fn autostart_error_code(err: &os::Error) -> &'static str {
     match err {
         tauri_plugin_autostart::Error::Io(_) => ERR_IO,
         _ => ERR_PLUGIN,
     }
+}
+
+/// Windows: every failure of Tandem's own registry backend is an `io::Error`
+/// (a Win32 error code, or the another-user's-profile refusal), so it is
+/// always `ERR_IO`. The message is logged, never forwarded.
+#[cfg(target_os = "windows")]
+pub fn autostart_error_code(_err: &os::Error) -> &'static str {
+    ERR_IO
 }
 
 /// Read the current registration state. Never mutates.
@@ -78,7 +133,7 @@ pub fn autostart_get_status(
     tray_available: tauri::State<'_, crate::TrayAvailable>,
 ) -> AutostartStatus {
     let tray = tray_available.get();
-    match app.autolaunch().is_enabled() {
+    match os::is_enabled(&app) {
         Ok(enabled) => AutostartStatus::new(enabled, tray, None),
         Err(e) => {
             log::warn!("[autostart] is_enabled failed: {e}");
@@ -99,22 +154,21 @@ pub fn autostart_set_enabled(
     tray_available: tauri::State<'_, crate::TrayAvailable>,
 ) -> AutostartStatus {
     let tray = tray_available.get();
-    let manager = app.autolaunch();
 
     let write = if enabled {
-        manager.enable()
+        os::enable(&app)
     } else {
-        manager.disable()
+        os::disable(&app)
     };
     if let Err(e) = write {
         log::warn!("[autostart] set_enabled({enabled}) failed: {e}");
         // Still read back — the write may have partially applied, and the
         // toggle must reflect what the OS actually holds.
-        let actual = manager.is_enabled().unwrap_or(false);
+        let actual = os::is_enabled(&app).unwrap_or(false);
         return AutostartStatus::new(actual, tray, Some(autostart_error_code(&e)));
     }
 
-    match manager.is_enabled() {
+    match os::is_enabled(&app) {
         Ok(actual) if actual == enabled => AutostartStatus::new(actual, tray, None),
         Ok(actual) => {
             log::warn!("[autostart] readback mismatch: requested {enabled}, OS reports {actual}");
@@ -129,8 +183,9 @@ pub fn autostart_set_enabled(
 
 /// May we re-bake this launch's executable path into the OS login item?
 ///
-/// `manager.enable()` writes whatever path the plugin resolves for this launch
-/// (`$APPIMAGE` on Linux when set, else `current_exe()`); the caller resolves it
+/// `os::enable()` writes whatever path the backend resolves for this launch
+/// (`$APPIMAGE` on Linux when set, else `current_exe()`, which is also what
+/// Tandem's own Windows backend bakes); the caller resolves it
 /// the same way and passes it in as `exe`, which is what keeps this pure and
 /// testable by value.
 ///
@@ -322,10 +377,9 @@ fn path_starts_with_ci(path: &std::path::Path, prefix: &std::path::Path) -> bool
 /// The `Ok(false)` arm below is what keeps "every launch" from ever meaning
 /// "enable".
 pub fn refresh_registration(app: &tauri::AppHandle) {
-    let manager = app.autolaunch();
-    match manager.is_enabled() {
+    match os::is_enabled(app) {
         Ok(true) => {
-            if let Err(e) = manager.enable() {
+            if let Err(e) = os::enable(app) {
                 log::warn!("[autostart] refresh failed (registration may be stale): {e}");
             } else {
                 log::info!("[autostart] refreshed registration");
@@ -334,6 +388,100 @@ pub fn refresh_registration(app: &tauri::AppHandle) {
         Ok(false) => {}
         Err(e) => log::warn!("[autostart] refresh skipped, is_enabled failed: {e}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Windows registration shape (#2160)
+//
+// The FFI lives in `autostart_win.rs`, which only compiles on Windows. What it
+// writes and how it reads it back are decided here, ungated, so the ubuntu CI
+// leg tests them by value. `uninstall_scrub.rs` deletes these same two values.
+// ---------------------------------------------------------------------------
+
+/// The per-user Run key, relative to `HKEY_CURRENT_USER`. Never `HKLM`: Tandem
+/// installs per user into `%LOCALAPPDATA%`, a folder only that user can write,
+/// so an all-users Run value pointing into it would let one user's files run at
+/// every other user's logon.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const WIN_RUN_SUBKEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+
+/// Task Manager's Startup-tab override for the Run value of the same name.
+/// Explorer creates the key; enabling writes the "enabled" bytes only when it
+/// already exists, which is what `auto-launch` 0.5 (what earlier Tandem builds
+/// used through the plugin) did.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const WIN_STARTUP_APPROVED_SUBKEY: &str =
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+
+/// The `REG_BINARY` Task Manager reads as "enabled": a leading `02` and all
+/// zero after it. A disabled entry is `03` followed by the FILETIME it was
+/// disabled at.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const WIN_STARTUP_APPROVED_ENABLED: [u8; 12] = [
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+/// The Run value's command line: the executable **quoted**, then the args.
+///
+/// `auto-launch` 0.5 wrote the path unquoted, so a profile folder with a space
+/// in it (`C:\Users\Jane Doe\…`) left Windows to guess where the program
+/// name ends — the classic unquoted-path shape. A Windows path cannot contain
+/// `"`, and Tandem's only argument is a constant flag, so instead of escaping
+/// this refuses anything that would need it (`None`), and the caller reports
+/// an error rather than baking an ambiguous command.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win_run_command(exe: &str, args: &[&str]) -> Option<String> {
+    if exe.is_empty() || exe.contains('"') {
+        return None;
+    }
+    let mut command = format!("\"{exe}\"");
+    for arg in args {
+        if arg.is_empty() || arg.contains('"') || arg.chars().any(char::is_whitespace) {
+            return None;
+        }
+        command.push(' ');
+        command.push_str(arg);
+    }
+    Some(command)
+}
+
+/// Does Task Manager's StartupApproved value leave the Run entry enabled?
+///
+/// The same rule `auto-launch` 0.5 applied, so a registration reads the same
+/// before and after Tandem took the backend over: an entry is enabled when the
+/// last eight bytes are all zero, and a value too short to judge does not
+/// disable it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win_startup_approved_allows(bytes: &[u8]) -> bool {
+    if bytes.len() < 8 {
+        return true;
+    }
+    bytes[bytes.len() - 8..].iter().all(|b| *b == 0)
+}
+
+/// Is `exe` inside a user profile other than `home`?
+///
+/// The Run key Tandem writes belongs to whoever the process runs as. A process
+/// started with "Run as administrator" **under different credentials** (a
+/// standard user's install, elevated with an admin's password) runs as the
+/// admin, so its `HKCU` is the admin's — and baking this launch's path there
+/// would make the admin run, at every logon, an executable that the standard
+/// user can replace. `HKCU` alone does not prevent that, so `enable()` refuses
+/// it. Also refuses `C:\Users\Public\…`, which every user can write.
+///
+/// "Another profile" means: under `home`'s parent (the profiles root) but not
+/// under `home`. A `home` with no grandparent (a profile at a drive root) has
+/// no profiles root to judge by, so nothing is refused on that ground. Both
+/// paths should arrive canonicalized; the comparison is case-insensitive.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn exe_in_another_users_profile(exe: &std::path::Path, home: &std::path::Path) -> bool {
+    let Some(profiles_root) = home.parent() else {
+        return false;
+    };
+    if profiles_root.parent().is_none() {
+        return false;
+    }
+    path_starts_with_ci(exe, profiles_root) && !path_starts_with_ci(exe, home)
 }
 
 #[cfg(test)]
@@ -544,6 +692,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn io_errors_map_to_the_io_code() {
         let err = tauri_plugin_autostart::Error::Io(std::io::Error::new(
@@ -553,6 +702,7 @@ mod tests {
         assert_eq!(autostart_error_code(&err), ERR_IO);
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn anyhow_errors_map_to_the_generic_code_and_drop_the_message() {
         let secret = "/Users/victim/Library/LaunchAgents/Tandem.plist";
@@ -570,6 +720,135 @@ mod tests {
             json,
             r#"{"enabled":true,"trayAvailable":false,"error":"readback-mismatch"}"#
         );
+    }
+    // -- Windows registration shape (#2160). Pure, so they run on every leg. --
+
+    #[test]
+    fn the_windows_run_command_quotes_the_executable() {
+        assert_eq!(
+            win_run_command(
+                r"C:\Users\Jane Doe\AppData\Local\Tandem\tandem-desktop.exe",
+                &[AUTOSTART_FLAG]
+            )
+            .as_deref(),
+            Some(
+                r#""C:\Users\Jane Doe\AppData\Local\Tandem\tandem-desktop.exe" --tandem-autostart"#
+            ),
+            "a space in the profile folder must not leave Windows guessing where the program ends"
+        );
+        assert_eq!(
+            win_run_command(r"C:\T\tandem.exe", &[]).as_deref(),
+            Some(r#""C:\T\tandem.exe""#)
+        );
+    }
+
+    #[test]
+    fn the_windows_run_command_refuses_what_it_would_have_to_escape() {
+        assert_eq!(win_run_command("", &[AUTOSTART_FLAG]), None);
+        assert_eq!(win_run_command(r#"C:\a"b\tandem.exe"#, &[]), None);
+        assert_eq!(win_run_command(r"C:\T\tandem.exe", &["two words"]), None);
+        assert_eq!(win_run_command(r"C:\T\tandem.exe", &[r#"--x="y""#]), None);
+        assert_eq!(win_run_command(r"C:\T\tandem.exe", &[""]), None);
+    }
+
+    /// The flag the backend bakes must stay one the quoting rule accepts, or
+    /// every Windows enable would fail closed.
+    #[test]
+    fn the_autostart_flag_needs_no_quoting() {
+        assert!(win_run_command(r"C:\T\tandem.exe", &[AUTOSTART_FLAG]).is_some());
+    }
+
+    #[test]
+    fn startup_approved_reads_as_auto_launch_0_5_read_it() {
+        assert!(win_startup_approved_allows(&WIN_STARTUP_APPROVED_ENABLED));
+        // Disabled in Task Manager: 03 then the FILETIME of the change.
+        let disabled = [
+            0x03, 0, 0, 0, 0x10, 0x52, 0x3a, 0x8b, 0xc4, 0x41, 0xda, 0x01,
+        ];
+        assert!(!win_startup_approved_allows(&disabled));
+        // Too short to judge: does not disable.
+        assert!(win_startup_approved_allows(&[0x03, 0, 0]));
+        assert!(win_startup_approved_allows(&[]));
+        // Only the last eight bytes count, as in 0.5.
+        assert!(win_startup_approved_allows(&[
+            0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]));
+    }
+
+    #[test]
+    fn an_executable_in_another_users_profile_is_refused() {
+        use std::path::Path;
+        let home = Path::new("/Users/admin");
+        assert!(exe_in_another_users_profile(
+            Path::new("/Users/jane/AppData/Local/Tandem/tandem.exe"),
+            home
+        ));
+        assert!(
+            exe_in_another_users_profile(Path::new("/USERS/Jane/x/tandem.exe"), home),
+            "the profiles root compares case-insensitively, as Windows paths do"
+        );
+        assert!(
+            exe_in_another_users_profile(Path::new("/Users/Public/Tandem/tandem.exe"), home),
+            "a folder every user can write is not this user's either"
+        );
+    }
+
+    #[test]
+    fn an_executable_in_this_users_profile_or_outside_profiles_is_allowed() {
+        use std::path::Path;
+        let home = Path::new("/Users/jane");
+        assert!(!exe_in_another_users_profile(
+            Path::new("/Users/jane/AppData/Local/Tandem/tandem.exe"),
+            home
+        ));
+        assert!(!exe_in_another_users_profile(
+            Path::new("/users/JANE/AppData/Local/Tandem/tandem.exe"),
+            home
+        ));
+        assert!(!exe_in_another_users_profile(
+            Path::new("/Program Files/Tandem/tandem.exe"),
+            home
+        ));
+        // `/Users/janet` is a sibling profile, not inside `/Users/jane`.
+        assert!(exe_in_another_users_profile(
+            Path::new("/Users/janet/tandem.exe"),
+            home
+        ));
+    }
+
+    #[test]
+    fn a_profile_at_a_drive_root_refuses_nothing_on_profile_grounds() {
+        use std::path::Path;
+        assert!(!exe_in_another_users_profile(
+            Path::new("/opt/tandem/tandem.exe"),
+            Path::new("/jane")
+        ));
+        assert!(!exe_in_another_users_profile(
+            Path::new("/opt/tandem/tandem.exe"),
+            Path::new("/")
+        ));
+    }
+
+    /// The scrub prefixes these with `HKCU\` for `reg.exe`, and the backend
+    /// opens them under `HKEY_CURRENT_USER`; a hive spelled into the constant
+    /// itself would send both somewhere else.
+    #[test]
+    fn the_windows_registration_keys_are_hive_relative() {
+        assert_eq!(
+            WIN_RUN_SUBKEY,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        );
+        assert_eq!(
+            WIN_STARTUP_APPROVED_SUBKEY,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_backend_errors_map_to_the_io_code() {
+        let err = std::io::Error::from_raw_os_error(5);
+        assert_eq!(autostart_error_code(&err), ERR_IO);
     }
 }
 
