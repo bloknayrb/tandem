@@ -20,20 +20,43 @@
 
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import * as Y from "yjs";
+import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
 import {
   attachCtrlObservers,
   reattachCtrlObservers,
   resetForTesting,
 } from "../../src/server/events/queue.js";
 import {
+  documentWaiting,
+  ownershipChatSide,
+  setWaitingWrittenSinceForTests,
+} from "../../src/server/mcp/awareness.js";
+import { populateYDoc } from "../../src/server/mcp/document.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import {
+  noteTransportRegistered,
   ownershipSnapshotForTests,
   replayModeKnownAfterSupervisorStart,
   resetOwnershipForTests,
+  setDocOwner,
+  setOpenDocumentIdsSource,
+  setOwnershipChatSide,
+  setOwnershipFrameSink,
   setStartOrWakeSink,
+  setTandemPresenceSource,
+  setTransportView,
+  setWaitingProbe,
+  TANDEM_OWNER_ID,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM, Y_MAP_MODE, Y_MAP_USER_AWARENESS } from "../../src/shared/constants.js";
-import { withInternal } from "../../src/shared/origins.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+  Y_MAP_MODE,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
+import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 let forwarded: string[] = [];
 let errSpy: MockInstance;
@@ -187,5 +210,157 @@ describe("the mode-unknown observer (#2358, the restart question)", () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     replayModeKnownAfterSupervisorStart();
     expect(forwarded).toEqual([]);
+  });
+});
+
+// The other-owner half (#2358, the flip-blocker row "The restart question's
+// other-owner half"): the same first Tandem reading sends step 5's
+// `ownership` frame (through ownership's frame sink, as `index.ts` sets it)
+// when work waits for a session other than Tandem's Claude, or for nobody.
+// The real waiting probe and chat side; a counting sink for the frame (the
+// wake socket's writer, its coalescing and its licence ask are
+// `ownership-wake-frame.test.ts`'s).
+describe("the mode-unknown observer's other-owner half: the ownership frame", () => {
+  const B = "claude:modeknown-b";
+  let frames = 0;
+  let run = 0;
+  const docIds: string[] = [];
+
+  function mkDoc(name: string): { id: string; ydoc: Y.Doc } {
+    run++;
+    const id = `modeknown${run}-${name}`;
+    const ydoc = getOrCreateDocument(id);
+    populateYDoc(ydoc, "Hello world, this is a test document.");
+    addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
+    docIds.push(id);
+    return { id, ydoc };
+  }
+
+  /** A user comment, written as the browser writes one (while the mode is unknown). */
+  function userComment(ydoc: Y.Doc, id: string): void {
+    withBrowser(ydoc, () =>
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: `text of ${id}`,
+        status: "pending",
+        timestamp: Date.now(),
+        rev: 1,
+      }),
+    );
+  }
+
+  /** An unread doc-less user chat message. */
+  function userChat(key: string): void {
+    withInternal(ctrl(), () =>
+      ctrl()
+        .getMap(Y_MAP_CHAT)
+        .set(key, { id: key, author: "user", text: "hello", timestamp: Date.now(), read: false }),
+    );
+  }
+
+  /** The seams `index.ts` wires for the frame, and B's record (after `restart()`). */
+  function world(): void {
+    frames = 0;
+    setOwnershipFrameSink(() => frames++);
+    setWaitingProbe(documentWaiting);
+    setOpenDocumentIdsSource(() => getOpenDocs().keys());
+    setOwnershipChatSide(ownershipChatSide);
+    setTransportView(() => [{ ownerId: B, openStreams: 0 }]);
+    noteTransportRegistered(B, { recordKind: "claude" });
+  }
+
+  beforeEach(() => {
+    setWaitingWrittenSinceForTests(undefined);
+    world();
+  });
+
+  afterEach(() => {
+    for (const id of docIds.splice(0)) {
+      removeDoc(id);
+      removeDocument(id);
+    }
+    setWaitingProbe(() => false);
+    setWaitingWrittenSinceForTests(Date.now());
+  });
+
+  it("another session holds a document with a comment made while the mode was unknown: one frame, beside Tandem's Claude's mode-known", () => {
+    const d = mkDoc("held-by-b");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    expect(frames).toBe(0);
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual(["mode-known"]);
+    expect(frames).toBe(1);
+    // Once per run, as the forward is.
+    clientWritesMode("tandem");
+    expect(frames).toBe(1);
+  });
+
+  it("an unowned document with the comment: one frame (anchor: the row above)", () => {
+    const d = mkDoc("unowned");
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    clientWritesMode("tandem");
+    expect(frames).toBe(1);
+  });
+
+  it("a document only Tandem's Claude holds: no frame, its forward only (anchor: the first row)", () => {
+    setTandemPresenceSource(() => true);
+    const d = mkDoc("tandem");
+    setDocOwner(d.id, { ownerId: TANDEM_OWNER_ID, kind: "claimed" }, "claim", TANDEM_OWNER_ID);
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual(["mode-known"]);
+    expect(frames).toBe(0);
+  });
+
+  it("nothing waiting: no frame (anchor: the first row)", () => {
+    const d = mkDoc("empty");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    attachCtrlObservers();
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual(["mode-known"]);
+    expect(frames).toBe(0);
+  });
+
+  it("doc-less chat claimable per message (Tandem's Claude not present): one frame; Tandem's Claude present makes it its own: none", () => {
+    userChat("m1");
+    attachCtrlObservers();
+    clientWritesMode("tandem");
+    expect(frames).toBe(1);
+    restart();
+    world();
+    setTandemPresenceSource(() => true);
+    userChat("m2");
+    attachCtrlObservers();
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual(["mode-known"]);
+    expect(frames).toBe(0);
+  });
+
+  it("a Solo reading first: unknown→Solo→Tandem is the release route's, so no frame (anchor: the first row)", () => {
+    const d = mkDoc("solo-first");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    clientWritesMode("solo");
+    clientWritesMode("tandem");
+    expect(frames).toBe(0);
+  });
+
+  it("flag off: no frame (anchor: the first row)", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const d = mkDoc("dark");
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    clientWritesMode("tandem");
+    expect(forwarded).toEqual([]);
+    expect(frames).toBe(0);
   });
 });

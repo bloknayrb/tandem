@@ -1575,8 +1575,13 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
     // Step 5, a release of per-message owners, the end of presence, the
     // messages the user's control moved (#2358 PR 5a-2, `wakeForMovedMessages`),
-    // and a lapsed holder's close (`forwardClosedChatAfterUntrack`).
-    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(5);
+    // a lapsed holder's close (`forwardClosedChatAfterUntrack`), and the first
+    // Tandem mode after an unknown one (the restart question's other-owner
+    // half), which asks only when work waits for another session or nobody.
+    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(6);
+    expect(text).toMatch(
+      /export function noteModeObserved\([\s\S]*?modeKnownAsked = true;[\s\S]*?if \(otherOwnersWorkWaiting\(\)\) sendOwnershipFrame\(\);\s*\}\);\s*\}/,
+    );
   });
 });
 

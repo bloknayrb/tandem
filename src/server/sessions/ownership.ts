@@ -2527,8 +2527,10 @@ let modeKnownAsked = false;
  * the two do not both forward a change from a Solo the room saw (a window
  * that toggled before its CTRL_ROOM sync writes only `tandem`, then posts the
  * release, so both forward; the supervisor's pass joins or repeats the ask).
- * At most once per server run. Flag
- * off: nothing, and nothing recorded. Total, since it runs inside a
+ * At most once per server run. The same first Tandem reading also sends the
+ * `ownership` frame when work waits for another session or for nobody
+ * ({@link otherOwnersWorkWaiting}), the restart question's other-owner half.
+ * Flag off: nothing, and nothing recorded. Total, since it runs inside a
  * `CTRL_ROOM` transaction's observer.
  */
 export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
@@ -2558,6 +2560,48 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
   }
+  // The other-owner half (#2358, the flip-blocker row "The restart question's
+  // other-owner half"): a comment made while the mode was unknown was dropped
+  // by `pushEvent`'s Solo gate for every session, so sessions other than
+  // Tandem's Claude are told too, by step 5's frame and only when work waits
+  // for one of them. Its own catches; `total` for anything else.
+  total("modeKnownFrame", undefined, () => {
+    if (otherOwnersWorkWaiting()) sendOwnershipFrame();
+  });
+}
+
+/**
+ * Whether work waits for a session other than Tandem's Claude, or for nobody
+ * (#2358, the restart question's other-owner half), read when the mode first
+ * reads Tandem after reading unknown: an open document Tandem's Claude does not
+ * hold (another record holds it, or nobody does) with work waiting on it, by
+ * step 5's check ({@link workWaitingOnDocument}: the waiting probe after every
+ * privacy gate, then the chat that follows it), or a user chat message a fresh
+ * reader would be handed that is now another record's or claimable
+ * ({@link frameOwedForMessages}, the release's check). Unscoped as the frame
+ * is (ownership design §9.4): it says whether to wake, not whom. The open
+ * documents and the chat side are each read in their own catch: false, one
+ * fixed line.
+ */
+function otherOwnersWorkWaiting(): boolean {
+  let documents: string[] = [];
+  try {
+    documents = [...openDocumentIds()];
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  for (const documentId of documents) {
+    const holder = readEntry(documentId)?.ownerId;
+    if (holder === TANDEM_OWNER_ID) continue;
+    if (workWaitingOnDocument(documentId, holder)) return true;
+  }
+  let keys: readonly string[] = [];
+  try {
+    keys = chatSide.owedToFreshReader();
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  return keys.length > 0 && frameOwedForMessages(keys);
 }
 
 /**
