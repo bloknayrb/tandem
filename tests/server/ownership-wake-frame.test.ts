@@ -165,9 +165,15 @@ function expectOneOwnershipFrame(frames: string[], ...absent: string[]): void {
   const frame = JSON.parse(frames[0] as string) as Record<string, unknown>;
   expect(Object.keys(frame).sort()).toEqual(["id", "timestamp", "type"]);
   expect(frame.type).toBe(OWNERSHIP_WAKE_FRAME_TYPE);
-  expect(typeof frame.id).toBe("string");
+  // The id is `evt_<timestamp>_<rand>` (src/shared/events/types.ts): pinning that shape
+  // proves it carries nothing but digits and a random base-36 tail, so the substring
+  // check below runs on the frame without it. A random tail can contain a short id
+  // such as "c1" by chance, which made the whole-frame check fail intermittently.
+  expect(frame.id).toMatch(/^evt_\d+_[a-z0-9]+$/);
   expect(typeof frame.timestamp).toBe("number");
-  for (const text of [SECRET, A, B, ...absent]) expect(frames[0]).not.toContain(text);
+  const { id: _id, ...rest } = frame;
+  const withoutId = JSON.stringify(rest);
+  for (const text of [SECRET, A, B, ...absent]) expect(withoutId).not.toContain(text);
 }
 
 beforeEach(async () => {
