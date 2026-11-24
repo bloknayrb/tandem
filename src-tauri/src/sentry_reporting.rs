@@ -43,20 +43,22 @@
 //!   that order against the real client.
 //! - the DSN is never logged
 //!
-//! **The minidump is not scrubbed.** A native crash of this shell process also
-//! sends a minidump attachment. Attachments are added to the envelope after
-//! `before_send` has run, and rewriting a binary dump in place is not
-//! attempted, so its bytes leave exactly as written. On Linux that dump
-//! carries the full command line, the process's whole inherited environment
-//! and the path of every open file, among other streams; `docs/security.md`
-//! ("Telemetry") lists what each platform's dump holds. It goes only to the
-//! operator's own DSN, and only after they opted in.
+//! **The minidump is scrubbed only in part, and not here.** A native crash of
+//! this shell process also sends a minidump attachment. Attachments are added
+//! to the envelope after `before_send` has run, so this hook never sees the
+//! dump. The minidump integration's `before_capture` hook does instead, in the
+//! crash-reporter process: `crate::minidump_scrub` zeroes the command-line,
+//! environment and open-file streams and every copy of an environment entry
+//! or argument of 8 bytes or more in the dump (the main thread's stack holds
+//! one), and drops a dump it cannot parse. Raw thread stacks and full module paths still leave;
+//! `docs/security.md` ("Telemetry") lists what each platform's dump holds and
+//! what the scrub leaves. It goes only to the operator's own DSN, and only
+//! after they opted in.
 //!
 //! Document content is not deliberately attached to events, but the shell
-//! process's minidump can carry document paths (argv, open files) and any of
-//! its memory that is on a thread stack. The sidecar and the WebView are
-//! separate processes and are not in this dump. The WebView side applies its
-//! own scrubbing in `src/client/sentry.ts`.
+//! process's minidump can carry whatever of its memory is on a thread stack.
+//! The sidecar and the WebView are separate processes and are not in this
+//! dump. The WebView side applies its own scrubbing in `src/client/sentry.ts`.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,13 +134,17 @@ pub fn init() -> Option<SentryGuard> {
     // everything before that call runs in both processes. The reporter's client
     // is cloned from these options, so `before_send` scrubbing still applies to
     // the minidump EVENT — but not to the dump bytes, which are attached after
-    // `before_send` runs and leave unscrubbed (#2161; see the module doc). The
-    // cfg matches the `sentry` re-export's own gate —
-    // the integration exists only on Linux, macOS and Windows.
+    // `before_send` runs. Those are scrubbed by the `before_capture` hook,
+    // which runs in the reporter process before the crash event is sent
+    // (#2161; see the module doc and `minidump_scrub.rs`). The cfg matches the
+    // `sentry` re-export's own gate — the integration exists only on Linux,
+    // macOS and Windows.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
-        options =
-            options.add_integration(sentry::integrations::minidump::MinidumpIntegration::new());
+        options = options.add_integration(
+            sentry::integrations::minidump::MinidumpIntegration::new()
+                .before_capture(crate::minidump_scrub::scrub_minidump_attachment),
+        );
     }
 
     let client = sentry::init((dsn, options));

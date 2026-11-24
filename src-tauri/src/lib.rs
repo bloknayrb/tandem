@@ -5,6 +5,10 @@ mod native_theme;
 mod notifications;
 mod pending_update;
 pub mod keychain;
+// Scrubs an opted-in crash report's minidump (#2161); the integration it hooks
+// exists only on these three targets.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod minidump_scrub;
 mod sentry_reporting;
 mod sidecar;
 mod startup_rejection;

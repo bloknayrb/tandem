@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -153,12 +153,26 @@ describe("check-token-violation.sh worktree guard", () => {
   });
 
   bashOnly("still runs the scanner for a file inside the project", () => {
-    const run = runBashHook(
-      "check-token-violation.sh",
-      editEvent(`${ROOT}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: ROOT },
-    );
-    expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
+    // The guard skips every path under `.claude/worktrees/`, so when this
+    // checkout IS such a worktree, ROOT itself would read as skipped. Reach
+    // the same checkout through a symlink outside that directory instead.
+    let project = ROOT;
+    let linkDir: string | undefined;
+    if (ROOT.replace(/\\/g, "/").includes("/.claude/worktrees/")) {
+      linkDir = mkdtempSync(path.join(os.tmpdir(), "tandem-hook-root-"));
+      project = path.join(linkDir, "tandem");
+      symlinkSync(ROOT, project, "dir");
+    }
+    try {
+      const run = runBashHook(
+        "check-token-violation.sh",
+        editEvent(`${project}/src/client/does-not-exist.ts`),
+        { CLAUDE_PROJECT_DIR: project },
+      );
+      expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
+    } finally {
+      if (linkDir) rmSync(linkDir, { recursive: true, force: true });
+    }
   });
 });
 
