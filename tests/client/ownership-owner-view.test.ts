@@ -676,5 +676,28 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
       text: "No AI will answer",
       remedy: "settings",
     });
+    // Start could help, yet the bind-failed line keeps its Settings pointer.
+    const tandemHeld: PublishedOwnerFields = {
+      ...terminal,
+      owner: { label: "owner-t", displayKind: "Tandem's Claude", kind: "default" },
+    };
+    const bindFailed = summary({
+      tandemPresent: false,
+      tandemRunning: false,
+      tandemStartable: true,
+      notPresentReason: "bind-failed",
+      chatStale: true,
+    });
+    expect(composerLine(tandemHeld, bindFailed)).toEqual({
+      kind: "none",
+      text: NO_AI_BIND_FAILED_TEXT,
+      remedy: "settings",
+    });
+  });
+});
+
+describe("messageControlView: Assign only where the facts offer it", () => {
+  it("hides Assign on facts that offer only Release", () => {
+    expect(messageControlView(chatFacts({ assign: false }), null)?.assign).toBe(false);
   });
 });

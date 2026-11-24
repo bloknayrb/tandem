@@ -230,6 +230,14 @@ describe("the control line under each unanswered message", () => {
     expect(noSummary.queryByTestId("chat-message-owner-d")).toBeNull();
   });
 
+  it("offers Assign only where the facts do", () => {
+    const { getByTestId, queryByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts({ assign: false })]]), SUMMARY),
+    });
+    expect(getByTestId("chat-message-owner-release-m")).toBeTruthy();
+    expect(queryByTestId("chat-message-owner-assign-m")).toBeNull();
+  });
+
   it("never on Claude's rows, even under a key with facts", () => {
     const claude: ChatMessage = { id: "c1", author: "claude", text: "hi", timestamp: T0 };
     const { queryByTestId } = render(ChatPanel, {
