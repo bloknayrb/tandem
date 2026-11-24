@@ -116,6 +116,16 @@ export interface OwnershipSummary {
  */
 export type PublishedChatHeldBy = "message" | "document" | "presence" | "none";
 
+/**
+ * Where a Release of a message sends it (#2358 PR 5e; Bryan, 2026-11-24,
+ * "Yes, say where (Recommended)"): the holder §7.1's table gives it once its
+ * per-message owner is dropped and its loss recorded against that owner.
+ * `tandem-claude` when Tandem's Claude then holds it (by presence, or by holding its
+ * open document), `unassigned` when nobody does (claimable), `document` when
+ * it then follows its open document, held by another session.
+ */
+export type PublishedChatReleaseTo = "tandem-claude" | "unassigned" | "document";
+
 /** A message's holder, as the pickup row shows it: its label and display kind. */
 export interface PublishedChatOwner {
   readonly label: string;
@@ -136,6 +146,12 @@ export interface PublishedChatMessageOwner {
    * a per-message owner whose record is gone included (the Release drops it).
    */
   readonly release: boolean;
+  /**
+   * Where Release sends the message (#2358 PR 5e), read through the same
+   * helper the route decides from, so the label cannot disagree with what the
+   * route then does; null exactly when `release` is false.
+   */
+  readonly releaseTo: PublishedChatReleaseTo | null;
   /**
    * Assign applies: every message but one that follows its open document
    * (that one answers `409 follows-document`; its document's Assign moves it).

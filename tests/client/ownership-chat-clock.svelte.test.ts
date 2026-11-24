@@ -38,6 +38,7 @@ function facts(since: number, over: Partial<PublishedChatMessageOwner> = {}) {
     owner: { label: "owner-k7qx", displayKind: "terminal" },
     heldBy: "message",
     release: true,
+    releaseTo: "unassigned",
     assign: true,
     since,
     stale: false,

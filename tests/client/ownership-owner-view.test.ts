@@ -449,6 +449,7 @@ function chatFacts(over: Partial<PublishedChatMessageOwner> = {}): PublishedChat
     owner: { label: "owner-k7qx", displayKind: "terminal" },
     heldBy: "message",
     release: true,
+    releaseTo: "unassigned",
     assign: true,
     since: T0,
     stale: false,
@@ -467,7 +468,10 @@ describe("readChatOwners (what yjsSync keeps)", () => {
 
   it("keeps each well-formed entry by chat key, an unowned one included", () => {
     const got = readChatOwners(
-      { m1: chatFacts(), m2: chatFacts({ owner: null, heldBy: "none", release: false }) },
+      {
+        m1: chatFacts(),
+        m2: chatFacts({ owner: null, heldBy: "none", release: false, releaseTo: null }),
+      },
       EMPTY,
     );
     expect([...got.keys()]).toEqual(["m1", "m2"]);
@@ -480,6 +484,9 @@ describe("readChatOwners (what yjsSync keeps)", () => {
     ["an empty label", { owner: { label: "", displayKind: "terminal" } }],
     ["an unknown heldBy", { heldBy: "nobody" }],
     ["a non-boolean release", { release: "yes" }],
+    ["an unknown releaseTo", { releaseTo: "elsewhere" }],
+    ["no releaseTo where Release applies", { releaseTo: null }],
+    ["a releaseTo where Release does not apply", { release: false, releaseTo: "unassigned" }],
     ["a non-boolean assign", { assign: 1 }],
     ["a non-finite since", { since: Number.NaN }],
     ["a string since", { since: "1800000000000" }],
@@ -495,7 +502,8 @@ describe("readChatOwners (what yjsSync keeps)", () => {
     for (const over of [
       { since: T0 + 1 },
       { stale: true },
-      { release: false },
+      { release: false, releaseTo: null },
+      { releaseTo: "tandem-claude" as const },
       { assign: false },
       { heldBy: "presence" as const },
       { owner: null },

@@ -22,6 +22,7 @@ import type {
   OwnershipSummary,
   PublishedChatHeldBy,
   PublishedChatMessageOwner,
+  PublishedChatReleaseTo,
   PublishedDisplayKind,
   PublishedOwner,
   PublishedOwnerFields,
@@ -168,11 +169,16 @@ const HELD_BY: ReadonlySet<string> = new Set<PublishedChatHeldBy>([
   "presence",
   "none",
 ]);
+const RELEASE_TO: ReadonlySet<string> = new Set<PublishedChatReleaseTo>([
+  "tandem-claude",
+  "unassigned",
+  "document",
+]);
 
 /** One message's published facts, or undefined for a shape this client does not know. */
 function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
   if (!isRecord(v)) return undefined;
-  const { owner, heldBy, release, assign, since, stale } = v;
+  const { owner, heldBy, release, releaseTo, assign, since, stale } = v;
   let holder: PublishedChatMessageOwner["owner"] = null;
   if (owner !== null) {
     if (!isRecord(owner)) return undefined;
@@ -183,9 +189,23 @@ function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
   }
   if (typeof heldBy !== "string" || !HELD_BY.has(heldBy)) return undefined;
   if (typeof release !== "boolean" || typeof assign !== "boolean") return undefined;
+  // #2358 PR 5e: where Release sends it, exactly when Release applies.
+  let to: PublishedChatReleaseTo | null = null;
+  if (release) {
+    if (typeof releaseTo !== "string" || !RELEASE_TO.has(releaseTo)) return undefined;
+    to = releaseTo as PublishedChatReleaseTo;
+  } else if (releaseTo !== null) return undefined;
   if (typeof since !== "number" || !Number.isFinite(since)) return undefined;
   if (typeof stale !== "boolean") return undefined;
-  return { owner: holder, heldBy: heldBy as PublishedChatHeldBy, release, assign, since, stale };
+  return {
+    owner: holder,
+    heldBy: heldBy as PublishedChatHeldBy,
+    release,
+    releaseTo: to,
+    assign,
+    since,
+    stale,
+  };
 }
 
 function sameChatOwner(
@@ -196,6 +216,7 @@ function sameChatOwner(
   if (
     a.heldBy !== b.heldBy ||
     a.release !== b.release ||
+    a.releaseTo !== b.releaseTo ||
     a.assign !== b.assign ||
     a.since !== b.since ||
     a.stale !== b.stale

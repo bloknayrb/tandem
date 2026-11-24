@@ -440,6 +440,76 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     expect(awareness().get(Y_MAP_OWNERSHIP_SUMMARY)).toMatchObject({ chatWaiting: false });
   });
 
+  /**
+   * #2358 PR 5e (Bryan, 2026-11-24, "Yes, say where (Recommended)"): each
+   * Release-able message publishes where its Release sends it, and the route's
+   * Release then lands exactly there.
+   */
+  async function releaseLandsWherePublished(k: string, expected: string): Promise<void> {
+    const before = published()?.[k];
+    expect(before, k).toMatchObject({ heldBy: "message", release: true, releaseTo: expected });
+    expect(controlMessageOwner(k, "release", undefined), k).toBe("changed");
+    await settle();
+    const after = published()?.[k];
+    if (expected === "tandem-claude") {
+      expect(after?.owner?.displayKind, k).toBe("Tandem's Claude");
+    } else if (expected === "unassigned") {
+      expect(after?.owner, k).toBeNull();
+    } else {
+      expect(after?.heldBy, k).toBe("document");
+      expect(after?.owner, k).not.toBeNull();
+      expect(after?.owner?.displayKind, k).not.toBe("Tandem's Claude");
+    }
+    expect(after?.release, k).toBe(false);
+    expect(after?.releaseTo, k).toBeNull();
+  }
+
+  it("publishes where Release sends a message, and the route sends it there (Tandem's Claude absent)", async () => {
+    // Taken per message by A's poll while their documents are closed.
+    const loose = userChat(key("loose"));
+    const onB = userChat(key("on-b"), docId("doc-b"));
+    const onA = userChat(key("on-a"), docId("doc-a"));
+    const onFree = userChat(key("on-free"), docId("doc-free"));
+    await poll(A);
+    // Opened afterwards: a per-message owner wins on a document open again.
+    setDocOwner(mkDoc("doc-b"), { ownerId: B, kind: "claimed" }, "take", B);
+    setDocOwner(mkDoc("doc-a"), { ownerId: A, kind: "claimed" }, "take", A);
+    mkDoc("doc-free");
+    await startPublishing();
+
+    await releaseLandsWherePublished(loose, "unassigned");
+    // It then follows its document, which B holds.
+    await releaseLandsWherePublished(onB, "document");
+    // Its document's holder is the record it was released from: the loss skips it.
+    await releaseLandsWherePublished(onA, "unassigned");
+    // It follows an unowned document: claimable with it.
+    await releaseLandsWherePublished(onFree, "unassigned");
+  });
+
+  it("publishes where Release sends a message, and the route sends it there (Tandem's Claude present)", async () => {
+    tandemPresent();
+    const loose = userChat(key("loose"));
+    const toTandem = userChat(key("to-tandem"));
+    const onT = userChat(key("on-t"), docId("doc-t"));
+    await startPublishing();
+    expect(controlMessageOwner(loose, "assign", labelOf(A))).toBe("changed");
+    // Tandem's Claude already holds it by presence, so Assign it away first
+    // (an Assign to the holder changes nothing, Bryan's "Do nothing").
+    expect(controlMessageOwner(toTandem, "assign", labelOf(A))).toBe("changed");
+    expect(controlMessageOwner(toTandem, "assign", labelOf(TANDEM))).toBe("changed");
+    expect(controlMessageOwner(onT, "assign", labelOf(A))).toBe("changed");
+    setDocOwner(mkDoc("doc-t"), { ownerId: TANDEM, kind: "default" }, "presence");
+    broadcastOpenDocs();
+    await settle();
+
+    // Back to Tandem's Claude, by presence.
+    await releaseLandsWherePublished(loose, "tandem-claude");
+    // Released from Tandem's Claude itself: the loss skips it, so nobody holds it.
+    await releaseLandsWherePublished(toTandem, "unassigned");
+    // Its open document is Tandem's Claude's.
+    await releaseLandsWherePublished(onT, "tandem-claude");
+  });
+
   it("carries no owner id, owner handle or session id", async () => {
     const held = mkDoc("held");
     setDocOwner(held, { ownerId: B, kind: "claimed" }, "take", B);
