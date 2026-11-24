@@ -927,6 +927,26 @@ bound in full, and the conditions that void the acceptance.
 
   **The acceptance is void — reopen it — if any becomes true:** the check becomes an allowlist (refusing every entry but the user's, SYSTEM's and Administrators'; then retire this entry rather than keep it); a new caller, direct or through a wrapper, of the lock or the check appears (nothing enforces this; review does); a file Claude Code loads as instructions or configuration (a skill, a settings file, hooks, an MCP entry), or a script that is run, comes under a log-and-continue lock; or inherited entries are observed remaining after Tandem's lock on a Windows PC of a version the README supports.
 
+- **[#2554](https://github.com/bloknayrb/tandem/issues/2554) — the cloud Claude review holds the owner's subscription token on pull-request runs. ACCEPTED by Bryan 2026-11-24 (bounded, picked from options when he asked for the review in #1831); revisit by 2027-05-24, gated by #2554 itself.** Token renewal is the separate dated gate [#2555](https://github.com/bloknayrb/tandem/issues/2555).
+
+  **The condition.** `.github/workflows/claude-code-review.yml` runs on every new same-repo PR and on owner dispatch. `CLAUDE_CODE_OAUTH_TOKEN`, a repository-level secret from `claude setup-token` that bills the owner's Claude subscription, is in the env of two steps: the review (the Claude Code CLI) and `classify` (the secret scan after it). Inside the review, the model reads content the PR's author controls: the diff, the title and body, and the code.
+
+  **Push access is the bound, and nothing below changes that.** A `pull_request` run executes the PR's own copy of the workflow, so anyone who can push a branch (the owner, and any cloud session holding his credentials) can rewrite it and read the token. They can read the repository's existing signing secrets the same way, so this adds a secret to a set that push access already exposes. The controls below protect against something narrower: PR *content* steering an unmodified run into leaking the token.
+
+  **The controls**, each pinned by `tests/scripts/claude-review-wiring.test.ts` or `tests/scripts/claude-review-scripts.test.ts`:
+  - The review command is exactly `--restricted --permission-mode dontAsk --permission-prompts none --setting-sources user --strict-mcp-config --tools "Read,Grep,Glob,Agent"`. File tools are confined to the PR checkout, and there is no shell, no network tool and no MCP server. Probed 2026-11-24 on CLI 2.1.331: reads and greps of `..`, `/` and `/./..` paths were refused; without `--strict-mcp-config` every claude.ai connector loaded despite `--tools`; the built-in general-purpose subagent had no Write tool. Specialists come from master's `.claude/agents/` with Read/Grep/Glob forced.
+  - The CLI is the native `linux-x64` build at an exact version, its tarball checked against a pinned sha512. It has no install script and no dependencies, so nothing runs at install time.
+  - No GitHub token is in the review or `classify` step. The posting step holds the GitHub token and not the subscription token.
+  - Symlinks are deleted from the checkout. The PR's `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude*` and `.mcp.json` are deleted at every depth, and master's root copies are put back.
+  - The scripts that classify and post come from a sparse checkout of master, never from the PR.
+  - Everything the model produced is scanned before anything is posted: the exact token, its base64 at three alignments (standard and URL-safe), and a length-gated `sk-ant-` pattern. A hit posts only a notice and turns the run red, and the merge gate (`scripts/ci/await-claude-review.mjs`) then stops every merge of that PR until Bryan says go.
+
+  **Residuals.** The scan catches known encodings only, so a token the model had read and obfuscated would pass. The boundary therefore rests on the model never reading the token, which is what the confinement and the missing shell are for. (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is deliberately not set: with no shell it protects nothing, and on CLI 2.1.331 setting it silently forces the permission mode back to default, overriding `dontAsk`.) CLI stderr and tool names reach the public job log; tool names are drawn from the fixed tool set.
+
+  **The acceptance is void — reopen it — if any becomes true:** a trigger gains `pull_request_target`, `issue_comment` or `workflow_run`; the review command gains `--add-dir`, `--mcp-config`, `--plugin-dir`, `--settings`, `--bare`, `--allowedTools` or `--dangerously-*`, or loses `--restricted`, `dontAsk` or `--strict-mcp-config`; `--tools` or a specialist's tools widen; the subscription token appears in any step other than review and `classify`, or a GitHub token appears in either of those; the config neutralising, the symlink removal or the secret scan is removed; dispatch loses its refusal of fork, draft, bot and closed PRs; or the token moves to organisation scope.
+
+  **At review** the outcome is keep (both tests green and no void condition has occurred), replace, or retire, answered from the workflow file and those two tests. "Revisit again" is not an outcome.
+
 ## CodeQL dispositions, and why they do not survive a refactor
 
 **A dismissal is keyed to an alert number, and an alert number is keyed to a
