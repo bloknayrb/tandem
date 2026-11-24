@@ -1111,8 +1111,12 @@ function runVerifyPack() {
   const files = JSON.parse(res.stdout)[0].files.map((f) => f.path);
   if (!files.includes("dist/THIRD_PARTY_NOTICES.txt"))
     fail("the npm tarball does not include dist/THIRD_PARTY_NOTICES.txt");
+  // Sourcemaps are build inputs (the trace above reads them), not runtime ones:
+  // nothing starts Node with --enable-source-maps, and they were most of the
+  // tarball's size (#1825). package.json's `files` excludes them.
   const leaked = files.filter(
-    (f) => f.startsWith("dist/desktop/") || f.startsWith("dist/.third-party/"),
+    (f) =>
+      f.startsWith("dist/desktop/") || f.startsWith("dist/.third-party/") || f.endsWith(".map"),
   );
   if (leaked.length > 0) fail(`the npm tarball includes build-only files: ${leaked.join(", ")}`);
   const notices = readFileSync(NPM_NOTICES, "utf8");

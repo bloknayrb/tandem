@@ -153,10 +153,16 @@ describe("check-token-violation.sh worktree guard", () => {
   });
 
   bashOnly("still runs the scanner for a file inside the project", () => {
+    // The fixed `project`, not ROOT: when this suite itself runs from a
+    // checkout under `.claude/worktrees/` (as the pre-push hook does in an
+    // agent worktree), ROOT matches the nested-worktree skip above and the
+    // test failed for where the checkout lives, not for what the guard does.
+    // The scanner still runs from ROOT (the spawn's cwd), which is all the
+    // non-empty stderr needs.
     const run = runBashHook(
       "check-token-violation.sh",
-      editEvent(`${ROOT}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: ROOT },
+      editEvent(`${project}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: project },
     );
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
