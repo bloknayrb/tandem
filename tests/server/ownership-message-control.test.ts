@@ -83,6 +83,22 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
+/** Set to make the next `resolveDeliveryRound` throw: a throw after the chat commit (as in `ownership-chat.test.ts`). */
+const roundThrows = vi.hoisted(() => ({ next: false }));
+vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/server/events/delivery-state.js")>();
+  return {
+    ...real,
+    resolveDeliveryRound: (...args: Parameters<typeof real.resolveDeliveryRound>) => {
+      if (roundThrows.next) {
+        roundThrows.next = false;
+        throw new Error("after the chat commit");
+      }
+      return real.resolveDeliveryRound(...args);
+    },
+  };
+});
+
 const A = "claude:msgctl-a";
 const B = "claude:msgctl-b";
 const C = "claude:msgctl-c";
@@ -399,7 +415,7 @@ describe("Release of a message (ownership design §10.2)", () => {
     expect(messageLoss(m)).toEqual({ ownerId: A, cause: "released" });
   });
 
-  it("a message whose owner lapses after a Release keeps the loss on the record it was released from", async () => {
+  it("after a Release, the next owner's lapse ends the loss: the record it was released from may take it again", async () => {
     const m = userChat(key("m"));
     await takeByPoll(A, m);
     await releaseMessage(m);
@@ -409,6 +425,34 @@ describe("Release of a message (ownership design §10.2)", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(messageLoss(m)).toBeUndefined();
     await takeByPoll(A, m);
+  });
+
+  it("a poll that took a released message and then failed puts the loss back: it never goes back to the released record", async () => {
+    tandemPresent();
+    present = false;
+    const m = userChat(key("m"));
+    await takeByPoll(A, m);
+    present = true;
+    await assignMessage(m, TANDEM);
+    await releaseMessage(m);
+    expect(messageLoss(m)).toEqual({ ownerId: TANDEM, cause: "released" });
+    forwarded = [];
+
+    // B's poll takes it, then throws after its chat commit: the take is undone.
+    roundThrows.next = true;
+    callingAs = B;
+    expect(
+      parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: { cursor: "start" } }),
+      ).error,
+    ).toBe(true);
+    expect(roundThrows.next).toBe(false);
+    expect(messageOwner(m)).toBeUndefined();
+    // Not a change of owner: the loss stands, so Tandem's Claude is not given it back by presence.
+    expect(messageLoss(m)).toEqual({ ownerId: TANDEM, cause: "released" });
+    expect(forwarded).toEqual([]);
+    expect(await freshPoll(TANDEM)).not.toContain(m);
+    await takeByPoll(B, m);
   });
 });
 
@@ -612,6 +656,27 @@ describe("a document's Release or Assign moves the messages its close gave an ow
     expect(res.body).toEqual({ data: { changed: true } });
     expect(getDocOwner(d)).toMatchObject({ ownerId: TANDEM, kind: "default" });
     expect(messageOwner(m)).toBeUndefined();
+    expect(forwarded).toContain("message");
+    expect(await freshPoll(TANDEM)).toContain(m);
+  });
+
+  it("Release of a document whose entry is stale (its record is gone) moves the close-given message too", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d);
+    expect(chatIds(await pollAs(A))).toContain(m);
+    await closeByRoute(d);
+    expect(messageOwner(m)).toMatchObject({ ownerId: A, origin: "close", closedDocumentId: d });
+    mkDoc("d");
+    // An entry for a record that does not exist (the stale backstop's case).
+    setDocOwner(d, { ownerId: "bridge:gone", kind: "opened" }, "take", "bridge:gone");
+    present = true;
+    forwarded = [];
+    const res = await control({ documentId: d, action: "release" });
+    expect(res.body).toEqual({ data: { changed: true } });
+    expect(getDocOwner(d)).toMatchObject({ ownerId: TANDEM, kind: "default" });
+    expect(messageOwner(m)).toBeUndefined();
+    expect(row(m)?.read).toBe(false);
     expect(forwarded).toContain("message");
     expect(await freshPoll(TANDEM)).toContain(m);
   });

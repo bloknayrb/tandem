@@ -2049,6 +2049,9 @@ function workWaitingOnDocument(documentId: string, ownerId: string | undefined):
       const standing = messageStanding(key, facts);
       if (standing.kind === "with-document") return true;
       if (standing.kind === "owned" && !standing.perMessage) return true;
+      // A message loss naming the new holder (#2358 PR 5a-2) leaves the
+      // message on its open document claimable per message by the others.
+      if (standing.kind === "per-message" && facts.documentOpen) return true;
     }
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
@@ -3271,6 +3274,18 @@ const UNSCOPED: InboxPollScope = Object.freeze({
 /** Which record each drained batch came from, so a give-back reaches only that record. */
 const drainedFrom = new WeakMap<InboxChangeBatch, OwnerRecord>();
 
+/**
+ * The message losses a poll's take ended (#2358 PR 5a-2), by the commit's
+ * `out`, so the poll's undo (`dropChatOwners`) puts them back: an undone take
+ * is not a change of owner, and without this a message released from a
+ * record would go back to it (by presence, or with its document) when another
+ * session's poll that took it fails.
+ */
+const lossesEndedByPoll = new WeakMap<
+  InboxChatCommit,
+  Map<string, { ownerId: string; cause: LossCause }>
+>();
+
 /** One of the poll claim's commit-time checks, for {@link setInboxClaimCheckForTests}. */
 export type InboxClaimCheck = "claimable" | "open" | "unowned" | "record" | "scope";
 
@@ -3392,7 +3407,18 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       if (callerId === undefined) return;
       total("commitChat", undefined, () => {
         chatFaultForTests?.("commit");
-        for (const key of taken) if (setMessageOwner(key, callerId, "poll")) out.owners.push(key);
+        for (const key of taken) {
+          const loss = lossByMessage.get(key);
+          if (!setMessageOwner(key, callerId, "poll")) continue;
+          out.owners.push(key);
+          if (loss === undefined) continue;
+          let ended = lossesEndedByPoll.get(out);
+          if (ended === undefined) {
+            ended = new Map();
+            lossesEndedByPoll.set(out, ended);
+          }
+          ended.set(key, loss);
+        }
         noteHanded(callerId, handed, out.handed);
       });
     },
@@ -3405,6 +3431,10 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           const owner = ownerByMessage.get(key);
           if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
           ownerByMessage.delete(key);
+          // The take ended a message loss (#2358 PR 5a-2): the undo restores
+          // it, before the admit below reads the message's standing.
+          const loss = lossesEndedByPoll.get(out)?.get(key);
+          if (loss !== undefined && !lossByMessage.has(key)) lossByMessage.set(key, loss);
           // Runs before the poll's chat revert (awareness.ts), so the admit
           // reads the poll's stamps; inert while its caller is a terminal and
           // presence cannot flip between the take and this undo (R6).
@@ -4207,7 +4237,11 @@ function applyControl(
     if (entry === undefined) {
       if (!hadEntry) return "unchanged";
       const fallback = defaultRuleOwner();
+      // A change of owner, so the messages this document's close gave an
+      // owner move with it, as on the live-entry path below (#2358 PR 5a-2).
+      const movedFromStale = closeDerivedChat(documentId, fallback?.ownerId);
       if (fallback !== null) setDocOwner(documentId, fallback, "release");
+      moveCloseDerivedChat(movedFromStale);
       return "changed";
     }
     const next = defaultRuleOwner();
@@ -4392,9 +4426,19 @@ export function controlMessageOwner(
   if (followsDocument) return "follows-document";
   const holder = standing.kind === "owned" ? standing.ownerId : undefined;
   if (action === "release") {
-    if (standing.kind !== "owned" || !standing.perMessage) return "unchanged";
-    applyMessageControl(key, undefined, { ownerId: standing.ownerId, cause: "released" });
-    return "changed";
+    if (standing.kind === "owned" && standing.perMessage) {
+      applyMessageControl(key, undefined, { ownerId: standing.ownerId, cause: "released" });
+      return "changed";
+    }
+    // A per-message owner whose record is gone (the stale backstop, as a
+    // document's Release clears a stale entry): it holds nothing but would
+    // block every later take (`setMessageOwner` is a check-and-set), so the
+    // Release drops it, recording no loss (nobody held the message).
+    if (ownerByMessage.has(key)) {
+      applyMessageControl(key, undefined, undefined);
+      return "changed";
+    }
+    return "unchanged";
   }
   const target = ownerLabel === undefined ? undefined : recordByLabel(ownerLabel);
   if (target === undefined) return "unknown-owner";
