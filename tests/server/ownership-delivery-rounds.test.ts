@@ -284,10 +284,20 @@ function reader(owner: string) {
 const reply = (owner: string, replyTo: string, extra: Record<string, unknown> = {}) =>
   as(owner, "tandem_reply", { text: `reply from ${owner}`, replyTo, ...extra });
 
-function channelReply(body: Record<string, unknown>) {
+/**
+ * A reply through the channel shim. Its session id defaults to A's, so it is
+ * A's shim (since the permit, #2358 PR 4b, an unmapped shim's reply is
+ * refused); `null` sends no header.
+ */
+function channelReply(body: Record<string, unknown>, sessionId: string | null = "rounds-a") {
   const { app, routes } = makeRecorderApp();
   registerChannelRoutes(app as never, (() => {}) as never);
-  return callRoute(routes, `POST ${API_CHANNEL_REPLY}`, { text: "via the shim", ...body });
+  return callRoute(
+    routes,
+    `POST ${API_CHANNEL_REPLY}`,
+    { text: "via the shim", ...body },
+    sessionId === null ? {} : { "x-claude-session-id": sessionId },
+  );
 }
 
 async function userOpen(filePath: string): Promise<string> {
@@ -759,8 +769,17 @@ describe("R2.2: a message's round", () => {
   it("a final reply through /api/channel-reply with no poll closes M; d2's and m2's stay", () => {
     const { d2, m2 } = bRounds();
     const m = userChat(key("m"));
-    channelReply({ replyTo: m });
+    expect(channelReply({ replyTo: m })._status ?? 200).toBe(200);
     expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
+  });
+
+  it("a channel reply the permit refuses (an unmapped shim, or A's shim on B's message) closes nothing (#2358 PR 4b)", () => {
+    const { d2, m2 } = bRounds();
+    const m = userChat(key("m"));
+    expect(channelReply({ replyTo: m }, null)._status).toBe(409);
+    expect(channelReply({ replyTo: m }, "rounds-unknown")._status).toBe(409);
+    expect(channelReply({ replyTo: m2 })._status).toBe(409);
+    expect(rounds()).toEqual([docRound(d2), msgRound(m), msgRound(m2)].sort());
   });
 
   it("A's tandem_reply naming B's message is refused at the ownership stage: m2's round and d2's stay open", async () => {

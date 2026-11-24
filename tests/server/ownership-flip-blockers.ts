@@ -185,19 +185,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
-      "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead. " +
-      "A channel-reply final reply handles its message (an unmapped shim session can answer a " +
-      "message another session owns), and settles only its target. A channel-reply " +
-      "acknowledgement handles nothing and sets no owner, but it still stamps `read`, so on a " +
-      "message a re-owe made unread it hides the message from its owner's polls (cursor and " +
-      "cursor-less) until the next re-owe (the posts PR, R0.5). A message is handled only by a " +
-      "final reply or `settles` (Ruling 11). With no re-owe after it, such an acknowledgement " +
-      "takes the message out of waiting for good.",
-    closedBy: "PR 4 (the shim's permit, design §9.2).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -403,7 +390,7 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
       "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
       "carried over and never re-owed. The user notices and sends the message again. (The same " +
-      "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
+      "route's acknowledgement from a non-owner was the channel-reply row, closed by PR 4b's permit.)",
     closedBy:
       "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
     acceptedFor:

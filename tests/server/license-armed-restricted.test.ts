@@ -581,7 +581,19 @@ describe("armed and keyless (#1521)", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: "answer" }),
       });
-      expect(res.status).toBe(200);
+      // Admitted by the licence: 200 with ownership off. With it on, this
+      // header-less shim is refused by the ownership permit instead (#2358
+      // PR 4b, 409 `unlinked`), which is not the licence.
+      const body = (await res.json()) as {
+        error?: string;
+        sent?: boolean;
+        details?: { reason?: string };
+      };
+      if (res.status === 409) {
+        // Only the permit's `unlinked` refusal, never any other 409.
+        expect(body.error).toBe("NOT_DOC_OWNER");
+        expect(body.details?.reason).toBe("unlinked");
+      } else expect(res.status === 200 && body.sent).toBe(true);
     });
   });
 

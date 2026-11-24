@@ -247,8 +247,11 @@ Two things sit outside it, for two different reasons:
   With multi-session ownership on (dark, ADR-054's delivery-rounds amendment), the same
   `replyTo` also closes that message's delivery round once the reply is appended, so
   `/health` and the editor's stall banner stop reporting it as waiting. Same bound: the
-  caller needs the message's key, and the route has no caller identity until PR 4's permit;
-  a refused (unlicensed) reply closes nothing.
+  caller needs the message's key; a refused reply (unlicensed, or refused by the permit)
+  closes nothing. Since the permit (#2358 PR 4b), with ownership on, the stamp and the
+  close happen only for a reply the server accepts from the record the shim's session id
+  names, so a caller must also name a record that may answer that message; see
+  [The session-identity header](#the-session-identity-header-multi-session-ownership-ships-dark).
 - **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
   (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
   its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.
@@ -331,6 +334,24 @@ With the flag on, each start of Tandem's own Claude gets an **owner handle**, `t
 - **The log redaction does not cover** a dependency's own `process.stderr.write` or `process.emitWarning`, and a clamped field that leaves 1 to 15 characters after `th_`; on the plain console shape `console.trace`'s stack and `console.dir`'s options differ slightly from Node's own. The direct `process.stderr.write` calls in `src/server/index.ts` print bind configuration only.
 
 **Void if** a handle-holder gains anything beyond what ownership design §11.1 calls coordination; route E (the handle in the child's environment) ships; `LAN_BIND_ENABLED` flips (ADR-056's checklist carries this); or the run files move out of `launcher/`, the directory whose owner and access list are checked (#2439, #2441). The #1599 entry is unchanged: the run files are Tandem's own, not a Claude Code config.
+
+## The session-identity header (multi-session ownership, ships dark)
+
+**Posture, not a finding** (#2358 PR 4b, ADR-054; ownership design §11.1, §9.1–§9.3). Nothing here is reachable in a release: multi-session ownership ships dark behind `OWNERSHIP_ENABLED`, and with the flag off no record is made from the header and no stream or reply is judged by it.
+
+**What it is.** `X-Claude-Session-Id` is a Claude Code session id, forwarded by the stdio bridge (from the `CLAUDE_CODE_SESSION_ID` Claude Code gives it) and by the channel shim and plugin monitor (`authFetch`). It is **optional**: a direct-HTTP entry, Claude Desktop and other clients send none. It is **not authentication**. Anyone who can reach `/mcp` or `/api` can send any value; loopback callers do not even need the bearer token. Within ownership design §11.1's terms (D4) ownership coordinates Claude sessions and is not a security boundary: every local process can already write every document through `/api`.
+
+**What a forged id gets: everything the record it names has.** With the flag on, that is the record's narrowed `/api/events` stream; its reply rights on `/api/channel-reply`; and, on an MCP transport, its documents, its answerer rights and the acknowledgement of its inbox items. Two side effects come with it. A forged transport or stream keeps a dead terminal's record attached, so its documents do not return to the default rule. And an `initialize` carrying an unlinked shim's session id creates a `claude:` record that the shim's stream then maps to, narrowing a stream ownership design §9.3 leaves whole (R3.4 holds only for ids no record carries).
+
+**What it never gets: Tandem's Claude's rights.** Binding a transport to the `tandem` record needs the current spawn's owner handle as well as its session id (see [The owner handle](#the-owner-handle-multi-session-ownership-ships-dark)). Tandem's Claude's session id never names a shared record. The channel route never maps a header to Tandem's Claude. The exception is a bound transport's `Mcp-Session-Id`, which carries Tandem's Claude's rights for the rest of the run without the handle (ownership design §11.2).
+
+**The two bounds.**
+- **`/api/events`.** A forged child id gets at most the `tandem` record's narrowed stream, never more than today's unmapped stream. A mapped stream is today's stream with events removed (`pushStreamAdmits` runs after the Solo filter and the licence refusal and only ever drops an event), and an unmapped stream, or one with no header, is today's stream exactly.
+- **`/api/channel-reply` (the permit).** A forged id gets at most the reply rights of the record it names, never more than today's route, which accepts any reply from any caller. Tandem's Claude's session id, forged or real, bound or not, gets no reply rights at all: it is refused with `unlinked` and never acts as Tandem's Claude (R3.3; Tandem's Claude answers through the `tandem` server's `tandem_reply`, where its bound transport identifies it). An id no live record carries, or no header, gets none either: it is refused with `chat` when the message is Tandem's Claude's, otherwise `unlinked`. Within the named record's rights, a forged reply that is accepted acts as that record: it can claim an unowned document, take a claimable message and become its answerer, after which the real session's reply to that message is refused. That is interference between local sessions, inside D4. A refused reply writes no row, stamps nothing read and closes no delivery round.
+
+Both are pinned by `tests/server/ownership-push-narrowing.test.ts` and `tests/server/ownership-channel-reply.test.ts`, which share the header mapping (`mapSessionHeader` in `src/server/sessions/ownership.ts`).
+
+**Void if** the header comes to decide anything beyond which Claude session is coordinated with: an `/api` route other than `/api/channel-reply` and `/api/events` keys on it, or any route keys on it for a write outside the ownership check. Also void if the channel route maps any header to the `tandem` record, or a mapped stream can receive an event an unmapped one would not. And void if `LAN_BIND_ENABLED` flips: the `/api/channel-*` family is in `NON_LOOPBACK_ALLOWED`, so a forged header would then arrive from another machine (ADR-056's checklist carries this).
 
 ## Open findings
 
