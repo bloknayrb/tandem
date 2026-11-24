@@ -90,17 +90,19 @@ gets `vGOOD`.
 
 ### 3. Plugin marketplace: point the ref back
 
-If the release skill's step 9 already set `source.ref` in `.claude-plugin/marketplace.json` to
-`vBAD`, open a PR setting it back to `vGOOD`. `plugin-version-pin.test.ts` accepts the previous
-stable release, so CI stays green on that PR. If step 9 has not happened yet, do nothing, and
-don't do it for `vBAD`.
+Open one PR that does both of these, whether or not the release skill's step 9 has already moved
+`source.ref` in `.claude-plugin/marketplace.json` to `vBAD`:
 
-**This turns `vFIX`'s version-bump PR red.** That test allows only package.json's version or the
-stable release before it in `CHANGELOG.md`. Once the bump moves package.json to `vFIX`, the
-allowed pair is `vFIX` / `vBAD`, and a ref still on `vGOOD` fails `check`. The bump PR cannot move
-the ref to `vFIX` either (the tag does not exist yet, which is what the test guards). Decide with
-Bryan before cutting `vFIX`: either let the bump PR set the ref to `vBAD` for the window between
-merge and publish, or widen the test for this one release.
+1. Add `vBAD` to `WITHDRAWN_RELEASES` in `tests/plugin/plugin-version-pin.test.ts`, as
+   `{ version: "x.y.z", issue: "#<incident issue>", reason: "<one line>" }`. The entry stays after
+   the incident: the release stays withdrawn.
+2. If step 9 set the ref to `vBAD`, set it back to `vGOOD`. If it has not, leave it on `vGOOD`.
+
+That test then refuses a ref naming a withdrawn release, and when it looks for "the stable release
+before package.json's" it skips withdrawn ones. So `vFIX`'s version-bump PR stays green with the
+ref on `vGOOD` (the allowed pair is `vFIX` / `vGOOD`, not `vFIX` / `vBAD`), and the release skill's
+step 9 moves the ref to `vFIX` once it is published, as for any release. Never point the ref at
+`vBAD`; the test fails if anyone does.
 
 ### 4. Licensed route
 
