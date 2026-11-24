@@ -277,15 +277,19 @@ describe("workspace", () => {
   it("lists every path git shows as binary, for the model to Read, under pipefail", () => {
     const prep = stepNamed("Prepare review inputs").run ?? "";
     expect(prep.startsWith("set -o pipefail\n")).toBe(true);
+    // No -z: git C-quotes names with a tab or newline, so one file is one
+    // line and a filename cannot forge or hide an entry.
     expect(prep).toContain(
-      '--no-renames --numstat -z --merge-base "origin/$BASE_REF" "$HEAD_SHA" \\\n' +
-        "  | tr '\\0' '\\n' | awk -F'\\t' '$1 == \"-\" && $2 == \"-\" { print $3 }' > inputs/binary-paths.txt",
+      '--no-renames --numstat --merge-base "origin/$BASE_REF" "$HEAD_SHA" \\\n' +
+        "  | awk '/^-\\t-\\t/ { print substr($0, 5) }' > inputs/binary-paths.txt",
     );
+    expect(prep).not.toMatch(/--numstat -z|tr '\\0'/);
     expect(prep).toContain(
       "cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/",
     );
     const prompt = readFileSync(path.join(ROOT, ".github/claude-review/prompt.md"), "utf8");
     expect(prompt).toContain("`.review-input/binary-paths.txt`");
+    expect(prompt).toContain("file names (including those in `binary-paths.txt`)");
   });
 
   it("keeps the step order the controls depend on", () => {

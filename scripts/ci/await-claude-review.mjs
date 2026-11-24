@@ -27,7 +27,8 @@
 // itself: whoever can push can change what a pull_request run does. What the
 // gate refuses is PR *content* claiming a status.
 //   1  the gate itself failed (gh auth, network, parse, inline comments that
-//      could not all be fetched). Stop: ask Bryan.
+//      could not all be fetched, or a files list shorter than the PR, which
+//      every PR over GitHub's 3000-file listing limit hits). Stop: ask Bryan.
 //
 // Usage: node scripts/ci/await-claude-review.mjs <pr-number>
 

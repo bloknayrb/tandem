@@ -150,10 +150,12 @@ jobs:
           # Git also calls any file with a NUL byte binary, whatever the
           # attributes, so a source file could hide its change that way. List
           # every path shown as binary; the prompt has the model Read the ones
-          # that are source by their name.
+          # that are source by their name. No -z: git then C-quotes any name
+          # with a tab, newline or quote, so each file is exactly one line and
+          # a filename cannot forge or hide an entry.
           git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
-            --no-renames --numstat -z --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
-            | tr '\0' '\n' | awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' > inputs/binary-paths.txt
+            --no-renames --numstat --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
+            | awk '/^-\t-\t/ { print substr($0, 5) }' > inputs/binary-paths.txt
           node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
           mkdir pr/.review-input
           cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/
