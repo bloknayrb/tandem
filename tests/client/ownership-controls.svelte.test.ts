@@ -32,6 +32,7 @@ import {
 } from "../../src/client/tabs/tab-context-menu";
 import type { OpenTab } from "../../src/client/types";
 import type { OwnershipSummary, PublishedOwnerFields } from "../../src/shared/ownership-published";
+import type { ChatMessage } from "../../src/shared/types";
 
 function makeTab(id: string): OpenTab {
   return {
@@ -407,10 +408,10 @@ function chatProps(
   ownerLineTakeBack: string | null = null,
 ) {
   return {
-    messages: [],
+    messages: [] as ChatMessage[],
     editor: null,
     activeDocId: null,
-    openDocs: [],
+    openDocs: [] as Array<{ id: string; fileName: string }>,
     capturedAnchor: null,
     onCapturedAnchorChange: () => {},
     onSend: () => true,
@@ -434,7 +435,7 @@ function chatProps(
     ownerLine,
     ownerLineTakeBack,
     onOwnerLineRemedy,
-  } as const;
+  };
 }
 
 describe("the composer line", () => {

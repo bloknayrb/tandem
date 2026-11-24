@@ -138,7 +138,7 @@ describe("ownerFieldsFromList (what yjsSync keeps)", () => {
 
   it("keeps only the entries that carry owner fields", () => {
     const out = ownerFieldsFromList(
-      [
+      <Array<{ id: string }>>[
         DARK_ENTRY,
         { ...DARK_ENTRY, id: "d2", owner: TERMINAL, stale: null, hint: null, waitingSince: null },
       ],
@@ -149,10 +149,12 @@ describe("ownerFieldsFromList (what yjsSync keeps)", () => {
   });
 
   it("returns the previous map when nothing changed, and a new one when anything did", () => {
-    const list = [{ ...DARK_ENTRY, owner: TERMINAL, stale: null, hint: null, waitingSince: null }];
+    const entry = { ...DARK_ENTRY, owner: TERMINAL, stale: null, hint: null, waitingSince: null };
+    const list: Array<{ id: string }> = [entry];
     const first = ownerFieldsFromList(list, new Map());
     expect(ownerFieldsFromList(list, first)).toBe(first);
-    const moved = ownerFieldsFromList([{ ...list[0], stale: "disconnected" }], first);
+    const staleEntry = { ...entry, stale: "disconnected" };
+    const moved = ownerFieldsFromList([staleEntry], first);
     expect(moved).not.toBe(first);
     expect(moved.get("d1")?.stale).toBe("disconnected");
     expect(ownerFieldsFromList([DARK_ENTRY], first).size).toBe(0);
