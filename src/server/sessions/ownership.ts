@@ -1593,8 +1593,10 @@ function armGrace(record: OwnerRecord): void {
   // A record entering its grace (#2358 PR 5a-3): a holder reads as
   // "disconnected", and any record stops counting for the summary's
   // `otherAiAttached` (Bryan, 2026-11-24: "Republish on check-in"). Once per
-  // grace, not per re-arm.
-  if (starting && records.get(record.ownerId) === record) requestPublish();
+  // grace, not per re-arm. Asked even when the cap above lapsed and deleted
+  // this record: it counted for `otherAiAttached` until now, and a record
+  // holding nothing moves no document, so nothing else would ask.
+  if (starting) requestPublish();
 }
 
 function onGraceExpired(ownerId: string, timer: ReturnType<typeof setTimeout>): void {
@@ -1619,9 +1621,18 @@ function enforceDetachedCap(): void {
   // landed in the registry before its own re-judge ran) is not detached: its
   // grace ends here instead of counting against the cap.
   const { attached } = readAttachment();
+  let graceEnded = false;
   for (const r of records.values()) {
-    if (r.graceTimer !== undefined && attached.has(r.ownerId)) clearGrace(r);
+    if (r.graceTimer !== undefined && attached.has(r.ownerId)) {
+      clearGrace(r);
+      graceEnded = true;
+    }
   }
+  // A record leaving its grace here (#2358 PR 5a-3) asks the republish
+  // `recompute` would have asked: its own re-judge then finds no grace and
+  // asks nothing, so its "disconnected" and `otherAiAttached` would wait for
+  // the tick.
+  if (graceEnded) requestPublish();
   const inGrace = [...records.values()].filter((r) => r.graceTimer !== undefined);
   if (inGrace.length <= MAX_DETACHED_RECORDS) return;
   // Records that hold nothing go first: lapsing one early costs nothing, so

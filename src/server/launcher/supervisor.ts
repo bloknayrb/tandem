@@ -4986,6 +4986,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       resolveCommand() !== null
     ) {
       lastError = undefined;
+      // The published state reads it (#2358 PR 5a-3: `tandemStartable` and
+      // `notPresentReason`); presence stays Ruling H's, untouched here.
+      markFactsDirty();
     }
     const stopped: Extract<SupervisorStatus, { running: false }> = { running: false };
     if (lastError) stopped.lastError = lastError;

@@ -74,6 +74,8 @@ const PUBLISH_FAILED =
   "[ownership] the published ownership state could not be written; the next change or tick writes it.";
 const RESTORE_FAILED =
   "[ownership] a client's write to the published ownership state could not be restored; the next change or tick restores it.";
+const GUARD_FAILED =
+  "[ownership] the guard on the published ownership state could not be attached to a room; the next broadcast attaches it.";
 
 /** A write the server's own helpers made: never restored. */
 function serverOrigin(origin: unknown): boolean {
@@ -105,7 +107,7 @@ export function guardOwnershipRoom(room: string, doc: Y.Doc): void {
       });
     }
   } catch (err) {
-    console.error(RESTORE_FAILED, err instanceof Error ? err.name : "");
+    console.error(GUARD_FAILED, err instanceof Error ? err.name : "");
   }
 }
 

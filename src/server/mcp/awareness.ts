@@ -45,7 +45,7 @@ import {
   selectionMayBeHanded,
   wasOwedAtSwitch,
 } from "../models/local-period.js";
-import { inboxOwnership } from "../sessions/ownership.js";
+import { inboxOwnership, logLimited } from "../sessions/ownership.js";
 import {
   inboxExcludedAllNote,
   inboxExcludedNamedNote,
@@ -659,14 +659,15 @@ const OLDEST_WAITING_FAILED =
  * (`oldestDocumentWaitingAt`), the same reads and no Y.Doc write. Reached
  * only through the ownership module's seam (`setOldestWaitingProbe`), which
  * only a flag-on publish asks. Total: a throw answers null with one fixed
- * line, rate-limited by the ownership module's caller.
+ * line, rate-limited here (`logLimited`), since every publish and every tick
+ * asks it once per published document.
  */
 export function oldestDocumentWaiting(documentId: string): number | null {
   try {
     const input = documentWaitingInput(documentId);
     return input === null ? null : oldestDocumentWaitingAt(input);
   } catch {
-    console.error(OLDEST_WAITING_FAILED);
+    logLimited("oldest-waiting-computed", OLDEST_WAITING_FAILED);
     return null;
   }
 }
