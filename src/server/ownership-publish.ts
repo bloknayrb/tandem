@@ -10,7 +10,9 @@
  * Flag on, it owns three things:
  * - **The republish** ({@link requestOwnershipPublish}): step 4 of
  *   `setDocOwner`, a holder's grace starting or ending, presence, a new
- *   session and every change of the launcher's facts ask it. One microtask
+ *   session, every change of the launcher's facts and a mode change ask it
+ *   in full; a holder's check-in, a waiting-relevant user annotation event
+ *   and an acknowledgement change ask it for those documents only. One microtask
  *   later it rewrites the owner fields of the last broadcast's tab list where
  *   they changed (`writePublishedOpenDocs`) and the composer summary where it
  *   changed. Coalesced, so a burst of changes costs one republish, and never
@@ -49,6 +51,9 @@ import {
   setOpenDocsWrittenListener,
   writePublishedOpenDocs,
 } from "./documents/registry.js";
+import { subscribe, unsubscribe } from "./events/queue.js";
+import type { TandemEvent } from "./events/types.js";
+import { CHAT_SCOPE, deliveryRegistry } from "./mcp/inbox-cursor.js";
 import { ownershipEnabled } from "./ownership-flag.js";
 import { ownershipSummary } from "./sessions/ownership.js";
 import { getOrCreateDocument } from "./yjs/provider.js";
@@ -222,14 +227,68 @@ function publishDocsNow(documentIds: ReadonlySet<string>): void {
 }
 
 /**
+ * Whether `event` can change what `documentWaiting` counts on its document
+ * (#2358 PR 5a-3 review): a user comment created or edited, or a user reply
+ * (the waiting rule counts only user comments and user replies on a
+ * Claude-facing thread; the rule itself decides, this only picks what is
+ * worth asking it again). In Solo or with the mode unknown, `pushEvent`'s
+ * privacy hold drops these before any subscriber, which is the waiting rule's
+ * own answer there (it counts nothing unless the mode reads Tandem); the mode
+ * change that ends the hold asks a full republish (`noteModeObserved`).
+ */
+function changesWaiting(event: TandemEvent): boolean {
+  switch (event.type) {
+    case "annotation:created":
+    case "annotation:edited":
+      return true;
+    case "annotation:reply":
+      return event.payload.replyAuthor === "user";
+    default:
+      return false;
+  }
+}
+
+/**
+ * A waiting-relevant event landed (#2358 PR 5a-3 review): ask the narrow
+ * republish of its one document, so an "unowned-waiting" hint and
+ * `waitingSince` appear at once (ADR-054's 5a-3 amendment). An event with
+ * no document asks the full republish.
+ */
+function onWaitingEvent(event: TandemEvent): void {
+  if (!changesWaiting(event)) return;
+  if (event.documentId) requestOwnershipPublish([event.documentId]);
+  else requestOwnershipPublish();
+}
+
+/**
+ * The registry changed an acknowledgement in `scope` (#2358 PR 5a-3 review):
+ * a check-in acknowledged items there (or a refused claim took one back, or
+ * a handover retired one), which moves that document's waiting. Ask its
+ * narrow republish, so a terminal's check-in that acknowledges a claimable
+ * unowned document's items clears its hint at once, not only the documents
+ * the poller holds. Chat acknowledgements move no document's waiting.
+ */
+function onAckChanged(scope: string): void {
+  if (scope === CHAT_SCOPE) return;
+  requestOwnershipPublish([scope]);
+}
+
+/**
  * Start publishing (`src/server/index.ts`, once at boot, both transports):
  * guard `CTRL_ROOM` and every room each broadcast writes, write the summary,
- * and arm the stale tick (unref'd). Flag off it does nothing. Returns a stop
- * function (tests).
+ * arm the stale tick (unref'd), and attach the two waiting triggers: an
+ * `"internal"` event subscriber ({@link onWaitingEvent}; never `"external"`,
+ * which would be a new AI surface, CLAUDE.md Critical Rule 9) and the
+ * delivery registry's acknowledgement listener ({@link onAckChanged}). Flag
+ * off it does nothing: no subscriber, no listener. Returns a stop function
+ * (tests).
  */
 export function startOwnershipPublishing(): () => void {
   if (!ownershipEnabled()) return () => {};
   setOpenDocsWrittenListener(guardPublishedRooms);
+  // The queue's subscriber set makes a second start's subscribe a no-op.
+  subscribe(onWaitingEvent, "internal");
+  deliveryRegistry.setAckListener(onAckChanged);
   publishNow();
   if (tick === undefined) {
     tick = setInterval(publishNow, OWNERSHIP_STALE_TICK_MS);
@@ -251,6 +310,8 @@ export function stopOwnershipPublishingForTests(): void {
   narrowOwed.clear();
   restoresForTests = 0;
   setOpenDocsWrittenListener(undefined);
+  unsubscribe(onWaitingEvent);
+  deliveryRegistry.setAckListener(undefined);
 }
 
 /** Tests only: how many restore passes have run since the last stop. */

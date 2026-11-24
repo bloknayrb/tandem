@@ -130,12 +130,35 @@ export class DeliveryRegistry {
   readonly #handOuts = new Map<number, readonly number[]>();
   /** The same, keyed by the seq list, so an identical hand-out reuses its token. */
   readonly #handOutTokens = new Map<string, number>();
+  /**
+   * Told the scope of every entry whose acknowledgement changed (#2358 PR
+   * 5a-3 review): acknowledged, unacknowledged, or retired while
+   * acknowledged, the three changes that move what `documentWaiting` reads
+   * (`handedAtOrAbove`). Unset (the default, and always while ownership is
+   * off) nothing is told; set only by `ownership-publish.ts`'s
+   * `startOwnershipPublishing`, flag on. Called synchronously, so it must be
+   * cheap and must not throw (its caller is the inbox's commit).
+   */
+  #ackListener: ((scope: string) => void) | undefined;
 
   constructor() {
     this.reset();
   }
 
   /** Changes on every reset; a cursor from another epoch reads as fresh. */
+  /** Set or clear the acknowledgement listener (see `#ackListener`). */
+  setAckListener(listener: ((scope: string) => void) | undefined): void {
+    this.#ackListener = listener;
+  }
+
+  #ackChanged(scope: string): void {
+    try {
+      this.#ackListener?.(scope);
+    } catch {
+      // A listener's fault never reaches the inbox; it only delays a republish.
+    }
+  }
+
   get epoch(): string {
     return this.#epoch;
   }
@@ -328,6 +351,7 @@ export class DeliveryRegistry {
     remove(this.#byBase, baseId(entry.kind, entry.base), entry);
     remove(this.#byScope, entry.scope, entry);
     this.#unacked.get(entry.scope)?.delete(entry);
+    if (entry.acked) this.#ackChanged(entry.scope);
   }
 
   /**
@@ -364,6 +388,7 @@ export class DeliveryRegistry {
     }
     if (kept.length > 0) this.#byScope.set(scope, kept);
     else this.#byScope.delete(scope);
+    if (dropped.some((entry) => entry.acked)) this.#ackChanged(scope);
     return dropped.length;
   }
 
@@ -407,11 +432,14 @@ export class DeliveryRegistry {
       this.#unacked.set(entry.scope, unacked);
     }
     unacked.add(entry);
+    this.#ackChanged(entry.scope);
   }
 
   markAcked(entry: RegistryEntry): void {
+    const was = entry.acked;
     entry.acked = true;
     this.#unacked.get(entry.scope)?.delete(entry);
+    if (!was) this.#ackChanged(entry.scope);
   }
 }
 

@@ -205,6 +205,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-presence.test.ts",
     // PR 5a-3: the published state flag on, with a dark row that turns it off.
     "tests/server/ownership-published-state.test.ts",
+    // PR 5a-3 review: the waiting triggers flag on, with a dark row.
+    "tests/server/ownership-published-waiting-triggers.test.ts",
     // PR 4a: the push stream's narrowing and the ownership-changed nudge.
     "tests/server/ownership-push-narrowing.test.ts",
     "tests/server/ownership-records.test.ts",
@@ -287,6 +289,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-presence.test.ts",
       // PR 5a-3: the published state flag on, with a dark row that turns it off.
       "tests/server/ownership-published-state.test.ts",
+      // PR 5a-3 review: the waiting triggers flag on, with a dark row.
+      "tests/server/ownership-published-waiting-triggers.test.ts",
       // PR 4a's one: the push stream's narrowing and the ownership-changed
       // nudge flag on, with dark rows (every stream gets every event byte for
       // byte; a lapse nudges nothing).
@@ -352,6 +356,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-presence.test.ts",
       // PR 5a-3: the published state flag on, with a dark row that turns it off.
       "tests/server/ownership-published-state.test.ts",
+      // PR 5a-3 review: the waiting triggers flag on, with a dark row.
+      "tests/server/ownership-published-waiting-triggers.test.ts",
       // PR 4a: the push stream's narrowing and the ownership-changed nudge.
       "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",

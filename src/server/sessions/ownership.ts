@@ -1108,8 +1108,11 @@ export function noteRecordPoll(ownerId: string | undefined): void {
   // claim the poll then makes asks its own through step 4. Only the
   // documents this record holds are recomputed (Bryan, 2026-11-24:
   // "Recompute own docs (Recommended)"): `lastPollAt` is read by nothing
-  // published but its own holder's stale flag, so no other entry can change.
-  // None held, nothing asked. Coalesced, written only where something changed.
+  // published but its own holder's stale flag. None held, nothing asked here.
+  // The documents the poll acknowledges items on are asked separately, by the
+  // delivery registry's acknowledgement listener (`ownership-publish.ts`'s
+  // `onAckChanged`), since an acknowledgement moves their waiting whoever
+  // holds them. Coalesced, written only where something changed.
   const held = heldDocumentIds(ownerId);
   if (held.length > 0) requestPublish(held);
 }
@@ -2459,6 +2462,15 @@ let modeKnownAsked = false;
  */
 export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
   if (!ownershipEnabled()) return;
+  // The mode feeds every document's waiting (`documentWaiting` counts
+  // nothing unless it reads Tandem), so a change of it asks the full
+  // republish (#2358 PR 5a-3 review): a Solo→Tandem change publishes the
+  // hints the Solo hold kept back at once, and the reverse clears them,
+  // without waiting for the tick. Rare, so the full cost is accepted. Before
+  // the latch, which governs only the start-or-wake forward. At install
+  // (boot, before the sink is wired, or a swap) it asks too; coalesced, and
+  // written only where something changed.
+  requestPublish();
   if (modeKnownAsked) return;
   if (state === "indeterminate") {
     modeUnknownSeen = true;
@@ -4888,9 +4900,9 @@ export interface LauncherFacts {
  * Step 4's publish (#2358 PR 5a-3). `src/server/index.ts` wires it to
  * `requestOwnershipPublish` (`ownership-publish.ts`). Only stored; called by
  * a flag-on change of owner, a record's grace starting or ending, presence,
- * a new session, and a holder's check-in. With `documentIds` (a check-in
- * only) it asks for those documents' entries alone; without, the full
- * republish.
+ * a new session, a mode change, and a holder's check-in. With `documentIds`
+ * (a check-in only, from this module) it asks for those documents' entries
+ * alone; without, the full republish.
  */
 export function setOwnershipPublishSink(sink: (documentIds?: readonly string[]) => void): void {
   publishSink = sink;

@@ -1253,11 +1253,15 @@ describe("no per-client state", () => {
     expect(code.match(/[(,]\s*caller\b/g)).toHaveLength(2);
     expect(code.match(/\bcaller\./g)).toBeNull();
     expect(handler).toMatch(/inboxOwnership\.begin\(caller,/);
-    // The one name from the ownership module, value or type.
+    // The names from the ownership module, value or type: the one door, and
+    // since #2358 PR 5a-3's review the shared log rate-limiter (`logLimited`,
+    // for `oldestDocumentWaiting`'s failure line), which names no caller.
     const fromOwnership = [
       ...awareness.matchAll(/import (?:type )?\{([^}]*)\} from "\.\.\/sessions\/ownership\.js";/g),
     ];
-    expect(fromOwnership.map((m) => m[1]?.trim())).toEqual(["inboxOwnership"]);
+    expect(fromOwnership.map((m) => m[1]?.replace(/\s+/g, " ").trim())).toEqual([
+      "inboxOwnership, logLimited",
+    ]);
     expect(awareness).not.toMatch(/\bownerId\b/);
     expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled|owned-op/);
     // Nothing else reaches the ownership module from awareness.ts (no
