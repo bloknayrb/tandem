@@ -7,7 +7,10 @@
  * badge, or from the native tab menu's Assign leaf.
  *
  * Rendered only while the document's entry carries owner fields, so a dark
- * build never mounts it. It writes no Y.Doc: every change goes through
+ * build never mounts it. `data-tauri-drag-region="false"` because the tab strip
+ * sits inside the title bar's deep drag region, where a plain div inside an
+ * open popover would otherwise become a window-drag handle (see the new-tab
+ * menu's wrapper in DocumentTabs). It writes no Y.Doc: every change goes through
  * `POST /api/ownership`, and the result arrives as the server's republish.
  */
 import { onMount, untrack } from "svelte";
@@ -116,6 +119,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   role="dialog"
   aria-label={`Who works on ${fileName}`}
   data-testid="tab-owner-menu"
+  data-tauri-drag-region="false"
   style={`left: ${anchor.left}px; top: ${anchor.bottom + 4}px;`}
 >
   <div class="owner-heading" data-stale={view.stale ?? undefined}>{view.detail}</div>
