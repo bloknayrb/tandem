@@ -879,6 +879,18 @@ const tandemClaudeControl = $derived<"start" | "turn-off" | null>(
       : null,
 );
 
+// #2358 PR 5b: the palette's "Start Tandem's Claude" says what it takes back
+// (design §10.2; Bryan, 2026-11-24, "Yes, all Starts (Recommended)"). The
+// palette's commands are static, so the entry stays listed while Tandem's
+// Claude runs; the sentence shows only while a Start would start it. Empty
+// while ownership is off (no sentence), so the palette renders as before.
+const NO_PALETTE_DETAILS: ReadonlyMap<string, string> = new Map();
+const paletteDetails = $derived<ReadonlyMap<string, string>>(
+  ownerTakeBackText !== null && !aiReadiness.launcherRunning
+    ? new Map([["launcher-start", ownerTakeBackText]])
+    : NO_PALETTE_DETAILS,
+);
+
 /** The "hasn't said hello" note's action (#2197): restart a Claude that is
  *  still running, otherwise the stopped launcher's own remedy. */
 const greetingAction = $derived<GreetingAction | null>(
@@ -3429,6 +3441,7 @@ function dismissModelPicker() {
       {editor}
       annotations={visibleAnnotations}
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
+      actionDetails={paletteDetails}
     />
 
     <ToastContainer

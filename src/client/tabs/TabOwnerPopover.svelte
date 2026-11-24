@@ -13,7 +13,7 @@
  * menu's wrapper in DocumentTabs). It writes no Y.Doc: every change goes through
  * `POST /api/ownership`, and the result arrives as the server's republish.
  */
-import { onMount, untrack } from "svelte";
+import { onMount, tick, untrack } from "svelte";
 import type { OwnershipSummary, PublishedOwnerFields } from "../../shared/ownership-published";
 import {
   badgeOffersStart,
@@ -45,6 +45,12 @@ interface Props {
   takeBack: readonly string[];
   /** A refusal to show at once (the native menu's Release that failed). */
   initialError?: string | null;
+  /**
+   * Where focus goes back when this popover closes: the badge that opened it,
+   * or, opened from the native menu, whatever held focus then. Skipped when it
+   * has left the DOM.
+   */
+  returnFocus?: HTMLElement | null;
   onclose: () => void;
   onstart: () => void;
 }
@@ -58,6 +64,7 @@ const {
   anchor,
   takeBack,
   initialError = null,
+  returnFocus = null,
   onclose,
   onstart,
 }: Props = $props();
@@ -81,13 +88,47 @@ let el: HTMLDivElement | null = $state(null);
 // different tab's popover (the keyed remount), which it would close.
 let live = true;
 
+/** The first row that does something, or null (none yet: the owners list is still loading). */
+function firstRow(): HTMLButtonElement | null {
+  return el?.querySelector<HTMLButtonElement>("button.owner-row:not(:disabled)") ?? null;
+}
+
+/**
+ * Close, then hand focus back to the opener. On the next task, after the
+ * popover has left the DOM and any press has moved focus, and only when focus
+ * then sits nowhere (it was inside the popover, or a press landed on something
+ * that takes no focus): a press on the editor or another control keeps it.
+ */
+function dismiss() {
+  // Read before `onclose`: closing clears the parent's state the prop reads from.
+  const target = returnFocus;
+  onclose();
+  if (!target) return;
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (target.isConnected && (active === null || active === document.body)) target.focus();
+  }, 0);
+}
+
 onMount(() => {
+  // A dialog takes focus when it opens: its first actionable row, or the
+  // dialog itself until the owners list brings one (the effect below).
+  (firstRow() ?? el)?.focus();
   void fetchOwnerChoices().then((list) => {
     if (live) choices = list ?? [];
   });
   return () => {
     live = false;
   };
+});
+
+// The owners list arrived: if focus is still parked on the dialog itself, move
+// it to the first row. Runs after the DOM update, so the rows exist.
+$effect(() => {
+  if (!choices) return;
+  untrack(() => {
+    if (el && document.activeElement === el) firstRow()?.focus();
+  });
 });
 
 // A mousedown on an owner badge is not "outside": the badge's own click
@@ -100,14 +141,14 @@ $effect(() =>
     (event) => {
       const target = event.target;
       if (target instanceof Element && target.closest('[data-testid="tab-owner-badge"]')) return;
-      onclose();
+      dismiss();
     },
   ),
 );
 
 $effect(() => {
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") onclose();
+    if (e.key === "Escape") dismiss();
   };
   document.addEventListener("keydown", onKey);
   return () => document.removeEventListener("keydown", onKey);
@@ -120,8 +161,17 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   const result = await postDocumentOwnership(documentId, action, ownerLabel);
   if (!live) return;
   pending = false;
-  if (result.ok) onclose();
-  else error = ownershipErrorText(result.error);
+  if (result.ok) {
+    dismiss();
+    return;
+  }
+  error = ownershipErrorText(result.error);
+  // The pressed row was disabled while the request ran, which dropped focus;
+  // a refusal keeps the popover open, so focus comes back into it.
+  await tick();
+  if (live && (document.activeElement === null || document.activeElement === document.body)) {
+    firstRow()?.focus();
+  }
 }
 </script>
 
@@ -129,6 +179,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   bind:this={el}
   class="owner-popover"
   role="dialog"
+  tabindex="-1"
   aria-label={`Who works on ${fileName}`}
   data-testid="tab-owner-menu"
   data-tauri-drag-region="false"
@@ -175,7 +226,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
       disabled={pending}
       onclick={() => {
         onstart();
-        onclose();
+        dismiss();
       }}
     >
       <span class="owner-row-main">Start Tandem's Claude</span>

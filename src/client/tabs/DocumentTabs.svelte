@@ -139,6 +139,8 @@ let ownerPopover = $state<{
   tabId: string;
   anchor: { left: number; bottom: number };
   error: string | null;
+  /** Where focus returns on close: the badge, or what held focus at a menu open. */
+  opener: HTMLElement | null;
 } | null>(null);
 
 function anchorOf(el: Element): { left: number; bottom: number } {
@@ -151,14 +153,20 @@ function toggleOwnerPopover(tabId: string, anchor: HTMLElement) {
     ownerPopover = null;
     return;
   }
-  ownerPopover = { tabId, anchor: anchorOf(anchor), error: null };
+  ownerPopover = { tabId, anchor: anchorOf(anchor), error: null, opener: anchor };
 }
 
 /** Opens the popover hung from the tab itself (the native menu's leaves). */
 function openOwnerPopoverForTab(tabId: string, error: string | null = null) {
   const pill = scrollEl?.querySelector(`[data-testid="tab-${CSS.escape(tabId)}"][role="tab"]`);
   const anchor = pill ? anchorOf(pill) : { left: 8, bottom: 40 };
-  ownerPopover = { tabId, anchor, error };
+  const active = document.activeElement;
+  ownerPopover = {
+    tabId,
+    anchor,
+    error,
+    opener: active instanceof HTMLElement && active !== document.body ? active : null,
+  };
 }
 
 // A popover whose tab closed, or whose entry lost its owner fields, goes away.
@@ -1484,6 +1492,7 @@ $effect(() => {
         now={ownerNow}
         anchor={open.anchor}
         initialError={open.error}
+        returnFocus={open.opener}
         {takeBack}
         onclose={() => (ownerPopover = null)}
         onstart={() => onStartTandemClaude?.()}

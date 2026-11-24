@@ -65,6 +65,7 @@ chat-claude-code-offer-setup
 chat-composer-input
 chat-greeting-late
 chat-greeting-late-action
+chat-greeting-late-take-back
 chat-messages
 chat-notice-live
 chat-notice-{*}
@@ -77,6 +78,7 @@ chat-send-btn
 chat-tab
 chat-tandem-claude-resume-failed
 chat-tandem-claude-resume-remedy
+chat-tandem-claude-resume-take-back
 chat-tandem-claude-resuming
 chat-tandem-claude-take-back
 chat-tandem-claude-toggle
@@ -424,6 +426,7 @@ outline-panel
 outline-search-input
 palette-empty
 palette-input
+palette-item-detail-{*}
 palette-item-new-scratchpad
 palette-item-{*}
 panel-edge-collapse-{*}

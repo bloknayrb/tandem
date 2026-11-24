@@ -14,10 +14,12 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fireEvent, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { registerAction, unregisterAction } from "../../src/client/actions/registry.svelte";
+import CommandPalette from "../../src/client/components/CommandPalette.svelte";
 import {
   composerLine,
   ownerFieldsFromList,
@@ -89,6 +91,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount, not only clear the body: a mounted palette or popover keeps its
+  // window and document listeners, which would see the next test's events.
+  cleanup();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
@@ -657,5 +662,305 @@ describe("every Start lists what it takes back", () => {
   it("App hands the same sentence to the status bar", () => {
     const app = readFileSync(join(import.meta.dirname, "../../src/client/App.svelte"), "utf8");
     expect(app).toMatch(/startTakeBack=\{ownerTakeBackText\}/);
+  });
+});
+
+/**
+ * The rest of the Starts (Bryan, 2026-11-24, "Yes, all Starts (Recommended)"):
+ * the failed resume row's remedy and the late-greeting note's action when they
+ * offer `start` (both run through App's `aiCtaHandler`), and the command
+ * palette's `launcher-start`. Null while ownership is off: markup unchanged.
+ */
+describe("every Start lists what it takes back: the chat rows and the palette", () => {
+  const TAKE_BACK = "Starting takes back “a.md”";
+
+  function renderResume(remedy: "start" | "restart", takeBack: string | null) {
+    return render(ChatPanel, {
+      props: {
+        ...chatProps(null, () => {}, takeBack),
+        tandemClaudeResume: { kind: "failed" as const, remedy },
+      },
+    });
+  }
+
+  function renderGreeting(action: "start" | "restart" | "relaunch", takeBack: string | null) {
+    return render(ChatPanel, {
+      props: { ...chatProps(null, () => {}, takeBack), tandemClaudeGreetingLate: action },
+    });
+  }
+
+  it("the resume row's Start remedy shows the sentence and adds it to its title and name", () => {
+    const { getByTestId } = renderResume("start", TAKE_BACK);
+    expect(getByTestId("chat-tandem-claude-resume-take-back").textContent?.trim()).toBe(TAKE_BACK);
+    const button = getByTestId("chat-tandem-claude-resume-remedy");
+    expect(button.getAttribute("title")).toBe(
+      `Tandem's Claude isn't running. Click to start it. ${TAKE_BACK}.`,
+    );
+    expect(button.getAttribute("aria-label")).toBe(`Start Tandem's Claude. ${TAKE_BACK}.`);
+  });
+
+  it("the resume row's other remedies say nothing about taking back", () => {
+    const { getByTestId, queryByTestId } = renderResume("restart", TAKE_BACK);
+    expect(queryByTestId("chat-tandem-claude-resume-take-back")).toBeNull();
+    expect(getByTestId("chat-tandem-claude-resume-remedy").getAttribute("title")).not.toContain(
+      "takes back",
+    );
+  });
+
+  it("the late-greeting note's Start shows the sentence and adds it to its title and name", () => {
+    const { getByTestId } = renderGreeting("start", TAKE_BACK);
+    expect(getByTestId("chat-greeting-late-take-back").textContent?.trim()).toBe(TAKE_BACK);
+    const button = getByTestId("chat-greeting-late-action");
+    expect(button.getAttribute("title")).toBe(
+      `Tandem's Claude isn't running. Click to start it. ${TAKE_BACK}.`,
+    );
+    expect(button.getAttribute("aria-label")).toBe(`Start Tandem's Claude. ${TAKE_BACK}.`);
+  });
+
+  it("the late-greeting note's relaunch and restart say nothing about taking back", () => {
+    for (const action of ["relaunch", "restart"] as const) {
+      const r = renderGreeting(action, TAKE_BACK);
+      expect(r.queryByTestId("chat-greeting-late-take-back"), action).toBeNull();
+      expect(
+        r.getByTestId("chat-greeting-late-action").getAttribute("title"),
+        action,
+      ).not.toContain("takes back");
+      r.unmount();
+    }
+  });
+
+  it("flag off (no sentence): both rows render exactly as before", () => {
+    for (const renderRow of [
+      () => renderResume("start", null),
+      () => renderGreeting("start", null),
+    ]) {
+      const dark = renderRow();
+      expect(dark.queryByTestId("chat-tandem-claude-resume-take-back")).toBeNull();
+      expect(dark.queryByTestId("chat-greeting-late-take-back")).toBeNull();
+      const html = dark.container.innerHTML;
+      expect(html).not.toContain("takes back");
+      dark.unmount();
+    }
+    const resume = renderResume("start", null);
+    expect(resume.getByTestId("chat-tandem-claude-resume-remedy").getAttribute("title")).toBe(
+      "Tandem's Claude isn't running. Click to start it.",
+    );
+    expect(resume.getByTestId("chat-tandem-claude-resume-remedy").getAttribute("aria-label")).toBe(
+      "Start Tandem's Claude.",
+    );
+    resume.unmount();
+    const greeting = renderGreeting("start", null);
+    expect(greeting.getByTestId("chat-greeting-late-action").getAttribute("title")).toBe(
+      "Tandem's Claude isn't running. Click to start it.",
+    );
+  });
+
+  describe("the command palette's Start", () => {
+    beforeEach(() => {
+      registerAction(
+        { id: "launcher-start", label: "Start Tandem's Claude", group: "claude", run() {} },
+        { replace: true },
+      );
+    });
+    afterEach(() => {
+      unregisterAction("launcher-start");
+    });
+
+    function renderPalette(details?: ReadonlyMap<string, string>) {
+      return render(CommandPalette, {
+        props: {
+          open: true,
+          onClose: () => {},
+          editor: null,
+          annotations: [],
+          ...(details ? { actionDetails: details } : {}),
+        },
+      });
+    }
+
+    it("shows the sentence under the entry's label", async () => {
+      const { getByTestId } = renderPalette(new Map([["launcher-start", TAKE_BACK]]));
+      await settle();
+      const item = getByTestId("palette-item-launcher-start");
+      expect(getByTestId("palette-item-detail-launcher-start").textContent?.trim()).toBe(TAKE_BACK);
+      expect(item.textContent).toContain("Start Tandem's Claude");
+      expect(item.textContent).toContain(TAKE_BACK);
+    });
+
+    it("flag off (no details): the palette renders exactly as with no prop", async () => {
+      const plain = renderPalette();
+      await settle();
+      const before = plain.getByTestId("palette-item-launcher-start").outerHTML;
+      plain.unmount();
+      const dark = renderPalette(new Map());
+      await settle();
+      expect(dark.queryByTestId("palette-item-detail-launcher-start")).toBeNull();
+      expect(dark.getByTestId("palette-item-launcher-start").outerHTML).toBe(before);
+    });
+
+    it("App gives the sentence to launcher-start only, and only while a Start would start", () => {
+      const root = join(import.meta.dirname, "../..");
+      const app = readFileSync(join(root, "src/client/App.svelte"), "utf8");
+      expect(app).toMatch(/actionDetails=\{paletteDetails\}/);
+      expect(app).toMatch(
+        /ownerTakeBackText !== null && !aiReadiness\.launcherRunning\s*\?\s*new Map\(\[\["launcher-start", ownerTakeBackText\]\]\)\s*:\s*NO_PALETTE_DETAILS/,
+      );
+      const builtin = readFileSync(join(root, "src/client/actions/builtin.svelte.ts"), "utf8");
+      expect(builtin).toMatch(/id: "launcher-start",\s*label: "Start Tandem's Claude"/);
+    });
+  });
+});
+
+/**
+ * The popover is a dialog (role="dialog"), so it takes focus when it opens and
+ * gives it back to its opener when it closes (Escape, an outside press, or a
+ * successful action), if the opener is still in the DOM.
+ */
+describe("the owner popover's focus", () => {
+  const held: PublishedOwnerFields = {
+    owner: { label: "owner-k7qx", displayKind: "terminal", kind: "claimed" },
+    stale: null,
+    hint: null,
+    waitingSince: null,
+  };
+
+  function renderStrip(fields: PublishedOwnerFields = held) {
+    const tabs = [makeTab("a")];
+    return render(DocumentTabs, {
+      props: {
+        ...stripProps(tabs),
+        ownerFields: new Map([["a", fields]]),
+        ownershipSummary: SUMMARY,
+      },
+    });
+  }
+
+  /** Past the popover's deferred hand-back (a zero-delay timer). */
+  async function nextTask() {
+    await settle();
+    await new Promise((r) => setTimeout(r, 0));
+    await settle();
+  }
+
+  it("focuses the first row on open and returns focus to the badge on Escape", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = renderStrip();
+    const badge = r.getByTestId("tab-owner-badge");
+    badge.focus();
+    await fireEvent.click(badge);
+    await settle();
+    expect(document.activeElement).toBe(r.getByTestId("tab-owner-release"));
+    await fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await nextTask();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+    expect(document.activeElement).toBe(badge);
+  });
+
+  it("holds focus on the dialog until the owners list brings a row", async () => {
+    let resolve: (v: unknown) => void = () => {};
+    fetchMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolve = res;
+        }),
+    );
+    // With a Release row, focus is on it at once, before the owners list answers.
+    const held1 = renderStrip();
+    await fireEvent.click(held1.getByTestId("tab-owner-badge"));
+    await settle();
+    expect(document.activeElement).toBe(held1.getByTestId("tab-owner-release"));
+    held1.unmount();
+    // Unowned with Tandem's Claude present: no Release, so nothing to focus yet.
+    const r = renderStrip({ owner: null, stale: null, hint: null, waitingSince: null });
+    await fireEvent.click(r.getByTestId("tab-owner-badge"));
+    await settle();
+    const menu = r.getByTestId("tab-owner-menu");
+    expect(r.queryByTestId("tab-owner-release")).toBeNull();
+    expect(document.activeElement).toBe(menu);
+    resolve(
+      jsonResponse(200, {
+        data: [{ label: "owner-p2zt", displayKind: "Claude Desktop", holds: [], canTake: true }],
+      }),
+    );
+    await settle();
+    expect(document.activeElement).toBe(r.getByTestId("tab-owner-assign-owner-p2zt"));
+  });
+
+  it("returns focus to the badge after a successful action, and keeps it inside on a refusal", async () => {
+    let status = 409;
+    let answer: () => void = () => {};
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/ownership/owners")) return jsonResponse(200, { data: [] });
+      if (init?.method === "POST") {
+        if (status === 409) await new Promise<void>((res) => (answer = res));
+        return status === 200
+          ? jsonResponse(200, { data: { changed: true } })
+          : jsonResponse(409, { error: "busy" });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const r = renderStrip();
+    const badge = r.getByTestId("tab-owner-badge");
+    await fireEvent.click(badge);
+    await settle();
+    await fireEvent.click(r.getByTestId("tab-owner-release"));
+    await settle();
+    // The pressed row is disabled while the request runs; a browser applying the
+    // focus fixup rule drops focus to the body then.
+    expect(r.getByTestId("tab-owner-release").hasAttribute("disabled")).toBe(true);
+    // (happy-dom will not blur a disabled button, so park focus and drop it.)
+    const parked = document.createElement("input");
+    document.body.appendChild(parked);
+    parked.focus();
+    parked.remove();
+    expect(document.activeElement).toBe(document.body);
+    answer();
+    await nextTask();
+    expect(r.getByTestId("tab-owner-error")).toBeTruthy();
+    expect(document.activeElement).toBe(r.getByTestId("tab-owner-release"));
+
+    status = 200;
+    await fireEvent.click(r.getByTestId("tab-owner-release"));
+    await nextTask();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+    expect(document.activeElement).toBe(badge);
+  });
+
+  it("an outside press returns focus to the badge, unless the press took focus itself", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = renderStrip();
+    const badge = r.getByTestId("tab-owner-badge");
+    await fireEvent.click(badge);
+    await settle();
+    expect(document.activeElement).toBe(r.getByTestId("tab-owner-release"));
+    // A press on something that takes no focus: focus lands nowhere, so it goes back.
+    await fireEvent.mouseDown(document.body);
+    await nextTask();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+    expect(document.activeElement).toBe(badge);
+
+    // A press on a control that takes focus keeps it there.
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    await fireEvent.click(badge);
+    await settle();
+    await fireEvent.mouseDown(input);
+    input.focus();
+    await nextTask();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("does not reach for a badge that has left the DOM", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = renderStrip();
+    const badge = r.getByTestId("tab-owner-badge");
+    await fireEvent.click(badge);
+    await settle();
+    const focus = vi.spyOn(badge, "focus");
+    badge.remove();
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await nextTask();
+    expect(focus).not.toHaveBeenCalled();
   });
 });

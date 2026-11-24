@@ -271,8 +271,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
 - `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
 - `chat-tandem-claude-resume-remedy` — that row's remedy button
+- `chat-tandem-claude-resume-take-back` — beside that remedy, when it is Start and ownership is on: the documents a Start would take back (#2358 PR 5b, ownership design §10.2)
 - `chat-greeting-late` — "Tandem's Claude hasn't said hello" note, when the one-time greeting did not reach the chat (#2197; `data-action` is `relaunch` or the stopped launcher's `AiChip`); below the resume row, replaces the pickup row
 - `chat-greeting-late-action` — that note's button
+- `chat-greeting-late-take-back` — beside that button, when it is Start and ownership is on: the documents a Start would take back (#2358 PR 5b)
 - `chat-claude-code-offer` — offer to set up Tandem's own Claude (#2199), with
   `chat-claude-code-offer-setup` (opens the wizard at its offer) and
   `chat-claude-code-offer-dismiss` ("Not now", until the next server launch); only when the
@@ -320,7 +322,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   scroll region)
 - `error-boundary-{recover,reload}-btn` (resolved from constants)
 - `command-palette`, `palette-{input,empty}`, `palette-item-{*}`,
-  `palette-item-new-scratchpad`
+  `palette-item-new-scratchpad`, `palette-item-detail-{*}` (a command's second line; #2358 PR 5b: `launcher-start`'s take-back sentence while ownership is on)
 - `onboarding-tutorial` (the checklist strip), `tutorial-dismiss-btn` (its ×), `tutorial-next-btn` (the Done button, shown once every item is ticked — #1711), `tutorial-item-{review,ask,edit}` (each with `data-done`)
 
 ### Settings — popover (REMOVED 2026-07-21 — consolidated into the modal below; testids deleted)

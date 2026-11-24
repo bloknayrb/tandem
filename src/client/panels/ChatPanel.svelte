@@ -123,7 +123,8 @@ interface Props {
   /**
    * The take-back sentence every Start offered here adds (the composer line's
    * and, since Bryan's "Yes, all Starts (Recommended)" of 2026-11-24, the
-   * header's), or null; always null while ownership is off.
+   * header's, the failed resume row's and the late-greeting note's), or null;
+   * always null while ownership is off.
    */
   ownerLineTakeBack: string | null;
   onOwnerLineRemedy: (remedy: "start" | "settings") => void;
@@ -182,6 +183,21 @@ const TANDEM_CLAUDE_CONTROL = {
       "Turn off Tandem's Claude. It stays off, including the next time Tandem starts, until you start it again.",
   },
 } as const;
+
+/**
+ * #2358 PR 5b (design §10.2; Bryan, 2026-11-24, "Yes, all Starts
+ * (Recommended)"): the take-back sentence for a remedy that runs Start, or
+ * null. Keyed on the CTA's `action`, the handler `aiCtaHandler` dispatches, so
+ * any remedy that starts Tandem's Claude carries it. Null while ownership is off.
+ */
+function startTakeBack(remedy: keyof typeof AI_CTA): string | null {
+  return AI_CTA[remedy].action === "start" ? ownerLineTakeBack : null;
+}
+
+/** A Start's title or accessible name with the take-back sentence added. */
+function withTakeBack(text: string, takeBack: string | null): string {
+  return takeBack ? `${text} ${takeBack}.` : text;
+}
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
@@ -443,9 +459,10 @@ async function exportChat() {
           onclick={tandemClaudeControl === "start" ? onStartClaude : onTurnOffClaude}
           data-testid="chat-tandem-claude-toggle"
           data-action={tandemClaudeControl}
-          title={tandemClaudeControl === "start" && ownerLineTakeBack
-            ? `${TANDEM_CLAUDE_CONTROL.start.title} ${ownerLineTakeBack}.`
-            : TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title}
+          title={withTakeBack(
+            TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title,
+            tandemClaudeControl === "start" ? ownerLineTakeBack : null,
+          )}
           class="chat-header-action"
           style="margin-right: auto;"
         >
@@ -646,6 +663,7 @@ async function exportChat() {
       </div>
     {:else if tandemClaudeResume?.kind === "failed"}
       {@const remedy = tandemClaudeResume.remedy}
+      {@const takeBack = startTakeBack(remedy)}
       <div
         class="chat-status-row chat-status-row-wrap"
         data-testid="chat-tandem-claude-resume-failed"
@@ -657,18 +675,26 @@ async function exportChat() {
           type="button"
           class="chat-header-action"
           data-testid="chat-tandem-claude-resume-remedy"
-          title={AI_CTA[remedy].title}
-          aria-label={AI_CTA[remedy].ariaLabel}
+          title={withTakeBack(AI_CTA[remedy].title, takeBack)}
+          aria-label={withTakeBack(AI_CTA[remedy].ariaLabel, takeBack)}
           onclick={() => onResumeRemedy(remedy)}
         >
           {AI_CTA[remedy].label}
         </button>
+        {#if takeBack}
+          <!-- #2358 PR 5b: a Start says which documents it takes back. -->
+          <span class="chat-owner-line-note" data-testid="chat-tandem-claude-resume-take-back"
+            >{takeBack}</span
+          >
+        {/if}
       </div>
     {:else if tandemClaudeGreetingLate}
       {@const greet =
         tandemClaudeGreetingLate === "relaunch"
           ? GREETING_RELAUNCH
           : AI_CTA[tandemClaudeGreetingLate]}
+      {@const takeBack =
+        tandemClaudeGreetingLate === "relaunch" ? null : startTakeBack(tandemClaudeGreetingLate)}
       <div
         class="chat-status-row chat-status-row-wrap"
         data-testid="chat-greeting-late"
@@ -680,12 +706,18 @@ async function exportChat() {
           type="button"
           class="chat-header-action"
           data-testid="chat-greeting-late-action"
-          title={greet.title}
-          aria-label={greet.ariaLabel}
+          title={withTakeBack(greet.title, takeBack)}
+          aria-label={withTakeBack(greet.ariaLabel, takeBack)}
           onclick={() => onGreetingAction(tandemClaudeGreetingLate)}
         >
           {greet.label}
         </button>
+        {#if takeBack}
+          <!-- #2358 PR 5b: a Start says which documents it takes back. -->
+          <span class="chat-owner-line-note" data-testid="chat-greeting-late-take-back"
+            >{takeBack}</span
+          >
+        {/if}
       </div>
     {:else if pickup}
       <div
