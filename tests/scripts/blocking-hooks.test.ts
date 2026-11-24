@@ -153,10 +153,13 @@ describe("check-token-violation.sh worktree guard", () => {
   });
 
   bashOnly("still runs the scanner for a file inside the project", () => {
+    // The synthetic `project`, not `ROOT`: a checkout that itself lives under
+    // `.claude/worktrees/` (an agent worktree) would hit the guard's worktree
+    // arm and fail this for a reason unrelated to the project-dir comparison.
     const run = runBashHook(
       "check-token-violation.sh",
-      editEvent(`${ROOT}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: ROOT },
+      editEvent(`${project}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: project },
     );
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
