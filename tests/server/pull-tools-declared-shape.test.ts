@@ -75,6 +75,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { ownershipOn } from "../../src/server/mcp/owned-op.js";
 import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";
 import {
   __resetLocalPeriodForTests,
@@ -1110,6 +1111,33 @@ describe("G5: the stripped keys stay undeclared and unsent", () => {
     const replies = item.replies as Item[];
     expect(replies.map((r) => r.id)).toEqual(["reply-carrier"]);
     for (const k of REPLY_STRIPPED) expect(k in replies[0], `reply ${k} sent`).toBe(false);
+  });
+});
+
+describe("G6: the owner label is declared exactly when it is sent (#2358 PR 5c)", () => {
+  it("every top-level key is declared, and `owner` is both declared and sent only flag on", async () => {
+    const o = await openDoc();
+    browserWrite(o.doc, Y_MAP_ANNOTATIONS, "labelled", userComment(o.doc, "labelled"));
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "tandem_getAnnotations");
+    const declared = new Set(
+      Object.keys((tool?.outputSchema as { properties: Record<string, unknown> }).properties),
+    );
+
+    const structured = (await getAnnotations(o.documentId)) as Record<string, unknown>;
+
+    // This file's server follows the shipped flag (CI's `ownership-flag-on`
+    // job runs it flag on): ownership design §5.7's label rides only there.
+    expect(declared.has("owner"), "owner is declared").toBe(ownershipOn());
+    expect("owner" in structured, "owner is sent").toBe(ownershipOn());
+    for (const k of Object.keys(structured)) expect(declared.has(k), k).toBe(true);
+    if (ownershipOn()) {
+      // The test caller holds nothing here; whoever holds it, the label names
+      // no owner id.
+      const owner = structured.owner as { you?: boolean } | null;
+      if (owner !== null)
+        expect(Object.keys(owner).sort()).toEqual(["displayKind", "kind", "label", "you"]);
+    }
   });
 });
 

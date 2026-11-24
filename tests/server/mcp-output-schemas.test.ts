@@ -45,8 +45,10 @@ import {
   checkInboxOwnershipShape,
   diagnosticsOutputShape,
   getAnnotationsOutputShape,
+  getAnnotationsOwnershipShape,
   getTextContentOutputShape,
   listDocumentsOutputShape,
+  listDocumentsOwnershipOutputShape,
   searchOutputShape,
   statusOutputShape,
   statusOwnershipShape,
@@ -114,6 +116,13 @@ const inboxShape = (): ZodRawShape =>
     : checkInboxOutputShape;
 const statusShape = (): ZodRawShape =>
   ownershipOn() ? { ...statusOutputShape, ...statusOwnershipShape } : statusOutputShape;
+// #2358 PR 5c: flag on, both tools add their owner label (ownership design §5.7).
+const annotationsShape = (): ZodRawShape =>
+  ownershipOn()
+    ? { ...getAnnotationsOutputShape, ...getAnnotationsOwnershipShape }
+    : getAnnotationsOutputShape;
+const listShape = (): ZodRawShape =>
+  ownershipOn() ? listDocumentsOwnershipOutputShape : listDocumentsOutputShape;
 
 function textEnvelope(result: ToolResult): { error: boolean; data?: unknown } {
   const textContent = result.content.find((c) => c.type === "text");
@@ -381,7 +390,7 @@ describe("tandem_getAnnotations structured output", () => {
       name: "tandem_getAnnotations",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, getAnnotationsOutputShape);
+    const sc = expectStructuredMatch(result, annotationsShape());
 
     expect(sc.count).toBe(2);
     expect(sc.notesExcluded).toBe(1);
@@ -415,7 +424,7 @@ describe("tandem_getAnnotations structured output", () => {
         name: "tandem_getAnnotations",
         arguments: {},
       })) as ToolResult;
-      const sc = expectStructuredMatch(result, getAnnotationsOutputShape);
+      const sc = expectStructuredMatch(result, annotationsShape());
       const anns = sc.annotations as Array<Record<string, unknown>>;
       expect(anns.find((a) => a.id === id)?.resolvedBy).toBe("claude");
     })();
@@ -522,7 +531,7 @@ describe("tandem_listDocuments structured output", () => {
       name: "tandem_listDocuments",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, listDocumentsOutputShape);
+    const sc = expectStructuredMatch(result, listShape());
     expect(sc.count).toBe(2);
     expect(sc.activeDocumentId).toBe("schema-list-b");
     const docs = sc.documents as Array<Record<string, unknown>>;
@@ -534,7 +543,7 @@ describe("tandem_listDocuments structured output", () => {
       name: "tandem_listDocuments",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, listDocumentsOutputShape);
+    const sc = expectStructuredMatch(result, listShape());
     expect(sc.count).toBe(0);
     expect(sc.activeDocumentId).toBeNull();
   });

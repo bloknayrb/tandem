@@ -194,13 +194,43 @@ describe("tools/list while dark", () => {
     // read-mode `tandem_status`'s `owner` field. Anything else is a leak
     // of ownership into a tool that PR 1c did not mean to change.
     // The scope PR adds `tandem_checkInbox`'s `ownership` output field.
+    // #2358 PR 5c adds the owner label to `tandem_getAnnotations` and
+    // `tandem_listDocuments`: their output schemas only (below).
     expect(changed.sort()).toEqual([
       "tandem_checkInbox",
       "tandem_close",
+      "tandem_getAnnotations",
+      "tandem_listDocuments",
       "tandem_open",
       "tandem_status",
       "tandem_switchDocument",
     ]);
+    for (const name of ["tandem_getAnnotations", "tandem_listDocuments"]) {
+      const toolOn = on.get(name);
+      const toolOff = off.get(name);
+      expect(toolOn?.description, name).toBe(toolOff?.description);
+      expect(toolOn?.inputSchema, name).toEqual(toolOff?.inputSchema);
+      expect(toolOn?.annotations, name).toEqual(toolOff?.annotations);
+      const onText = JSON.stringify(toolOn?.outputSchema);
+      expect(onText, name).toContain('"owner"');
+      expect(onText, name).toContain('"you"');
+      expect(JSON.stringify(toolOff?.outputSchema), name).not.toContain('"owner"');
+    }
+    // getAnnotations' `owner` is top-level and optional; listDocuments' is on
+    // each listed document, optional too.
+    const annotationsOut = on.get("tandem_getAnnotations")?.outputSchema as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(Object.keys(annotationsOut.properties ?? {})).toContain("owner");
+    expect(annotationsOut.required ?? []).not.toContain("owner");
+    const listItem = (
+      on.get("tandem_listDocuments")?.outputSchema as {
+        properties: { documents: { items: { properties: object; required?: string[] } } };
+      }
+    ).properties.documents.items;
+    expect(Object.keys(listItem.properties)).toContain("owner");
+    expect(listItem.required ?? []).not.toContain("owner");
     for (const name of ["tandem_close", "tandem_open", "tandem_switchDocument"]) {
       expect(on.get(name)?.description, name).toContain(off.get(name)?.description as string);
       expect(on.get(name)?.inputSchema, name).toEqual(off.get(name)?.inputSchema);

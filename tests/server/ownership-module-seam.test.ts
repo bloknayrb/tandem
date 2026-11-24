@@ -212,6 +212,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-reowe-rounds.test.ts",
     "tests/server/ownership-take-back.test.ts",
+    // PR 5c: the owner labels on the two read tools, flag on with dark rows.
+    "tests/server/ownership-tool-labels.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
     "tests/server/ownership-waiting-chat.test.ts",
@@ -300,6 +302,8 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      // PR 5c: the owner labels, with dark rows that build their server flag off.
+      "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
@@ -365,6 +369,8 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      // PR 5c: the owner labels, with dark rows that build their server flag off.
+      "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
