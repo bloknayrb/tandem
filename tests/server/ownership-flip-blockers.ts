@@ -162,18 +162,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The editor's pickup row still counts from the message's arrival, not its last change " +
-      "of owner (design §6.5's sentence), so a re-owed message older than the stall threshold " +
-      "reads 'still waiting' at once and may show the Claude Code offer, though a session " +
-      "started from that offer is not handed it while another session holds the document (the " +
-      "chat owners PR, R8.1, R8.3). (Narrowed by PR 5d: the server counts the clock from the " +
-      "last change of owner and publishes it as each unanswered message's `since` under " +
-      "`Y_MAP_OWNERSHIP_CHAT`; the summary's chat stale and a document's chat waiting time use " +
-      "it. Nothing in the editor reads it yet.)",
-    closedBy: "PR 5e (the pickup row reads each message's published `since`).",
-  },
-  {
-    gap:
       "The user's controls for a chat message exist only on the server (#2358 PR 5a-2: " +
       "POST /api/ownership with a messageId): nothing in the editor reaches them, so a live " +
       "acknowledger that never answers, or chat a tab close left with its closing holder, can be " +
