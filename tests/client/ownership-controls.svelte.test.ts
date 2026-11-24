@@ -335,6 +335,15 @@ describe("the owner badge and its popover", () => {
     await settle();
     expect(r.queryByTestId("tab-owner-menu")).toBeNull();
     expect(r.queryByTestId("tab-owner-badge")).toBeNull();
+    // The fields coming back does not reopen a popover nobody asked for.
+    await r.rerender({
+      ...stripProps(tabs),
+      ownerFields: new Map([["a", held]]),
+      ownershipSummary: SUMMARY,
+    });
+    await settle();
+    expect(r.getByTestId("tab-owner-badge")).toBeTruthy();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
   });
 
   it("does not switch tabs when the badge is clicked", async () => {
@@ -466,5 +475,50 @@ describe("the composer line", () => {
     expect(settings.container.querySelector(".chat-owner-line-note")).toBeNull();
     await fireEvent.click(settings.getByTestId("chat-owner-line-action"));
     expect(onRemedy).toHaveBeenLastCalledWith("settings");
+  });
+});
+
+/**
+ * The wiring no rendered component reaches: `createYjsSync` needs live
+ * providers and App mounts nothing in tests, so these are pinned from source.
+ */
+describe("wiring, from source", () => {
+  const root = join(import.meta.dirname, "../..");
+  const read = (p: string) => readFileSync(join(root, p), "utf8");
+
+  it("yjsSync reads the owner fields from every list it reconciles and the summary from CTRL_ROOM's awareness map", () => {
+    const sync = read("src/client/hooks/yjsSync.svelte.ts");
+    expect(sync).toMatch(/ownerFieldsFromList\(docList, ownerFieldsState\)/);
+    expect(sync).toMatch(/ydoc\.getMap\(Y_MAP_USER_AWARENESS\)/);
+    expect(sync).toMatch(/readOwnershipSummary\(userAwareness\.get\(Y_MAP_OWNERSHIP_SUMMARY\)\)/);
+    expect(sync).toMatch(/userAwareness\.unobserve\(summaryObserver\)/);
+  });
+
+  it("the client never writes the published keys (the server's guard reverts any write)", () => {
+    const files = [
+      "src/client/hooks/yjsSync.svelte.ts",
+      "src/client/App.svelte",
+      "src/client/tabs/DocumentTabs.svelte",
+      "src/client/tabs/TabOwnerPopover.svelte",
+      "src/client/ownership/owner-view.ts",
+      "src/client/ownership/ownership-api.ts",
+    ];
+    for (const f of files) {
+      const src = read(f);
+      expect(src, f).not.toMatch(/\.set\(\s*Y_MAP_OWNERSHIP_SUMMARY/);
+      expect(src, f).not.toMatch(/\.set\(\s*Y_MAP_OPEN_DOCUMENTS/);
+    }
+  });
+
+  it("App hands the published state to the tab strip and the composer line to the chat panel", () => {
+    const app = read("src/client/App.svelte");
+    expect(app).toMatch(/ownerFields=\{yjsSync\.ownerFields\}/);
+    expect(app).toMatch(/ownershipSummary=\{yjsSync\.ownershipSummary\}/);
+    expect(app).toMatch(/onStartTandemClaude=\{startClaude\}/);
+    expect(app).toMatch(/ownerLine=\{ownerComposerLine\}/);
+    expect(app).toMatch(/ownerLineTakeBack=\{ownerTakeBackText\}/);
+    expect(app).toMatch(
+      /composerLine\(\s*yjsSync\.activeTabId === null \? undefined : yjsSync\.ownerFields\.get\(yjsSync\.activeTabId\),\s*yjsSync\.ownershipSummary,\s*\)/,
+    );
   });
 });

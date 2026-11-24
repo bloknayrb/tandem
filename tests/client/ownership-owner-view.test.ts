@@ -337,6 +337,17 @@ describe("composerLine (design §10.2)", () => {
       "→ the first session to check in",
     );
     expect(composerLine(unowned, summary())?.text).toBe("→ the first session to check in");
+    expect(
+      composerLine(
+        unowned,
+        summary({
+          tandemPresent: false,
+          tandemRunning: false,
+          notPresentReason: "off",
+          otherAiAttached: true,
+        }),
+      )?.text,
+    ).toBe("→ the first session to check in");
     expect(composerLine(unowned, null)?.text).toBe("→ the first session to check in");
   });
 
