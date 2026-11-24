@@ -387,10 +387,14 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
       }),
     );
     captureCarriedOverChat(() => [carried]);
+    // Present, so §7.1's table would give a doc-less message to Tandem's
+    // Claude; a carried-over one is handed to nobody all the same.
+    tandemPresent();
     await startPublishing();
     const facts = published() ?? {};
     expect(Object.keys(facts).sort()).toEqual([carried, loose, mine, onHeld].sort());
     expect(facts[carried]).toMatchObject({ owner: null, heldBy: "none", release: false });
+    expect(facts[loose]).toMatchObject({ heldBy: "presence" });
 
     for (const [k, f] of Object.entries(facts)) {
       // An Assign to no such label stops at follows-document or at the label.
@@ -408,7 +412,8 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     expect(facts[mine]?.release).toBe(true);
     expect(controlMessageOwner(mine, "release", undefined)).toBe("changed");
     await settle();
-    expect(published()?.[mine]).toMatchObject({ owner: null, heldBy: "none", release: false });
+    // Released from A, it follows §7.1's table again: Tandem's Claude's, by presence.
+    expect(published()?.[mine]).toMatchObject({ heldBy: "presence", release: false });
   });
 
   it("carries no owner id, owner handle or session id", async () => {
@@ -630,6 +635,26 @@ describe("a document's waiting time counts the chat that follows it (ownership d
     await settle();
     expect(writes).toBe(1);
     expect(Object.keys(published() ?? {})).toHaveLength(20);
+    // A republish that changes nothing writes nothing.
+    runOwnershipTickForTests();
+    requestOwnershipChatPublish();
+    await settle();
+    expect(writes).toBe(1);
+  });
+
+  it("counts a document's chat only while it is owed: handed to its holder, it no longer waits", async () => {
+    const d = mkDoc("d");
+    tandemPresent();
+    setDocOwner(d, { ownerId: TANDEM, kind: "default" }, "presence");
+    // Tandem's Claude holds the document and its process is not running.
+    setLauncherFactsSource(() => ({ ...FACTS, running: false }));
+    await startPublishing();
+    userChat(key("m"), d);
+    await settle();
+    expect(entryIn(CTRL_ROOM, d)).toMatchObject({ hint: "start-to-answer" });
+    await poll(TANDEM);
+    await settle();
+    expect(entryIn(CTRL_ROOM, d)).toMatchObject({ hint: null, waitingSince: null });
   });
 });
 
