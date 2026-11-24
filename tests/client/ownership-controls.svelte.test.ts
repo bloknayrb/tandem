@@ -348,6 +348,47 @@ describe("the owner badge and its popover", () => {
     expect(r.queryByTestId("tab-owner-menu")).toBeNull();
   });
 
+  it("a second press on the badge closes its popover (mousedown is not outside)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const { getByTestId, queryByTestId } = renderHeld();
+    const badge = getByTestId("tab-owner-badge");
+    await fireEvent.mouseDown(badge);
+    await fireEvent.click(badge);
+    await settle();
+    expect(getByTestId("tab-owner-menu")).toBeTruthy();
+    await fireEvent.mouseDown(badge);
+    await fireEvent.click(badge);
+    await settle();
+    expect(queryByTestId("tab-owner-menu")).toBeNull();
+    expect(badge.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("a Release settling after its popover closed does not close the next one", async () => {
+    let resolvePost: (r: ReturnType<typeof jsonResponse>) => void = () => {};
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/ownership/owners")) return jsonResponse(200, { data: [] });
+      if (init?.method === "POST") {
+        return new Promise<ReturnType<typeof jsonResponse>>((res) => {
+          resolvePost = res;
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const { getByTestId } = renderHeld();
+    await fireEvent.click(getByTestId("tab-owner-badge"));
+    await settle();
+    await fireEvent.click(getByTestId("tab-owner-release"));
+    // Escape closes the first popover while its Release is in flight; then reopen.
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await settle();
+    await fireEvent.click(getByTestId("tab-owner-badge"));
+    await settle();
+    expect(getByTestId("tab-owner-menu")).toBeTruthy();
+    resolvePost(jsonResponse(200, { data: { changed: true } }));
+    await settle();
+    expect(getByTestId("tab-owner-menu")).toBeTruthy();
+  });
+
   it("does not switch tabs when the badge is clicked", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
     const tabs = [makeTab("a"), makeTab("b")];

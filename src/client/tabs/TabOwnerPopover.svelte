@@ -76,8 +76,12 @@ let error = $state<string | null>(untrack(() => initialError));
 let pending = $state(false);
 let el: HTMLDivElement | null = $state(null);
 
+// False once this popover is gone. A Release or Assign still in flight then
+// must not call `onclose`: by the time it settles the strip may be showing a
+// different tab's popover (the keyed remount), which it would close.
+let live = true;
+
 onMount(() => {
-  let live = true;
   void fetchOwnerChoices().then((list) => {
     if (live) choices = list ?? [];
   });
@@ -86,11 +90,18 @@ onMount(() => {
   };
 });
 
+// A mousedown on an owner badge is not "outside": the badge's own click
+// toggles this popover (or moves it to another tab), and closing here first
+// would make that click reopen it instead.
 $effect(() =>
   onOutsideEvent(
     () => el,
     ["mousedown"],
-    () => onclose(),
+    (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-testid="tab-owner-badge"]')) return;
+      onclose();
+    },
   ),
 );
 
@@ -107,6 +118,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   pending = true;
   error = null;
   const result = await postDocumentOwnership(documentId, action, ownerLabel);
+  if (!live) return;
   pending = false;
   if (result.ok) onclose();
   else error = ownershipErrorText(result.error);
@@ -120,7 +132,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   aria-label={`Who works on ${fileName}`}
   data-testid="tab-owner-menu"
   data-tauri-drag-region="false"
-  style={`left: ${anchor.left}px; top: ${anchor.bottom + 4}px;`}
+  style={`left: clamp(8px, ${anchor.left}px, calc(100vw - 348px)); top: ${anchor.bottom + 4}px;`}
 >
   <div class="owner-heading" data-stale={view.stale ?? undefined}>{view.detail}</div>
   {#if error}
@@ -177,7 +189,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
 <style>
   .owner-popover {
     position: fixed;
-    z-index: 60;
+    z-index: var(--tandem-z-popover);
     min-width: 220px;
     max-width: 340px;
     padding: var(--tandem-space-1);

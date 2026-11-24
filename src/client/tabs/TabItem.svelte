@@ -402,7 +402,10 @@ function handleMouseLeaveClose() {
   /* #2358 PR 5b: the owner badge. Shrinks before the filename does, and never
      past a short stub, so a long label cannot push the close button off. */
   .tab-owner-badge {
-    flex: 0 1 auto;
+    /* Flex shrink is weighted by basis, so an equal factor would shrink the
+       filename alongside the badge; a large factor makes the badge give up
+       its width first, down to its stub. */
+    flex: 0 1000 auto;
     min-width: 24px;
     max-width: 140px;
     overflow: hidden;
