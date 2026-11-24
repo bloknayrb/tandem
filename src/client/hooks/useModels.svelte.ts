@@ -20,6 +20,7 @@ import { modelsWriteWasRefused, noteModelsWriteRefused } from "../models/write-r
 import type { AgentLabelSource } from "../utils/agentLabel.js";
 import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { throwUnlessReadable } from "./useModelsWriteAccess.svelte.js";
 import {
   loadSettings,
   type ModelRegistryEntry,
@@ -427,7 +428,7 @@ async function writeThrough(
  */
 async function fetchAndApply(): Promise<void> {
   const res = await fetch(`${API_BASE}${API_MODELS}`, { method: "GET" });
-  if (!res.ok) throw new Error(`GET ${API_MODELS} → ${res.status}`);
+  await throwUnlessReadable(res, API_MODELS);
   const { file, etag } = (await res.json()) as ModelsGetResponse;
   _autoDefaultId = null; // adopted server state: no run of ours marked it
   _models = file.models as ModelRegistryEntry[];
