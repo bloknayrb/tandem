@@ -509,7 +509,7 @@ describe("flag on: the queue, the document and the gates", () => {
     expect(res.json).toEqual({ error: "unknown-document" });
   });
 
-  it("400 for a malformed body, a message action, or a release naming an owner", async () => {
+  it("400 for a malformed body, a body naming both a document and a message, or a release naming an owner", async () => {
     await boot("1");
     openDoc("bad-1");
     for (const body of [
@@ -518,7 +518,14 @@ describe("flag on: the queue, the document and the gates", () => {
       { documentId: "bad-1", action: "take" },
       { documentId: "bad-1", action: "assign" },
       { documentId: "bad-1", action: "release", ownerLabel: "owner-abcd" },
-      { messageId: "m1", action: "release" },
+      // Since #2358 PR 5a-2 a `messageId` names a chat message; with a
+      // `documentId` beside it, or of the wrong type, it is a 400.
+      { documentId: "bad-1", messageId: "m1", action: "release" },
+      { messageId: "", action: "release" },
+      { messageId: 7, action: "release" },
+      { messageId: "m1", action: "take" },
+      { messageId: "m1", action: "assign" },
+      { messageId: "m1", action: "release", ownerLabel: "owner-abcd" },
       ["bad-1"],
     ]) {
       const res = await post(body);
@@ -547,8 +554,27 @@ describe("flag on: the queue, the document and the gates", () => {
     for (const o of ["http://evil.example", null]) {
       const res = await post({ documentId: "origin-1", action: "release" }, { origin: o });
       expect(res.status).toBe(403);
+      // The message half (#2358 PR 5a-2) is behind the same gates.
+      const msg = await post({ messageId: "m1", action: "release" }, { origin: o });
+      expect(msg.status).toBe(403);
     }
     expect(getDocOwner("origin-1")?.ownerId).toBe(A);
+  });
+
+  it("the message half answers through the real server: 404 unknown-message for an id with no chat row (#2358 PR 5a-2)", async () => {
+    await boot("1");
+    const res = await post({ messageId: "no-such-message", action: "release" });
+    expect(res.status).toBe(404);
+    expect(res.json).toEqual({ error: "unknown-message" });
+  });
+
+  it("a text/plain message body never reaches the control (#2358 PR 5a-2)", async () => {
+    await boot("1");
+    const res = await post(undefined, {
+      contentType: "text/plain",
+      raw: JSON.stringify({ messageId: "m1", action: "release" }),
+    });
+    expect(res.status).toBe(400);
   });
 });
 

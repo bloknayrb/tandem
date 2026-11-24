@@ -128,6 +128,7 @@ const EMPTY_SNAPSHOT = {
   carriedOver: [],
   chatAnswerers: [],
   repliers: [],
+  messageLosses: [],
 };
 
 describe("tools/list while dark", () => {

@@ -22,8 +22,10 @@
  * about an unowned document or about none, so it has forms of its own where
  * the document forms would be false for it); `unlinked` ({@link unlinkedReplyRefusal}) is
  * `/api/channel-reply`'s, since the shim's permit (PR 4b),
- * `unbound-child` is here since PR 3b-2b3b (reached only while rule 0 routes: flag on, since 3b-2b4a's switch-on), and the `released` and `assigned`
- * causes of `lost` with the controls (PR 5). `default` and `not-present` need
+ * `unbound-child` is here since PR 3b-2b3b (reached only while rule 0 routes: flag on, since 3b-2b4a's switch-on), the `released` and `assigned`
+ * causes of `lost` with the controls (PR 5a), and the `chat` copy for a
+ * message the user released or reassigned away from the caller (PR 5a-2,
+ * {@link MESSAGE_RELEASED}). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b-2; their copy is here
  * because the decision that produces them is.
  */
@@ -342,7 +344,12 @@ function body(input: NotDocOwnerInput): string {
   }
 }
 
-/** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6; `answered`, the posts PR, R2.2). */
+/**
+ * Why a reply to a chat message was refused, for its copy (the chat owners PR,
+ * R5.6; `answered`, the posts PR, R2.2; `released` and `reassigned`, #2358 PR
+ * 5a-2: the record a message loss names, replying while the message is
+ * claimable, ownership design §10.2).
+ */
 export type ChatRefusalWhy =
   | "holder"
   | "busy"
@@ -350,7 +357,9 @@ export type ChatRefusalWhy =
   | "local"
   | "not-present"
   | "answered"
-  | "unbound-child";
+  | "unbound-child"
+  | "released"
+  | "reassigned";
 
 /**
  * The `chat` refusal's text (Ruling 15; ownership design §5.3): it refuses
@@ -378,8 +387,32 @@ function chatRefusalText(why: ChatRefusalWhy, holder: HolderView | null): string
       return `${holderPhrase(holder)} already answered this. Do not answer it again.`;
     case "unbound-child":
       return UNBOUND_CHILD_MESSAGE;
+    case "released":
+      return MESSAGE_RELEASED;
+    case "reassigned":
+      return MESSAGE_REASSIGNED;
   }
 }
+
+/**
+ * A message the user released from this session (#2358 PR 5a-2; ownership
+ * design §10.2): the `chat` copy for a message loss, with no holder to name.
+ * Like the document's `released` copy it says only that the message was
+ * released, never that the user chose it (ownership design §11.3), and it
+ * gives no remedy that would take the message back: Release always moves a
+ * message away from the session it was released from.
+ */
+export const MESSAGE_RELEASED =
+  "This message was released from you, so it is not yours to answer. Nothing was sent. Do not reply to it.";
+
+/**
+ * The same for a message assigned to another session. While that session owns
+ * it the `holder` form refuses first, naming it, and a dropped owner ends the
+ * loss, so no production path reaches this today; it is here so every loss
+ * cause a message can carry has a true copy.
+ */
+export const MESSAGE_REASSIGNED =
+  "This message was assigned to another session, so it is not yours to answer. Nothing was sent. Do not reply to it.";
 
 const CHAT_NOT_PRESENT =
   "Tandem's Claude is turned off or stopped, so it answers no chat now. Nothing was sent.";

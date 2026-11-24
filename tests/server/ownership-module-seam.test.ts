@@ -193,6 +193,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
+    // PR 5a-2: the message control, flag on, with a dark row.
+    "tests/server/ownership-message-control.test.ts",
     "tests/server/ownership-mode-known.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
@@ -270,6 +272,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // PR 5a-2: the message control flag on, with a dark row that turns it off.
+      "tests/server/ownership-message-control.test.ts",
       // The mode-unknown observer: flag on, with a dark row that writes the
       // mode and swaps CTRL_ROOM flag off.
       "tests/server/ownership-mode-known.test.ts",
@@ -333,6 +337,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // PR 5a-2: the message control.
+      "tests/server/ownership-message-control.test.ts",
       "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",

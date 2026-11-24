@@ -87,6 +87,7 @@ import { resetOwnerHandleBindForTests } from "../../../src/server/sessions/owner
 import {
   applyUserOpenDefault,
   controlDocumentOwner,
+  controlMessageOwner,
   forgetChatMessageOwners,
   getDocOwner,
   getOwnerRecord,
@@ -1080,6 +1081,48 @@ describe("the decision table: A lapses", () => {
     setOwnershipTransportMode("http");
     const label = getOwnerRecord(TANDEM)?.label;
     expect(await controlDocumentOwner(d.id, "assign", label, () => true)).toBe("changed");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  /** A owns a closed F's message per message (origin close): the message Assign's starting point. */
+  async function messageOwnedByA(): Promise<string> {
+    register(A);
+    const f = mkDoc("f");
+    setDocOwner(f.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), f.id);
+    await closeByRoute(f.id);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    causes = [];
+    return m;
+  }
+
+  it("PR 5a-2, an unlicensed Assign of a chat message (ownership design §10.1): it lands keyless, the message forward goes out, and the supervisor refuses it: no spawn", async () => {
+    const lic = licenceDouble();
+    const { h } = await idleStopped({ aiRefusal: lic.fn });
+    const m = await messageOwnedByA();
+    lic.refusing = true;
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
+    expect(messageOwner(m)).toEqual({ ownerId: TANDEM, origin: "assign" });
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a-2, an Assign of a chat message (positive twin): admitted, idle-stopped: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    const m = await messageOwnedByA();
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
     await lockBarrier(h);
     const c2 = await childN(2);
     await settle();

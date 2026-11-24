@@ -10,6 +10,7 @@ import {
 import { ownershipEnabled } from "../../ownership-flag.js";
 import {
   controlDocumentOwner,
+  controlMessageOwner,
   type OwnershipControlAction,
   ownersList,
 } from "../../sessions/ownership.js";
@@ -18,8 +19,8 @@ import { sendApiError } from "./_shared.js";
 
 /**
  * The ownership routes (#2358 PR 5a, ADR-054; ownership design §10.1): the
- * user's Release and Assign of a document, and the owners list the Assign
- * popover reads. **Dark:** registered only while ownership is on
+ * user's Release and Assign of a document and, since PR 5a-2, of a chat
+ * message, and the owners list the Assign popover reads. **Dark:** registered only while ownership is on
  * ({@link ownershipRouteGate}); flag off both paths answer exactly as an
  * unknown `/api` route does.
  *
@@ -60,8 +61,18 @@ const ACTIONS: ReadonlySet<string> = new Set<OwnershipControlAction>(["release",
  * take a document now; `409 {error: "busy"}` when the document's operation
  * queue did not free up within the control's wait (the change is not queued).
  *
- * The message half of the route (`{messageId, …}`, ownership design §10.2)
- * is not built yet: a body naming a `messageId` is refused 400.
+ * The message half (#2358 PR 5a-2; ownership design §10.1, §10.2):
+ * `{messageId, action, ownerLabel?}` Releases or Assigns one user chat
+ * message, named by its chat id, **synchronously**: a message is not a
+ * document-queue operation, so it never waits and never answers `busy`.
+ * Answers: `200 {data: {changed}}`; `404 {error: "unknown-message"}`;
+ * `404 unknown-owner`; `409 owner-detached`; `409 {error:
+ * "follows-document"}` for a message that follows an open document (that
+ * document's own Release and Assign move it); `409 {error: "answered"}` for a
+ * message a final reply already answered; `409 {error: "not-controllable"}`
+ * for local-period chat (a message carried over from before a restart may be
+ * Assigned, which ends its carried-over status; its Release is a no-op). A
+ * body naming both `documentId` and `messageId`, or neither, is a 400.
  */
 export async function handleOwnershipControl(req: Request, res: Response): Promise<void> {
   if (assertOriginAllowlisted(req, res, API_OWNERSHIP)) return;
@@ -72,15 +83,20 @@ export async function handleOwnershipControl(req: Request, res: Response): Promi
     return;
   }
   const { documentId, action, ownerLabel, messageId } = body as Record<string, unknown>;
-  if (messageId !== undefined) {
+  if (documentId !== undefined && messageId !== undefined) {
     res.status(400).json({
       error: "BAD_REQUEST",
-      message: "Release and Assign of a chat message are not available yet",
+      message: "Name either documentId or messageId, not both",
     });
     return;
   }
-  if (typeof documentId !== "string" || documentId === "") {
-    res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
+  const isMessage = messageId !== undefined;
+  if (isMessage && (typeof messageId !== "string" || messageId === "")) {
+    res.status(400).json({ error: "BAD_REQUEST", message: "messageId must be a non-empty string" });
+    return;
+  }
+  if (!isMessage && (typeof documentId !== "string" || documentId === "")) {
+    res.status(400).json({ error: "BAD_REQUEST", message: "documentId or messageId is required" });
     return;
   }
   if (typeof action !== "string" || !ACTIONS.has(action)) {
@@ -93,6 +109,15 @@ export async function handleOwnershipControl(req: Request, res: Response): Promi
   }
   if (action === "release" && ownerLabel !== undefined) {
     res.status(400).json({ error: "BAD_REQUEST", message: "release takes no ownerLabel" });
+    return;
+  }
+  if (isMessage) {
+    controlMessage(res, messageId as string, action as OwnershipControlAction, ownerLabel);
+    return;
+  }
+  if (typeof documentId !== "string") {
+    // Unreachable (checked above); kept so a later edit cannot leave the request unanswered.
+    res.status(400).json({ error: "BAD_REQUEST", message: "documentId or messageId is required" });
     return;
   }
   if (!hasDoc(documentId)) {
@@ -132,6 +157,40 @@ export async function handleOwnershipControl(req: Request, res: Response): Promi
         return;
       case "cancelled":
         // The caller is gone; there is nobody to answer.
+        return;
+    }
+  } catch (err: unknown) {
+    sendApiError(res, err);
+  }
+}
+
+/** The message half of `POST /api/ownership` (#2358 PR 5a-2): one synchronous decision and write. */
+function controlMessage(
+  res: Response,
+  messageId: string,
+  action: OwnershipControlAction,
+  ownerLabel: unknown,
+): void {
+  try {
+    const outcome = controlMessageOwner(
+      messageId,
+      action,
+      action === "assign" ? (ownerLabel as string) : undefined,
+    );
+    switch (outcome) {
+      case "changed":
+      case "unchanged":
+        res.json({ data: { changed: outcome === "changed" } });
+        return;
+      case "unknown-message":
+      case "unknown-owner":
+        res.status(404).json({ error: outcome });
+        return;
+      case "owner-detached":
+      case "follows-document":
+      case "answered":
+      case "not-controllable":
+        res.status(409).json({ error: outcome });
         return;
     }
   } catch (err: unknown) {
