@@ -311,6 +311,12 @@ describe("mergePatch", () => {
     });
   });
 
+  it("merges the content when both sides made the same governing change", () => {
+    const w = { ...base, status: "dismissed", range: { from: 4, to: 9 } };
+    const l = { ...base, status: "dismissed", content: "reworded" };
+    expect(Object.fromEntries(mergePatch(base, w, l, server))).toEqual({ content: "reworded" });
+  });
+
   it("never merges rev", () => {
     expect(mergePatch(base, { ...base, rev: 5 }, { ...base, rev: 9 }, server).size).toBe(0);
   });
@@ -350,6 +356,57 @@ describe("write arbiter wired into attachObservers", () => {
     expect((sMap.get("a1") as Rec).status).toBe("accepted");
     const accepted = events.filter((e) => e.type === "annotation:accepted");
     expect(accepted).toHaveLength(1);
+    browser.destroy();
+  });
+
+  it("does not fire a held browser Accept's event twice when a remote write displaces it", () => {
+    server.clientID = 500;
+    const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(server, () => sMap.set("a1", claudeSuggestion()));
+    const a = new Y.Doc();
+    a.clientID = 1000;
+    const b = new Y.Doc();
+    b.clientID = 3000;
+    push(server, a, connection);
+    push(server, b, connection);
+    const aMap = a.getMap(Y_MAP_ANNOTATIONS);
+    const bMap = b.getMap(Y_MAP_ANNOTATIONS);
+    withBrowser(a, () => aMap.set("a1", { ...(aMap.get("a1") as Rec), status: "accepted" }));
+    withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), color: "x" }));
+
+    const { events, cleanup } = collectEvents();
+    push(a, server, connection);
+    push(b, server, connection);
+    cleanup();
+
+    const s = sMap.get("a1") as Rec;
+    expect(s.status).toBe("accepted");
+    expect(s.color).toBe("x");
+    expect(events.filter((e) => e.type === "annotation:accepted")).toHaveLength(1);
+    a.destroy();
+    b.destroy();
+  });
+
+  it("keeps its history across a re-attach to the same doc (the reload paths)", () => {
+    server.clientID = 5000;
+    const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(server, () => sMap.set("a1", claudeSuggestion()));
+    const browser = new Y.Doc();
+    browser.clientID = 1000;
+    push(server, browser, connection);
+    const bMap = browser.getMap(Y_MAP_ANNOTATIONS);
+
+    // A reload remaps the record, then re-runs `attachObservers` on the same doc.
+    withInternal(server, () =>
+      sMap.set("a1", { ...(sMap.get("a1") as Rec), range: { from: 4, to: 9 }, rev: 2 }),
+    );
+    attachObservers("arbiter-events-doc", server);
+    withBrowser(browser, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), status: "accepted" }));
+    push(browser, server, connection);
+
+    const s = sMap.get("a1") as Rec;
+    expect(s.status).toBe("accepted");
+    expect(s.range).toEqual({ from: 4, to: 9 });
     browser.destroy();
   });
 });
