@@ -23,6 +23,7 @@ import {
   chatPickupLabel,
   isLocalPickup,
   type LocalPickupInputs,
+  type PickupClock,
 } from "./chat-pickup";
 import { type ChatResume, chatResumeLabel } from "./chat-resume";
 import "./markdown-body.css";
@@ -128,6 +129,13 @@ interface Props {
    */
   ownerLineTakeBack: string | null;
   onOwnerLineRemedy: (remedy: "start" | "settings") => void;
+  /**
+   * #2358 PR 5e: each unanswered message's published pickup clock (its
+   * `since`, ownership design §6.5), which the pickup row counts from; empty
+   * while ownership is off, so the row counts from the message's timestamp as
+   * before. Required, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  pickupClock: PickupClock;
 }
 
 let {
@@ -163,6 +171,7 @@ let {
   ownerLine,
   ownerLineTakeBack,
   onOwnerLineRemedy,
+  pickupClock,
 }: Props = $props();
 
 /** Render a row as a notice (#1123 part B, R6.1). Flag-gated: a dark editor
@@ -227,7 +236,7 @@ let now = $state(Date.now());
 const pickup = $derived(
   tandemClaudeResume || tandemClaudeGreetingLate
     ? null
-    : chatPickup(messages, Math.max(now, Date.now()), localPickup),
+    : chatPickup(messages, Math.max(now, Date.now()), localPickup, pickupClock),
 );
 const pickupKind = $derived(pickup?.kind ?? null);
 // Beside the pickup row, not instead of it: "still waiting" stays true.

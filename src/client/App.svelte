@@ -154,7 +154,7 @@ import {
   startCommentReveal,
   toCommentAnswerItem,
 } from "./notifications/comment-attention";
-import { composerLine, takeBackNames, takeBackText } from "./ownership/owner-view";
+import { chatStaleWaitMs, composerLine, takeBackNames, takeBackText } from "./ownership/owner-view";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -529,12 +529,32 @@ const firstRun = createFirstRunNeeded();
 // AI-readiness (#1018/#1022): keys on launcher status, not the doc-sync "Synced"
 // dot. Gate on the monotonic `firstRun.settled` (set true once, never reset) so
 // a `refetch()` during a server blip can't bounce the chip back to "booting".
+// #2358 PR 5e: stale chat drives the stall banner beside the delivery round
+// (ownership design §10.2; Bryan, 2026-11-24, "Yes, wire it (Recommended)").
+// The clock ticks only while a published message reads stale, so a dark build
+// (no facts) never arms it; `Math.max` with `Date.now()` keeps a stopped tick
+// from under-counting when the facts change.
+let chatStaleNow = $state(Date.now());
+const chatStaleClockNeeded = $derived(chatStaleWaitMs(yjsSync.chatOwners, 0) !== null);
+$effect(() => {
+  if (!chatStaleClockNeeded) return;
+  chatStaleNow = Date.now();
+  const timer = setInterval(() => {
+    chatStaleNow = Date.now();
+  }, 30_000);
+  return () => clearInterval(timer);
+});
+const chatStaleMs = $derived(
+  chatStaleWaitMs(yjsSync.chatOwners, Math.max(chatStaleNow, Date.now())),
+);
+
 const aiReadiness = createAiReadiness({
   connected: () => yjsSync.connected,
   firstRunSettled: () => firstRun.settled,
   soloMode: () => modeState.tandemMode === "solo",
   aiNotice: () => licenseStore.ui.aiNotice,
   refreshLicence: () => licenseStore.refresh(),
+  chatStaleMs: () => chatStaleMs,
 });
 
 // #1282 working-folder drift. Fed the SAME derivation the relaunch action uses,
@@ -3291,6 +3311,7 @@ function dismissModelPicker() {
             ownerLineTakeBack={ownerTakeBackText}
             onOwnerLineRemedy={(remedy) =>
               remedy === "start" ? startClaude() : openClaudeCodeSettings()}
+            pickupClock={yjsSync.chatOwners}
           />
           <PanelSlot
             kind="side"

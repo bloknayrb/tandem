@@ -9,6 +9,7 @@ import {
   badgeOffersStart,
   badgeView,
   canRelease,
+  chatStaleWaitMs,
   composerLine,
   describeOwner,
   holderName,
@@ -16,6 +17,7 @@ import {
   NO_AI_BIND_FAILED_TEXT,
   ownerFieldsFromList,
   ownershipErrorText,
+  readChatOwners,
   readOwnerFields,
   readOwnershipSummary,
   releaseGoesToTandem,
@@ -28,6 +30,7 @@ import {
 } from "../../src/client/ownership/owner-view";
 import type {
   OwnershipSummary,
+  PublishedChatMessageOwner,
   PublishedOwner,
   PublishedOwnerFields,
 } from "../../src/shared/ownership-published";
@@ -435,5 +438,105 @@ describe("ownershipErrorText", () => {
     expect(ownershipErrorText("unknown-owner")).toBe(ownershipErrorText("owner-detached"));
     expect(ownershipErrorText("unknown-document")).toBe("This document is no longer open");
     expect(ownershipErrorText(null)).toMatch(/try again/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2358 PR 5e: the per-message facts PR 5d publishes under `Y_MAP_OWNERSHIP_CHAT`.
+
+function chatFacts(over: Partial<PublishedChatMessageOwner> = {}): PublishedChatMessageOwner {
+  return {
+    owner: { label: "owner-k7qx", displayKind: "terminal" },
+    heldBy: "message",
+    release: true,
+    assign: true,
+    since: T0,
+    stale: false,
+    ...over,
+  };
+}
+
+describe("readChatOwners (what yjsSync keeps)", () => {
+  const EMPTY = new Map<string, PublishedChatMessageOwner>();
+
+  it("absent (a dark server) or not an object reads as no facts", () => {
+    for (const v of [undefined, null, "x", 3, [chatFacts()]]) {
+      expect(readChatOwners(v, EMPTY).size).toBe(0);
+    }
+  });
+
+  it("keeps each well-formed entry by chat key, an unowned one included", () => {
+    const got = readChatOwners(
+      { m1: chatFacts(), m2: chatFacts({ owner: null, heldBy: "none", release: false }) },
+      EMPTY,
+    );
+    expect([...got.keys()]).toEqual(["m1", "m2"]);
+    expect(got.get("m1")).toEqual(chatFacts());
+    expect(got.get("m2")?.owner).toBeNull();
+  });
+
+  it.each([
+    ["an unknown display kind", { owner: { label: "x", displayKind: "Bryan's laptop" } }],
+    ["an empty label", { owner: { label: "", displayKind: "terminal" } }],
+    ["an unknown heldBy", { heldBy: "nobody" }],
+    ["a non-boolean release", { release: "yes" }],
+    ["a non-boolean assign", { assign: 1 }],
+    ["a non-finite since", { since: Number.NaN }],
+    ["a string since", { since: "1800000000000" }],
+    ["a non-boolean stale", { stale: null }],
+  ])("drops an entry with %s, keeping the rest", (_name, bad) => {
+    const got = readChatOwners({ good: chatFacts(), bad: { ...chatFacts(), ...bad } }, EMPTY);
+    expect([...got.keys()]).toEqual(["good"]);
+  });
+
+  it("returns the previous map itself when nothing changed, and a new one on any field change", () => {
+    const first = readChatOwners({ m1: chatFacts() }, EMPTY);
+    expect(readChatOwners({ m1: chatFacts() }, first)).toBe(first);
+    for (const over of [
+      { since: T0 + 1 },
+      { stale: true },
+      { release: false },
+      { assign: false },
+      { heldBy: "presence" as const },
+      { owner: null },
+      { owner: { label: "owner-zz", displayKind: "terminal" as const } },
+      { owner: { label: "owner-k7qx", displayKind: "other app" as const } },
+    ]) {
+      expect(readChatOwners({ m1: chatFacts(over) }, first)).not.toBe(first);
+    }
+    expect(readChatOwners({ m2: chatFacts() }, first)).not.toBe(first);
+    expect(readChatOwners({}, first).size).toBe(0);
+  });
+});
+
+describe("chatStaleWaitMs (the stall banner's chat signal)", () => {
+  it("null with no stale message", () => {
+    expect(chatStaleWaitMs(new Map(), T0)).toBeNull();
+    expect(chatStaleWaitMs(new Map([["m", chatFacts()]]), T0 + 60 * MIN)).toBeNull();
+  });
+
+  it("the oldest stale message's wait since its last change of owner", () => {
+    const owners = new Map([
+      ["a", chatFacts({ stale: true, since: T0 + 2 * MIN })],
+      ["b", chatFacts({ stale: true, since: T0 })],
+      ["c", chatFacts({ stale: false, since: T0 - 30 * MIN })],
+    ]);
+    expect(chatStaleWaitMs(owners, T0 + 7 * MIN)).toBe(7 * MIN);
+  });
+
+  it("leaves out a message that follows its open document (its badge speaks), as the summary's chatStale does", () => {
+    const owners = new Map([
+      ["doc", chatFacts({ stale: true, heldBy: "document", assign: false, since: T0 - 30 * MIN })],
+      ["own", chatFacts({ stale: true, heldBy: "presence", since: T0 })],
+    ]);
+    expect(chatStaleWaitMs(owners, T0 + 6 * MIN)).toBe(6 * MIN);
+    owners.delete("own");
+    expect(chatStaleWaitMs(owners, T0 + 6 * MIN)).toBeNull();
+  });
+
+  it("never negative under clock skew", () => {
+    expect(chatStaleWaitMs(new Map([["m", chatFacts({ stale: true, since: T0 + MIN })]]), T0)).toBe(
+      0,
+    );
   });
 });

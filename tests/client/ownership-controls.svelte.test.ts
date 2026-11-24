@@ -568,6 +568,7 @@ function chatProps(
     ownerLine,
     ownerLineTakeBack,
     onOwnerLineRemedy,
+    pickupClock: new Map(),
   };
 }
 

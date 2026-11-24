@@ -39,6 +39,7 @@ function renderChat() {
       noticeAnnouncement: "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
       onOwnerLineRemedy: () => {},
       tandemClaudeResume: null,
       onResumeRemedy: () => {},

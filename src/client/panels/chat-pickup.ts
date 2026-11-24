@@ -64,10 +64,21 @@ export const LOCAL_RUN_UNJUDGED_MAX_MS = DEFAULT_RUN_DEADLINE_MS + 60_000;
  * keep claiming a state. A real stall past 2 min is `WakeStallBanner`'s story. */
 export const PICKUP_MAX_AGE_MS = 10 * 60_000;
 
+/**
+ * Each unanswered message's pickup and stall clock, by message id: the
+ * `since` a flag-on server publishes under `Y_MAP_OWNERSHIP_CHAT` (#2358 PR
+ * 5d, ownership design §6.5), the message's last change of owner, or its
+ * arrival if it never had one. Empty while ownership is off.
+ */
+export type PickupClock = ReadonlyMap<string, { readonly since: number }>;
+
+const NO_CLOCK: PickupClock = new Map();
+
 export function chatPickup(
   messages: readonly ChatMessage[],
   now: number,
   local: LocalPickupInputs | null = null,
+  clock: PickupClock = NO_CLOCK,
 ): ChatPickup | null {
   // Only the latest user message is a candidate, so answering it can never
   // resurrect an older one as pending.
@@ -76,7 +87,14 @@ export function chatPickup(
     if (m.author === "user" && (latest === null || m.timestamp >= latest.timestamp)) latest = m;
   }
   if (latest === null) return null;
-  if (now - latest.timestamp > PICKUP_MAX_AGE_MS) return null;
+  // #2358 PR 5e (ownership design §6.5; Bryan, 2026-11-24, "Both
+  // (Recommended)"): where the server publishes the message's clock, the row
+  // counts from it, for its waiting time and for this cut-off alike, so a
+  // handover does not show an old message as instantly stalled. Otherwise
+  // (ownership off, or a message it publishes nothing for) from the message's
+  // own timestamp, as before.
+  const since = clock.get(latest.id)?.since ?? latest.timestamp;
+  if (now - since > PICKUP_MAX_AGE_MS) return null;
 
   const lit = BYO_MODELS_ENABLED && local !== null;
   if (lit) {
@@ -122,7 +140,7 @@ export function chatPickup(
 
   return latest.read || latest.delivered === true
     ? { kind: "received" }
-    : { kind: "waiting", waitedMs: now - latest.timestamp };
+    : { kind: "waiting", waitedMs: now - since };
 }
 
 /**

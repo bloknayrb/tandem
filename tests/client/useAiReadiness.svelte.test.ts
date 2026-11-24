@@ -128,6 +128,7 @@ function mount(
     soloMode?: boolean;
     aiNotice?: "unlicensed" | "unverifiable" | null;
     refreshLicence?: () => Promise<unknown> | void;
+    chatStaleMs?: number | null;
   } = {},
 ): { get(): AiReadiness } {
   const holder: { readiness: AiReadiness | null } = { readiness: null };
@@ -1466,6 +1467,79 @@ describe("createAiReadiness — push consumer", () => {
         await settle();
         expect(h.get().deliveryStalledMs).toBe(200_000);
         expect(banner()).not.toBeNull();
+      });
+
+      // --- #2358 PR 5e: stale chat drives the banner too (Bryan, 2026-11-24,
+      // "Yes, wire it (Recommended)"), under the same hide and copy rules.
+      describe("stale chat (#2358 PR 5e)", () => {
+        const POLLED = {
+          status: "ok",
+          hasSession: true,
+          delivery: { state: "polled", waitingMs: null },
+        };
+
+        it("shows with no waiting round, in the keyed copy, before /health says keyed", async () => {
+          globalThis.fetch = routedFetch({
+            launcher: RUNNING_LAUNCHER,
+            health: mkResponse(POLLED),
+          });
+          const h = mount({ chatStaleMs: 360_000 });
+          await settle();
+          expect(h.get().deliveryStalledMs).toBe(360_000);
+          expect(h.get().deliveryKeyed).toBe(true);
+          expect(banner()?.textContent?.trim()).toBe(
+            "Claude hasn't picked this up for 6 minutes. Your message is still waiting.",
+          );
+        });
+
+        it("the longer of the two waits", async () => {
+          globalThis.fetch = routedFetch({
+            launcher: RUNNING_LAUNCHER,
+            health: mkResponse({ status: "ok", hasSession: true, delivery: KEYED }),
+          });
+          const longer = mount({ chatStaleMs: 360_000 });
+          await settle();
+          expect(longer.get().deliveryStalledMs).toBe(360_000);
+          cleanup();
+          const shorter = mount({ chatStaleMs: 150_000 });
+          await settle();
+          expect(shorter.get().deliveryStalledMs).toBe(200_000);
+        });
+
+        it("hidden while Tandem's Claude is being started", async () => {
+          globalThis.fetch = routedFetch({ launcher: RESTARTING, health: mkResponse(POLLED) });
+          const h = mount({ chatStaleMs: 360_000 });
+          await settle();
+          expect(h.get().launcherRestarting).toBe(true);
+          expect(h.get().deliveryStalledMs).toBeNull();
+          expect(banner()).toBeNull();
+        });
+
+        it("hidden in Solo", async () => {
+          globalThis.fetch = routedFetch({
+            launcher: RUNNING_LAUNCHER,
+            health: mkResponse(POLLED),
+          });
+          const h = mount({ chatStaleMs: 360_000, soloMode: true });
+          await settle();
+          expect(h.get().deliveryStalledMs).toBeNull();
+        });
+
+        it("no stale chat (a dark build): exactly the delivery round's banner", async () => {
+          globalThis.fetch = routedFetch({
+            launcher: RESTARTING,
+            health: mkResponse({
+              status: "ok",
+              hasSession: true,
+              delivery: { state: "awaiting-poll", waitingMs: 200_000 },
+            }),
+          });
+          const h = mount({ chatStaleMs: null });
+          await settle();
+          expect(h.get().deliveryKeyed).toBe(false);
+          expect(h.get().deliveryStalledMs).toBe(200_000);
+          expect(banner()?.textContent).toContain("time Claude checks in.");
+        });
       });
 
       it("a later read without `keyed` drops the reword at once", async () => {

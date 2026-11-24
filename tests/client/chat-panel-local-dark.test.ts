@@ -55,6 +55,7 @@ function renderChat(messages: ChatMessage[]) {
       noticeAnnouncement: "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
       onOwnerLineRemedy: () => {},
     },
   });

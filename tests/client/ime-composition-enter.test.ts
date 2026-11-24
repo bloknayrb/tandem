@@ -94,6 +94,7 @@ function renderChat(onSend: () => boolean) {
       noticeAnnouncement: "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
       onOwnerLineRemedy: () => {},
       tandemClaudeResume: null,
       onResumeRemedy: () => {},

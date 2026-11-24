@@ -20,6 +20,8 @@
 import type {
   NotPresentReason,
   OwnershipSummary,
+  PublishedChatHeldBy,
+  PublishedChatMessageOwner,
   PublishedDisplayKind,
   PublishedOwner,
   PublishedOwnerFields,
@@ -138,7 +140,8 @@ export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
     typeof tandemRunning !== "boolean" ||
     typeof tandemStartable !== "boolean" ||
     typeof otherAiAttached !== "boolean" ||
-    // #2358 PR 5d: chat waiting and chat stale (read here, shown by PR 5e).
+    // #2358 PR 5d: chat waiting and chat stale (read and compared here; PR 5e
+    // drives the stall banner from the per-message facts, the same set).
     typeof chatWaiting !== "boolean" ||
     typeof chatStale !== "boolean"
   )
@@ -157,6 +160,96 @@ export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
     chatWaiting,
     chatStale,
   };
+}
+
+const HELD_BY: ReadonlySet<string> = new Set<PublishedChatHeldBy>([
+  "message",
+  "document",
+  "presence",
+  "none",
+]);
+
+/** One message's published facts, or undefined for a shape this client does not know. */
+function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
+  if (!isRecord(v)) return undefined;
+  const { owner, heldBy, release, assign, since, stale } = v;
+  let holder: PublishedChatMessageOwner["owner"] = null;
+  if (owner !== null) {
+    if (!isRecord(owner)) return undefined;
+    const { label, displayKind } = owner;
+    if (typeof label !== "string" || label.length === 0) return undefined;
+    if (typeof displayKind !== "string" || !DISPLAY_KINDS.has(displayKind)) return undefined;
+    holder = { label, displayKind: displayKind as PublishedDisplayKind };
+  }
+  if (typeof heldBy !== "string" || !HELD_BY.has(heldBy)) return undefined;
+  if (typeof release !== "boolean" || typeof assign !== "boolean") return undefined;
+  if (typeof since !== "number" || !Number.isFinite(since)) return undefined;
+  if (typeof stale !== "boolean") return undefined;
+  return { owner: holder, heldBy: heldBy as PublishedChatHeldBy, release, assign, since, stale };
+}
+
+function sameChatOwner(
+  a: PublishedChatMessageOwner | undefined,
+  b: PublishedChatMessageOwner,
+): boolean {
+  if (a === undefined) return false;
+  if (
+    a.heldBy !== b.heldBy ||
+    a.release !== b.release ||
+    a.assign !== b.assign ||
+    a.since !== b.since ||
+    a.stale !== b.stale
+  )
+    return false;
+  if (a.owner === null || b.owner === null) return a.owner === b.owner;
+  return a.owner.label === b.owner.label && a.owner.displayKind === b.owner.displayKind;
+}
+
+/**
+ * Each unanswered message's published facts under `Y_MAP_OWNERSHIP_CHAT`
+ * (#2358 PR 5d), by chat key (the message's id), keeping only the entries of
+ * a shape this client knows; an empty map when the key is absent (ownership
+ * off: a dark server never writes it) or not an object. Returns `prev` itself
+ * when nothing changed, so a republish that changed nothing re-renders
+ * nothing. Read-only: the client never writes the key (#2358 PR 5e).
+ */
+export function readChatOwners(
+  v: unknown,
+  prev: ReadonlyMap<string, PublishedChatMessageOwner>,
+): ReadonlyMap<string, PublishedChatMessageOwner> {
+  const next = new Map<string, PublishedChatMessageOwner>();
+  if (isRecord(v)) {
+    for (const [key, raw] of Object.entries(v)) {
+      const facts = readChatOwner(raw);
+      if (facts) next.set(key, facts);
+    }
+  }
+  if (next.size !== prev.size) return next;
+  for (const [key, facts] of next) {
+    if (!sameChatOwner(prev.get(key), facts)) return next;
+  }
+  return prev;
+}
+
+/**
+ * How long the oldest stale chat message with no controlling badge has gone
+ * without a final answer since its last change of owner, in ms, or null when
+ * none is stale (#2358 PR 5e; ownership design §10.2: "The stale flag, counted
+ * from the message's last change of owner, only drives the stall banner").
+ * The same set as the summary's `chatStale`: a message that follows its open
+ * document is that document's badge's, so it is left out. The server decides
+ * `stale` (and only for a message written in its run); this only measures it.
+ */
+export function chatStaleWaitMs(
+  owners: ReadonlyMap<string, PublishedChatMessageOwner>,
+  now: number,
+): number | null {
+  let oldest: number | null = null;
+  for (const facts of owners.values()) {
+    if (!facts.stale || facts.heldBy === "document") continue;
+    if (oldest === null || facts.since < oldest) oldest = facts.since;
+  }
+  return oldest === null ? null : Math.max(0, now - oldest);
 }
 
 /** Field-wise equality, so a republish that changed nothing keeps identity. */

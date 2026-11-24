@@ -48,6 +48,7 @@ function renderChat(messages: ChatMessage[], visible: boolean | "omit" = true) {
       noticeAnnouncement: "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
       onOwnerLineRemedy: () => {},
       tandemClaudeResume: null,
       onResumeRemedy: () => {},

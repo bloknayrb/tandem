@@ -710,6 +710,13 @@ export function createAiReadiness(deps: {
    * The pill waits only until the returned promise settles.
    */
   refreshLicence: () => Promise<unknown> | void;
+  /**
+   * #2358 PR 5e: how long the oldest stale chat message with no controlling
+   * badge has waited since its last change of owner (`chatStaleWaitMs` over
+   * the published facts), or null. Optional: absent reads as null, and a dark
+   * server publishes no facts, so a dark build always reads null.
+   */
+  chatStaleMs?: () => number | null;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -1395,6 +1402,7 @@ export function createAiReadiness(deps: {
     // own tracked scope. It must keep returning a PRIMITIVE: handing back a
     // fresh object per read would invalidate any consumer `$derived` every time.
     get deliveryStalledMs() {
+      const chatStaleMs = deps.chatStaleMs?.() ?? null;
       return deliveryStall({
         state: deliveryState,
         waitingMs: deliveryWaitingMs,
@@ -1402,12 +1410,17 @@ export function createAiReadiness(deps: {
         aiOff: notice !== null,
         serverUnreachable,
         // #2358 PR 3b-2e2: hidden while Tandem's Claude is started or woken
-        // for what waits. Keyed rounds only, so a dark build shows as before.
-        checkInUnderway: deliveryKeyed && (deliveryWoken || launcherRestarting),
+        // for what waits. Keyed rounds only, so a dark build shows as before;
+        // stale chat (#2358 PR 5e) is published only by a flag-on server, so it
+        // counts as keyed even before `/health`'s first answer says so.
+        checkInUnderway:
+          (deliveryKeyed || chatStaleMs !== null) && (deliveryWoken || launcherRestarting),
+        chatStaleMs,
       });
     },
     get deliveryKeyed() {
-      return deliveryKeyed;
+      // #2358 PR 5e: stale chat is flag-on only, so it takes the keyed copy.
+      return deliveryKeyed || (deps.chatStaleMs?.() ?? null) !== null;
     },
     get aiNotice() {
       return notice;
