@@ -374,16 +374,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
       "ADR; if it does not, 3b-2b2's re-ask, with a test.",
   },
-  {
-    gap:
-      "A lapsed holder whose deferred move has not run leaves a closed document's chat with no " +
-      "owner (`assignClosedDocumentChat`: `to` is undefined, the chat is re-owed). Once the " +
-      "document is closed and Tandem's Claude is present the message is its by standing, with " +
-      "no `messageOwnerChanged`, so nothing forwards for it.",
-    closedBy:
-      "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
-      "line.",
-  },
 ];
 
 /**

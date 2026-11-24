@@ -50,6 +50,7 @@ import {
   registerAwarenessTools,
   resetInbox,
   setInboxResponseCorruptorForTests,
+  setWaitingWrittenSinceForTests,
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -90,9 +91,11 @@ import {
   setInboxScopeReadForTests,
   setLossForTests,
   setOwnershipChatSide,
+  setOwnershipFrameSink,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setPollClaimAppliedForTests,
+  setStartOrWakeSink,
   setTandemPresenceSource,
   setTransportView,
   setWakeObserverForTests,
@@ -1382,6 +1385,88 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     release();
     await op;
     await vi.waitFor(() => expect(getOwnerRecord(A)).toBeUndefined());
+  });
+
+  // The flip-blocker row "A lapsed holder whose deferred move has not run
+  // leaves a closed document's chat with no owner": once the document is
+  // closed the re-owed message stands as a closed document's does, and that
+  // change of owner is told as the release loop tells one.
+  describe("R6.3: a lapsed holder's close tells the re-owed chat's new standing", () => {
+    // This file's messages carry made-up timestamps from before this run's
+    // boot, which the waiting rule ("written since boot") would never count.
+    beforeEach(() => setWaitingWrittenSinceForTests(undefined));
+    afterEach(() => setWaitingWrittenSinceForTests(Date.now()));
+
+    /** D held by A, a user message on it, A lapsed with its move waiting on D's queue. */
+    function lapsedHolderWorld(name: string) {
+      const d = mkDoc(name);
+      setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+      const m = userChat(key("m"), d.id);
+      let release!: () => void;
+      const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+      lapseByGrace(A, "transport removed");
+      expect(getOwnerRecord(A)?.lapsed).toBe(true);
+      expect(ownerOf(d.id)).toBe(A);
+      const sink = vi.fn();
+      const frames = vi.fn();
+      setStartOrWakeSink(sink);
+      setOwnershipFrameSink(frames);
+      return {
+        d,
+        m,
+        sink,
+        frames,
+        async finish() {
+          release();
+          await op;
+        },
+      };
+    }
+
+    it("Tandem's Claude present and no other session: the message is its own, and it is started or woken for it", async () => {
+      setTandemPresenceSource(() => true);
+      lapseByGrace(B, "transport removed");
+      lapseByGrace(C, "transport removed");
+      const w = lapsedHolderWorld("lapsed-tandem");
+      await closeByRoute(w.d.id);
+      expect(messageOwner(w.m)).toBeUndefined();
+      expect(row(w.m)?.read).toBe(false);
+      expect(w.sink.mock.calls).toEqual([["message"]]);
+      expect(w.frames).not.toHaveBeenCalled();
+      await w.finish();
+    });
+
+    it("Tandem's Claude present beside another session: the departure's gate holds the forward, and no frame (the message is not claimable)", async () => {
+      setTandemPresenceSource(() => true);
+      const w = lapsedHolderWorld("lapsed-gated");
+      await closeByRoute(w.d.id);
+      expect(w.sink).not.toHaveBeenCalled();
+      expect(w.frames).not.toHaveBeenCalled();
+      await w.finish();
+    });
+
+    it("Tandem's Claude not present: the message is claimable per message, so attached sessions get one frame", async () => {
+      const w = lapsedHolderWorld("lapsed-claimable");
+      await closeByRoute(w.d.id);
+      expect(w.sink).not.toHaveBeenCalled();
+      expect(w.frames).toHaveBeenCalledTimes(1);
+      expect(chatIds(await reader(B).poll())).toEqual([w.m]);
+      await w.finish();
+    });
+
+    it("flag off: a close forwards and frames nothing", async () => {
+      await close?.();
+      await buildWorld("");
+      const d = mkDoc("lapsed-dark");
+      userChat(key("m"), d.id);
+      const sink = vi.fn();
+      const frames = vi.fn();
+      setStartOrWakeSink(sink);
+      setOwnershipFrameSink(frames);
+      await closeByRoute(d.id);
+      expect(sink).not.toHaveBeenCalled();
+      expect(frames).not.toHaveBeenCalled();
+    });
   });
 
   it("R6.5: a handled message's row is unchanged by a take, a lapse and a close", async () => {

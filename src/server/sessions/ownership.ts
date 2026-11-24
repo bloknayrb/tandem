@@ -2692,7 +2692,9 @@ export function onDocumentClosed(documentId: string, filePath?: string): void {
  * "close": the holder at the close if its record exists and has not lapsed;
  * if the document was unowned, Tandem's Claude while present; otherwise
  * nobody (a lapsed holder's messages are then owned as closed-document
- * messages are, so none is left with a record nothing will arm or delete).
+ * messages are, so none is left with a record nothing will arm or delete;
+ * they are re-owed, and their new standing is told once the document is
+ * untracked: {@link forwardClosedChatAfterUntrack}).
  * An existing per-message owner is never overwritten. Never throws.
  */
 function assignClosedDocumentChat(documentId: string, heldBy: string | undefined): void {
@@ -2710,12 +2712,16 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
       // record is gone: the chat that followed the document leaves that
       // record here, and the deferred move never runs once the entry is gone,
       // so this is the message's change of owner away from a record (R6.1).
-      // Re-owe it, or a message the holder had read would be owed to nobody.
+      // Re-owe it, or a message the holder had read would be owed to nobody,
+      // and tell its new standing once the document is untracked.
       if (heldBy !== undefined) {
         const keys = chatSide
           .messagesOn(documentId)
           .filter((key) => !ownerByMessage.has(key) && !carriedOver.has(key));
-        if (keys.length > 0) chatSide.reOwe(keys);
+        if (keys.length > 0) {
+          chatSide.reOwe(keys);
+          forwardClosedChatAfterUntrack(keys);
+        }
       }
       return;
     }
@@ -2726,6 +2732,39 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
   } catch {
     logLimited("chat-close-failed", CHAT_CLOSE_FAILED);
   }
+}
+
+/**
+ * The wake for chat a lapsed holder's close re-owed with no owner (#2358, the
+ * flip-blocker row "A lapsed holder whose deferred move has not run leaves a
+ * closed document's chat with no owner"). Once the document is closed such a
+ * message stands as a closed document's does (ownership design §7.1): Tandem's
+ * Claude's while it is present, otherwise claimable per message. That is a
+ * change of owner away from a record, so it is told as the release loop tells
+ * one ({@link releaseMessageOwners}): each key through the message forward as
+ * a departure (`messageOwnerChanged`, whose admit asks that no other session
+ * is connected and that the message waits for Tandem's Claude), the
+ * `ownership` frame once when a released message is now another record's or
+ * claimable ({@link frameOwedForMessages}), and the delivery rounds of what
+ * either woke someone for. Deferred to a microtask: the close calls
+ * {@link onDocumentClosed} immediately before the registry untracks the
+ * document, with no await between, and until then the message still reads as
+ * following an open document nobody holds. Outside any MCP request context, in
+ * its own `total`, so the close stands whatever this does.
+ */
+function forwardClosedChatAfterUntrack(keys: readonly string[]): void {
+  runOutsideMcpContext(() =>
+    queueMicrotask(() => {
+      total("closedChatForward", undefined, () => {
+        if (!ownershipEnabled()) return;
+        let forwarded = false;
+        for (const key of keys) if (messageOwnerChanged({ key })) forwarded = true;
+        const framed = frameOwedForMessages(keys);
+        if (framed) sendOwnershipFrame();
+        if (forwarded || framed) openOwedRounds([], keys);
+      });
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
