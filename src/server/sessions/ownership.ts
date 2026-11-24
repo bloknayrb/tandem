@@ -4142,6 +4142,45 @@ export function heldDocumentIds(ownerId: string): string[] {
   return held;
 }
 
+/**
+ * A document's holder as the read tools label it (#2358 PR 5c; ownership
+ * design §5.7): the published `owner` (label, display kind, kind) plus `you`,
+ * which says whether the holder is the calling record.
+ */
+export interface ToolOwnerLabel extends HolderView {
+  readonly kind: OwnershipKind;
+  readonly you: boolean;
+}
+
+/**
+ * The owner label `tandem_getAnnotations` and `tandem_listDocuments` carry for
+ * `documentId` (#2358 PR 5c; ownership design §5.7), or undefined while
+ * ownership is off, so a dark tool output gains no key. Null when nobody holds
+ * the document (an entry whose record is gone reads as unowned, `readEntry`'s
+ * rule, as the published fields do). `you` is the holder's owner id compared
+ * with the caller's, never a guess from the label; a caller with no owner id
+ * is never `you`. Never an owner id, handle or session id (ownership design
+ * §10.3). A reader: it writes nothing, and never throws (a failure reads as
+ * unowned, as `publishedOwnerFields` does).
+ */
+export function toolOwnerLabel(
+  documentId: string,
+  callerId: string | undefined,
+): ToolOwnerLabel | null | undefined {
+  if (!ownershipEnabled()) return undefined;
+  return total("toolOwnerLabel", null as ToolOwnerLabel | null, () => {
+    const entry = readEntry(documentId);
+    if (entry === undefined) return null;
+    const record = records.get(entry.ownerId) as OwnerRecord;
+    return {
+      label: record.label,
+      displayKind: displayKindOf(record),
+      kind: entry.kind,
+      you: callerId !== undefined && entry.ownerId === callerId,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The user's controls: Release and Assign of a document, and the owners list
 // (#2358 PR 5a; ownership design §10.1); Release and Assign of a chat message
