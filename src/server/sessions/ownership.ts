@@ -4290,8 +4290,11 @@ const CONTROL_REOWE_FAILED =
  *   chat handover (ownership design §6.5) for those whose owner changes
  *   (`nextOwnerId` is the document's holder after the control, undefined for
  *   none): their chat entries retired, marked unread, their
- *   acknowledgements superseded. If the re-owe throws, it throws and the
- *   control changes nothing (the route answers 500).
+ *   acknowledgements superseded. If the re-owe throws, it throws before
+ *   the document moves and the route answers 500. A failure after it (the
+ *   document's write found unwritten) also answers 500, with these messages
+ *   already re-owed: they are marked unread and handed again at the next
+ *   poll, which is the re-owe's ordinary effect, not a lost change.
  * - **{@link moveCloseDerivedChat}, after it**: drops their owners, then
  *   step 5 for the ones that changed ({@link wakeForMovedMessages}). After,
  *   so the document's own handover (which re-owes only chat with no
