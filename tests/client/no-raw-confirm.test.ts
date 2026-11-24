@@ -32,11 +32,19 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+// Repeats until nothing changes, so a removal that splices two fragments into
+// a new comment opener is stripped too. (This only feeds the scan below; its
+// output never reaches HTML, but one pass is the pattern CodeQL rightly flags.)
 function stripComments(source: string): string {
-  return source
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  let current = source;
+  for (;;) {
+    const next = current
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    if (next === current) return next;
+    current = next;
+  }
 }
 
 describe("confirm dialogs go through confirmDialog", () => {
