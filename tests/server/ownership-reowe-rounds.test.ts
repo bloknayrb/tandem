@@ -58,6 +58,7 @@ import {
 } from "../../src/server/mcp/output-schemas.js";
 import { handleClose } from "../../src/server/mcp/routes/close.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
+import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
   DEFAULT_GRACE_MS,
   forgetChatMessageOwners,
@@ -415,6 +416,28 @@ describe("handover gap (d): a re-owe that wakes someone opens the round of what 
     lapseByGrace(A);
     expect(frames).toBe(1);
     expect(rounds()).toEqual([`message:${m}`]);
+  });
+
+  it("a lapsed holder's close, its move deferred behind a running operation: the re-owed chat that followed the document is framed and its message round opens", async () => {
+    const d = mkDoc("d");
+    const m = userChat(`${prefix}-m`, d.id);
+    await handedAndAcknowledgedBy(A, [m]);
+    let release!: () => void;
+    const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+    lapseByGrace(A);
+    // The move waits on d's queue, so A still holds it when the tab closes.
+    expect(getDocOwner(d.id)).toMatchObject({ ownerId: A });
+    expect(rounds()).toEqual([]);
+    frames = 0;
+
+    await userClose(d.id);
+    expect(frames).toBe(1);
+    expect(rounds()).toEqual([`message:${m}`]);
+    register(B);
+    expect(handed(await reader(B).poll())).toEqual([m]);
+    expect(rounds()).toEqual([]);
+    release();
+    await op;
   });
 
   it("the run start's self re-owe wakes Tandem's Claude and opens the rounds of the held document and the chat it owed again", async () => {
