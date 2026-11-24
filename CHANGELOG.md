@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Opted-in desktop crash reports no longer send your environment, command line or open-file paths in a native crash's minidump (#2161).** If you set `TANDEM_SENTRY_DSN`, a hard crash of the desktop app sent a minidump that, on Linux, held every environment variable of the shell that launched Tandem (including any API keys exported there), the document path it was opened with, and the path of every open file. The crash reporter now removes those, and their copies elsewhere in the dump, before sending; a dump it cannot read is not sent at all. The dump still carries raw thread stack memory and full library paths, which can include your user name. It goes only to the endpoint you configured. Checked against a real Linux dump in development, not yet against a crash of a desktop build.
+- **Opted-in desktop crash reports no longer send your environment, command line or open-file paths in a native crash's minidump (#2161).** If you set `TANDEM_SENTRY_DSN`, a hard crash of the desktop app sent a minidump that, on Linux, held every environment variable of the shell that launched Tandem (including any API keys exported there), the document path it was opened with, and the path of every open file. The crash reporter now removes those, and the copies of the environment and command line elsewhere in the dump, before sending; a dump it cannot read is not sent at all. The dump still carries raw thread stack memory and full library paths, which can include your user name. It goes only to the endpoint you configured. Checked against a real Linux dump in development, not yet against a crash of a desktop build.
 
 ## [0.32.0] - 2026-11-20
 

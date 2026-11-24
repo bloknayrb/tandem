@@ -249,7 +249,10 @@ pub(crate) fn scrub_minidump(dump: &mut [u8], extra_needles: &[Vec<u8>]) -> Resu
     }
 
     needles.retain(|needle| needle.len() >= MIN_NEEDLE_LEN);
-    needles.sort_unstable();
+    // Longest first: zeroing a needle that is a substring of a longer one
+    // (e.g. a spawn-time `KEY=abc` against an exec-time `KEY=abcdef`) would
+    // break the longer one's match and leave its remaining bytes in the dump.
+    needles.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     needles.dedup();
     for needle in &needles {
         zero_occurrences(dump, needle);
@@ -421,6 +424,19 @@ mod tests {
         assert!(!contains(&dump, b"TOKEN=abcdefghij"));
         assert!(contains(&dump, b"threads"));
         assert_eq!(stream_type_at(&dump, 0), 3);
+    }
+
+    #[test]
+    fn a_needle_that_prefixes_a_longer_one_does_not_shield_its_tail() {
+        // The dump's exec-time entry is longer than the reporter's spawn-time
+        // one; a lexicographic order would zero the shorter first and leave
+        // the longer one's tail behind.
+        let (mut dump, _) = build(
+            &[(LINUX_ENVIRON, b"TOKEN=abcdefgh-tail-secret\0".to_vec())],
+            b"..TOKEN=abcdefgh-tail-secret..",
+        );
+        scrub_minidump(&mut dump, &[b"TOKEN=abcdefgh".to_vec()]).unwrap();
+        assert!(!contains(&dump, b"tail-secret"));
     }
 
     #[test]
