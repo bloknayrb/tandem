@@ -661,6 +661,13 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
       text: "→ terminal owner-k7qx",
     });
     expect(composerLine(terminal, null)).toEqual({ kind: "to", text: "→ terminal owner-k7qx" });
+    // Tandem's Claude already running: Start cannot help.
+    expect(
+      composerLine(
+        terminal,
+        summary({ chatStale: true, tandemStartable: true, tandemRunning: true }),
+      ),
+    ).toEqual({ kind: "to", text: "→ terminal owner-k7qx" });
   });
 
   it("leaves a no-AI line's own remedy alone", () => {

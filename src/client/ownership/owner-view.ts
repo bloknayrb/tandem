@@ -543,8 +543,14 @@ export function composerLine(
   // composer's Start offer (where Start can help)"; Bryan, 2026-11-24, "Yes
   // (Recommended)"): a stale chat message with no controlling badge, and
   // Tandem's Claude could answer it, so the line offers 5b's Start. A "no AI"
-  // line already carries its own remedy.
-  if (line?.kind === "to" && summary?.chatStale === true && summary.tandemStartable) {
+  // line already carries its own remedy. Not while Tandem's Claude is already
+  // running: Start cannot help then (the same test as the not-present offer).
+  if (
+    line?.kind === "to" &&
+    summary?.chatStale === true &&
+    summary.tandemStartable &&
+    !summary.tandemRunning
+  ) {
     return { ...line, remedy: "start" };
   }
   return line;
