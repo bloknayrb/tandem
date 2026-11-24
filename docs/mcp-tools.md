@@ -1554,6 +1554,8 @@ data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936
 : keepalive
 ```
 
+**With multi-session ownership on** (#2358 PR 4a, ADR-054; ships dark, so a release build does neither): a stream whose `X-Claude-Session-Id` maps to an owner record gets only the events of documents that record holds or nobody holds, chat that record owns or may claim, and document-less events; a stream with no header, or one that maps to no record, gets the whole stream as above. Every stream also gets a payload-free nudge when work changes hands between sessions — `event: ownership-changed` followed by `data: {}`, with **no `id:` line**, so it never moves `Last-Event-ID`. It is not a `TandemEvent`: a direct subscriber should treat it as "call `tandem_checkInbox`", not parse `{}` as an event.
+
 **While Tandem is unlicensed** (#1521) this answers `403` with `{ error: "LICENSE_REQUIRED", kind, message }` before any frame — a `Last-Event-ID` replays nothing — and a live stream is ended by the next event pushed while refused. The shared consumer (shim and monitor) treats that 403 as a licence refusal, not an outage: it retries every 5 minutes, reports no `channel-error`, and the plugin monitor prints the refusal once on stdout. Events pushed while refused are still buffered, and replay to the first consumer admitted after activation.
 
 Events are only emitted for editor-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.

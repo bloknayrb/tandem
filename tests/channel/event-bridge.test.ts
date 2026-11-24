@@ -20,6 +20,7 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../../src/shared/constants.js";
+import { OWNERSHIP_CHANGED_SSE_FRAME } from "../../src/shared/events/wake-scope.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -631,5 +632,54 @@ describe("event-bridge: licence refusal notice", () => {
     expect(licenceNotices()).toHaveLength(0);
     expect(attempts).toBeGreaterThan(CHANNEL_MAX_RETRIES);
     expect(h.errorReports.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("event-bridge: the ownership-changed nudge (#2358 PR 4a)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = setupHarness({ mode: "tandem" });
+  });
+
+  afterEach(() => {
+    teardownHarness(h);
+  });
+
+  it("sends one payload-free notification and moves no Last-Event-ID", async () => {
+    const stream1 = new ControllableStream();
+    const stream2 = new ControllableStream();
+    let attempt = 0;
+    const lastIds: Array<string | null> = [];
+    h.stub.on("/api/events", (_url, init) => {
+      attempt++;
+      lastIds.push(new Headers(init?.headers).get("last-event-id"));
+      if (attempt === 1) return sseResponse(stream1);
+      if (attempt === 2) return sseResponse(stream2);
+      throw new Error("network down");
+    });
+
+    const start = await loadStartEventBridge();
+    const mod = await import("../../src/channel/event-bridge.js");
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
+
+    stream1.push(OWNERSHIP_CHANGED_SSE_FRAME);
+    await vi.advanceTimersByTimeAsync(10);
+    stream1.end();
+    await vi.advanceTimersByTimeAsync(5_000);
+    stream2.end();
+    await vi.advanceTimersByTimeAsync(200_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.mcp.notification).toHaveBeenCalledTimes(1);
+    const notif = h.mcp.notification.mock.calls[0]?.[0];
+    expect(notif.method).toBe("notifications/claude/channel");
+    expect(notif.params.content).toBe(mod.OWNERSHIP_CHANGED_CHANNEL_CONTENT);
+    expect(notif.params.meta).toEqual({ event_type: mod.OWNERSHIP_CHANGED_CHANNEL_EVENT_TYPE });
+    // The Channels API drops hyphenated meta keys.
+    expect(Object.keys(notif.params.meta).every((k) => !k.includes("-"))).toBe(true);
+    expect(lastIds.slice(0, 2)).toEqual([null, null]);
+    // No awareness POST: the nudge asks Claude for nothing in particular.
+    expect(h.awarenessCalls).toEqual([]);
   });
 });

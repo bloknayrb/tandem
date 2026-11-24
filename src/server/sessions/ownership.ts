@@ -2879,6 +2879,85 @@ function mayTakePerMessage(callerId: string | undefined): callerId is string {
 }
 
 /**
+ * What one push-stream event names, for its narrowing (#2358 PR 4a): its
+ * document, and for a user `chat:message` the message's key. The SSE writer
+ * builds it from the event; this module never imports `events/`.
+ */
+export interface PushEventScope {
+  readonly documentId?: string;
+  /** The user chat message's key, for a `chat:message` event only. */
+  readonly chatMessageKey?: string;
+}
+
+/**
+ * Whether an `/api/events` stream that sent `claudeSessionId` as its
+ * `X-Claude-Session-Id` (undefined for none) gets `event` (#2358 PR 4a;
+ * ownership design §9.1, R3.4). Asked by the SSE writer for each event at the
+ * moment it writes it, live and on `Last-Event-ID` replay, wake-mode streams
+ * included, after the queue's Solo filter and licence refusal, so it only ever
+ * removes an event. The header is mapped afresh each time
+ * ({@link pushStreamRecord}), so a shim that connected before its bridge
+ * initialized is mapped once the record exists. An unmapped stream gets
+ * exactly today's stream. A mapped stream gets an event whose document its
+ * record holds or nobody holds (an entry whose record is gone reads as
+ * unowned); a chat event whose message's owner (ownership design §7.1) is its
+ * record, or which is claimable (it follows an open document nobody holds,
+ * or is claimable per message); and every event with no document that is not
+ * chat (the Solo release wake). A chat event whose row is gone, or local-period
+ * chat (which is never pushed), names no owner and is not claimable, so a
+ * mapped stream does not get it. **Pure**: it marks nothing handled or
+ * delivered and creates no record. True at its first line while ownership is
+ * off, and true when it throws (today's stream; D4: narrowing coordinates
+ * sessions and is not a security boundary).
+ */
+export function pushStreamAdmits(
+  claudeSessionId: string | undefined,
+  event: PushEventScope,
+): boolean {
+  if (!ownershipEnabled()) return true;
+  return total("pushStreamAdmits", true, () => {
+    const ownerId = pushStreamRecord(claudeSessionId);
+    if (ownerId === undefined) return true;
+    if (event.chatMessageKey !== undefined) {
+      const facts = chatSide.message(event.chatMessageKey);
+      if (facts === undefined) return false;
+      const standing = messageStanding(event.chatMessageKey, facts);
+      if (standing.kind === "owned") return standing.ownerId === ownerId;
+      return standing.kind !== "none";
+    }
+    if (event.documentId === undefined) return true;
+    const entry = readEntry(event.documentId);
+    return entry === undefined || entry.ownerId === ownerId;
+  });
+}
+
+/**
+ * The record a push stream's `X-Claude-Session-Id` maps to, or undefined for
+ * an unmapped stream (ownership design §9.1), in order: (1) Tandem's Claude's
+ * session id — the current spawn's, while the own-spawn seam is set — maps to
+ * the `tandem` record while Tandem's Claude is present (its run bound), for
+ * reading only, otherwise to that spawn's `unbound-child` record; an id an
+ * earlier child of Tandem's used, with no spawn current or not the current
+ * one, is unmapped, and such an id never maps through rule 2; (2) a live
+ * `claude:<id>` record (it exists and has not lapsed) maps to that record;
+ * (3) anything else, or no header, is unmapped. **Pure**: creates nothing.
+ */
+function pushStreamRecord(claudeSessionId: string | undefined): string | undefined {
+  if (claudeSessionId === undefined) return undefined;
+  const key = claudeIdKey(claudeSessionId);
+  if (ownSpawnSource !== undefined) {
+    const spawn = ownSpawnSource();
+    if (spawn !== null && claudeIdKey(spawn.sessionId) === key) {
+      return isTandemPresent() ? TANDEM_OWNER_ID : `spawn:${spawn.n}`;
+    }
+    if (ownChildCheck?.(claudeSessionId) === true) return undefined;
+  }
+  const ownerId = `claude:${key}`;
+  const record = records.get(ownerId);
+  return record !== undefined && record.lapsed !== true ? ownerId : undefined;
+}
+
+/**
  * What a poll may do with one chat message (R4.1): `"owns"` — the caller owns
  * it; `"take"` — it is claimable per message and the caller may take it (the
  * poll's commit makes the caller its owner, R3.3); `"claim"` — it follows an

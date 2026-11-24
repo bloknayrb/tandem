@@ -187,6 +187,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-presence.test.ts",
+    // PR 4a: the push stream's narrowing and the ownership-changed nudge.
+    "tests/server/ownership-push-narrowing.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-reowe-rounds.test.ts",
     "tests/server/ownership-take-back.test.ts",
@@ -256,6 +258,10 @@ describe("tests and the flag", () => {
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
+      // PR 4a's one: the push stream's narrowing and the ownership-changed
+      // nudge flag on, with dark rows (every stream gets every event byte for
+      // byte; a lapse nudges nothing).
+      "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",
       // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
       // dark row run with every seam wired.
@@ -308,6 +314,8 @@ describe("tests and the flag", () => {
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-presence.test.ts",
+      // PR 4a: the push stream's narrowing and the ownership-changed nudge.
+      "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",
       // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
       // dark row run with every seam wired.

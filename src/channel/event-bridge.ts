@@ -16,6 +16,13 @@ import {
 import { runEventConsumer } from "../shared/sse-consumer.js";
 import { CHANNEL_CONNECT_FAILED } from "../shared/types.js";
 
+/** The channel notification's `event_type` for the ownership nudge (#2358 PR 4a). */
+export const OWNERSHIP_CHANGED_CHANNEL_EVENT_TYPE = "ownership_changed";
+
+/** Its fixed content: names nothing, says where to look. */
+export const OWNERSHIP_CHANGED_CHANNEL_CONTENT =
+  "Tandem: work changed hands between sessions. Call tandem_checkInbox to see whether any of it is yours.";
+
 /**
  * Stdio-mode SSE bridge. New push-path work should target src/monitor/.
  * This path remains active for stdio-mode Claude Code connections.
@@ -49,5 +56,17 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
           console.error("[Channel] Failed to send the licence-refusal notice:", err);
         });
     },
+    // #2358 PR 4a: work changed hands, so this session may have something to
+    // claim. Payload-free like the frame: fixed copy naming no document,
+    // session or item; the poll is where the model finds out. Meta value with
+    // underscores, matching `license_refused`.
+    onOwnershipChanged: () =>
+      mcp.notification({
+        method: "notifications/claude/channel",
+        params: {
+          content: OWNERSHIP_CHANGED_CHANNEL_CONTENT,
+          meta: { event_type: OWNERSHIP_CHANGED_CHANNEL_EVENT_TYPE },
+        },
+      }),
   });
 }
