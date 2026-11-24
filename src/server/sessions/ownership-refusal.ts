@@ -96,8 +96,9 @@ const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a requ
  * after a tab close gave it the document's unanswered chat and the document
  * was reopened and claimed by another session; after it acknowledged a
  * message about the document; or after it answered one while the document
- * could not be claimed (Ruling 4's reply arm). Push paths stay unscoped until
- * PR 4. So a chat message this session answers, or a push, can still be about
+ * could not be claimed (Ruling 4's reply arm). Since PR 4a a mapped push
+ * stream is narrowed, but an unmapped one, `/api/wake` and the supervisor's
+ * wake are not. So a chat message this session answers, or a push, can still be about
  * a document the poll left out: the exclusion texts say what was not returned
  * and never that nothing about the document was (the notice-rule PR, R2.1).
  * No new instruction (Ruling 14): the write refusals say what to do if the
