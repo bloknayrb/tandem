@@ -154,6 +154,7 @@ import {
   startCommentReveal,
   toCommentAnswerItem,
 } from "./notifications/comment-attention";
+import { composerLine, takeBackNames, takeBackText } from "./ownership/owner-view";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -322,6 +323,23 @@ const pendingUpdateBanner = createPendingUpdateBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
+
+// #2358 PR 5b: the composer's "who answers" line (ownership design §10.2),
+// from the active document's published owner fields, or from the summary with
+// no tab. Null while ownership is off: a dark server publishes neither.
+const ownerComposerLine = $derived(
+  composerLine(
+    yjsSync.activeTabId === null ? undefined : yjsSync.ownerFields.get(yjsSync.activeTabId),
+    yjsSync.ownershipSummary,
+  ),
+);
+const ownerTakeBackText = $derived(
+  takeBackText(
+    takeBackNames(
+      yjsSync.tabs.map((t) => ({ fileName: t.fileName, fields: yjsSync.ownerFields.get(t.id) })),
+    ),
+  ),
+);
 
 // #1123 part B, R1.2: the switch's own notices are a trigger to re-read who
 // answers chat. Called from the stream's message handler (an event handler).
@@ -1339,6 +1357,12 @@ let nextSettingsTabId = $state<string | null>(null);
 
 function openModelsSettings() {
   if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.models;
+  openSettingsModalWithAck();
+}
+
+/** Settings → Claude Code (#2358 PR 5b): the composer line's "No AI will answer" pointer. */
+function openClaudeCodeSettings() {
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.claudeCode;
   openSettingsModalWithAck();
 }
 
@@ -3251,6 +3275,10 @@ function dismissModelPicker() {
             localPickup={localPickupInputs}
             localPeriod={localPeriodNow}
             noticeAnnouncement={chatNoticeAnnouncement}
+            ownerLine={ownerComposerLine}
+            ownerLineTakeBack={ownerTakeBackText}
+            onOwnerLineRemedy={(remedy) =>
+              remedy === "start" ? startClaude() : openClaudeCodeSettings()}
           />
           <PanelSlot
             kind="side"
@@ -3484,6 +3512,9 @@ function dismissModelPicker() {
     renameTrigger={renameTabTrigger}
     closedTabTop={closedTabStack.top}
     onReopenClosed={documentWorkspace.reopenClosedTab}
+    ownerFields={yjsSync.ownerFields}
+    ownershipSummary={yjsSync.ownershipSummary}
+    onStartTandemClaude={startClaude}
   />
 {/snippet}
 

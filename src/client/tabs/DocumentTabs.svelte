@@ -1,10 +1,20 @@
 <script lang="ts">
 import { onDestroy, untrack } from "svelte";
 import { flip } from "svelte/animate";
+import type { OwnershipSummary, PublishedOwnerFields } from "../../shared/ownership-published.js";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
+import {
+  badgeView,
+  canRelease,
+  mayAssign,
+  ownershipErrorText,
+  releaseGoesToTandem,
+  takeBackNames,
+} from "../ownership/owner-view.js";
+import { postDocumentOwnership } from "../ownership/ownership-api.js";
 import { easeOut, motionOff, tabEnter, tabExit } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
@@ -18,6 +28,7 @@ import {
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
+import TabOwnerPopover from "./TabOwnerPopover.svelte";
 import {
   buildTabMenuContext,
   hasRealPath,
@@ -70,7 +81,18 @@ interface Props {
    * below. Defaults false so `svelte-harness/registry.ts`, which mounts this
    * component with no props, keeps its adaptive-by-default smoke render. */
   uniformTabWidth?: boolean;
+  /**
+   * #2358 PR 5b: the owner fields the server publishes, by document id. Empty
+   * while ownership is off, which renders no badge, no popover and no menu leaf.
+   */
+  ownerFields?: ReadonlyMap<string, PublishedOwnerFields>;
+  /** #2358 PR 5b: the composer summary, or null. */
+  ownershipSummary?: OwnershipSummary | null;
+  /** #2358 PR 5b: the popover's Start (Tandem's Claude's Start control). */
+  onStartTandemClaude?: () => void;
 }
+
+const NO_OWNER_FIELDS: ReadonlyMap<string, PublishedOwnerFields> = new Map();
 
 const {
   tabs,
@@ -92,7 +114,64 @@ const {
   closedTabTop = null,
   onReopenClosed,
   uniformTabWidth = false,
+  ownerFields = NO_OWNER_FIELDS,
+  ownershipSummary = null,
+  onStartTandemClaude,
 }: Props = $props();
+
+// ---- Owner badge and popover (#2358 PR 5b; ownership design §10.2) --------
+// `ownerNow` is the clock the "waiting N min" count reads. It ticks only while
+// some entry carries a waiting time, so a dark build (no owner fields) never
+// arms the interval.
+let ownerNow = $state(Date.now());
+const ownerClockNeeded = $derived([...ownerFields.values()].some((f) => f.waitingSince !== null));
+$effect(() => {
+  if (!ownerClockNeeded) return;
+  ownerNow = Date.now();
+  const timer = setInterval(() => {
+    ownerNow = Date.now();
+  }, 30_000);
+  return () => clearInterval(timer);
+});
+
+/** The open popover: its tab, where it hangs, and a refusal to show on open. */
+let ownerPopover = $state<{
+  tabId: string;
+  anchor: { left: number; bottom: number };
+  error: string | null;
+} | null>(null);
+
+function anchorOf(el: Element): { left: number; bottom: number } {
+  const r = el.getBoundingClientRect();
+  return { left: r.left, bottom: r.bottom };
+}
+
+function toggleOwnerPopover(tabId: string, anchor: HTMLElement) {
+  if (ownerPopover?.tabId === tabId) {
+    ownerPopover = null;
+    return;
+  }
+  ownerPopover = { tabId, anchor: anchorOf(anchor), error: null };
+}
+
+/** Opens the popover hung from the tab itself (the native menu's leaves). */
+function openOwnerPopoverForTab(tabId: string, error: string | null = null) {
+  const pill = scrollEl?.querySelector(`[data-testid="tab-${CSS.escape(tabId)}"][role="tab"]`);
+  const anchor = pill ? anchorOf(pill) : { left: 8, bottom: 40 };
+  ownerPopover = { tabId, anchor, error };
+}
+
+// A popover whose tab closed, or whose entry lost its owner fields, goes away.
+$effect(() => {
+  const open = ownerPopover;
+  if (open && (!tabs.some((t) => t.id === open.tabId) || !ownerFields.has(open.tabId))) {
+    ownerPopover = null;
+  }
+});
+
+const takeBack = $derived(
+  takeBackNames(tabs.map((t) => ({ fileName: t.fileName, fields: ownerFields.get(t.id) }))),
+);
 
 // Inline rename (#1017). DocumentTabs is the single source of truth for which
 // tab is editing; each TabItem derives `isRenaming` from it. Double-click (via
@@ -191,7 +270,11 @@ async function handleTabContextMenu(e: MouseEvent) {
   try {
     const invoke = await loadInvoke();
     await invoke("show_tab_context_menu", {
-      req: buildTabMenuContext(tabs, id, isTabInSourceView(id)),
+      req: buildTabMenuContext(tabs, id, isTabInSourceView(id), {
+        release: canRelease(ownerFields.get(id), ownershipSummary),
+        releaseToTandem: releaseGoesToTandem(ownershipSummary),
+        assign: mayAssign(ownerFields.get(id), ownershipSummary),
+      }),
     });
   } catch {
     // Tauri unavailable / command error — native menu already suppressed.
@@ -259,6 +342,17 @@ async function runTabAction(id: TabContextMenuActionId) {
       return;
     case "ctx:tab:toggleSourceView":
       if (tab.format === "md" && !tab.readOnly) await onToggleSourceViewTarget?.(tabId);
+      return;
+    // #2358 PR 5b: re-check against the published state rather than trust the
+    // menu (a forged event, or a state that changed while the menu was open).
+    case "ctx:tab:release": {
+      if (!canRelease(ownerFields.get(tabId), ownershipSummary)) return;
+      const result = await postDocumentOwnership(tabId, "release");
+      if (!result.ok) openOwnerPopoverForTab(tabId, ownershipErrorText(result.error));
+      return;
+    }
+    case "ctx:tab:assign":
+      if (ownerFields.has(tabId)) openOwnerPopoverForTab(tabId);
       return;
   }
 }
@@ -1302,6 +1396,9 @@ $effect(() => {
           onstartrename={startRename}
           onrename={commitRename}
           onrenamecancel={cancelRename}
+          ownerBadge={badgeView(ownerFields.get(tab.id), ownershipSummary, ownerNow)}
+          ownerOpen={ownerPopover?.tabId === tab.id}
+          onowneropen={toggleOwnerPopover}
         />
       </div>
     {/each}
@@ -1372,6 +1469,28 @@ $effect(() => {
     </div>
   </div>
 </div>
+
+{#if ownerPopover}
+  {@const open = ownerPopover}
+  {@const openTab = tabs.find((t) => t.id === open.tabId)}
+  {@const openFields = ownerFields.get(open.tabId)}
+  {#if openTab && openFields}
+    {#key open}
+      <TabOwnerPopover
+        documentId={open.tabId}
+        fileName={openTab.fileName}
+        fields={openFields}
+        summary={ownershipSummary}
+        now={ownerNow}
+        anchor={open.anchor}
+        initialError={open.error}
+        {takeBack}
+        onclose={() => (ownerPopover = null)}
+        onstart={() => onStartTandemClaude?.()}
+      />
+    {/key}
+  {/if}
+{/if}
 
 <style>
   /* s3 reorder (#798): transparent flex wrapper that carries `animate:flip`.

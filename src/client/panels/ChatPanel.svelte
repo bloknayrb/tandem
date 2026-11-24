@@ -8,6 +8,7 @@ import { scrollFade } from "../actions/scrollFade.svelte.js";
 import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
+import type { ComposerLine } from "../ownership/owner-view";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { agentBylineLabel } from "../utils/agentLabel";
@@ -113,6 +114,15 @@ interface Props {
    * notice is announced too. Required.
    */
   noticeAnnouncement: string;
+  /**
+   * #2358 PR 5b: who will answer a message sent now (ownership design §10.2),
+   * or null while ownership is off, which renders nothing. Required, with its
+   * handler, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  ownerLine: ComposerLine | null;
+  /** The take-back sentence a Start offered here adds, or null. */
+  ownerLineTakeBack: string | null;
+  onOwnerLineRemedy: (remedy: "start" | "settings") => void;
 }
 
 let {
@@ -145,6 +155,9 @@ let {
   localPickup,
   localPeriod,
   noticeAnnouncement,
+  ownerLine,
+  ownerLineTakeBack,
+  onOwnerLineRemedy,
 }: Props = $props();
 
 /** Render a row as a notice (#1123 part B, R6.1). Flag-gated: a dark editor
@@ -758,6 +771,32 @@ async function exportChat() {
        its own border + focus ring; the send button is a separate accent circle
        with a paper-plane glyph (the prototype's dark-warm fill maps to the
        app's accent primary so it stays on the semantic-token system). -->
+  {#if ownerLine}
+    <!-- #2358 PR 5b: who answers a message sent now (ownership design §10.2). -->
+    <div
+      class="chat-owner-line"
+      data-testid="chat-owner-line"
+      data-kind={ownerLine.kind}
+    >
+      <span>{ownerLine.text}</span>
+      {#if ownerLine.kind === "none"}
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-owner-line-action"
+          data-remedy={ownerLine.remedy}
+          onclick={() => {
+            if (ownerLine.kind === "none") onOwnerLineRemedy(ownerLine.remedy);
+          }}
+        >
+          {ownerLine.remedy === "start" ? "Start Tandem's Claude" : "Open Settings"}
+        </button>
+        {#if ownerLine.remedy === "start" && ownerLineTakeBack}
+          <span class="chat-owner-line-note">{ownerLineTakeBack}</span>
+        {/if}
+      {/if}
+    </div>
+  {/if}
   <div class="chat-input-area">
     <textarea
       bind:this={internalInputEl}
@@ -798,6 +837,22 @@ async function exportChat() {
 </div>
 
 <style>
+  .chat-owner-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--tandem-space-1) var(--tandem-space-2);
+    padding: var(--tandem-space-1) var(--tandem-space-3) 0;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .chat-owner-line[data-kind="none"] {
+    color: var(--tandem-warning-fg-strong);
+  }
+  .chat-owner-line-note {
+    flex-basis: 100%;
+    color: var(--tandem-fg-muted);
+  }
   .chat-bubble {
     margin-bottom: var(--tandem-space-3);
     padding: var(--tandem-space-2) var(--tandem-space-3);

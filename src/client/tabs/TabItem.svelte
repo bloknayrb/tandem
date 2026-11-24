@@ -5,6 +5,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
+import type { BadgeView } from "../ownership/owner-view.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import TabRenameInput from "./TabRenameInput.svelte";
 // A30 (tab reorder drag): --a30-lift / --a30-shadow / --a30-lift-shadow, plus
@@ -37,6 +38,15 @@ interface Props {
   onrename?: (id: string, newName: string) => void;
   /** Cancel rename mode (Escape / blur). */
   onrenamecancel?: () => void;
+  /**
+   * #2358 PR 5b: the owner badge, or null when it is not shown (always null
+   * while ownership is off: a dark server publishes no owner fields).
+   */
+  ownerBadge?: BadgeView | null;
+  /** The badge's popover is open for this tab. */
+  ownerOpen?: boolean;
+  /** Open (or close) the badge's popover, hung from `anchor`. */
+  onowneropen?: (id: string, anchor: HTMLElement) => void;
 }
 
 const {
@@ -52,6 +62,9 @@ const {
   onstartrename,
   onrename,
   onrenamecancel,
+  ownerBadge = null,
+  ownerOpen = false,
+  onowneropen,
 }: Props = $props();
 
 // Only real on-disk files are renamable; scratchpads/uploads use Save As, and
@@ -344,6 +357,30 @@ function handleMouseLeaveClose() {
        This RELOCATES the whitespace rather than removing it: the gap now sits
        between the filename and the ×, which is the conventional browser-tab
        layout. -->
+  {#if ownerBadge}
+    <!-- #2358 PR 5b: who works on this document (ownership design §10.2). A
+         second control inside role="tab", like the close button beside it. -->
+    <button
+      type="button"
+      class="tab-owner-badge"
+      data-testid="tab-owner-badge"
+      data-stale={ownerBadge.stale ?? undefined}
+      data-hint={ownerBadge.hint ?? undefined}
+      title={ownerBadge.detail}
+      aria-haspopup="dialog"
+      aria-expanded={ownerOpen}
+      aria-label={`Who works on ${tab.fileName}: ${ownerBadge.detail}`}
+      onclick={(e) => {
+        e.stopPropagation();
+        onowneropen?.(tab.id, e.currentTarget);
+      }}
+      onpointerdown={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      {ownerBadge.text}
+    </button>
+  {/if}
+
   <button
     bind:this={closeBtn}
     onclick={(e) => {
@@ -362,6 +399,32 @@ function handleMouseLeaveClose() {
 </div>
 
 <style>
+  /* #2358 PR 5b: the owner badge. Shrinks before the filename does, and never
+     past a short stub, so a long label cannot push the close button off. */
+  .tab-owner-badge {
+    flex: 0 1 auto;
+    min-width: 24px;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 6px;
+    height: 18px;
+    line-height: 18px;
+    font: inherit;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+    background: var(--tandem-surface-muted);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    cursor: pointer;
+  }
+  .tab-owner-badge[data-stale],
+  .tab-owner-badge[data-hint] {
+    color: var(--tandem-warning-fg-strong);
+    background: var(--tandem-warning-bg);
+    border-color: var(--tandem-warning-border);
+  }
   /* The pill had no app-level focus style, so a keyboard interaction fell
      through to Chromium's default ring — a heavy black outline that reads as an
      error state on this surface. A30 made that visible: pointerdown focuses the
