@@ -22,6 +22,15 @@
  * both correct and the safe default. Adding a NEW run-time external — a cli
  * import that must stay external, or a native module — is the only reason to
  * change this list, and the change belongs here with its reason.
+ *
+ * The cost, stated so it is not discovered later: GitHub and `npm audit` now
+ * file the inlined packages (express, ws, yjs, @hocuspocus/server, ...) as
+ * development-scoped, although their code runs in every shipped bundle. An
+ * advisory against one of them must still be read as a production advisory —
+ * in particular, GitHub's auto-triage preset that dismisses low-impact alerts
+ * on development-scoped dependencies would hide exactly those, and
+ * `npm audit --omit=dev` skips them. How alerts on bundled packages are seen
+ * is a repository-settings decision, recorded in the PR that made this split.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";

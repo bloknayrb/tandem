@@ -906,7 +906,7 @@ pub fn add_cowork_allow_rule(cidr: &str) -> Result<(), FirewallError> {
         "dir=in",
         "action=allow",
         "protocol=TCP",
-        "localport=3479",
+        concat!("localport=", sidecar_mcp_port!()),
         &format!("remoteip={cidr}"),
     ])
 }
@@ -937,7 +937,7 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
         "dir=in",
         "action=block",
         "protocol=TCP",
-        "localport=3479",
+        concat!("localport=", sidecar_mcp_port!()),
         &format!("remoteip={cidr}"),
     ])
 }
