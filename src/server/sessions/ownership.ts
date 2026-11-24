@@ -1099,7 +1099,17 @@ function rejudge(record: OwnerRecord): void {
 export function noteRecordPoll(ownerId: string | undefined): void {
   if (!ownershipEnabled() || ownerId === undefined) return;
   const record = records.get(ownerId);
-  if (record) record.lastPollAt = Date.now();
+  if (!record) return;
+  record.lastPollAt = Date.now();
+  // A check-in republishes at once (#2358 PR 5a-3; Bryan, 2026-11-24:
+  // "Republish on check-in"), so a "not-checking-in" flag clears without
+  // waiting for the tick. After the poll time is recorded, before the handler
+  // runs: the republish is a microtask later, so it reads this time, and a
+  // claim the poll then makes asks its own through step 4. Only for a record
+  // holding a document, the only case where `lastPollAt` changes anything
+  // published (no other field reads it); coalesced, written only where
+  // something changed.
+  if (heldDocumentIds(ownerId).length > 0) requestPublish();
 }
 
 /** The record for `ownerId`, or undefined. */
@@ -1274,13 +1284,16 @@ function recompute(record: OwnerRecord): void {
   if (isBuiltin(record)) return;
   const { registered, attached } = readAttachment();
   if (attached.has(record.ownerId)) {
-    // A holder leaving its grace stops reading as "disconnected" (#2358 PR
-    // 5a-3): republish, only for one that was detached and holds a document.
+    // A record leaving its grace (#2358 PR 5a-3): a holder stops reading as
+    // "disconnected", and any record counts again for the summary's
+    // `otherAiAttached` (Bryan, 2026-11-24: "Republish on check-in", which
+    // also asked this for a record holding nothing). Only on that change,
+    // never for an attached record's every request.
     const wasDetached = record.graceTimer !== undefined || record.lapsed === true;
     clearGrace(record);
     clearReOweRetry(record.ownerId);
     record.lapsed = undefined;
-    if (wasDetached && heldDocumentIds(record.ownerId).length > 0) requestPublish();
+    if (wasDetached) requestPublish();
     return;
   }
   if (record.lapsed && !recordHoldsState(record)) {
@@ -1560,6 +1573,9 @@ export function keyedDeliveryRounds(): boolean {
 }
 
 function armGrace(record: OwnerRecord): void {
+  // Whether a grace is starting, not being re-armed by a detached record's
+  // later request (`recompute` re-arms on each one).
+  const starting = record.graceTimer === undefined;
   clearGrace(record);
   record.graceArmedAt = Date.now();
   // Armed outside any MCP request context: the event that detached this record
@@ -1572,10 +1588,11 @@ function armGrace(record: OwnerRecord): void {
   timer.unref?.();
   record.graceTimer = timer;
   enforceDetachedCap();
-  // A holder entering its grace reads as "disconnected" (#2358 PR 5a-3).
-  if (records.get(record.ownerId) === record && heldDocumentIds(record.ownerId).length > 0) {
-    requestPublish();
-  }
+  // A record entering its grace (#2358 PR 5a-3): a holder reads as
+  // "disconnected", and any record stops counting for the summary's
+  // `otherAiAttached` (Bryan, 2026-11-24: "Republish on check-in"). Once per
+  // grace, not per re-arm.
+  if (starting && records.get(record.ownerId) === record) requestPublish();
 }
 
 function onGraceExpired(ownerId: string, timer: ReturnType<typeof setTimeout>): void {

@@ -352,12 +352,36 @@ describe("in process", () => {
       oldest.set("st-b", Date.now() - OWNERSHIP_STALE_AFTER_MS - MIN);
       runOwnershipTickForTests();
       expect(entryIn(CTRL_ROOM, "st-b")?.stale).toBe("not-checking-in");
-      // A poll after the item arrived clears it at the next tick.
-      noteRecordPoll(T);
-      runOwnershipTickForTests();
-      expect(entryIn(CTRL_ROOM, "st-b")?.stale).toBeNull();
       // A terminal holder's stale flag carries no hint or time.
       expect(entryIn(CTRL_ROOM, "st-b")).toMatchObject({ hint: null, waitingSince: null });
+      // A check-in after the item arrived clears it at once, with no tick
+      // (Bryan, 2026-11-24: "Republish on check-in").
+      noteRecordPoll(T);
+      await settle();
+      expect(entryIn(CTRL_ROOM, "st-b")?.stale).toBeNull();
+    });
+
+    it("a check-in republishes once per microtask for a holder, and never for a record holding nothing", async () => {
+      startOwnershipPublishing();
+      open("st-e");
+      register(T);
+      register(U);
+      setDocOwner("st-e", { ownerId: T, kind: "claimed" }, "claim", T);
+      await settle();
+      const asked: number[] = [];
+      setOwnershipPublishSink(() => {
+        asked.push(1);
+        requestOwnershipPublish();
+      });
+      noteRecordPoll(U);
+      expect(asked, "a record holding nothing").toEqual([]);
+      noteRecordPoll(T);
+      noteRecordPoll(T);
+      expect(asked, "each holder's check-in asks").toHaveLength(2);
+      const updates: number[] = [];
+      getOrCreateDocument(CTRL_ROOM).on("update", () => updates.push(1));
+      await settle();
+      expect(updates, "nothing changed, so nothing is written").toEqual([]);
     });
 
     it("a poll before the item arrived does not count", () => {
@@ -507,6 +531,28 @@ describe("in process", () => {
       view[0] = { ownerId: T, openStreams: 0, streamEver: true };
       noteTransportChanged(T);
       expect(ownershipSummary()?.otherAiAttached).toBe(false);
+    });
+
+    it("a session holding nothing starting or ending its grace republishes the summary at once, with no tick", async () => {
+      startOwnershipPublishing();
+      present = true;
+      register(T);
+      await settle();
+      expect(summaryIn()?.otherAiAttached).toBe(true);
+      view[0] = { ownerId: T, openStreams: 0, streamEver: true };
+      noteTransportChanged(T);
+      await settle();
+      expect(summaryIn()?.otherAiAttached, "its grace started").toBe(false);
+      // A later request while still detached re-arms the grace: no republish.
+      const asked: number[] = [];
+      setOwnershipPublishSink(() => asked.push(1));
+      noteTransportChanged(T);
+      expect(asked, "a re-arm asks nothing").toEqual([]);
+      setOwnershipPublishSink(requestOwnershipPublish);
+      view[0] = { ownerId: T, openStreams: 1, streamEver: true };
+      noteTransportChanged(T);
+      await settle();
+      expect(summaryIn()?.otherAiAttached, "its grace ended").toBe(true);
     });
 
     it("stdio mode, or no launcher, writes none, and a summary written before is deleted", async () => {

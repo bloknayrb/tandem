@@ -28,11 +28,18 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
-import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { broadcastOpenDocs } from "../../src/server/documents/registry.js";
+import {
+  addDoc,
+  removeDoc,
+  resetPublished,
+  setActiveDocId,
+} from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   documentWaiting,
   handOverDocumentInbox,
+  oldestDocumentWaiting,
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
@@ -42,12 +49,21 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import {
+  requestOwnershipPublish,
+  runOwnershipTickForTests,
+  startOwnershipPublishing,
+  stopOwnershipPublishingForTests,
+} from "../../src/server/ownership-publish.js";
+import {
+  noteRecordPoll,
   noteTransportRegistered,
   resetOwnershipForTests,
   setDocOwner,
+  setOldestWaitingProbe,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
+  setOwnershipPublishSink,
   setOwnershipSeqSource,
   setTandemPresenceSource,
   setTransportView,
@@ -202,6 +218,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await close?.();
   close = undefined;
+  stopOwnershipPublishingForTests();
+  resetPublished();
   setWaitingProbe(() => false);
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   withInternal(ctrl(), () => {
@@ -276,5 +294,64 @@ describe("the waiting decision's cost (3b-2b4c's measurement)", () => {
     );
     expect(whole.max).toBeLessThan(LOOSE_BOUND_MS);
     expect(half.max).toBeLessThan(LOOSE_BOUND_MS);
+  }, 120_000);
+});
+
+describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Republish on check-in')", () => {
+  it(`records the republish a holder's tandem_checkInbox asks for, over ${DOCUMENTS + 1} published documents`, async () => {
+    // The same check-in with no published state wired, for comparison.
+    const baseline: number[] = [];
+    for (let run = 0; run < 5; run++) {
+      const t0 = performance.now();
+      await pollAs(TANDEM, {});
+      await Promise.resolve();
+      baseline.push(performance.now() - t0);
+    }
+    // The lines of `src/server/index.ts` for the published state.
+    setOldestWaitingProbe(oldestDocumentWaiting);
+    let asked = 0;
+    setOwnershipPublishSink(() => {
+      asked += 1;
+      requestOwnershipPublish();
+    });
+    startOwnershipPublishing();
+    broadcastOpenDocs();
+    await Promise.resolve();
+    // One check-in by a holder asks one republish.
+    asked = 0;
+    noteRecordPoll(TANDEM);
+    expect(asked).toBe(1);
+    await Promise.resolve();
+    // The republish itself, as the microtask runs it: every published
+    // entry's owner fields recomputed (each document's oldest-waiting scan
+    // at its worst, nothing waiting) and compared in every room; nothing
+    // changed, so nothing is written.
+    const samples: number[] = [];
+    for (let run = 0; run < RUNS; run++) samples.push(timed(() => runOwnershipTickForTests()).ms);
+    // And a whole holder's check-in through the real tool, for scale.
+    const polls: number[] = [];
+    asked = 0;
+    for (let run = 0; run < 5; run++) {
+      const t0 = performance.now();
+      await pollAs(TANDEM, {});
+      await Promise.resolve();
+      polls.push(performance.now() - t0);
+    }
+    // Through the real tool too (`response.ts` calls `noteRecordPoll` for
+    // every tandem_checkInbox): each holder's check-in asked one.
+    expect(asked, "one republish asked per real check-in").toBe(5);
+    const republish = stats(samples);
+    const poll = stats(polls);
+    const before = stats(baseline);
+    record(
+      `a holder's cursor-less tandem_checkInbox without the published state: median ${fmt(before.median)} ms, max ${fmt(before.max)} ms`,
+    );
+    record(
+      `republish (${DOCUMENTS + 1} published documents, ${DOCUMENTS} held by Tandem's Claude): median ${fmt(republish.median)} ms, max ${fmt(republish.max)} ms`,
+    );
+    record(
+      `a holder's cursor-less tandem_checkInbox with the republish: median ${fmt(poll.median)} ms, max ${fmt(poll.max)} ms`,
+    );
+    expect(republish.max).toBeLessThan(LOOSE_BOUND_MS);
   }, 120_000);
 });
