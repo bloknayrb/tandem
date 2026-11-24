@@ -76,6 +76,8 @@ function chatProps(messages: ChatMessage[], pickupClock: PickupClock) {
     ownerLineTakeBack: null,
     onOwnerLineRemedy: () => {},
     pickupClock,
+    messageOwners: new Map(),
+    ownershipSummary: null,
   };
 }
 

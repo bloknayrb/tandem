@@ -2,17 +2,19 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import { BYO_MODELS_ENABLED } from "../../shared/constants";
+import type { OwnershipSummary, PublishedChatMessageOwner } from "../../shared/ownership-published";
 import type { FlatOffset } from "../../shared/positions/types";
 import { type CapturedAnchor, type ChatMessage, isChatNoticeRow } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
-import type { ComposerLine } from "../ownership/owner-view";
+import { type ComposerLine, messageControlView } from "../ownership/owner-view";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { agentBylineLabel } from "../utils/agentLabel";
 import { AI_OFF_TITLE } from "../utils/license-ui";
+import ChatMessageOwnerLine from "./ChatMessageOwnerLine.svelte";
 import { CLAUDE_CODE_OFFER_TEXT, showClaudeCodeOffer } from "./chat-claude-code-offer";
 import { localChatDateLabel } from "./chat-export";
 import { GREETING_LATE_TEXT, GREETING_RELAUNCH, type GreetingAction } from "./chat-greeting";
@@ -136,6 +138,16 @@ interface Props {
    * before. Required, for the same PanelSlot reason as `tandemClaudeControl`.
    */
   pickupClock: PickupClock;
+  /**
+   * #2358 PR 5e: each unanswered message's published owner facts (5d's
+   * per-message key, `yjsSync.chatOwners`), for the control line under each one (Bryan,
+   * 2026-11-24, "A line per message (Recommended)"), and the composer
+   * summary its show rule reads. An empty map and null while ownership is
+   * off, which renders no line. Required, for the same PanelSlot reason as
+   * `tandemClaudeControl`.
+   */
+  messageOwners: ReadonlyMap<string, PublishedChatMessageOwner>;
+  ownershipSummary: OwnershipSummary | null;
 }
 
 let {
@@ -172,6 +184,8 @@ let {
   ownerLineTakeBack,
   onOwnerLineRemedy,
   pickupClock,
+  messageOwners,
+  ownershipSummary,
 }: Props = $props();
 
 /** Render a row as a notice (#1123 part B, R6.1). Flag-gated: a dark editor
@@ -643,6 +657,13 @@ async function exportChat() {
           >Insert into open document</button>
         </div>
       </div>
+      {@const control =
+        msg.author === "user" ? messageControlView(messageOwners.get(msg.id), ownershipSummary) : null}
+      {#if control}
+        <!-- #2358 PR 5e: who holds this unanswered message, with its Release
+             and Assign (ownership design §10.2). Never while ownership is off. -->
+        <ChatMessageOwnerLine messageId={msg.id} view={control} />
+      {/if}
       {/if}
     {/each}
 
@@ -833,14 +854,15 @@ async function exportChat() {
       data-kind={ownerLine.kind}
     >
       <span>{ownerLine.text}</span>
-      {#if ownerLine.kind === "none"}
+      {#if ownerLine.remedy}
+        <!-- A "no AI" line's remedy, or (#2358 PR 5e) Start offered for stale chat. -->
         <button
           type="button"
           class="chat-header-action"
           data-testid="chat-owner-line-action"
           data-remedy={ownerLine.remedy}
           onclick={() => {
-            if (ownerLine.kind === "none") onOwnerLineRemedy(ownerLine.remedy);
+            if (ownerLine.remedy) onOwnerLineRemedy(ownerLine.remedy);
           }}
         >
           {ownerLine.remedy === "start" ? "Start Tandem's Claude" : "Open Settings"}

@@ -488,7 +488,12 @@ export const NO_AI_BIND_FAILED_TEXT =
 export const NO_AI_TEXT = "No AI will answer";
 
 export type ComposerLine =
-  | { readonly kind: "to"; readonly text: string }
+  /**
+   * `remedy: "start"` (#2358 PR 5e): some chat message is stale and Start can
+   * help, so the line offers Start beside whoever it names (ownership design
+   * §10.2; Bryan, 2026-11-24, "Yes (Recommended)").
+   */
+  | { readonly kind: "to"; readonly text: string; readonly remedy?: "start" }
   | { readonly kind: "none"; readonly text: string; readonly remedy: "start" | "settings" };
 
 function tandemLine(summary: OwnershipSummary | null): ComposerLine | null {
@@ -533,6 +538,22 @@ export function composerLine(
   active: PublishedOwnerFields | undefined,
   summary: OwnershipSummary | null,
 ): ComposerLine | null {
+  const line = whoAnswers(active, summary);
+  // #2358 PR 5e (ownership design §10.2: the stale flag "drives ... the
+  // composer's Start offer (where Start can help)"; Bryan, 2026-11-24, "Yes
+  // (Recommended)"): a stale chat message with no controlling badge, and
+  // Tandem's Claude could answer it, so the line offers 5b's Start. A "no AI"
+  // line already carries its own remedy.
+  if (line?.kind === "to" && summary?.chatStale === true && summary.tandemStartable) {
+    return { ...line, remedy: "start" };
+  }
+  return line;
+}
+
+function whoAnswers(
+  active: PublishedOwnerFields | undefined,
+  summary: OwnershipSummary | null,
+): ComposerLine | null {
   if (active) {
     const { owner, stale } = active;
     if (owner !== null) {
@@ -561,6 +582,84 @@ export function composerLine(
   }
   if (summary.otherAiAttached) return FIRST_TO_CHECK_IN;
   return willStart(summary) ?? noAi(summary);
+}
+
+// ---------------------------------------------------------------------------
+// #2358 PR 5e: a chat message's controls (ownership design §10.2, "Chat with
+// no controlling badge"; Bryan, 2026-11-24, "A line per message
+// (Recommended)").
+
+/**
+ * A message Release's label, saying where it goes (Bryan, 2026-11-24, "Yes,
+ * say where (Recommended)"): the document Release's two destinations, as the
+ * native menu words them, and (decided here) the third a message has, its
+ * open document held by another session.
+ */
+export const MESSAGE_RELEASE_TEXT: Record<PublishedChatReleaseTo, string> = {
+  "tandem-claude": "Release — Back to Tandem's Claude",
+  unassigned: "Release — Unassigned",
+  document: "Release — Back to its document",
+};
+
+export interface MessageControlView {
+  /** Who holds the message: "terminal owner-k7qx", "Tandem's Claude" or "Unassigned". */
+  readonly holder: string;
+  /** Release's label, or null when Release does not apply. */
+  readonly release: string | null;
+  /** Assign applies ("Assign…" opens the owners list). */
+  readonly assign: boolean;
+}
+
+/**
+ * The control line under one unanswered message, or null when none is shown.
+ * Only for a message whose facts offer Assign or Release (never one that
+ * follows its open document: its document's badge has its controls), at any
+ * age, and, like the badge, only when it says something: the message has a
+ * per-message owner, nobody holds it, or another session is attached; always
+ * with no summary (stdio mode, or no launcher). No facts (ownership off, or an
+ * answered message) is always null.
+ */
+export function messageControlView(
+  facts: PublishedChatMessageOwner | undefined,
+  summary: OwnershipSummary | null,
+): MessageControlView | null {
+  if (!facts || (!facts.assign && !facts.release)) return null;
+  const saysSomething =
+    summary === null ||
+    summary.otherAiAttached ||
+    facts.heldBy === "message" ||
+    facts.owner === null;
+  if (!saysSomething) return null;
+  return {
+    holder: facts.owner === null ? UNASSIGNED_TEXT : holderName(facts.owner),
+    // The reader keeps `releaseTo` exactly where `release` holds.
+    release: facts.releaseTo === null ? null : MESSAGE_RELEASE_TEXT[facts.releaseTo],
+    assign: facts.assign,
+  };
+}
+
+/**
+ * A message control's refusal, in words (`POST /api/ownership`'s message
+ * answers, ADR-054's 5a-2 amendment): the four message answers in Bryan's
+ * copy (2026-11-24, "Accept (Recommended)"), a vanished session as for a
+ * document, and (decided here) a message-worded fallback.
+ */
+export function messageOwnershipErrorText(code: string | null): string {
+  switch (code) {
+    case "unknown-message":
+      return "This message was removed";
+    case "follows-document":
+      return "This message follows its document — use the document's tab";
+    case "answered":
+      return "This message was already answered";
+    case "not-controllable":
+      return "A local model is handling this message";
+    case "owner-detached":
+    case "unknown-owner":
+      return ownershipErrorText(code);
+    default:
+      return "Couldn't change who answers this message — try again";
+  }
 }
 
 /** A control's refusal, in words (ownership design §10.1's answers). */

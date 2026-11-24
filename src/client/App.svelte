@@ -3312,6 +3312,8 @@ function dismissModelPicker() {
             onOwnerLineRemedy={(remedy) =>
               remedy === "start" ? startClaude() : openClaudeCodeSettings()}
             pickupClock={yjsSync.chatOwners}
+            messageOwners={yjsSync.chatOwners}
+            ownershipSummary={yjsSync.ownershipSummary}
           />
           <PanelSlot
             kind="side"

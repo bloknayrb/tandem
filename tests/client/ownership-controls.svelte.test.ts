@@ -569,6 +569,8 @@ function chatProps(
     ownerLineTakeBack,
     onOwnerLineRemedy,
     pickupClock: new Map(),
+    messageOwners: new Map(),
+    ownershipSummary: null,
   };
 }
 

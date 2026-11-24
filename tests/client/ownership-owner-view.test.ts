@@ -14,6 +14,8 @@ import {
   describeOwner,
   holderName,
   mayAssign,
+  messageControlView,
+  messageOwnershipErrorText,
   NO_AI_BIND_FAILED_TEXT,
   ownerFieldsFromList,
   ownershipErrorText,
@@ -546,5 +548,133 @@ describe("chatStaleWaitMs (the stall banner's chat signal)", () => {
     expect(chatStaleWaitMs(new Map([["m", chatFacts({ stale: true, since: T0 + MIN })]]), T0)).toBe(
       0,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2358 PR 5e: a chat message's controls (Bryan, 2026-11-24, "A line per
+// message (Recommended)", "Yes, say where (Recommended)", "Accept
+// (Recommended)" and "Yes (Recommended)").
+
+describe("messageControlView (the line under one unanswered message)", () => {
+  const byTandem = { label: "owner-t", displayKind: "Tandem's Claude" as const };
+
+  it("no facts (ownership off, or an answered message) is no line", () => {
+    expect(messageControlView(undefined, summary())).toBeNull();
+    expect(messageControlView(undefined, null)).toBeNull();
+  });
+
+  it("a message that follows its open document has no line: its document's badge has the controls", () => {
+    const onDoc = chatFacts({ heldBy: "document", release: false, releaseTo: null, assign: false });
+    expect(messageControlView(onDoc, null)).toBeNull();
+    expect(messageControlView(onDoc, summary({ otherAiAttached: true }))).toBeNull();
+  });
+
+  it("names the holder in 5b's words, Release saying where it goes, and Assign", () => {
+    expect(messageControlView(chatFacts(), summary())).toEqual({
+      holder: "terminal owner-k7qx",
+      release: "Release — Unassigned",
+      assign: true,
+    });
+    expect(messageControlView(chatFacts({ releaseTo: "tandem-claude" }), summary())?.release).toBe(
+      "Release — Back to Tandem's Claude",
+    );
+    expect(messageControlView(chatFacts({ releaseTo: "document" }), summary())?.release).toBe(
+      "Release — Back to its document",
+    );
+    expect(
+      messageControlView(
+        chatFacts({ owner: null, heldBy: "none", release: false, releaseTo: null }),
+        summary(),
+      ),
+    ).toEqual({ holder: "Unassigned", release: null, assign: true });
+  });
+
+  it("shows only when it says something: a per-message owner, no holder, or another session attached; always with no summary", () => {
+    const presence = chatFacts({
+      owner: byTandem,
+      heldBy: "presence",
+      release: false,
+      releaseTo: null,
+    });
+    expect(messageControlView(presence, summary())).toBeNull();
+    expect(messageControlView(presence, summary({ otherAiAttached: true }))?.holder).toBe(
+      "Tandem's Claude",
+    );
+    expect(messageControlView(presence, null)?.holder).toBe("Tandem's Claude");
+    // A per-message owner, even Tandem's Claude, says something.
+    expect(messageControlView(chatFacts({ owner: byTandem }), summary())?.holder).toBe(
+      "Tandem's Claude",
+    );
+    // Nobody holds it.
+    expect(
+      messageControlView(
+        chatFacts({ owner: null, heldBy: "none", release: false, releaseTo: null }),
+        summary(),
+      ),
+    ).not.toBeNull();
+  });
+});
+
+describe("messageOwnershipErrorText", () => {
+  it("words each message refusal in Bryan's copy", () => {
+    expect(messageOwnershipErrorText("unknown-message")).toBe("This message was removed");
+    expect(messageOwnershipErrorText("follows-document")).toBe(
+      "This message follows its document — use the document's tab",
+    );
+    expect(messageOwnershipErrorText("answered")).toBe("This message was already answered");
+    expect(messageOwnershipErrorText("not-controllable")).toBe(
+      "A local model is handling this message",
+    );
+    expect(messageOwnershipErrorText("owner-detached")).toBe(ownershipErrorText("owner-detached"));
+    expect(messageOwnershipErrorText("unknown-owner")).toBe(ownershipErrorText("unknown-owner"));
+    expect(messageOwnershipErrorText(null)).toBe(
+      "Couldn't change who answers this message — try again",
+    );
+  });
+});
+
+describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
+  const terminal: PublishedOwnerFields = {
+    owner: { label: "owner-k7qx", displayKind: "terminal", kind: "claimed" },
+    stale: null,
+    hint: null,
+    waitingSince: null,
+  };
+
+  it("offers Start beside whoever answers when chat is stale and Start can help", () => {
+    const stale = summary({ chatStale: true, tandemStartable: true, tandemRunning: false });
+    expect(composerLine(terminal, stale)).toEqual({
+      kind: "to",
+      text: "→ terminal owner-k7qx",
+      remedy: "start",
+    });
+  });
+
+  it("offers nothing new without stale chat, where Start cannot help, or with no summary", () => {
+    expect(composerLine(terminal, summary({ chatStale: false }))).toEqual({
+      kind: "to",
+      text: "→ terminal owner-k7qx",
+    });
+    expect(composerLine(terminal, summary({ chatStale: true, tandemStartable: false }))).toEqual({
+      kind: "to",
+      text: "→ terminal owner-k7qx",
+    });
+    expect(composerLine(terminal, null)).toEqual({ kind: "to", text: "→ terminal owner-k7qx" });
+  });
+
+  it("leaves a no-AI line's own remedy alone", () => {
+    const none = summary({
+      tandemPresent: false,
+      tandemRunning: false,
+      tandemStartable: false,
+      notPresentReason: "off",
+      chatStale: true,
+    });
+    expect(composerLine(undefined, none)).toEqual({
+      kind: "none",
+      text: "No AI will answer",
+      remedy: "settings",
+    });
   });
 });

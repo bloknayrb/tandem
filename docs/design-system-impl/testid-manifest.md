@@ -284,8 +284,15 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   past the stall threshold
 - `chat-owner-line` — who answers a message sent now (#2358 PR 5b, ownership
   design §10.2; `data-kind` is `to` or `none`), with `chat-owner-line-action`
-  (Start or Open Settings, `data-remedy`) when no AI will answer; nothing while
+  (Start or Open Settings, `data-remedy`) when no AI will answer, or Start when
+  a chat message is stale and Start can help (#2358 PR 5e); nothing while
   ownership ships dark
+- `chat-message-owner-{*}` — the control line under an unanswered user message,
+  keyed by message id (#2358 PR 5e, ownership design §10.2): who holds it, with
+  `chat-message-owner-release-{*}` (Release, saying where it goes) and
+  `chat-message-owner-assign-{*}` ("Assign…", which opens `chat-message-owner-menu`
+  listing `chat-message-owner-choice-{*}`, keyed by the session's label), and
+  `chat-message-owner-error-{*}` for a refusal; nothing while ownership ships dark
 
 ### Banners
 - `banner-stack` — the measured wrapper around the five top-of-shell banners
