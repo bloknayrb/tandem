@@ -165,9 +165,14 @@ function expectOneOwnershipFrame(frames: string[], ...absent: string[]): void {
   const frame = JSON.parse(frames[0] as string) as Record<string, unknown>;
   expect(Object.keys(frame).sort()).toEqual(["id", "timestamp", "type"]);
   expect(frame.type).toBe(OWNERSHIP_WAKE_FRAME_TYPE);
-  expect(typeof frame.id).toBe("string");
+  // The id is `generateEventId()`'s random `evt_<ms>_<base36>`: pinned to that
+  // shape, so nothing else can ride in it, and then left out of the leak check,
+  // whose substrings (a chat key such as "m1") its random suffix can contain by
+  // chance.
+  expect(frame.id).toMatch(/^evt_\d+_[0-9a-z]+$/);
   expect(typeof frame.timestamp).toBe("number");
-  for (const text of [SECRET, A, B, ...absent]) expect(frames[0]).not.toContain(text);
+  const withoutId = JSON.stringify({ ...frame, id: "" });
+  for (const text of [SECRET, A, B, ...absent]) expect(withoutId).not.toContain(text);
 }
 
 beforeEach(async () => {

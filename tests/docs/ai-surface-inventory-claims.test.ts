@@ -606,3 +606,82 @@ describe("the wake socket's frame writers (#2358 PR 3b-2d)", () => {
     expect(refs, OBLIGATION).toEqual(["requestOwnershipFrame:writeOwnershipFrame"]);
   });
 });
+
+describe("the SSE stream's writers (#2358 PR 4a)", () => {
+  // Every frame written on `/api/events` is an AI surface (Critical Rule 9).
+  // The event frames ride `pushEvent`'s licence verdict and its revocation
+  // (and the replay is behind the handler's admission); the
+  // `ownership-changed` frame does not enter `pushEvent`, so its writer asks
+  // `aiRefusal()` itself (ownership design §8.6). These multisets see a new
+  // write that a file-level "calls aiRefusal() somewhere" check cannot.
+  const SSE = read("src", "server", "events", "sse.ts");
+  const OBLIGATION = [
+    "A new writer on /api/events (or a moved one). A frame that does not come from",
+    "pushEvent's subscription or the admitted replay must consult the licence",
+    "decision (aiRefusal(), Critical Rule 9) before it writes, and end the stream",
+    "as onRevoke does on a refusal; list it in docs/licensing-explained.md's SSE",
+    "/api/events row. Then update this list.",
+  ].join(" ");
+
+  const memberCalls = (src: string, members: readonly string[]) =>
+    sitesIn(src, (node) =>
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      members.includes(node.expression.name.text)
+        ? node.expression.name.text
+        : null,
+    );
+
+  it("every write and end on a stream is known", () => {
+    expect(memberCalls(SSE, ["write", "end"]), OBLIGATION).toEqual(
+      [
+        "revoke:end", // the licence end, shared by onRevoke and the nudge's writer
+        "sseHandler:write", // ": connected"
+        "sseHandler:write", // the keepalive, an unnamed arrow inside the handler
+        "writeEvent:write", // an event's `id:` line
+        "writeEvent:write", // an event's `data:` line
+        "writeOwnershipChangedEvent:write",
+      ].sort(),
+    );
+  });
+
+  it("the licence end is reached only from onRevoke and the nudge's writer", () => {
+    // `LiveStream`'s own `revoke(): void` declares the member; it is no reference.
+    const refs = sitesIn(SSE, (node) =>
+      isReferenceTo(node, ["revoke"]) && !ts.isMethodSignature(node.parent) ? node.text : null,
+    );
+    expect(refs, OBLIGATION).toEqual(
+      [
+        "sseHandler:revoke", // `{ onRevoke: revoke }` and the stream's record
+        "sseHandler:revoke",
+        "writeOwnershipChangedEvent:revoke",
+      ].sort(),
+    );
+  });
+
+  it("the nudge's writer asks the licence before its write", () => {
+    const text = stripComments(SSE);
+    const start = text.indexOf("function writeOwnershipChangedEvent(");
+    expect(start).toBeGreaterThan(-1);
+    const body = text.slice(start, text.indexOf("\n}\n", start));
+    const asks = body.indexOf("aiRefusal()");
+    expect(asks, OBLIGATION).toBeGreaterThan(-1);
+    expect(asks, OBLIGATION).toBeLessThan(body.indexOf(".write("));
+  });
+
+  it("the nudge is requested only through ownership's sink", () => {
+    const files = sourcesUnder("src")
+      .filter(({ src }) =>
+        /\b(requestOwnershipChangedEvent|writeOwnershipChangedEvent)\b/.test(stripComments(src)),
+      )
+      .map(({ path }) => path)
+      .sort();
+    expect(files, OBLIGATION).toEqual(["src/server/events/sse.ts", "src/server/index.ts"]);
+    const refs = sitesIn(SSE, (node) =>
+      isReferenceTo(node, ["requestOwnershipChangedEvent", "writeOwnershipChangedEvent"])
+        ? node.text
+        : null,
+    );
+    expect(refs, OBLIGATION).toEqual(["requestOwnershipChangedEvent:writeOwnershipChangedEvent"]);
+  });
+});
