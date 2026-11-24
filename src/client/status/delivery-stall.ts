@@ -74,6 +74,16 @@ export interface DeliveryStallInput {
   aiOff: boolean;
   /** A dead server is its own, louder story; never stack the two. */
   serverUnreachable: boolean;
+  /**
+   * Multi-session ownership only (#2358 PR 3b-2e2, the owner's 2026-11-17
+   * answer 3, "Hide while starting, then reword"): Tandem's Claude is being
+   * started, or was woken after the oldest waiting message and is still on
+   * that turn. No claim meanwhile; if the message is still waiting once that
+   * is over, the banner comes back. The caller sets it only while the server
+   * reports keyed rounds, so a dark build never passes `true`. Optional, and
+   * absent reads as false.
+   */
+  checkInUnderway?: boolean;
 }
 
 /**
@@ -88,6 +98,7 @@ export function deliveryStall(input: DeliveryStallInput): number | null {
   // The offline notice already tells this story, and better: with the server
   // gone, "Claude hasn't picked this up" is true but blames the wrong party.
   if (input.serverUnreachable) return null;
+  if (input.checkInUnderway === true) return null;
   if (input.state !== "awaiting-poll") return null;
   if (input.waitingMs === null || input.waitingMs < DELIVERY_STALL_MS) return null;
   return input.waitingMs;

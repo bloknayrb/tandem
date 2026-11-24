@@ -155,13 +155,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Flag on, the stall banner's wording ('Your message is queued — it'll be seen the next " +
-      "time Claude checks in') and its lack of a dismiss have not been reviewed against keyed " +
+      "Flag on, the stall banner as built in 3b-2e2 (hidden while Tandem's Claude is started or " +
+      "woken after the oldest waiting message, then 'Claude hasn't picked this up for N minutes. " +
+      "Your message is still waiting.', no dismiss) has not been reviewed by Bryan against keyed " +
       "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
-      "banner up while another session polls and is never handed that document's item.",
-    closedBy:
-      "Bryan's review of the banner against keyed rounds, in PR 3b (once its wakes open rounds, " +
-      "which changes when the banner shows; 3b-2b1c-a's start-or-wake opens none).",
+      "banner up while another session polls and is never handed that document's item, and a " +
+      "turn of Tandem's Claude written after the message hides it even when the message is " +
+      "another session's.",
+    closedBy: "Bryan's review of the built banner (3b-2e2).",
   },
   {
     gap:
