@@ -152,11 +152,15 @@ describe("check-token-violation.sh worktree guard", () => {
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
 
+  // A fixed project path, not ROOT: when the repository is itself checked out
+  // under a `.claude/worktrees/` directory (an agent's worktree), ROOT contains
+  // that segment and the nested-worktree skip fires, which says nothing about
+  // the project-directory guard this test is for.
   bashOnly("still runs the scanner for a file inside the project", () => {
     const run = runBashHook(
       "check-token-violation.sh",
-      editEvent(`${ROOT}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: ROOT },
+      editEvent(`${project}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: project },
     );
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
