@@ -225,7 +225,7 @@ describe("tools/list while dark", () => {
     expect(Object.keys(annotationsOut.properties ?? {})).toContain("owner");
     expect(annotationsOut.required ?? []).not.toContain("owner");
     const listItem = (
-      on.get("tandem_listDocuments")?.outputSchema as {
+      on.get("tandem_listDocuments")?.outputSchema as unknown as {
         properties: { documents: { items: { properties: object; required?: string[] } } };
       }
     ).properties.documents.items;
