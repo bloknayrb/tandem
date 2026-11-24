@@ -74,6 +74,9 @@ mod os {
 /// `src/client/tauri/autostart-invoke.ts` — renaming one desyncs the UI.
 pub const ERR_IO: &str = "io-error";
 pub const ERR_READBACK: &str = "readback-mismatch";
+/// Never produced on Windows, whose own backend fails only with `ERR_IO`
+/// (#2160); kept there because the client's union still names it.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub const ERR_PLUGIN: &str = "plugin-error";
 
 /// What the Settings toggle needs to render itself: the live OS state, whether
@@ -205,8 +208,10 @@ pub fn autostart_set_enabled(
 /// inside `if autostart_launch`, and hoisting the call removes that accidental
 /// guard:
 ///
-/// - **Debug.** The autostart plugin is registered with no `cfg` gate, and
-///   `tauri.conf.json`'s `productName` is `Tandem` for debug and release alike —
+/// - **Debug.** The registration backend (the plugin on macOS/Linux, Tandem's
+///   own on Windows) is the same in debug and release, with no
+///   `debug_assertions` gate, and `tauri.conf.json`'s `productName` is `Tandem`
+///   for debug and release alike —
 ///   so a `cargo tauri dev` run reads the *installed* app's HKCU `Run\Tandem`
 ///   value and would overwrite it with `target/debug/tandem.exe`. The next
 ///   `cargo clean` would then leave a real user's login item pointing at a

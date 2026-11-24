@@ -38,7 +38,9 @@
 
 use std::io;
 
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
+use windows_sys::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS, WIN32_ERROR,
+};
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
     HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_BINARY, REG_EXPAND_SZ, REG_SAM_FLAGS,
@@ -112,46 +114,55 @@ fn open_hkcu(subkey: &str, access: REG_SAM_FLAGS) -> io::Result<Option<Key>> {
 }
 
 /// The type and raw bytes of `value` under `key`; `Ok(None)` when absent.
+///
+/// The value can grow between the size probe and the read (Task Manager or
+/// another Tandem rewriting it), which the read reports as `ERROR_MORE_DATA`;
+/// that is retried a bounded number of times rather than surfaced as a failure
+/// that would read the toggle as off.
 fn query_value(key: &Key, value: &str) -> io::Result<Option<(u32, Vec<u8>)>> {
     let name = wide(value);
-    let mut kind: u32 = 0;
-    let mut len: u32 = 0;
-    // SAFETY: a null data pointer asks only for the type and size.
-    let rc = unsafe {
-        RegQueryValueExW(
-            key.0,
-            name.as_ptr(),
-            std::ptr::null(),
-            &mut kind,
-            std::ptr::null_mut(),
-            &mut len,
-        )
-    };
-    match rc {
-        ERROR_SUCCESS => {}
-        ERROR_FILE_NOT_FOUND => return Ok(None),
-        other => return Err(os_error(other)),
-    }
-    let mut buf = vec![0u8; len as usize];
-    // SAFETY: `buf` holds `len` bytes, the size the first call reported.
-    let rc = unsafe {
-        RegQueryValueExW(
-            key.0,
-            name.as_ptr(),
-            std::ptr::null(),
-            &mut kind,
-            buf.as_mut_ptr(),
-            &mut len,
-        )
-    };
-    match rc {
-        ERROR_SUCCESS => {
-            buf.truncate(len as usize);
-            Ok(Some((kind, buf)))
+    for _ in 0..4 {
+        let mut kind: u32 = 0;
+        let mut len: u32 = 0;
+        // SAFETY: a null data pointer asks only for the type and size.
+        let rc = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        match rc {
+            ERROR_SUCCESS => {}
+            ERROR_FILE_NOT_FOUND => return Ok(None),
+            other => return Err(os_error(other)),
         }
-        ERROR_FILE_NOT_FOUND => Ok(None),
-        other => Err(os_error(other)),
+        let mut buf = vec![0u8; len as usize];
+        // SAFETY: `buf` holds `len` bytes, the size the first call reported.
+        let rc = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                buf.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        match rc {
+            ERROR_SUCCESS => {
+                buf.truncate(len as usize);
+                return Ok(Some((kind, buf)));
+            }
+            ERROR_FILE_NOT_FOUND => return Ok(None),
+            ERROR_MORE_DATA => continue,
+            other => return Err(os_error(other)),
+        }
     }
+    Err(os_error(ERROR_MORE_DATA))
 }
 
 impl Registration<'_> {
