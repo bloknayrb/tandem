@@ -176,6 +176,20 @@ describe.each([
     p.detach();
   });
 
+  it("a delete made in the same transaction as a set still wins", () => {
+    const p = makePair(serverWins);
+    withMcp(p.server, () => {
+      p.sMap.set("a1", { ...get(p.sMap), rev: 2, range: { from: 3, to: 8 } });
+      p.sMap.delete("a1");
+    });
+    withBrowser(p.browser, () => p.bMap.set("a1", { ...get(p.bMap), status: "dismissed" }));
+    exchange(p);
+
+    expect(p.sMap.has("a1")).toBe(false);
+    expect(p.bMap.has("a1")).toBe(false);
+    p.detach();
+  });
+
   it("a user's content edit survives a concurrent held-in-Solo stamp, and keeps it", () => {
     const p = makePair(
       serverWins,
@@ -320,6 +334,17 @@ describe("mergePatch", () => {
   it("never merges rev", () => {
     expect(mergePatch(base, { ...base, rev: 5 }, { ...base, rev: 9 }, server).size).toBe(0);
   });
+
+  it("does not count a sanitize migration both sides carry as a governing change", () => {
+    // A legacy record with no `audience`: every sanitized write adds one, so a
+    // plain re-anchor must not beat a concurrent Dismiss on that alone.
+    const legacy = { ...base, audience: undefined };
+    const w = { ...legacy, audience: "outbound", range: { from: 4, to: 9 } };
+    const l = { ...legacy, audience: "outbound", status: "dismissed" };
+    expect(Object.fromEntries(mergePatch(legacy, w, l, { loserIsBrowser: true }))).toEqual({
+      status: "dismissed",
+    });
+  });
 });
 
 describe("write arbiter wired into attachObservers", () => {
@@ -408,6 +433,39 @@ describe("write arbiter wired into attachObservers", () => {
     expect(s.status).toBe("accepted");
     expect(s.range).toEqual({ from: 4, to: 9 });
     browser.destroy();
+  });
+
+  it("keeps a head's attribution across a re-attach when a lost write was recorded after it", () => {
+    server.clientID = 5000;
+    const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(server, () => sMap.set("a1", claudeSuggestion()));
+    const loser = new Y.Doc();
+    loser.clientID = 1000;
+    const late = new Y.Doc();
+    late.clientID = 9000;
+    push(server, loser, connection);
+    push(server, late, connection);
+    const lMap = loser.getMap(Y_MAP_ANNOTATIONS);
+    const tMap = late.getMap(Y_MAP_ANNOTATIONS);
+
+    // The server and one browser make the SAME re-anchor; the browser's loses
+    // and the merge is empty, so its lost item is the last history entry.
+    const moved = { ...(sMap.get("a1") as Rec), range: { from: 4, to: 9 }, rev: 2 };
+    withMcp(server, () => sMap.set("a1", moved));
+    withBrowser(loser, () => lMap.set("a1", { ...moved }));
+    push(loser, server, connection);
+    attachObservers("arbiter-events-doc", server);
+
+    // A browser that never saw the re-anchor wins by clientID; the server's
+    // re-anchor must still be merged back under its own origin.
+    withBrowser(late, () => tMap.set("a1", { ...(tMap.get("a1") as Rec), status: "accepted" }));
+    push(late, server, connection);
+
+    const s = sMap.get("a1") as Rec;
+    expect(s.status).toBe("accepted");
+    expect(s.range).toEqual({ from: 4, to: 9 });
+    loser.destroy();
+    late.destroy();
   });
 });
 

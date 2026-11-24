@@ -211,10 +211,6 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return ka.every((k) => deepEqual((a as Rec)[k], (b as Rec)[k]));
 }
 
-function groupChanged(fields: readonly string[], base: Rec, side: Rec): boolean {
-  return fields.some((f) => !deepEqual(base[f], side[f]));
-}
-
 /**
  * Did this write accept a proposal? Only the browser's Accept writes the
  * proposal into the document (Claude's resolve never touches content), so when
@@ -245,24 +241,28 @@ export function mergePatch(
     for (const f of fields) if (!deepEqual(w[f], l[f])) patch.set(f, l[f]);
   };
 
-  const govL = groupChanged(DECISION, base, l) || groupChanged(IDENTITY, base, l);
-  const govW = groupChanged(DECISION, base, w) || groupChanged(IDENTITY, base, w);
+  // A field both sides set to the SAME value is no side's change: two
+  // Dismisses, or the sanitize migration of a legacy record's
+  // `audience`/`type` (and a legacy `suggestion`'s content) that every
+  // sanitized write carries. Counted as a change, that migration made a plain
+  // re-anchor look like a governing write and let it beat a concurrent
+  // Dismiss by clientID — so each test below asks whether a side changed a
+  // field the OTHER side did not also change to the same value.
+  const changedAlone = (fields: readonly string[], side: Rec, other: Rec) =>
+    fields.some((f) => !deepEqual(base[f], side[f]) && !deepEqual(side[f], other[f]));
+  const govL = changedAlone(DECISION, l, w) || changedAlone(IDENTITY, l, w);
+  const govW = changedAlone(DECISION, w, l) || changedAlone(IDENTITY, w, l);
   const loserApplied = opts.loserIsBrowser && appliedText(base, l) && !appliedText(base, w);
-  // Both sides made the SAME governing change (two Dismisses, or the same
-  // sanitize migration of a legacy record's `audience`/`type` that every
-  // sanitized write carries): no decision conflicts, so the content merges as
-  // though neither had decided rather than going wholesale to the Yjs winner.
-  const sameGov = govL && govW && [...DECISION, ...IDENTITY].every((f) => deepEqual(w[f], l[f]));
-  if (!sameGov && govL && (!govW || loserApplied)) {
+  if (govL && (!govW || loserApplied)) {
     take(DECISION);
     take(IDENTITY);
     take(CONTENT);
-  } else if (sameGov || (!govL && !govW)) {
-    if (groupChanged(CONTENT, base, l) && !groupChanged(CONTENT, base, w)) take(CONTENT);
+  } else if (!govL && !govW) {
+    if (changedAlone(CONTENT, l, w) && !changedAlone(CONTENT, w, l)) take(CONTENT);
   }
   // Otherwise the winner keeps all three groups.
 
-  if (groupChanged(ANCHOR, base, l) && !groupChanged(ANCHOR, base, w)) take(ANCHOR);
+  if (changedAlone(ANCHOR, l, w) && !changedAlone(ANCHOR, w, l)) take(ANCHOR);
 
   const singles = new Set([...Object.keys(base), ...Object.keys(w), ...Object.keys(l)]);
   for (const f of singles) {
@@ -335,9 +335,11 @@ export function makeAnnotationWriteArbiter({
 
   for (const [key, head] of heads) {
     const id = lastIdString(head);
-    const latest = hist.get(key)?.at(-1);
     // Already recorded by an earlier attach to this doc: keep its attribution.
-    if (latest && latest.id === id && latest.deleted === head.deleted) continue;
+    // Searched, not read off the last entry: a transaction's lost remote write
+    // is recorded after the head that beat it, so the head is not always last,
+    // and re-recording it as `unknown` would leave its next conflict unarbitrated.
+    if (hist.get(key)?.some((e) => e.id === id && e.deleted === head.deleted)) continue;
     push(key, {
       id,
       deleted: head.deleted,
@@ -355,8 +357,22 @@ export function makeAnnotationWriteArbiter({
    */
   const recordTxn = (key: string, txn: Y.Transaction, items: Y.Item[], writer: WriterKind) => {
     if (items.length > 0) {
-      for (const item of items) {
+      // In write order: `newItemsByKey` collects each client's items newest first.
+      const ordered = [...items].sort(
+        (a, b) => a.id.client - b.id.client || a.id.clock - b.id.clock,
+      );
+      for (const item of ordered) {
         push(key, { id: lastIdString(item), deleted: false, value: itemValue(item), writer });
+      }
+      // A key set and then deleted in this same transaction ends deleted: record
+      // the delete too, or a later remote `set` written without seeing it is
+      // merged as an ordinary conflict instead of losing to the delete.
+      let end: Y.Item | null = heads.get(key) ?? null;
+      while (end && end.id.clock >= (txn.afterState.get(end.id.client) ?? 0)) {
+        end = end.left as Y.Item | null;
+      }
+      if (end && items.includes(end) && Y.isDeleted(txn.deleteSet, end.id)) {
+        push(key, { id: lastIdString(end), deleted: true, value: undefined, writer });
       }
       return;
     }
