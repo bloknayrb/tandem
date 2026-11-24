@@ -161,6 +161,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
   `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
   (the primary action keeps `palette-item-new-scratchpad`)
+- Document ownership (#2358 PR 5b, ownership design §10.2; nothing renders
+  while ownership ships dark, since a dark server publishes no owner fields):
+  `tab-owner-badge` (inside a tab pill, shown only when it says something;
+  `data-stale` / `data-hint` carry the published state), its popover
+  `tab-owner-menu`, and in it `tab-owner-release`, `tab-owner-assign-{*}`
+  (keyed by the session's label), `tab-owner-start` and `tab-owner-error`
 
 ### Saved sessions (file-open dialog)
 - `sessions-section`, `sessions-toggle` (the disclosure),
@@ -271,6 +277,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `chat-claude-code-offer-dismiss` ("Not now", until the next server launch); only when the
   launcher has no Claude Code setup and nothing is pushed to, on an empty chat or a message waiting
   past the stall threshold
+- `chat-owner-line` — who answers a message sent now (#2358 PR 5b, ownership
+  design §10.2; `data-kind` is `to` or `none`), with `chat-owner-line-action`
+  (Start or Open Settings, `data-remedy`) when no AI will answer; nothing while
+  ownership ships dark
 
 ### Banners
 - `banner-stack` — the measured wrapper around the five top-of-shell banners

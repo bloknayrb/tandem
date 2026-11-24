@@ -293,6 +293,28 @@ pub(crate) struct TabContextMenuRequest {
     can_toggle_source_view: bool,
     /// Selects the fixed return-to-editor label.
     source_view_active: bool,
+    /// #2358 PR 5b (ownership design §10.2): the Release leaf is present. The
+    /// webview sets it only while the document's entry carries owner fields
+    /// and Release would change something, so a dark build never shows it.
+    /// `default` so a webview that predates the field still opens the menu.
+    #[serde(default)]
+    owner_release: bool,
+    /// Selects Release's fixed "back to Tandem's Claude" label.
+    #[serde(default)]
+    owner_release_to_tandem: bool,
+    /// The Assign leaf is present; it opens the owner badge's popover.
+    #[serde(default)]
+    owner_assign: bool,
+}
+
+/// Release's fixed labels: where the document goes (ownership design §10.2).
+/// The popover carries the longer "unassigned" sentence.
+fn owner_release_label(to_tandem: bool) -> &'static str {
+    if to_tandem {
+        "Release — Back to Tandem's Claude"
+    } else {
+        "Release — Unassigned"
+    }
 }
 
 /// OS-appropriate label for the reveal-in-file-manager item. Mirrors the
@@ -306,7 +328,7 @@ fn reveal_in_file_manager_label(target_os: &str) -> &'static str {
 }
 
 fn build_tab_context_menu_spec(req: &TabContextMenuRequest, target_os: &str) -> Vec<CtxItem> {
-    vec![
+    let mut spec = vec![
         CtxItem::Custom("ctx:tab:close", "Close", true),
         CtxItem::Custom(
             "ctx:tab:closeLeft",
@@ -347,7 +369,25 @@ fn build_tab_context_menu_spec(req: &TabContextMenuRequest, target_os: &str) -> 
             reveal_in_file_manager_label(target_os),
             req.has_path,
         ),
-    ]
+    ];
+    // #2358 PR 5b: the ownership leaves are OMITTED, not disabled, when absent
+    // (ownership design §10.2), and their separator goes with them.
+    let mut owner: Vec<CtxItem> = Vec::new();
+    if req.owner_release {
+        owner.push(CtxItem::Custom(
+            "ctx:tab:release",
+            owner_release_label(req.owner_release_to_tandem),
+            true,
+        ));
+    }
+    if req.owner_assign {
+        owner.push(CtxItem::Custom("ctx:tab:assign", "Assign…", true));
+    }
+    if !owner.is_empty() {
+        spec.push(CtxItem::Separator);
+        spec.extend(owner);
+    }
+    spec
 }
 
 #[tauri::command]
@@ -704,7 +744,66 @@ mod tab_context_menu_tests {
             has_path,
             can_toggle_source_view: true,
             source_view_active: false,
+            owner_release: false,
+            owner_release_to_tandem: false,
+            owner_assign: false,
         }
+    }
+
+    fn custom_ids(spec: &[CtxItem]) -> Vec<&'static str> {
+        spec.iter()
+            .filter_map(|i| match i {
+                CtxItem::Custom(id, _, _) => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn label_of(spec: &[CtxItem], id: &str) -> Option<&'static str> {
+        spec.iter().find_map(|i| match i {
+            CtxItem::Custom(item_id, label, _) if *item_id == id => Some(*label),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn ownership_leaves_are_omitted_without_owner_fields() {
+        // #2358 PR 5b: a dark build sends none of the three, so neither leaf
+        // nor a trailing separator appears.
+        let spec = build_tab_context_menu_spec(&req(true, true, true), "linux");
+        let ids = custom_ids(&spec);
+        assert!(!ids.contains(&"ctx:tab:release"));
+        assert!(!ids.contains(&"ctx:tab:assign"));
+        assert!(!matches!(spec.last(), Some(CtxItem::Separator)));
+    }
+
+    #[test]
+    fn ownership_leaves_follow_their_gates() {
+        let mut r = req(true, true, true);
+        r.owner_release = true;
+        r.owner_release_to_tandem = true;
+        r.owner_assign = true;
+        let spec = build_tab_context_menu_spec(&r, "linux");
+        let ids = custom_ids(&spec);
+        assert_eq!(&ids[ids.len() - 2..], &["ctx:tab:release", "ctx:tab:assign"]);
+        assert_eq!(
+            label_of(&spec, "ctx:tab:release"),
+            Some("Release — Back to Tandem's Claude")
+        );
+        assert_eq!(enabled_of(&spec, "ctx:tab:assign"), Some(true));
+
+        r.owner_release_to_tandem = false;
+        r.owner_assign = false;
+        let spec = build_tab_context_menu_spec(&r, "linux");
+        assert_eq!(label_of(&spec, "ctx:tab:release"), Some("Release — Unassigned"));
+        assert!(!custom_ids(&spec).contains(&"ctx:tab:assign"));
+
+        r.owner_release = false;
+        r.owner_assign = true;
+        let spec = build_tab_context_menu_spec(&r, "linux");
+        let ids = custom_ids(&spec);
+        assert!(!ids.contains(&"ctx:tab:release"));
+        assert_eq!(ids.last(), Some(&"ctx:tab:assign"));
     }
 
     fn enabled_of(spec: &[CtxItem], id: &str) -> Option<bool> {
@@ -1099,7 +1198,7 @@ mod context_menu_id_space_tests {
         }
 
         for target_os in ["macos", "windows", "linux"] {
-            for flags in 0u16..1024 {
+            for flags in 0u16..8192 {
                 walk(
                     &build_tab_context_menu_spec(
                         &TabContextMenuRequest {
@@ -1113,6 +1212,9 @@ mod context_menu_id_space_tests {
                             has_path: flags & 128 != 0,
                             can_toggle_source_view: flags & 256 != 0,
                             source_view_active: flags & 512 != 0,
+                            owner_release: flags & 1024 != 0,
+                            owner_release_to_tandem: flags & 2048 != 0,
+                            owner_assign: flags & 4096 != 0,
                         },
                         target_os,
                     ),

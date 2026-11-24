@@ -53,6 +53,9 @@ function renderChat(messages: ChatMessage[]) {
       },
       localPeriod: true,
       noticeAnnouncement: "",
+      ownerLine: null,
+      ownerLineTakeBack: null,
+      onOwnerLineRemedy: () => {},
     },
   });
 }

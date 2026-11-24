@@ -84,6 +84,9 @@ function renderChat(
       localPickup: over.localPickup === undefined ? inputs() : over.localPickup,
       localPeriod: over.localPeriod ?? false,
       noticeAnnouncement: over.noticeAnnouncement ?? "",
+      ownerLine: null,
+      ownerLineTakeBack: null,
+      onOwnerLineRemedy: () => {},
     },
   });
 }
@@ -183,6 +186,9 @@ describe("notice rows (R6)", () => {
   it("the live region announces what App passes, in its own region", () => {
     const { container } = renderChat([], {
       noticeAnnouncement: "Your local model produced no reply.",
+      ownerLine: null,
+      ownerLineTakeBack: null,
+      onOwnerLineRemedy: () => {},
     });
     const region = container.querySelector<HTMLElement>("[data-testid='chat-notice-live']");
     expect(region?.getAttribute("role")).toBe("status");
