@@ -4153,8 +4153,9 @@ export interface ToolOwnerLabel extends HolderView {
 }
 
 /**
- * The owner label `tandem_getAnnotations` and `tandem_listDocuments` carry for
- * `documentId` (#2358 PR 5c; ownership design §5.7), or undefined while
+ * The owner label `tandem_getAnnotations`, `tandem_listDocuments` and
+ * `tandem_switchDocument` carry for `documentId` (#2358 PR 5c; ownership
+ * design §5.7), or undefined while
  * ownership is off, so a dark tool output gains no key. Null when nobody holds
  * the document (an entry whose record is gone reads as unowned, `readEntry`'s
  * rule, as the published fields do). `you` is the holder's owner id compared

@@ -269,9 +269,11 @@ export const statusOwnershipShape = {
  * `tandem_listDocuments` (#2358 PR 5c; ownership design §5.7): the editor's
  * published `owner` (label, display kind, kind) plus `you`. Spread into those
  * tools' schemas only on a server with ownership on, so a dark server's
- * `tools/list` carries no `owner` field. Optional, so a server registered
- * flag-on and called after a test turns the flag off still answers within its
- * schema; flag on it is always sent, null when nobody holds the document.
+ * `tools/list` carries no `owner` field (`tandem_switchDocument` sends the
+ * same label in its text result and declares no schema). Optional, so a
+ * server registered flag-on and called after a test turns the flag off still
+ * answers within its schema; flag on it is always sent, null when nobody
+ * holds the document.
  */
 const OwnerLabelSchema = z
   .object({
@@ -280,13 +282,15 @@ const OwnerLabelSchema = z
     kind: z
       .enum(["default", "claimed", "opened", "assigned"])
       .describe(
-        "How it holds the document: default (Tandem's Claude, by the default rule), claimed (picked up by a poll, a write or a chat reply while nobody held it), opened (by tandem_open), assigned (by the user)",
+        "How it holds the document: default (Tandem's Claude, by the default rule or its own pickup), claimed (another session picked it up by a poll, a write or a chat reply or post while nobody held it), opened (by tandem_open), assigned (by the user)",
       ),
     you: z.boolean().describe("Whether the holder is this session"),
   })
   .nullable()
   .optional()
-  .describe("Which session holds this document; null when nobody does");
+  .describe(
+    "Which session holds this document; null when nobody does (a session the user released it from still needs tandem_open before writing)",
+  );
 
 /** What `tandem_getAnnotations` adds with ownership on (#2358 PR 5c). */
 export const getAnnotationsOwnershipShape = { owner: OwnerLabelSchema };

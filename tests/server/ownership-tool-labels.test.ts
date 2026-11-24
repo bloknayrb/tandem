@@ -27,6 +27,7 @@ import { resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
+  controlDocumentOwner,
   getDocOwner,
   getOwnerRecord,
   noteTransportRegistered,
@@ -314,6 +315,34 @@ describe("flag on: tandem_getAnnotations labels the document it read", () => {
     expect((structured.owner as { you: boolean }).you).toBe(true);
     expect(raw).not.toContain("a private note body");
     for (const id of [A, B, C]) expect(raw).not.toContain(id);
+  });
+});
+
+describe("flag on: the label after the user's Assign and Release (#2358 PR 5a)", () => {
+  it("Assign: the new holder as `assigned`, `you` for it alone; Release: null for everyone, the old holder still blocked", async () => {
+    await buildWorld("1");
+    expect(await controlDocumentOwner(ids.a, "assign", labelOf(B), () => true)).toBe("changed");
+    const assigned = { label: labelOf(B), displayKind: "terminal", kind: "assigned" };
+    expect((await listAs(A)).get(ids.a)?.owner).toEqual({ ...assigned, you: false });
+    expect((await annotationsAs(B, ids.a)).owner).toEqual({ ...assigned, you: true });
+
+    // Tandem's Claude is not present here, so the default rule leaves it
+    // unowned, with a blocking `released` loss on B (ownership design §5.3).
+    expect(await controlDocumentOwner(ids.a, "release", undefined, () => true)).toBe("changed");
+    expect(getDocOwner(ids.a)).toBeUndefined();
+    expect((await listAs(A)).get(ids.a)?.owner).toBeNull();
+    expect((await annotationsAs(B, ids.a)).owner).toBeNull();
+    // `null` does not mean B may write: its write is still refused as lost,
+    // which is what the schema's description warns of.
+    callingAs = B;
+    const write = (await client.callTool({
+      name: "tandem_edit",
+      arguments: { documentId: ids.a, from: 0, to: 5, newText: "Howdy" },
+    })) as { content: Array<{ type: string; text?: string }> };
+    const text = write.content.find((c) => c.type === "text")?.text ?? "";
+    expect(text).toContain("NOT_DOC_OWNER");
+    expect(text).toContain("released");
+    expect(getDocOwner(ids.a)).toBeUndefined();
   });
 });
 

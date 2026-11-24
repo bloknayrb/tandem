@@ -523,8 +523,9 @@ export function callerOwnerInfo(
 }
 
 /**
- * The owner label `tandem_getAnnotations` and `tandem_listDocuments` carry for
- * a document (#2358 PR 5c; ownership design §5.7): `{label, displayKind, kind,
+ * The owner label `tandem_getAnnotations`, `tandem_listDocuments` and
+ * `tandem_switchDocument` carry for a document (#2358 PR 5c; ownership design
+ * §5.7): `{label, displayKind, kind,
  * you}`, or null when nobody holds it. Undefined while ownership is off, so a
  * dark output gains no key. `you` is decided from the caller's owner id alone
  * (CLAUDE.md: a tool reads its caller from the `caller` argument).
