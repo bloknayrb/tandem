@@ -37,8 +37,8 @@ _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
 while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
 # The worktree test reads the path BELOW the project dir when the file is inside
 # it, so a session whose project dir is itself a worktree under
-# .claude/worktrees/ still scans its own files (the scanner then runs from that
-# worktree, the right root). Matched on the whole path, that session's every
+# .claude/worktrees/ still scans its own files (the scanner is addressed from
+# that worktree below, the right root). Matched on the whole path, that session's every
 # edit was skipped, and this hook's own "inside the project" test failed in it.
 # A drive path is compared without regard to case, as in the inside-the-project
 # test below: otherwise C:/x against a project dir of c:/x is not stripped, and
@@ -77,7 +77,11 @@ RC=0
 # ignores stdout — so the BLOCKED framing below MUST also go to stderr,
 # otherwise Claude self-correct (continueOnBlock) has only the generic message
 # and not the actionable file:line details.
-npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" || RC=$?
+# The scanner is addressed from the project dir when there is one, never by a
+# path relative to the hook's working directory: a session that has cd'd into a
+# subfolder would otherwise make tsx exit 1 on a missing script, read here as a
+# violation. The scanner takes its scan root from its own location.
+npx tsx "${_PROJECT_DIR:-.}/scripts/check-semantic-tokens.ts" "$FILE_PATH" || RC=$?
 if [[ $RC -eq 1 ]]; then
   echo "BLOCKED: Raw hex/rgba color tokens in client code — use semantic --tandem-* CSS variables." >&2
   echo "Fix: Replace raw color values with var(--tandem-*) tokens or import from src/client/utils/colors.ts." >&2
