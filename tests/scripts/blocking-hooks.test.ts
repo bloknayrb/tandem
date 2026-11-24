@@ -137,6 +137,18 @@ describe("check-token-violation.sh worktree guard", () => {
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
 
+  bashOnly(
+    "still scans a worktree project's own drive-path file when only the case differs",
+    () => {
+      const run = runBashHook(
+        "check-token-violation.sh",
+        editEvent("C:\\Dev\\Tandem\\.claude\\worktrees\\agent-1\\src\\client\\does-not-exist.ts"),
+        { CLAUDE_PROJECT_DIR: "c:\\dev\\tandem\\.claude\\worktrees\\agent-1" },
+      );
+      expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
+    },
+  );
+
   bashOnly("skips a file in a sibling worktree, outside the project directory", () => {
     const run = runBashHook(
       "check-token-violation.sh",

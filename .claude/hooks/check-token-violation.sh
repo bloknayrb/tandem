@@ -23,8 +23,8 @@ FILE_PATH=$(printf '%s' "$INPUT" | node -e "
 FILE_PATH="${FILE_PATH//\\//}"
 
 # Worktree guard, the same one typecheck-on-edit.sh carries. The scanner below
-# runs from the main checkout and exempts files by their path relative to ITS
-# root (SKIP_FILE_RELS in scripts/check-semantic-tokens.ts), so an exempt file
+# runs from the session's project checkout and exempts files by their path
+# relative to ITS root (SKIP_FILE_RELS in scripts/check-semantic-tokens.ts), so an exempt file
 # edited in another worktree does not match the list and is reported as a
 # violation. Skip; the worktree's own pre-commit (lint-staged) runs the scanner
 # with the right root.
@@ -39,9 +39,16 @@ FILE_PATH="${FILE_PATH//\\//}"
 # (.../.claude/worktrees/x) still scans its own files with its own root.
 _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
 while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
+# A drive path is compared without regard to case, as in the containment test
+# below, so a worktree session on Windows whose tool input differs from the
+# project dir only by case still has its own files scanned.
 _REL_PATH="$FILE_PATH"
-if [[ -n "$_PROJECT_DIR" && "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
-  _REL_PATH="${FILE_PATH#"$_PROJECT_DIR"}"
+if [[ -n "$_PROJECT_DIR" ]]; then
+  if [[ "$FILE_PATH" == [A-Za-z]:/* ]]; then shopt -s nocasematch; fi
+  if [[ "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
+    _REL_PATH="${FILE_PATH:${#_PROJECT_DIR}}"
+  fi
+  shopt -u nocasematch
 fi
 case "$_REL_PATH" in */.claude/worktrees/*) exit 0 ;; esac
 # Known limits, all of which skip the advisory scan rather than run it wrongly:
