@@ -239,7 +239,13 @@ describe("the control line under each unanswered message", () => {
   });
 
   it("never on Claude's rows, even under a key with facts", () => {
-    const claude: ChatMessage = { id: "c1", author: "claude", text: "hi", timestamp: T0 };
+    const claude: ChatMessage = {
+      id: "c1",
+      author: "claude",
+      text: "hi",
+      timestamp: T0,
+      read: true,
+    };
     const { queryByTestId } = render(ChatPanel, {
       props: chatProps([claude], new Map([["c1", facts()]]), SUMMARY),
     });
