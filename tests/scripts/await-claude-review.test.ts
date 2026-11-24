@@ -91,12 +91,25 @@ describe("gate integrity", () => {
             match: /^api --paginate repos\/o\/r\/pulls\/12\/files/,
             out: files.map((f) => JSON.stringify(f)).join("\n"),
           },
+          { match: /^api repos\/o\/r\/pulls\/12 --jq/, out: { n: files.length } },
         ]);
         const v = await run(PR, { gh, sleep: async () => {}, log: () => {} });
         expect(v.exit).toBe(2);
       }
     }
     expect(touchesReview([".github/workflows/ci.yml", "scripts/ci/other.mjs"])).toEqual([]);
+  });
+
+  it("refuses to judge a files list shorter than the PR (the REST list stops at 3000)", async () => {
+    const gh = fakeGh([
+      { match: /^pr view 12 /, out: { headRefName: "fix/x", headRefOid: "abc" } },
+      { match: /^repo view /, out: { nameWithOwner: "o/r", defaultBranchRef: { name: "master" } } },
+      { match: /pulls\/12\/files/, out: JSON.stringify({ filename: "src/a.ts" }) },
+      { match: /^api repos\/o\/r\/pulls\/12 --jq/, out: { n: 3001 } },
+    ]);
+    await expect(run(PR, { gh, sleep: async () => {}, log: () => {} })).rejects.toThrow(
+      /listed 1 of the PR's 3001 changed files/,
+    );
   });
 
   it("carries post.mjs's header, incomplete mark and inline-count pattern, and imports nothing local", () => {
@@ -276,6 +289,7 @@ const base = [
   { match: /^pr view 12 /, out: { headRefName: "fix/x", headRefOid: "abc1234ffff" } },
   { match: /^repo view /, out: { nameWithOwner: "o/r", defaultBranchRef: { name: "master" } } },
   { match: /pulls\/12\/files/, out: JSON.stringify({ filename: "src/a.ts", previous: null }) },
+  { match: /^api repos\/o\/r\/pulls\/12 --jq/, out: { n: 1 } },
 ];
 const lines = (...objs: unknown[]) => objs.map((o) => JSON.stringify(o)).join("\n");
 

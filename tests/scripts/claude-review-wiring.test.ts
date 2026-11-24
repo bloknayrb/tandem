@@ -274,6 +274,20 @@ describe("workspace", () => {
     expect(prep.env?.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
   });
 
+  it("lists every path git shows as binary, for the model to Read, under pipefail", () => {
+    const prep = stepNamed("Prepare review inputs").run ?? "";
+    expect(prep.startsWith("set -o pipefail\n")).toBe(true);
+    expect(prep).toContain(
+      '--no-renames --numstat -z --merge-base "origin/$BASE_REF" "$HEAD_SHA" \\\n' +
+        "  | tr '\\0' '\\n' | awk -F'\\t' '$1 == \"-\" && $2 == \"-\" { print $3 }' > inputs/binary-paths.txt",
+    );
+    expect(prep).toContain(
+      "cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/",
+    );
+    const prompt = readFileSync(path.join(ROOT, ".github/claude-review/prompt.md"), "utf8");
+    expect(prompt).toContain("`.review-input/binary-paths.txt`");
+  });
+
   it("keeps the step order the controls depend on", () => {
     const order = [
       "Re-check the PR",

@@ -9,9 +9,10 @@
 // sparse checkout of master that has no node_modules.
 //
 // It also builds the exact item post.mjs will send (and the body-only form for
-// a 422 retry) and scans those bytes too, because sanitising rewrites the
-// model's text: the scan has to see what is actually posted, not only what the
-// model wrote. post.mjs sends inputs/item.json as is.
+// a 422 retry) and scans those bytes too, because building rewrites the
+// model's text (carriage returns stripped, lines wrapped, fences added): the
+// scan has to see what is actually posted, not only what the model wrote.
+// post.mjs sends inputs/item.json as is.
 //
 // Usage: node classify.mjs <stream.jsonl> <inputs-dir>
 // Env:   CLAUDE_CODE_OAUTH_TOKEN, REVIEW_OUTCOME (steps.review.outcome), RUN_ID, RUN_ATTEMPT

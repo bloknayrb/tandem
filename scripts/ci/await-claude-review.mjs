@@ -204,13 +204,24 @@ export async function run(pr, deps = {}) {
   // renaming the workflow away does not escape the check. This reads the PR's
   // files now, not at the reviewed SHA: a PR that edits the workflow, gets a
   // green run, then reverts the edit is the push-access bound, not this check.
-  const changed = ghLines(gh, [
+  const fileEntries = ghLines(gh, [
     "api",
     "--paginate",
-    `repos/${repo}/pulls/${pr}/files`,
+    `repos/${repo}/pulls/${pr}/files?per_page=100`,
     "--jq",
     ".[] | {filename: .filename, previous: .previous_filename}",
-  ]).flatMap((f) => [f.filename, f.previous].filter(Boolean));
+  ]);
+  // The REST list also stops, at 3000 files. Refuse to judge a list that is
+  // shorter than the PR, rather than miss a change past the cut.
+  const total = Number(
+    ghJson(gh, ["api", `repos/${repo}/pulls/${pr}`, "--jq", "{n: .changed_files}"]).n,
+  );
+  if (!Number.isInteger(total) || fileEntries.length < total) {
+    throw new Error(
+      `listed ${fileEntries.length} of the PR's ${total} changed files; cannot check them all`,
+    );
+  }
+  const changed = fileEntries.flatMap((f) => [f.filename, f.previous].filter(Boolean));
   const touched = touchesReview(changed);
   if (touched.length) {
     return {

@@ -360,6 +360,25 @@ describe("post: everything untrusted is fenced", () => {
     expect(wrap("x".repeat(15), 7)).toBe("xxxxxxx\nxxxxxxx\nx");
   });
 
+  it("bounds the fence by the wrapped text, so a body of backticks cannot outgrow GitHub's limit", () => {
+    const ticks = "`".repeat(19_000);
+    expect(fence(ticks).split("\n")[0]).toBe(`${"`".repeat(101)}text`);
+    const item = buildItem({
+      outcome: { outcome: "posted" },
+      findings: {
+        summary: ticks,
+        findings: [{ path: "z", line: 1, severity: "nit", body: ticks }],
+      },
+      diffText: "",
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+    });
+    expect(item.body.length).toBeLessThanOrEqual(BODY_CAP);
+    expect(item.bodyOnlyBody?.length).toBeLessThanOrEqual(BODY_CAP);
+  });
+
   it("drops carriage returns, so every fenced line ends where the fence counting assumed", () => {
     expect(fence("a\rb\r\nc")).not.toContain("\r");
   });
@@ -499,7 +518,7 @@ describe("classify: prepare scans the bytes that are posted", () => {
       token: TOKEN,
     });
 
-  it("withholds a token the model split with constructs that sanitising removes", () => {
+  it("does not rejoin a token split around Markdown constructs: fenced text is posted as written", () => {
     const a = TOKEN.slice(0, 30);
     const b = TOKEN.slice(30);
     for (const sep of ["<!---->", "![](x)", "<!-- -->"]) {

@@ -71,10 +71,13 @@ export function wrap(text, width = WRAP) {
  * an issue reference, an image, HTML or an entity/escape.
  */
 export function fence(text) {
-  const clean = String(text).replace(/\r/g, "");
-  const longest = Math.max(0, ...[...clean.matchAll(/`+/g)].map((m) => m[0].length));
+  // Measured after wrapping, which splits any run longer than a line: the
+  // fence is then at most WRAP + 1 long, so a body of backticks cannot grow
+  // the post past GitHub's size limit.
+  const wrapped = wrap(String(text).replace(/\r/g, ""));
+  const longest = Math.max(0, ...[...wrapped.matchAll(/`+/g)].map((m) => m[0].length));
   const f = "`".repeat(Math.max(3, longest + 1));
-  return `${f}text\n${wrap(clean)}\n${f}`;
+  return `${f}text\n${wrapped}\n${f}`;
 }
 
 const findingText = (f) => `[${f.severity}] ${f.path}:${f.line}\n${f.body}`;
