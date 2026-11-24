@@ -48,7 +48,8 @@
  *
  * - The governing groups — the DECISION (`status`, `resolvedBy`,
  *   `acceptedReplyId`, `priorSuggestedText`) and the IDENTITY (`type`,
- *   `audience`, `promotedFrom`) — decide who owns the CONTENT (`content`,
+ *   `audience`, `promotedFrom`, `author`, `color`) — decide who owns the
+ *   CONTENT (`content`,
  *   `suggestedText`, `editedAt`). If exactly one side changed a governing
  *   group, that side's governing groups AND content win: an Accept applied the
  *   text the user saw, so a concurrent rewrite of the proposal must not survive
@@ -66,7 +67,9 @@
  *   Every browser writer reads the record before writing it and returns when it
  *   is absent, so no browser re-creates a key it has seen deleted, and a remote
  *   `set` landing on a key the server already deleted can only be one that was
- *   written without seeing the delete.
+ *   written without seeing the delete. Nothing enforces that at runtime;
+ *   `tests/server/annotation-write-arbiter-client-writers.test.ts` pins it over
+ *   `src/client`.
  * - `rev` is not merged; the repair writes one past the highest of the two.
  *
  * ## The repair's origin
@@ -83,7 +86,16 @@
  * concurrent remote write displaced it: it was observed on arrival and its
  * events already fired, so it is restored under `withInternal` (with a snapshot
  * queued, as for every repair under an origin durable sync skips) rather than
- * firing them twice. A loser whose origin is unknown (written before this
+ * firing them twice — unless the displacing write made a DECISION of its own
+ * that the restore undoes (window A Accepts, window B Dismisses and wins). B's
+ * decision was already pushed, so that restore is re-applied with `withBrowser`
+ * and the corrective decision event fires; otherwise Claude's last pushed
+ * decision would contradict what `tandem_checkInbox` reads.
+ *
+ * Attribution is per remote TRANSACTION, not per item: a server write an
+ * observer nests inside a remote transaction (the held-in-solo stamp, the
+ * key-identity repair) completes that browser write, so when the pair is
+ * displaced, the loser is the browser's write. A loser whose origin is unknown (written before this
  * observer first attached to the doc, or untagged) is left as Yjs resolved it,
  * with a warning.
  *
@@ -127,7 +139,7 @@ import { queueSnapshot } from "./sync.js";
 /** How many recent heads per key are kept to find a conflict's base. */
 export const HISTORY_PER_KEY = 16;
 
-/** Per-key head history, by document; survives a re-attach to the same doc. */
+/** Per-key head history, by document; survives a re-attach and is carried across a doc swap. */
 const historyByDoc = new WeakMap<Y.Doc, Map<string, HeadEntry[]>>();
 
 /**
@@ -160,13 +172,66 @@ interface HeadEntry {
   /** The record, when the head is live. Held by reference; records are never mutated in place. */
   value: unknown;
   writer: WriterKind;
+  /** The id of the head the writer saw (the item's `origin`), for a live entry. */
+  originId?: string | null;
+  /** Serial of the transaction that wrote this entry. */
+  txn?: number;
+  /**
+   * Serial of the REMOTE transaction this entry's transaction was nested in
+   * (opened by an observer of that remote transaction — the held-in-solo stamp,
+   * the key-identity repair), when it was.
+   */
+  nestedIn?: number;
 }
+
+/** Transaction serials, unique across docs and attaches. */
+let nextTxnSerial = 1;
 
 type Rec = Record<string, unknown>;
 
+/**
+ * Carry the per-key history to the replacement doc on a Hocuspocus swap
+ * (`onDocSwapped`), before the arbiter re-attaches to it. Item ids survive the
+ * swap — the new doc is built by applying the old one's state — so every entry
+ * still names the same item; without this, every head would reseed as
+ * `unknown` and the next conflict on it would be left as Yjs resolved it.
+ * Copied, never moved, like the alias ledger: an in-flight `loadAndMerge` can
+ * still hold the old doc.
+ */
+export function copyArbiterHistory(from: Y.Doc, to: Y.Doc): void {
+  const src = historyByDoc.get(from);
+  if (!src || src.size === 0) return;
+  const dst = historyByDoc.get(to) ?? new Map<string, HeadEntry[]>();
+  for (const [key, entries] of src) {
+    const later = dst.get(key) ?? [];
+    const merged = [
+      ...entries.filter((e) => !later.some((x) => x.id === e.id && x.deleted === e.deleted)),
+      ...later,
+    ];
+    dst.set(key, merged.slice(-HISTORY_PER_KEY));
+  }
+  historyByDoc.set(to, dst);
+}
+
+/** The recorded history for one key, oldest first. For the unit spec. */
+export function arbiterHistoryForTesting(
+  doc: Y.Doc,
+  key: string,
+): ReadonlyArray<{ id: string; deleted: boolean; writer: string }> {
+  return (historyByDoc.get(doc)?.get(key) ?? []).map(({ id, deleted, writer }) => ({
+    id,
+    deleted,
+    writer,
+  }));
+}
+
 /** Field groups. A field listed nowhere is its own group. */
 const DECISION = ["status", "resolvedBy", "acceptedReplyId", "priorSuggestedText"] as const;
-const IDENTITY = ["type", "audience", "promotedFrom"] as const;
+// `author` and `color` belong here, not on their own: promotion changes the
+// author (`import` -> `user`) and strips the color in the same write as the
+// type and audience, so merged apart they could pair a comment with a note's
+// color. Nothing writes either in place otherwise.
+const IDENTITY = ["type", "audience", "promotedFrom", "author", "color"] as const;
 const CONTENT = ["content", "suggestedText", "editedAt"] as const;
 const ANCHOR = [
   "range",
@@ -302,8 +367,9 @@ function itemValue(item: Y.Item): unknown {
 /**
  * Attach the arbiter to a document's annotations map. Returns the detach
  * function. Re-attached by `reattachObservers` after the Hocuspocus doc swap,
- * where the history restarts from the swapped doc's heads; a re-attach to the
- * SAME doc (the reload paths, Save-As promotion) keeps its history.
+ * whose history `onDocSwapped` has already carried over with
+ * {@link copyArbiterHistory}; a re-attach to the SAME doc (the reload paths,
+ * Save-As promotion) keeps its history.
  */
 export function makeAnnotationWriteArbiter({
   docName,
@@ -348,6 +414,62 @@ export function makeAnnotationWriteArbiter({
     });
   }
 
+  // ---- Transaction bookkeeping ----
+  //
+  // A transaction opened from an observer of another (the held-in-solo stamp,
+  // the key-identity repair) or from its `afterTransaction` (this module's
+  // repair) runs its function at once, but Yjs cleans it up — computing its
+  // `afterState` and calling its observers — only after the outer transaction's
+  // cleanup has finished. By then later transactions may have written too, so
+  // `afterState` does NOT bound a nested transaction's own items. Its true end
+  // is the state when the NEXT transaction began: a new transaction is opened
+  // only once the previous one's function has returned.
+  const serials = new WeakMap<Y.Transaction, number>();
+  const ends = new WeakMap<Y.Transaction, Map<number, number>>();
+  const nestedIn = new WeakMap<Y.Transaction, number>();
+  /** Transactions begun and not yet through `afterTransaction`, oldest first. */
+  const open: Y.Transaction[] = [];
+  const isArbitrated = (txn: Y.Transaction) => !txn.local && txn.origin != null;
+
+  const stateVector = (): Map<number, number> => {
+    const sv = new Map<number, number>();
+    doc.store.clients.forEach((structs, client) => {
+      const last = structs[structs.length - 1];
+      if (last) sv.set(client, last.id.clock + last.length);
+    });
+    return sv;
+  };
+
+  const onBegin = (txn: Y.Transaction): void => {
+    serials.set(txn, nextTxnSerial++);
+    if (open.length > 0) {
+      const sv = stateVector();
+      for (const t of open) if (!ends.has(t)) ends.set(t, sv);
+      // The innermost remote transaction still being cleaned up, if any: this
+      // one was opened by one of its observers.
+      for (let i = open.length - 1; i >= 0; i--) {
+        if (isArbitrated(open[i])) {
+          const s = serials.get(open[i]);
+          if (s !== undefined) nestedIn.set(txn, s);
+          break;
+        }
+      }
+    }
+    open.push(txn);
+  };
+
+  const onEnd = (txn: Y.Transaction): void => {
+    const i = open.indexOf(txn);
+    if (i >= 0) open.splice(i, 1);
+  };
+
+  /** The clock at which `txn`'s own writes by `client` end (exclusive). */
+  const endOf = (txn: Y.Transaction, client: number): number => {
+    const after = txn.afterState.get(client) ?? 0;
+    const end = ends.get(txn);
+    return end ? Math.min(after, end.get(client) ?? 0) : after;
+  };
+
   /**
    * Record what THIS transaction wrote to `key` — read from its own items, never
    * from the key's current head. Observers of a transaction run after any
@@ -356,23 +478,31 @@ export function makeAnnotationWriteArbiter({
    * and attributing it to this one would re-apply it under the wrong origin.
    */
   const recordTxn = (key: string, txn: Y.Transaction, items: Y.Item[], writer: WriterKind) => {
+    const tags = { txn: serials.get(txn), nestedIn: nestedIn.get(txn) };
     if (items.length > 0) {
       // In write order: `newItemsByKey` collects each client's items newest first.
       const ordered = [...items].sort(
         (a, b) => a.id.client - b.id.client || a.id.clock - b.id.clock,
       );
       for (const item of ordered) {
-        push(key, { id: lastIdString(item), deleted: false, value: itemValue(item), writer });
+        push(key, {
+          id: lastIdString(item),
+          deleted: false,
+          value: itemValue(item),
+          writer,
+          originId: item.origin ? idString(item.origin) : null,
+          ...tags,
+        });
       }
       // A key set and then deleted in this same transaction ends deleted: record
       // the delete too, or a later remote `set` written without seeing it is
       // merged as an ordinary conflict instead of losing to the delete.
       let end: Y.Item | null = heads.get(key) ?? null;
-      while (end && end.id.clock >= (txn.afterState.get(end.id.client) ?? 0)) {
+      while (end && end.id.clock >= endOf(txn, end.id.client)) {
         end = end.left as Y.Item | null;
       }
       if (end && items.includes(end) && Y.isDeleted(txn.deleteSet, end.id)) {
-        push(key, { id: lastIdString(end), deleted: true, value: undefined, writer });
+        push(key, { id: lastIdString(end), deleted: true, value: undefined, writer, ...tags });
       }
       return;
     }
@@ -380,7 +510,7 @@ export function makeAnnotationWriteArbiter({
     let it: Y.Item | null = heads.get(key) ?? null;
     for (let steps = 0; it && steps < 4 * HISTORY_PER_KEY; steps++) {
       if (Y.isDeleted(txn.deleteSet, it.id)) {
-        push(key, { id: lastIdString(it), deleted: true, value: undefined, writer });
+        push(key, { id: lastIdString(it), deleted: true, value: undefined, writer, ...tags });
         return;
       }
       it = it.left as Y.Item | null;
@@ -406,6 +536,29 @@ export function makeAnnotationWriteArbiter({
     return undefined;
   };
 
+  /**
+   * The write a live head entry stands for. A server write nested inside a
+   * remote transaction (the held-in-solo stamp under `mode-release`, the
+   * key-identity repair under `internal`) sits on top of that transaction's
+   * browser write and only completes it; the browser's write is what a later
+   * concurrent write displaces, so attribution walks past such entries to it.
+   * An entry nested in a remote transaction that wrote nothing to this key is
+   * its own write.
+   */
+  const attributed = (key: string, entry: HeadEntry): HeadEntry => {
+    const remote = entry.nestedIn;
+    if (remote === undefined) return entry;
+    let e = entry;
+    for (let steps = 0; e.originId && steps < HISTORY_PER_KEY; steps++) {
+      const prev = find(key, e.originId);
+      if (!prev) break;
+      if (prev.txn === remote) return prev;
+      if (prev.nestedIn !== remote) break;
+      e = prev;
+    }
+    return entry;
+  };
+
   /** Whether the latest history entry for `id` is its deletion. */
   const isDeletedBefore = (key: string, id: string): boolean => {
     const entries = hist.get(key) ?? [];
@@ -418,16 +571,21 @@ export function makeAnnotationWriteArbiter({
   /** Items integrated into the annotations map by this transaction, by key. */
   const newItemsByKey = (txn: Y.Transaction): Map<string, Y.Item[]> => {
     const out = new Map<string, Y.Item[]>();
-    txn.afterState.forEach((after, client) => {
+    txn.afterState.forEach((_, client) => {
       const before = txn.beforeState.get(client) ?? 0;
+      // Bounded by `endOf`, not `afterState`: for a transaction nested in
+      // another, `afterState` is taken at its own cleanup and also covers every
+      // write made after it (see the bookkeeping above).
+      const after = endOf(txn, client);
       if (after <= before) return;
       const structs = doc.store.clients.get(client);
       if (!structs) return;
       for (let i = structs.length - 1; i >= 0; i--) {
         const s = structs[i];
         if (s.id.clock + s.length <= before) break;
-        // Past this transaction's end: a write an observer nested inside it
-        // (or a repair queued from it), which its own transaction records.
+        // Past this transaction's end: a write made after it (one an observer
+        // nested inside it, or a repair queued from it), which its own
+        // transaction records.
         if (s.id.clock >= after) continue;
         if (!(s instanceof Y.Item)) continue;
         if (s.parent !== (map as unknown) || typeof s.parentSub !== "string") continue;
@@ -475,7 +633,7 @@ export function makeAnnotationWriteArbiter({
     // rather than read off the map: an earlier observer of this transaction may
     // already have nested a write of its own on top (the held-in-solo stamp).
     const before = (it: Y.Item) => it.id.clock < (txn.beforeState.get(it.id.client) ?? 0);
-    const atEnd = (it: Y.Item) => it.id.clock < (txn.afterState.get(it.id.client) ?? 0);
+    const atEnd = (it: Y.Item) => it.id.clock < endOf(txn, it.id.client);
     const walk = (keep: (it: Y.Item) => boolean): Y.Item | null => {
       let it: Y.Item | null = heads.get(key) ?? null;
       while (it && !keep(it)) it = it.left as Y.Item | null;
@@ -528,21 +686,43 @@ export function makeAnnotationWriteArbiter({
     if (!isRecord(base.value) || !isRecord(prior.value) || !isRecord(remoteValue)) return undefined;
 
     if (remoteWon) {
-      if (prior.writer === "unknown") {
+      // Attributed per remote transaction, not per head item: a server write
+      // nested on top of a browser write is restored with it, as that write.
+      const loser = attributed(key, prior);
+      if (loser.writer === "unknown") {
         console.warn(
           "[annotation-arbiter] %s: concurrent write lost by an unattributed writer; left as merged",
           docName,
         );
         return undefined;
       }
-      const loserIsBrowser = prior.writer === "remote" || prior.writer === BROWSER_ORIGIN;
+      const loserIsBrowser = loser.writer === "remote" || loser.writer === BROWSER_ORIGIN;
       const patch = mergePatch(base.value, remoteValue, prior.value, { loserIsBrowser });
       // The loser here already LANDED and was observed under its own origin
       // when it arrived, so a browser one has already fired its channel events
       // (e.g. `annotation:accepted`). Restoring it under `withBrowser` would
       // fire them a second time; restore it as a server repair instead, and
       // persist it explicitly because durable sync skips `internal`.
-      const writer: WriterKind = loserIsBrowser ? INTERNAL_ORIGIN : prior.writer;
+      //
+      // Unless the winner made a decision of its own that the restore undoes.
+      // The winner's decision was observed and pushed when it landed (e.g.
+      // `annotation:dismissed`), so a silent restore would leave Claude's last
+      // pushed decision contradicting what `tandem_checkInbox` reads. That
+      // restore is re-applied under `withBrowser` — it IS the user's browser
+      // decision being re-applied, which is that origin's meaning, and its
+      // event goes through the same narrow and the same Solo gate as any
+      // other. Claude then sees the decision a second time, after the one it
+      // contradicts; that is the price of the corrective event.
+      const baseValue = base.value;
+      const redecides =
+        loserIsBrowser &&
+        DECISION.some((f) => patch.has(f)) &&
+        DECISION.some((f) => !deepEqual(baseValue[f], remoteValue[f]));
+      const writer: WriterKind = !loserIsBrowser
+        ? loser.writer
+        : redecides
+          ? BROWSER_ORIGIN
+          : INTERNAL_ORIGIN;
       return patch.size > 0
         ? { kind: "patch", key, writer, patch, w: remoteValue, l: prior.value }
         : undefined;
@@ -635,17 +815,23 @@ export function makeAnnotationWriteArbiter({
   // deleted content at that point, and the write is its own transaction.
   let queued: { txn: Y.Transaction; repairs: Repair[] } | undefined;
   const flush = (txn: Y.Transaction): void => {
+    // First, so the repair below is not counted as nested in `txn`: it
+    // re-applies a write under that write's own origin, and is its own write.
+    onEnd(txn);
     if (!queued || queued.txn !== txn) return;
     const { repairs } = queued;
     queued = undefined;
     for (const r of repairs) apply(r);
   };
 
+  doc.on("beforeTransaction", onBegin);
   map.observe(onChange);
   doc.on("afterTransaction", flush);
   return () => {
+    doc.off("beforeTransaction", onBegin);
     map.unobserve(onChange);
     doc.off("afterTransaction", flush);
     queued = undefined;
+    open.length = 0;
   };
 }

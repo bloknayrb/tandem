@@ -13,9 +13,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
+  arbiterHistoryForTesting,
   makeAnnotationWriteArbiter,
   mergePatch,
 } from "../../src/server/annotations/write-arbiter.js";
+import { createHocuspocusLifecycle } from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
 import {
   attachObservers,
   detachObservers,
@@ -24,6 +26,7 @@ import {
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import {
   BROWSER_ORIGIN,
+  INTERNAL_ORIGIN,
   MCP_ORIGIN,
   withBrowser,
   withInternal,
@@ -335,6 +338,45 @@ describe("mergePatch", () => {
     expect(mergePatch(base, { ...base, rev: 5 }, { ...base, rev: 9 }, server).size).toBe(0);
   });
 
+  it("moves author and color with the identity, so a promotion is never half-applied", () => {
+    const note: Rec = {
+      ...base,
+      author: "import",
+      type: "note",
+      audience: "private",
+      suggestedText: undefined,
+      color: "yellow",
+    };
+    // One window recolors the note while another promotes it, which changes
+    // the author and strips the color along with the type and audience.
+    const recolored = { ...note, color: "blue" };
+    const { color: _color, ...uncolored } = note;
+    const promoted = {
+      ...uncolored,
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      promotedFrom: "note",
+    };
+    for (const [w, l] of [
+      [recolored, promoted],
+      [promoted, recolored],
+    ]) {
+      const merged: Rec = { ...w };
+      for (const [f, v] of mergePatch(note, w, l, { loserIsBrowser: true })) {
+        if (v === undefined) delete merged[f];
+        else merged[f] = v;
+      }
+      if (merged.type === "comment") {
+        expect(merged).toMatchObject({ author: "user", audience: "outbound" });
+        expect(merged.color).toBeUndefined();
+      } else {
+        expect(merged).toMatchObject({ type: "note", author: "import", audience: "private" });
+        expect(merged.promotedFrom).toBeUndefined();
+      }
+    }
+  });
+
   it("does not count a sanitize migration both sides carry as a governing change", () => {
     // A legacy record with no `audience`: every sanitized write adds one, so a
     // plain re-anchor must not beat a concurrent Dismiss on that alone.
@@ -397,7 +439,7 @@ describe("write arbiter wired into attachObservers", () => {
     const aMap = a.getMap(Y_MAP_ANNOTATIONS);
     const bMap = b.getMap(Y_MAP_ANNOTATIONS);
     withBrowser(a, () => aMap.set("a1", { ...(aMap.get("a1") as Rec), status: "accepted" }));
-    withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), color: "x" }));
+    withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), range: { from: 3, to: 8 } }));
 
     const { events, cleanup } = collectEvents();
     push(a, server, connection);
@@ -406,10 +448,70 @@ describe("write arbiter wired into attachObservers", () => {
 
     const s = sMap.get("a1") as Rec;
     expect(s.status).toBe("accepted");
-    expect(s.color).toBe("x");
+    expect(s.range).toEqual({ from: 3, to: 8 });
     expect(events.filter((e) => e.type === "annotation:accepted")).toHaveLength(1);
     a.destroy();
     b.destroy();
+  });
+
+  /** Two browsers decide one proposal concurrently: A Accepts, B Dismisses and wins by clientID. */
+  function acceptVsDismiss(): { sMap: Y.Map<unknown>; done: () => void } {
+    server.clientID = 500;
+    const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(server, () => sMap.set("a1", claudeSuggestion()));
+    const a = new Y.Doc();
+    a.clientID = 1000;
+    const b = new Y.Doc();
+    b.clientID = 3000;
+    push(server, a, connection);
+    push(server, b, connection);
+    const aMap = a.getMap(Y_MAP_ANNOTATIONS);
+    const bMap = b.getMap(Y_MAP_ANNOTATIONS);
+    withBrowser(a, () => aMap.set("a1", { ...(aMap.get("a1") as Rec), status: "accepted" }));
+    withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), status: "dismissed" }));
+    push(a, server, connection);
+    push(b, server, connection);
+    return {
+      sMap,
+      done: () => {
+        a.destroy();
+        b.destroy();
+      },
+    };
+  }
+
+  const decisions = (events: { type: string }[]) =>
+    events
+      .map((e) => e.type)
+      .filter((t) => t === "annotation:accepted" || t === "annotation:dismissed");
+
+  it("re-emits the decision when a held Accept is restored over a concurrent Dismiss", () => {
+    const { events, cleanup } = collectEvents();
+    const { sMap, done } = acceptVsDismiss();
+    cleanup();
+
+    expect((sMap.get("a1") as Rec).status).toBe("accepted");
+    // The last decision Claude was pushed must be the one the pull path reads.
+    expect(decisions(events)).toEqual([
+      "annotation:accepted",
+      "annotation:dismissed",
+      "annotation:accepted",
+    ]);
+    done();
+  });
+
+  it("holds that corrective event behind the Solo gate like any other", () => {
+    setCtrlMode("solo");
+    const external = collectEvents("external");
+    const internal = collectEvents("internal");
+    const { sMap, done } = acceptVsDismiss();
+    external.cleanup();
+    internal.cleanup();
+
+    expect((sMap.get("a1") as Rec).status).toBe("accepted");
+    expect(decisions(external.events)).toEqual([]);
+    expect(decisions(internal.events).at(-1)).toBe("annotation:accepted");
+    done();
   });
 
   it("keeps its history across a re-attach to the same doc (the reload paths)", () => {
@@ -514,5 +616,134 @@ describe("write arbiter beside a write nested in the same remote transaction", (
     expect(bMap.get("a1")).toEqual(s);
     browser.destroy();
     server.destroy();
+  });
+});
+
+describe("write arbiter — attribution across nested and later transactions", () => {
+  afterEach(() => {
+    detachObservers("arbiter-nest-doc");
+    resetForTesting();
+  });
+
+  // A's Accept arrives and the held-in-Solo stamp is nested on top of it in the
+  // same remote transaction. B's concurrent Dismiss then wins by clientID. The
+  // loser is A's Accept — a browser write that has already applied its text —
+  // not the stamp the server nested over it.
+  // When B's write is a decision too, the restore re-decides and is re-applied
+  // as the browser write it was; when it is not, A's Accept is restored under
+  // `internal` (its events already fired). Never as a held-in-Solo stamp.
+  it.each([
+    ["a concurrent Dismiss", { status: "dismissed" }, BROWSER_ORIGIN],
+    ["a concurrent re-anchor", { range: { from: 3, to: 8 } }, INTERNAL_ORIGIN],
+  ])(
+    "attributes a loser to the browser write, not a server write nested over it (%s)",
+    (_name, bWrite, repairOrigin) => {
+      const server = new Y.Doc();
+      server.clientID = 500;
+      attachObservers("arbiter-nest-doc", server);
+      setCtrlMode("solo");
+      const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+      withInternal(server, () =>
+        sMap.set("a1", claudeSuggestion({ author: "user", content: "rewrite" })),
+      );
+      const a = new Y.Doc();
+      a.clientID = 1000;
+      const b = new Y.Doc();
+      b.clientID = 3000;
+      push(server, a, connection);
+      push(server, b, connection);
+      const aMap = a.getMap(Y_MAP_ANNOTATIONS);
+      const bMap = b.getMap(Y_MAP_ANNOTATIONS);
+      withBrowser(a, () => aMap.set("a1", { ...(aMap.get("a1") as Rec), status: "accepted" }));
+      withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), ...bWrite }));
+      push(a, server, connection);
+      expect((sMap.get("a1") as Rec).heldInSolo).toBe(true);
+
+      const origins: unknown[] = [];
+      const rec = (_e: unknown, t: Y.Transaction) => {
+        if (t.local) origins.push(t.origin);
+      };
+      sMap.observe(rec);
+      push(b, server, connection);
+      sMap.unobserve(rec);
+
+      const s = sMap.get("a1") as Rec;
+      expect(s.status).toBe("accepted");
+      expect(s.heldInSolo).toBe(true);
+      expect(origins.at(-1)).toBe(repairOrigin);
+      a.destroy();
+      b.destroy();
+      server.destroy();
+    },
+  );
+
+  it("records each item once, under the transaction that wrote it", () => {
+    const server = new Y.Doc();
+    server.clientID = 1000;
+    attachObservers("arbiter-nest-doc", server);
+    setCtrlMode("solo");
+    const sMap = server.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(server, () =>
+      sMap.set(
+        "a1",
+        claudeSuggestion({ author: "user", suggestedText: undefined, content: "draft" }),
+      ),
+    );
+    const browser = new Y.Doc();
+    browser.clientID = 2000;
+    push(server, browser, connection);
+    const bMap = browser.getMap(Y_MAP_ANNOTATIONS);
+    withMcp(server, () =>
+      sMap.set("a1", { ...(sMap.get("a1") as Rec), range: { from: 4, to: 9 }, rev: 2 }),
+    );
+    withBrowser(browser, () =>
+      bMap.set("a1", { ...(bMap.get("a1") as Rec), content: "final", editedAt: 99 }),
+    );
+    // The browser wins; the stamp is nested in its transaction and the repair
+    // is written after it, before the stamp's own transaction is cleaned up.
+    push(browser, server, connection);
+    expect((sMap.get("a1") as Rec).range).toEqual({ from: 4, to: 9 });
+
+    const live = arbiterHistoryForTesting(server, "a1").filter((e) => !e.deleted);
+    expect(new Set(live.map((e) => e.id)).size).toBe(live.length);
+    // The repair re-applies the mcp re-anchor, so it is recorded as mcp only.
+    expect(live.at(-1)?.writer).toBe(MCP_ORIGIN);
+    browser.destroy();
+    server.destroy();
+  });
+
+  it("keeps its history across the Hocuspocus doc swap", () => {
+    const oldDoc = new Y.Doc();
+    oldDoc.clientID = 500;
+    attachObservers("arbiter-nest-doc", oldDoc);
+    setCtrlMode("tandem");
+    const oMap = oldDoc.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(oldDoc, () => oMap.set("a1", claudeSuggestion()));
+    const a = new Y.Doc();
+    a.clientID = 1000;
+    const b = new Y.Doc();
+    b.clientID = 3000;
+    push(oldDoc, a, connection);
+    push(oldDoc, b, connection);
+    const aMap = a.getMap(Y_MAP_ANNOTATIONS);
+    withBrowser(a, () => aMap.set("a1", { ...(aMap.get("a1") as Rec), status: "accepted" }));
+    push(a, oldDoc, connection);
+
+    // What `onLoadDocument` does: merge the old doc into Hocuspocus's, then swap.
+    const newDoc = new Y.Doc();
+    newDoc.clientID = 600;
+    Y.applyUpdate(newDoc, Y.encodeStateAsUpdate(oldDoc));
+    createHocuspocusLifecycle().onDocSwapped("arbiter-nest-doc", newDoc, oldDoc);
+
+    // B never saw A's Accept and wins by clientID; A's Accept applied its text.
+    const bMap = b.getMap(Y_MAP_ANNOTATIONS);
+    withBrowser(b, () => bMap.set("a1", { ...(bMap.get("a1") as Rec), status: "dismissed" }));
+    push(b, newDoc, connection);
+
+    expect((newDoc.getMap(Y_MAP_ANNOTATIONS).get("a1") as Rec).status).toBe("accepted");
+    a.destroy();
+    b.destroy();
+    oldDoc.destroy();
+    newDoc.destroy();
   });
 });
