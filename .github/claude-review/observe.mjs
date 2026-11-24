@@ -9,6 +9,13 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+/**
+ * The only tool names printed as themselves. A name outside this set is
+ * counted as "other": nothing outside the CLI guarantees what string a
+ * tool_use carries, and this log is public.
+ */
+export const KNOWN_TOOLS = new Set(["Read", "Grep", "Glob", "Agent", "Task", "StructuredOutput"]);
+
 /** Pure summary of a stream-json transcript. */
 export function summarize(streamText) {
   const tools = {};
@@ -25,10 +32,8 @@ export function summarize(streamText) {
     }
     if (event?.type === "assistant" && Array.isArray(event.message?.content)) {
       for (const block of event.message.content) {
-        if (block?.type === "tool_use" && typeof block.name === "string") {
-          // Tool names are model-chosen only within the fixed tool set, but
-          // keep them to a safe character class before printing anyway.
-          const name = block.name.replace(/[^\w.-]/g, "?").slice(0, 64);
+        if (block?.type === "tool_use") {
+          const name = KNOWN_TOOLS.has(block.name) ? block.name : "other";
           tools[name] = (tools[name] ?? 0) + 1;
         }
       }

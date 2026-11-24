@@ -118,11 +118,19 @@ jobs:
         if: steps.recheck.outputs.skip == 'false'
         working-directory: pr
         run: |
+          set -o pipefail
           find . -path ./.git -prune -o -type l -print0 | xargs -0 -r rm -f
           find . -path ./.git -prune -o \
             \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \
                -o -name '.claude*' -o -name '.mcp.json' -o -name '.review-input' \) \
             -prune -print0 | xargs -0 -r rm -rf
+          # Verify rather than trust: nothing a find error could have left behind.
+          left=$(find . -path ./.git -prune -o \( -type l -o -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' \
+            -o -name 'AGENTS.md' -o -name '.claude*' -o -name '.mcp.json' -o -name '.review-input' \) -print | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "neutralising left $left entries behind"
+            exit 1
+          fi
           cp ../trusted/CLAUDE.md ../trusted/AGENTS.md .
 
       - name: Prepare review inputs
@@ -131,7 +139,9 @@ jobs:
           BASE_REF: ${{ steps.recheck.outputs.base_ref }}
           HEAD_SHA: ${{ steps.recheck.outputs.head_sha }}
         run: |
-          git -C pr diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
+          # --text --no-textconv --no-ext-diff: a PR's .gitattributes must not
+          # hide a file from the review as "binary" or through a diff driver.
+          git -C pr diff --text --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
           node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
           mkdir pr/.review-input
           cp inputs/pr.diff inputs/pr.json pr/.review-input/
@@ -171,13 +181,16 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         run: |
-          "$RUNNER_TEMP/claude-cli/package/claude" -p "$(cat ../trusted/.github/claude-review/prompt.md)" \
+          prompt=$(cat ../trusted/.github/claude-review/prompt.md)
+          schema=$(cat ../trusted/.github/claude-review/schema.json)
+          "$RUNNER_TEMP/claude-cli/package/claude" -p "$prompt" \
             --model opus --max-turns 80 \
             --restricted --permission-mode dontAsk --permission-prompts none \
             --setting-sources user --strict-mcp-config \
             --tools "Read,Grep,Glob,Agent" \
+            --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch" \
             --agents ../inputs/agents.json \
-            --json-schema "$(cat ../trusted/.github/claude-review/schema.json)" \
+            --json-schema "$schema" \
             --output-format stream-json --verbose > ../stream.jsonl
 
       - name: Classify and scan for secrets
@@ -186,6 +199,8 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: node trusted/.github/claude-review/classify.mjs stream.jsonl inputs
 
       - name: Summarise tool use
@@ -196,15 +211,20 @@ jobs:
         if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true' && steps.classify.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: node trusted/.github/claude-review/post.mjs inputs
 
-      - name: Fail if the review was withheld
+      # Red means a person should look: a withheld review, or a review system
+      # that is down (missing or expired token, usage limit, API outage).
+      - name: Fail if the review was withheld or the review system is down
         if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true' && steps.classify.outcome == 'success'
         run: |
           outcome=$(jq -r .outcome inputs/outcome.json)
+          reason=$(jq -r '.reason // ""' inputs/outcome.json)
           if [ "$outcome" = "withheld" ]; then
             echo "The review output matched a secret pattern; nothing but the notice was posted."
+            exit 1
+          fi
+          if [ "$reason" = "api-error" ] || [ "$reason" = "no-token" ]; then
+            echo "The review could not run ($reason): check CLAUDE_CODE_OAUTH_TOKEN and the subscription's usage."
             exit 1
           fi

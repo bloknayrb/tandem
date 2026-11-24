@@ -66,6 +66,7 @@ const PR_EXPR = "${{ github.event.pull_request.number || inputs.pr }}";
 const SKIP = "steps.recheck.outputs.skip == 'false'";
 const STARTED = `always() && ${SKIP} && steps.mark-started.outputs.review_started == 'true'`;
 const OAUTH = "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}";
+const LAST_STEP = "Fail if the review was withheld or the review system is down";
 
 describe("trigger, identity and limits", () => {
   it("runs on new PRs and on owner dispatch, and nothing else", () => {
@@ -133,8 +134,9 @@ describe("authentication: the subscription token only, never an API key", () => 
 
   it("holds the OAuth token in exactly the review and classify steps, and no GitHub token there", () => {
     const holders = steps
-      .filter((s) => JSON.stringify(s).includes("CLAUDE_CODE_OAUTH_TOKEN"))
+      .filter((s) => JSON.stringify(s.env ?? {}).includes("secrets.CLAUDE_CODE_OAUTH_TOKEN"))
       .map((s) => s.id);
+    expect(raw.match(/secrets\.CLAUDE_CODE_OAUTH_TOKEN/g)).toHaveLength(2);
     expect(holders).toEqual(["review", "classify"]);
     for (const id of ["review", "classify"]) {
       const env = step(id).env ?? {};
@@ -176,13 +178,16 @@ describe("authentication: the subscription token only, never an API key", () => 
 
 describe("the review command", () => {
   const EXPECTED_RUN = [
-    '"$RUNNER_TEMP/claude-cli/package/claude" -p "$(cat ../trusted/.github/claude-review/prompt.md)" \\',
+    "prompt=$(cat ../trusted/.github/claude-review/prompt.md)",
+    "schema=$(cat ../trusted/.github/claude-review/schema.json)",
+    '"$RUNNER_TEMP/claude-cli/package/claude" -p "$prompt" \\',
     "  --model opus --max-turns 80 \\",
     "  --restricted --permission-mode dontAsk --permission-prompts none \\",
     "  --setting-sources user --strict-mcp-config \\",
     '  --tools "Read,Grep,Glob,Agent" \\',
+    '  --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch" \\',
     "  --agents ../inputs/agents.json \\",
-    '  --json-schema "$(cat ../trusted/.github/claude-review/schema.json)" \\',
+    '  --json-schema "$schema" \\',
     "  --output-format stream-json --verbose > ../stream.jsonl",
     "",
   ].join("\n");
@@ -239,6 +244,11 @@ describe("workspace", () => {
     expect(links).toBeGreaterThanOrEqual(0);
     expect(names).toBeGreaterThan(links);
     expect(copy).toBeGreaterThan(names);
+    // The deleting command itself, not the verification find after it, must
+    // name every path (the verifier repeats the names, so a check over the
+    // whole step would pass with one dropped from the delete).
+    const del = run.slice(names, run.indexOf("xargs -0 -r rm -rf") + "xargs -0 -r rm -rf".length);
+    expect(del).toContain("-prune -print0 | xargs -0 -r rm -rf");
     for (const n of [
       "'CLAUDE.md'",
       "'CLAUDE.local.md'",
@@ -247,9 +257,17 @@ describe("workspace", () => {
       "'.mcp.json'",
       "'.review-input'",
     ]) {
-      expect(run).toContain(`-name ${n}`);
+      expect(del).toContain(`-name ${n}`);
     }
-    expect(run).toContain("xargs -0 -r rm -rf");
+    expect(run.startsWith("set -o pipefail\n")).toBe(true);
+    expect(run).toMatch(/if \[ "\$left" -ne 0 \]; then[\s\S]*exit 1/);
+    expect(run.indexOf('"$left"')).toBeLessThan(copy);
+  });
+
+  it("diffs as text, without textconv or external diff drivers a PR could set", () => {
+    expect(stepNamed("Prepare review inputs").run).toContain(
+      'git -C pr diff --text --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff',
+    );
   });
 
   it("keeps the step order the controls depend on", () => {
@@ -265,16 +283,21 @@ describe("workspace", () => {
       "Classify and scan for secrets",
       "Summarise tool use",
       "Post to the PR",
-      "Fail if the review was withheld",
+      LAST_STEP,
     ].map(indexOfName);
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 });
 
 describe("posting", () => {
-  it("classifies from the review step's outcome, never its conclusion", () => {
+  it("classifies from the review step's outcome, never its conclusion, and builds what is posted", () => {
     const classify = step("classify");
-    expect(classify.env?.REVIEW_OUTCOME).toBe("${{ steps.review.outcome }}");
+    expect(classify.env).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: OAUTH,
+      REVIEW_OUTCOME: "${{ steps.review.outcome }}",
+      RUN_ID: "${{ github.run_id }}",
+      RUN_ATTEMPT: "${{ github.run_attempt }}",
+    });
     expect(classify.if).toBe(STARTED);
     expect(JSON.stringify(wf)).not.toContain("steps.review.conclusion");
   });
@@ -282,11 +305,7 @@ describe("posting", () => {
   it("posts only after classify succeeded, with the GitHub token and not the OAuth token", () => {
     const post = stepNamed("Post to the PR");
     expect(post.if).toBe(`${STARTED} && steps.classify.outcome == 'success'`);
-    expect(post.env).toEqual({
-      GH_TOKEN: "${{ github.token }}",
-      RUN_ID: "${{ github.run_id }}",
-      RUN_ATTEMPT: "${{ github.run_attempt }}",
-    });
+    expect(post.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
     expect(post.run).toBe("node trusted/.github/claude-review/post.mjs inputs");
   });
 
@@ -297,10 +316,13 @@ describe("posting", () => {
     }
   });
 
-  it("turns the job red on a withheld review", () => {
+  it("turns the job red on a withheld review or a review system that is down", () => {
     const last = steps[steps.length - 1];
-    expect(last.name).toBe("Fail if the review was withheld");
+    expect(last.name).toBe(LAST_STEP);
     expect(last.if).toBe(`${STARTED} && steps.classify.outcome == 'success'`);
-    expect(last.run).toMatch(/if \[ "\$outcome" = "withheld" \]; then[\s\S]*exit 1/);
+    expect(last.run).toMatch(/if \[ "\$outcome" = "withheld" \]; then[\s\S]*?exit 1/);
+    expect(last.run).toMatch(
+      /if \[ "\$reason" = "api-error" \] \|\| \[ "\$reason" = "no-token" \]; then[\s\S]*?exit 1/,
+    );
   });
 });

@@ -13,17 +13,22 @@ import {
   classify,
   isValidReview,
   lastResultEvent,
+  prepare,
+  SYSTEMIC_REASONS,
   scanForSecrets,
 } from "../../.github/claude-review/classify.mjs";
 import { summarize } from "../../.github/claude-review/observe.mjs";
 import {
   BODY_CAP,
+  bodyOnly,
   buildItem,
   cap,
   commentableLines,
   FINDING_CAP,
   HEADER_RE,
   header,
+  httpStatus,
+  inlineCountLine,
   postItem,
   sanitize,
 } from "../../.github/claude-review/post.mjs";
@@ -260,6 +265,8 @@ describe("post: sanitising and placement", () => {
       { path: "src/a.ts", line: 2, side: "RIGHT", body: "**important:** in diff" },
     ]);
     expect(item.body).toContain("`src/b.ts:9` **nit:** outside");
+    // The gate checks it fetched every inline comment against this line.
+    expect(item.body.split("\n\n")[1]).toBe(inlineCountLine(1));
   });
 
   it("says No findings. on an empty review", () => {
@@ -332,30 +339,176 @@ describe("post: sanitising and placement", () => {
     expect(incomplete.body).toContain("gh workflow run claude-code-review.yml -f pr=5");
   });
 
-  it("retries a refused review as body-only, and reports a failed post", () => {
-    const calls: string[] = [];
+  it("on a 422 posts the prepared body-only form, on anything else reports the failure", () => {
     const item = {
       kind: "review",
-      body: "B",
+      body: `H\n\n${inlineCountLine(1)}\n\nB`,
       comments: [{ path: "a", line: 1, side: "RIGHT", body: "c" }],
       commit_id: "1234567",
     };
-    const res = postItem(item, {
-      repo: "o/r",
-      pr: 5,
-      run: (_args: string[], input: string) => {
-        calls.push(input);
-        return { status: calls.length === 1 ? 1 : 0, stderr: "" };
+    const fallback = bodyOnly(item);
+    expect(fallback?.comments).toEqual([]);
+    expect(fallback?.body).toContain("`a:1` c");
+    expect(fallback?.body).toContain(inlineCountLine(0));
+    const calls: string[] = [];
+    const res = postItem(
+      { item, fallback },
+      {
+        repo: "o/r",
+        pr: 5,
+        run: (_args: string[], input: string) => {
+          calls.push(input);
+          return {
+            status: calls.length === 1 ? 1 : 0,
+            stderr: "gh: Validation Failed (HTTP 422)",
+            error: undefined,
+          };
+        },
       },
-    });
-    expect(res.status).toBe(0);
-    expect(JSON.parse(calls[1]).comments).toEqual([]);
-    expect(JSON.parse(calls[1]).body).toContain("`a:1` c");
-    const failed = postItem(
-      { kind: "comment", body: "x" },
-      { repo: "o/r", pr: 5, run: () => ({ status: 1, stderr: "" }) },
     );
-    expect(failed.status).toBe(1);
+    expect(res.status).toBe(0);
+    expect(JSON.parse(calls[1])).toMatchObject({ body: fallback?.body, comments: [] });
+    let tries = 0;
+    const serverError = postItem(
+      { item, fallback },
+      {
+        repo: "o/r",
+        pr: 5,
+        run: () => (tries++, { status: 1, stderr: "HTTP 502", error: undefined }),
+      },
+    );
+    expect(serverError.status).toBe(1);
+    expect(tries).toBe(1);
+    expect(httpStatus("x (HTTP 422)")).toBe("422");
+  });
+});
+
+describe("post: sanitising keeps code and refuses splicing", () => {
+  it("keeps generics and comparisons, in code spans and in prose", () => {
+    expect(sanitize("Use `Map<string, number>` here")).toBe("Use `Map<string, number>` here");
+    const prose = sanitize("if a<b && c>d then Promise<void>");
+    expect(prose).toContain("a&lt;b");
+    expect(prose).toContain("Promise&lt;void>");
+  });
+
+  it("replaces removed constructs with a space, so they cannot rejoin a split string", () => {
+    expect(sanitize("abc<!-- x -->def")).toBe("abc def");
+    expect(sanitize("abc![i](u)def")).toBe("abc def");
+  });
+
+  it("defuses a mention after a lone backtick, and wraps issue cross-references", () => {
+    const out = sanitize("a`@someone and see #123 or org/repo#9");
+    // The lone backtick becomes a quote, so it cannot pair with the wrap's
+    // opening backtick and leave the mention outside a code span.
+    expect(out).toContain("a'`@someone`");
+    expect(out).not.toContain("``");
+    expect(out).toContain("`#123`");
+    expect(out).toContain("`org/repo#9`");
+  });
+
+  it("does not take an added line starting '++ ' for a file header", () => {
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,1 +1,3 @@",
+      " x",
+      "+++ y",
+      "+z",
+      "\\ No newline at end of file",
+    ].join("\n");
+    expect([...(commentableLines(diff).get("f.ts") ?? [])]).toEqual([1, 2, 3]);
+    expect(commentableLines(diff).has("y")).toBe(false);
+  });
+
+  it("handles a new file, a deletion and a second file", () => {
+    const diff = [
+      "diff --git a/new.ts b/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.ts",
+      "@@ -0,0 +1,2 @@",
+      "+a",
+      "+b",
+      "diff --git a/old.ts b/old.ts",
+      "deleted file mode 100644",
+      "--- a/old.ts",
+      "+++ /dev/null",
+      "@@ -1,1 +0,0 @@",
+      "-gone",
+    ].join("\n");
+    const m = commentableLines(diff);
+    expect([...(m.get("new.ts") ?? [])]).toEqual([1, 2]);
+    expect(m.has("old.ts")).toBe(false);
+  });
+});
+
+describe("classify: prepare scans the bytes that are posted", () => {
+  const prep = (summary: string) =>
+    prepare({
+      verdict: { outcome: "posted", review: { summary, findings: [] } },
+      diffText: "",
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+      token: TOKEN,
+    });
+
+  it("withholds a token the model split with constructs that sanitising removes", () => {
+    const a = TOKEN.slice(0, 30);
+    const b = TOKEN.slice(30);
+    for (const sep of ["<!---->", "![](x)", "<!-- -->"]) {
+      expect(
+        classify({
+          streamText: stream(ok({ summary: a + sep + b, findings: [] })),
+          reviewOutcome: "success",
+          token: TOKEN,
+        }).outcome,
+      ).toBe("posted");
+      const p = prep(a + sep + b);
+      expect(JSON.stringify(p.item)).not.toContain(TOKEN);
+    }
+  });
+
+  it("turns a posted verdict into withheld when the built item carries the token", () => {
+    const p = prepare({
+      verdict: { outcome: "posted", review: { summary: "fine", findings: [] } },
+      diffText: "",
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+      token: "1234567-not-a-real-token-but-in-the-header",
+    });
+    expect(p.outcome).toEqual({ outcome: "posted" });
+    const hit = prepare({
+      verdict: { outcome: "posted", review: { summary: `x ${TOKEN.slice(0, 20)}`, findings: [] } },
+      diffText: "",
+      sha: "1234567",
+      runId: 1,
+      attempt: 1,
+      pr: 5,
+      token: `x ${TOKEN.slice(0, 20)}`.slice(2),
+    });
+    expect(hit.outcome).toMatchObject({ outcome: "withheld", matchKind: "exact" });
+    expect(hit.item.body).toContain("Review withheld");
+    expect(hit.fallback).toBeNull();
+  });
+
+  it("marks an API failure and a missing token as system-down reasons", () => {
+    expect(SYSTEMIC_REASONS).toEqual(["api-error", "no-token"]);
+    const apiErr = stream({ type: "result", subtype: "success", is_error: true });
+    expect(classify({ streamText: apiErr, reviewOutcome: "failure", token: TOKEN })).toEqual({
+      outcome: "incomplete",
+      reason: "api-error",
+    });
+    expect(
+      classify({ streamText: stream(ok(review)), reviewOutcome: "success", token: "" }),
+    ).toEqual({
+      outcome: "incomplete",
+      reason: "no-token",
+    });
   });
 });
 
@@ -388,6 +541,14 @@ describe("observe", () => {
     expect(s).toEqual({ tools: { Read: 2, Agent: 1 }, denials: 1, turns: 4, durationMs: 10 });
     expect(JSON.stringify(s)).not.toMatch(/proc|secret/);
   });
+
+  it("counts any tool name outside the known set as 'other', never printing it", () => {
+    const text = stream({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "sk-ant-oat01-leakyleakyleaky", input: {} }] },
+    });
+    expect(summarize(text).tools).toEqual({ other: 1 });
+  });
 });
 
 describe("build-agents", () => {
@@ -411,15 +572,19 @@ describe("build-agents", () => {
   });
 });
 
-describe("the review scripts use only node: built-ins", () => {
-  it("imports nothing else", () => {
+describe("the review scripts need no npm dependencies", () => {
+  it("import only node: built-ins and each other", () => {
     const files = readdirSync(SCRIPTS).filter((f) => f.endsWith(".mjs"));
     expect(files.sort()).toEqual(["build-agents.mjs", "classify.mjs", "observe.mjs", "post.mjs"]);
     for (const f of files) {
       const src = readFileSync(path.join(SCRIPTS, f), "utf8");
       const specifiers = [...src.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1]);
       expect(specifiers.length, f).toBeGreaterThan(0);
-      for (const s of specifiers) expect(s, `${f} imports ${s}`).toMatch(/^node:/);
+      for (const s of specifiers) {
+        expect(s, `${f} imports ${s}`).toMatch(
+          /^(node:|\.\/(build-agents|classify|observe|post)\.mjs$)/,
+        );
+      }
     }
   });
 });

@@ -1,12 +1,33 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { header } from "../../.github/claude-review/post.mjs";
-import { decide, run, selectRuns } from "../../scripts/ci/await-claude-review.mjs";
+import {
+  HEADER_RE,
+  header,
+  INCOMPLETE_MARK,
+  INLINE_COUNT_RE,
+} from "../../.github/claude-review/post.mjs";
+import {
+  decide,
+  HEADER_RE as GATE_HEADER_RE,
+  INCOMPLETE_MARK as GATE_INCOMPLETE,
+  INLINE_COUNT_RE as GATE_INLINE_RE,
+  run,
+  selectRuns,
+  touchesReview,
+} from "../../scripts/ci/await-claude-review.mjs";
 
 /**
  * The merge gate for the cloud Claude review (#1831). It decides from run and
- * attempt conclusions, which PR content cannot forge, and uses the bot's PR
- * items only to find the text to act on. Driven through an injected `gh`.
+ * attempt conclusions and uses the bot's PR items only to find the text to act
+ * on. Driven through an injected `gh`.
  */
+
+/** The gate returns several result shapes; tests read optional fields off any of them. */
+const loose = (v: unknown) => v as Record<string, unknown>;
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const PR = 12;
 const TITLE = `Claude review PR #${PR}`;
@@ -18,6 +39,8 @@ type Run = {
   attempt: number;
   createdAt: string;
   url: string;
+  event: string;
+  headBranch: string;
 };
 const mkRun = (id: number, conclusion: string, opts: Partial<Run> = {}): Run => ({
   databaseId: id,
@@ -27,21 +50,68 @@ const mkRun = (id: number, conclusion: string, opts: Partial<Run> = {}): Run => 
   attempt: 1,
   createdAt: `2026-11-24T10:${String(id).padStart(2, "0")}:00Z`,
   url: `https://example/runs/${id}`,
+  event: "pull_request",
+  headBranch: "fix/x",
   ...opts,
 });
+const dispatchRun = (id: number, conclusion: string, opts: Partial<Run> = {}) =>
+  mkRun(id, conclusion, { event: "workflow_dispatch", headBranch: "master", ...opts });
+const SCOPE = { headBranch: "fix/x", defaultBranch: "master" };
 const item = (runId: number, attempt: number) => ({
   body: `${header("abc1234", runId, attempt)}\n\nNo findings.`,
+});
+
+describe("gate integrity", () => {
+  it("ignores a run with the right title from a dispatch off the default branch, another branch, or another event", () => {
+    const forgedDispatch = dispatchRun(7, "success", { headBranch: "evil" });
+    const otherBranch = mkRun(8, "success", { headBranch: "other" });
+    const pushEvent = mkRun(9, "success", { event: "push" });
+    expect(selectRuns([[otherBranch, pushEvent], [forgedDispatch]], PR, SCOPE)).toEqual([]);
+  });
+
+  it("stops (exit 2) for a PR that changes the review workflow, its scripts or the gate", async () => {
+    for (const file of [
+      ".github/workflows/claude-code-review.yml",
+      ".github/claude-review/post.mjs",
+      "scripts/ci/await-claude-review.mjs",
+    ]) {
+      expect(touchesReview(["src/a.ts", file])).toEqual([file]);
+      const gh = fakeGh([
+        {
+          match: /^pr view 12 /,
+          out: { headRefName: "fix/x", headRefOid: "abc", files: [{ path: file }] },
+        },
+        {
+          match: /^repo view /,
+          out: { nameWithOwner: "o/r", defaultBranchRef: { name: "master" } },
+        },
+      ]);
+      const v = await run(PR, { gh, sleep: async () => {}, log: () => {} });
+      expect(v.exit).toBe(2);
+    }
+    expect(touchesReview([".github/workflows/ci.yml", "scripts/ci/other.mjs"])).toEqual([]);
+  });
+
+  it("carries post.mjs's header, incomplete mark and inline-count pattern, and imports nothing local", () => {
+    expect(GATE_HEADER_RE.source).toBe(HEADER_RE.source);
+    expect(GATE_INCOMPLETE).toBe(INCOMPLETE_MARK);
+    expect(GATE_INLINE_RE.source).toBe(INLINE_COUNT_RE.source);
+    const src = readFileSync(path.join(ROOT, "scripts/ci/await-claude-review.mjs"), "utf8");
+    const specifiers = [...src.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    for (const s of specifiers) expect(s).toMatch(/^node:/);
+  });
 });
 
 describe("selectRuns", () => {
   it("merges the branch and dispatch lists, de-duplicates, and matches the exact title", () => {
     const branch = [mkRun(1, "success")];
     const dispatch = [
-      mkRun(2, "success"),
+      dispatchRun(2, "success"),
       mkRun(1, "success"),
       mkRun(3, "success", { displayTitle: "Claude review PR #123" }),
     ];
-    expect(selectRuns([branch, dispatch], PR).map((r) => r.databaseId)).toEqual([2, 1]);
+    expect(selectRuns([branch, dispatch], PR, SCOPE).map((r) => r.databaseId)).toEqual([2, 1]);
   });
 });
 
@@ -80,10 +150,7 @@ describe("decide", () => {
   );
 
   it("exit 2 when a dispatched re-review (recorded against master) failed", () => {
-    const runs = selectRuns(
-      [[mkRun(1, "success")], [mkRun(2, "failure", { displayTitle: TITLE })]],
-      PR,
-    );
+    const runs = selectRuns([[mkRun(1, "success")], [dispatchRun(2, "failure")]], PR, SCOPE);
     const attempts = [
       { runId: 2, attempt: 1, conclusion: "failure" },
       { runId: 1, attempt: 1, conclusion: "success" },
@@ -91,16 +158,60 @@ describe("decide", () => {
     expect(decide({ runs, attempts, items: [item(1, 1)] }).exit).toBe(2);
   });
 
-  it("exit 3 for no run, only skipped runs, or only cancelled attempts", () => {
+  it("exit 3 for no run or only skipped runs", () => {
     expect(decide({ runs: [], attempts: [], items: [] }).exit).toBe(3);
-    expect(decide({ runs: [mkRun(1, "skipped")], attempts: [], items: [] }).exit).toBe(3);
+    expect(
+      decide({
+        runs: [mkRun(1, "skipped")],
+        attempts: [{ runId: 1, attempt: 1, conclusion: "skipped" }],
+        items: [],
+      }).exit,
+    ).toBe(3);
+  });
+
+  it("exit 2 when every attempt was cancelled (a job timeout looks like this)", () => {
     expect(
       decide({
         runs: [mkRun(1, "cancelled")],
         attempts: [{ runId: 1, attempt: 1, conclusion: "cancelled" }],
         items: [],
       }).exit,
-    ).toBe(3);
+    ).toBe(2);
+  });
+
+  it("exit 2 when a skipped re-run follows a red attempt", () => {
+    const runs = [mkRun(1, "skipped", { attempt: 2 })];
+    const attempts = [
+      { runId: 1, attempt: 1, conclusion: "failure" },
+      { runId: 1, attempt: 2, conclusion: "skipped" },
+    ];
+    expect(decide({ runs, attempts, items: [] }).exit).toBe(2);
+  });
+
+  it("exit 4 for a 'did not complete' note, so exit 0 always means a review exists", () => {
+    const note = {
+      body: `${header("abc1234", 1, 1)}\n\nClaude review did not complete (\`error_max_turns\`). Re-run: ...`,
+    };
+    const v = decide({
+      runs: [mkRun(1, "success")],
+      attempts: [{ runId: 1, attempt: 1, conclusion: "success" }],
+      items: [note],
+    });
+    expect(v.exit).toBe(4);
+  });
+
+  it("reads the inline count from a review body", () => {
+    const review = {
+      body: `${header("abc1234", 1, 1)}\n\n_2 inline comments._\n\nSummary.`,
+      reviewId: 7,
+    };
+    const v = decide({
+      runs: [mkRun(1, "success")],
+      attempts: [{ runId: 1, attempt: 1, conclusion: "success" }],
+      items: [review],
+    });
+    expect(v.exit).toBe(0);
+    expect(loose(v).inlineExpected).toBe(2);
   });
 
   it("exit 3 for a green attempt that posted nothing (the re-check refused the PR)", () => {
@@ -139,7 +250,7 @@ describe("decide", () => {
       items: [item(1, 1)],
     });
     expect(v.exit).toBe(0);
-    expect(v.sha).toBe("abc1234");
+    expect(loose(v).sha).toBe("abc1234");
   });
 });
 
@@ -155,8 +266,11 @@ function fakeGh(table: { match: RegExp; out: unknown | (() => unknown) }[], seen
   };
 }
 const base = [
-  { match: /^pr view 12 /, out: { headRefName: "fix/x", headRefOid: "abc1234ffff" } },
-  { match: /^repo view /, out: { nameWithOwner: "o/r" } },
+  {
+    match: /^pr view 12 /,
+    out: { headRefName: "fix/x", headRefOid: "abc1234ffff", files: [{ path: "src/a.ts" }] },
+  },
+  { match: /^repo view /, out: { nameWithOwner: "o/r", defaultBranchRef: { name: "master" } } },
 ];
 const lines = (...objs: unknown[]) => objs.map((o) => JSON.stringify(o)).join("\n");
 
@@ -193,8 +307,9 @@ describe("run (through an injected gh)", () => {
         { match: /^run list .*--event/, out: [] },
         { match: /attempts\/1$/, out: { conclusion: "success" } },
         { match: /attempts\/2$/, out: { conclusion: "success" } },
+        { match: /pulls\/12\/reviews\/2\/comments/, out: "" },
         {
-          match: /api --paginate repos\/o\/r\/pulls\/12\/reviews/,
+          match: /api --paginate repos\/o\/r\/pulls\/12\/reviews --jq/,
           out: lines({ body: "page1", id: 1 }, { body: item(4, 2).body, id: 2 }),
         },
         { match: /issues\/12\/comments/, out: "" },
@@ -204,7 +319,7 @@ describe("run (through an injected gh)", () => {
     );
     const v = await run(PR, { gh, sleep: async () => {}, log: () => {} });
     expect(v.exit).toBe(0);
-    expect(v.reviewId).toBe(2);
+    expect(loose(v).reviewId).toBe(2);
     expect(seen.filter((s) => /attempts\/\d$/.test(s))).toHaveLength(2);
     expect(seen.some((s) => s.startsWith("api --paginate"))).toBe(true);
   });
@@ -228,17 +343,93 @@ describe("run (through an injected gh)", () => {
     expect(polls).toBeGreaterThan(2);
   });
 
-  it("only-skipped exits 3 without waiting", async () => {
-    let slept = 0;
+  it("a draft's skipped run does not end the wait: the ready run that follows is read", async () => {
+    let t = 0;
+    let lists = 0;
+    const gh = fakeGh([
+      ...base,
+      {
+        match: /^run list .*--branch/,
+        out: () =>
+          ++lists < 3 ? [mkRun(1, "skipped")] : [mkRun(2, "success"), mkRun(1, "skipped")],
+      },
+      { match: /^run list .*--event/, out: [] },
+      { match: /runs\/1\/attempts\/1$/, out: { conclusion: "skipped" } },
+      { match: /runs\/2\/attempts\/1$/, out: { conclusion: "success" } },
+      { match: /issues\/12\/comments --jq/, out: lines({ body: item(2, 1).body }) },
+      { match: /reviews --jq/, out: "" },
+    ]);
+    const v = await run(PR, {
+      gh,
+      now: () => t,
+      sleep: async (ms: number) => void (t += ms),
+      log: () => {},
+    });
+    expect(v.exit).toBe(0);
+    expect(lists).toBeGreaterThanOrEqual(3);
+  });
+
+  it("only skipped runs, still only skipped after the wait, exit 3", async () => {
+    let t = 0;
     const gh = fakeGh([
       ...base,
       { match: /^run list .*--branch/, out: [mkRun(1, "skipped")] },
       { match: /^run list .*--event/, out: [] },
+      { match: /attempts\/1$/, out: { conclusion: "skipped" } },
       { match: /reviews|comments/, out: "" },
     ]);
-    const v = await run(PR, { gh, sleep: async () => void slept++, log: () => {} });
+    const v = await run(PR, {
+      gh,
+      now: () => t,
+      sleep: async (ms: number) => void (t += ms),
+      log: () => {},
+      opts: { firstRunWaitMs: 60_000, pollMs: 20_000 },
+    });
     expect(v.exit).toBe(3);
-    expect(slept).toBe(0);
+  });
+
+  it("fails (exit 1 in main) when the review's inline comments cannot all be fetched", async () => {
+    const review = { body: `${header("abc1234", 1, 1)}\n\n_2 inline comments._\n\nS.`, id: 5 };
+    const table = (inlineOut: string) =>
+      fakeGh([
+        ...base,
+        { match: /^run list .*--branch/, out: [mkRun(1, "success")] },
+        { match: /^run list .*--event/, out: [] },
+        { match: /attempts\/1$/, out: { conclusion: "success" } },
+        { match: /reviews\/5\/comments/, out: inlineOut },
+        { match: /reviews --jq/, out: lines(review) },
+        { match: /comments --jq/, out: "" },
+      ]);
+    const deps = { sleep: async () => {}, log: () => {} };
+    await expect(
+      run(PR, { gh: table(lines({ path: "a", line: 1, body: "x" })), ...deps }),
+    ).rejects.toThrow(/lists 2 inline comments but 1/);
+    const ok = await run(PR, {
+      gh: table(lines({ path: "a", line: 1, body: "x" }, { path: "b", line: null, body: "y" })),
+      ...deps,
+    });
+    expect(ok.exit).toBe(0);
+    expect(loose(ok).inline).toHaveLength(2);
+  });
+
+  it("reports a failed run on the branch that never got the review title", async () => {
+    const gh = fakeGh([
+      ...base,
+      {
+        match: /^run list .*--branch/,
+        out: [
+          mkRun(1, "success"),
+          mkRun(2, "failure", { displayTitle: ".github/workflows/claude-code-review.yml" }),
+        ],
+      },
+      { match: /^run list .*--event/, out: [] },
+      { match: /attempts\/1$/, out: { conclusion: "success" } },
+      { match: /issues\/12\/comments --jq/, out: lines({ body: item(1, 1).body }) },
+      { match: /reviews --jq/, out: "" },
+    ]);
+    const v = await run(PR, { gh, sleep: async () => {}, log: () => {} });
+    expect(v.exit).toBe(0);
+    expect(loose(v).untitledFailures).toEqual(["https://example/runs/2"]);
   });
 
   it("re-selects after a watch, so a replacement run and a re-run are both followed", async () => {
@@ -256,7 +447,10 @@ describe("run (through an injected gh)", () => {
               : [mkRun(1, "success", { attempt: 2 })];
           },
         },
-        { match: /^run list .*--event/, out: () => (listCalls === 1 ? [] : [mkRun(2, "failure")]) },
+        {
+          match: /^run list .*--event/,
+          out: () => (listCalls === 1 ? [] : [dispatchRun(2, "failure")]),
+        },
         { match: /^run watch 1 /, out: "" },
         { match: /runs\/1\/attempts\/1$/, out: { conclusion: "success" } },
         { match: /runs\/1\/attempts\/2$/, out: { conclusion: "success" } },
