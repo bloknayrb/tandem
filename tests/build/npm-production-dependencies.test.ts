@@ -17,10 +17,16 @@
  * - `@napi-rs/keyring`, kept external in every bundle because it dispatches to
  *   a platform `.node` binary at run time (`nativeExternals`).
  *
- * Adding a package used by a bundled entry needs no `dependencies` entry: tsup
- * bundles anything not listed there, so putting it in `devDependencies` is
- * both correct and the safe default. Adding a NEW run-time external — a cli
- * import that must stay external, or a native module — is the only reason to
+ * Adding a package used by a self-contained entry needs no `dependencies`
+ * entry: tsup bundles anything not listed there, so `devDependencies` is
+ * correct. The cli is the exception, because tsup now INLINES every
+ * devDependency its import graph reaches, and that bundle carries only the
+ * shebang banner, not `selfContained`'s `createRequire` one: a CommonJS
+ * package inlined there that calls `require("fs")` (express, ws, ...) builds
+ * cleanly and fails at run time with "Dynamic require of ... is not
+ * supported". A new bare import reachable from `src/cli/index.ts` therefore
+ * belongs here (kept external) unless it is ESM-only. Adding a NEW run-time
+ * external — such a cli import, or a native module — is the only reason to
  * change this list, and the change belongs here with its reason.
  *
  * The cost, stated so it is not discovered later: GitHub and `npm audit` now

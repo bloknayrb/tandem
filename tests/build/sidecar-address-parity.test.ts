@@ -8,15 +8,21 @@
  * `src/shared/constants.ts` alone would move the browser and npm builds while
  * the desktop shell kept spawning, polling and POSTing on the old one, and
  * nothing else would fail.
+ *
+ * The WebSocket port is not in the macro pair (no shell URL names it), but the
+ * spawn site exports `sidecar::WS_PORT` as `TANDEM_PORT` while the desktop
+ * client connects to `DEFAULT_WS_PORT`, so it drifts the same way and is
+ * pinned here too.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_BIND_HOST, DEFAULT_MCP_PORT } from "../../src/shared/constants";
+import { DEFAULT_BIND_HOST, DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../../src/shared/constants";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const LIB_RS = readFileSync(path.join(ROOT, "src-tauri/src/lib.rs"), "utf8");
+const SIDECAR_RS = readFileSync(path.join(ROOT, "src-tauri/src/sidecar.rs"), "utf8");
 
 /** The single token a zero-argument `macro_rules!` expands to. */
 function macroBody(name: string): string | undefined {
@@ -39,5 +45,12 @@ describe("sidecar address parity, Rust and TypeScript (#1825)", () => {
       macroBody("sidecar_bind_host"),
       "sidecar_bind_host! in lib.rs (undefined: macro not found)",
     ).toBe(JSON.stringify(DEFAULT_BIND_HOST));
+  });
+
+  it("sidecar::WS_PORT equals DEFAULT_WS_PORT", () => {
+    expect(
+      /\bconst\s+WS_PORT\s*:\s*u16\s*=\s*(\d+)\s*;/.exec(SIDECAR_RS)?.[1],
+      "WS_PORT in sidecar.rs (undefined: const not found)",
+    ).toBe(String(DEFAULT_WS_PORT));
   });
 });

@@ -52,8 +52,9 @@ use serde_json::{json, Map, Value};
 /// not `0.0.0.0` or a routable IP.
 pub const LOOPBACK_HOST: &str = "127.0.0.1";
 
-/// Default MCP HTTP port. Keep in sync with `DEFAULT_MCP_PORT` in
-/// `src/shared/constants.ts`.
+/// Default MCP HTTP port, from `sidecar_mcp_port!` (lib.rs), which
+/// `tests/build/sidecar-address-parity.test.ts` pins to `DEFAULT_MCP_PORT` in
+/// `src/shared/constants.ts` (#1825).
 pub const DEFAULT_MCP_PORT: u16 = sidecar_mcp_port!();
 
 /// A pointer-file payload as read off disk. Untrusted — must be promoted to
