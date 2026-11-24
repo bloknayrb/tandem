@@ -18,8 +18,12 @@ export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
  * Every reader that decides whether a record is held goes through it:
  * `mode.ts#hideFromAI`, the release sweep that clears the marker
  * (`routes/mode-release.ts`), the reply seam's answered-item scan and
- * `sanitizeAnnotation` below, so the hold and the release cannot disagree
- * about which records are held.
+ * `sanitizeAnnotation` below, and the reply record's envelope schema
+ * (`annotations/schema.ts`), so the hold and the release cannot disagree
+ * about which records are held. The one deliberate `=== true` reader is the
+ * server-side stamp's candidate filter (`annotations/held-in-solo.ts`): it
+ * decides whether to WRITE a real `true`, so re-stamping a non-boolean marker
+ * normalises it and never releases anything.
  */
 export function isHeldInSoloMarker(value: unknown): boolean {
   return value !== false && value !== undefined;

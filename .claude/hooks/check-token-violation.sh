@@ -40,9 +40,17 @@ while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
 # .claude/worktrees/ still scans its own files (the scanner then runs from that
 # worktree, the right root). Matched on the whole path, that session's every
 # edit was skipped, and this hook's own "inside the project" test failed in it.
+# A drive path is compared without regard to case, as in the inside-the-project
+# test below: otherwise C:/x against a project dir of c:/x is not stripped, and
+# the worktree session's own edit is skipped again. The strip is by length, not
+# by `${FILE_PATH#...}`, so it does not depend on how that expansion treats case.
 _REL_PATH="$FILE_PATH"
-if [[ -n "$_PROJECT_DIR" && "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
-  _REL_PATH="${FILE_PATH#"$_PROJECT_DIR"/}"
+if [[ -n "$_PROJECT_DIR" ]]; then
+  if [[ "$FILE_PATH" == [A-Za-z]:/* ]]; then shopt -s nocasematch; fi
+  if [[ "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
+    _REL_PATH="${FILE_PATH:$((${#_PROJECT_DIR} + 1))}"
+  fi
+  shopt -u nocasematch
 fi
 case "/$_REL_PATH" in */.claude/worktrees/*) exit 0 ;; esac
 # Known limits, all of which skip the advisory scan rather than run it wrongly:
