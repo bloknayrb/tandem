@@ -5287,10 +5287,21 @@ const NO_CHAT_STATE: ChatPublishState = Object.freeze({
 /**
  * The look of the current synchronous run. A republish reads it once per
  * document entry and again for the summary and the facts, so it is built
- * once and dropped one microtask later, and at once when anything asks a
- * republish (whose changes it may not have seen).
+ * once and dropped one microtask later, at once when anything asks a
+ * republish (whose changes it may not have seen), and at the start of every
+ * republish ({@link freshChatLook}).
  */
 let chatStateMemo: ChatPublishState | undefined;
+
+/**
+ * Drop the current look (#2358 PR 5d): `ownership-publish.ts` calls it at the
+ * start of each republish, so a republish never reads a look built before a
+ * chat write that asked it (that write's observer reaches the publisher,
+ * never this module).
+ */
+export function freshChatLook(): void {
+  chatStateMemo = undefined;
+}
 
 /**
  * Look at chat for the published state (#2358 PR 5d), once per synchronous

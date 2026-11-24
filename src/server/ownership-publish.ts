@@ -69,6 +69,7 @@ import { CHAT_SCOPE, deliveryRegistry } from "./mcp/inbox-cursor.js";
 import { ownershipEnabled } from "./ownership-flag.js";
 import {
   chatDocumentsToRefresh,
+  freshChatLook,
   ownershipSummary,
   publishedChatOwners,
 } from "./sessions/ownership.js";
@@ -171,6 +172,7 @@ function runRestore(): void {
   if (!ownershipEnabled()) return;
   try {
     restoresForTests++;
+    freshChatLook();
     if (rooms.length > 0) writePublishedOpenDocs(rooms);
     if (summary) {
       writeOwnershipSummary();
@@ -234,6 +236,7 @@ function writeChatOwners(): void {
 function publishNow(): void {
   if (!ownershipEnabled()) return;
   try {
+    freshChatLook();
     writePublishedOpenDocs();
     guardPublishedRooms();
     writeOwnershipSummary();
@@ -251,6 +254,7 @@ function publishNow(): void {
 function publishChatNow(): void {
   if (!ownershipEnabled()) return;
   try {
+    freshChatLook();
     writeChatOwners();
     writeOwnershipSummary();
     const documentIds = chatDocumentsToRefresh();
@@ -318,6 +322,7 @@ function queuePublish(): void {
 function publishDocsNow(documentIds: ReadonlySet<string>): void {
   if (!ownershipEnabled()) return;
   try {
+    freshChatLook();
     writePublishedOpenDocs(undefined, documentIds);
   } catch {
     console.error(PUBLISH_FAILED);
