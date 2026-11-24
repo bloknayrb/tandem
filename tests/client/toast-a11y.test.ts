@@ -317,6 +317,25 @@ describe("toast focus on close", () => {
     expect(document.activeElement).toBe(q("toast-dismiss-a2"));
   });
 
+  it("keeps the return target when the window's refocus re-fires focusin with no relatedTarget", async () => {
+    const { rerender } = mount([toast("a")]);
+    const dismissA = q("toast-dismiss-a") as HTMLElement;
+    focusFrom(dismissA, outside);
+    // Switching back to the app: focusin on the same element, from nowhere.
+    focusFrom(dismissA, null);
+    await rerender({ toasts: [], announced: none });
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("moves focus to the same card's Dismiss when a re-push drops the focused action", async () => {
+    const action = { label: "Go", onClick: () => {} };
+    const { rerender } = mount([toast("a1", { dedupKey: "same", action })]);
+    focusFrom(q("toast-action-a1") as HTMLElement, outside);
+    await rerender({ toasts: [toast("a2", { dedupKey: "same", count: 2 })], announced: none });
+    expect(q("toast-action-a2")).toBeNull();
+    expect(document.activeElement).toBe(q("toast-dismiss-a2"));
+  });
+
   it("a real press of the action button moves focus on", async () => {
     const dismiss = vi.fn();
     const action = { label: "Go", onClick: vi.fn() };

@@ -36,8 +36,12 @@ let returnTarget: Element | null = null;
 function onStackFocusIn(event: FocusEvent): void {
   const stack = event.currentTarget as HTMLElement;
   const from = event.relatedTarget;
-  if (from instanceof Node && stack.contains(from)) return;
-  returnTarget = from instanceof Element ? from : null;
+  // A null `relatedTarget` is also what the window's own refocus delivers
+  // (switching back to the app re-fires focusin on the element that held
+  // focus), so it is not evidence of where focus came from: keep the target
+  // rather than wipe it. It is cleared when the stack empties instead.
+  if (!(from instanceof Element) || stack.contains(from)) return;
+  returnTarget = from;
 }
 
 // Runs BEFORE this update reaches the DOM, while a card about to go is still
@@ -51,8 +55,11 @@ $effect.pre(() => {
     typeof document === "undefined" ? null : document.activeElement,
     new Set(toasts.map(toastKey)),
     returnTarget,
+    new Set(toasts.filter((t) => t.action).map(toastKey)),
   );
   target?.focus({ preventScroll: true });
+  // The stack is gone, so where focus came from before it is no longer news.
+  if (toasts.length === 0) returnTarget = null;
 });
 </script>
 

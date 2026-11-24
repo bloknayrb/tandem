@@ -50,6 +50,11 @@ function dismissButton(card: Element): HTMLElement | null {
  * Null unless `active` is inside a card whose key is not in `nextKeys`: a
  * removal that does not take focus with it moves nothing, and focus already
  * somewhere else (a dialog the press opened, the editor) is never pulled out.
+ * The one exception is a surviving card that loses its action button: a
+ * coalescing re-push carries the latest push's action, so one without an
+ * action removes the button while the card stays. When `actionKeys` (the
+ * next keys whose toast carries an action) is given and focus is on that
+ * button, it goes to the same card's Dismiss.
  *
  * Otherwise, first match: the Dismiss button of the nearest surviving card
  * after it, then before it (so a keyboard user can work down the stack); the
@@ -61,11 +66,17 @@ export function toastFocusTarget(
   active: Element | null,
   nextKeys: ReadonlySet<string>,
   returnTarget: Element | null,
+  actionKeys?: ReadonlySet<string>,
 ): HTMLElement | null {
   const card = active?.closest<HTMLElement>("[data-toast-key]");
   if (!card) return null;
   const key = card.dataset.toastKey;
-  if (key === undefined || nextKeys.has(key)) return null;
+  if (key === undefined) return null;
+  if (nextKeys.has(key)) {
+    const onAction = active?.closest("[data-testid^='toast-action-']");
+    if (onAction && actionKeys && !actionKeys.has(key)) return dismissButton(card);
+    return null;
+  }
 
   const stack = card.parentElement;
   const cards = stack
