@@ -17,13 +17,23 @@
  *   they changed (`writePublishedOpenDocs`) and the composer summary where it
  *   changed. Coalesced, so a burst of changes costs one republish, and never
  *   inside a registry composite's synchronous run.
+ * - **The chat republish** ({@link requestOwnershipChatPublish}, #2358 PR
+ *   5d): any change to `CTRL_ROOM`'s chat map (a guard below, any origin),
+ *   and a change of a message's owner, its loss, its carried-over status or a
+ *   chat handover (the ownership module's chat sink), ask it. One microtask
+ *   later it rewrites each unanswered message's facts under
+ *   `Y_MAP_OWNERSHIP_CHAT` and the summary (its chat waiting and chat stale)
+ *   where they changed, and the entries of the documents whose chat waiting
+ *   time changed (`writePublishedOpenDocs`' narrow form). A full republish
+ *   asked in the same run subsumes it.
  * - **The stale tick** (ownership design §10.2): every
  *   {@link OWNERSHIP_STALE_TICK_MS} the same republish, so a stale flag or a
  *   hint that turns on with time alone is published. It writes only on a
  *   change.
  * - **The guard** (ownership design §10.3): an observer on `documentMeta` in
  *   `CTRL_ROOM` and in every document room the broadcast writes, and on the
- *   summary key in `CTRL_ROOM`'s `Y_MAP_USER_AWARENESS`. A transaction whose
+ *   summary key and (#2358 PR 5d) the per-message facts key in `CTRL_ROOM`'s
+ *   `Y_MAP_USER_AWARENESS`. A transaction whose
  *   origin is not one of the server's own helpers (`shouldSkipChannel`'s set:
  *   `mcp`, `file-sync`, `internal`, `reload`, `mode-release`; a client's
  *   write arrives with its Hocuspocus connection, or no origin) that changes
@@ -39,8 +49,10 @@
 import type * as Y from "yjs";
 import {
   CTRL_ROOM,
+  Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
+  Y_MAP_OWNERSHIP_CHAT,
   Y_MAP_OWNERSHIP_SUMMARY,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants.js";
@@ -55,13 +67,19 @@ import { subscribe, unsubscribe } from "./events/queue.js";
 import type { TandemEvent } from "./events/types.js";
 import { CHAT_SCOPE, deliveryRegistry } from "./mcp/inbox-cursor.js";
 import { ownershipEnabled } from "./ownership-flag.js";
-import { ownershipSummary } from "./sessions/ownership.js";
+import {
+  chatDocumentsToRefresh,
+  ownershipSummary,
+  publishedChatOwners,
+} from "./sessions/ownership.js";
 import { getOrCreateDocument } from "./yjs/provider.js";
 
 /** The Y.Docs whose `documentMeta` is guarded. A swapped room is a new Y.Doc. */
 const guardedMeta = new WeakSet<Y.Doc>();
-/** The `CTRL_ROOM` Y.Docs whose summary key is guarded. */
+/** The `CTRL_ROOM` Y.Docs whose summary and per-message facts keys are guarded. */
 const guardedSummary = new WeakSet<Y.Doc>();
+/** The `CTRL_ROOM` Y.Docs whose chat map asks the chat republish (#2358 PR 5d). */
+const watchedChat = new WeakSet<Y.Doc>();
 
 const restoreRooms = new Set<string>();
 let summaryRestoreOwed = false;
@@ -69,6 +87,8 @@ let restoreScheduled: ReturnType<typeof setImmediate> | undefined;
 let publishQueued = false;
 /** A full republish is owed by the queued microtask. */
 let fullOwed = false;
+/** The chat republish is owed by the queued microtask (#2358 PR 5d). */
+let chatOwed = false;
 /** The documents a narrow republish (a holder's check-in) owes, when no full one is. */
 const narrowOwed = new Set<string>();
 let tick: ReturnType<typeof setInterval> | undefined;
@@ -106,10 +126,23 @@ export function guardOwnershipRoom(room: string, doc: Y.Doc): void {
     if (room === CTRL_ROOM && !guardedSummary.has(doc)) {
       guardedSummary.add(doc);
       doc.getMap(Y_MAP_USER_AWARENESS).observe((event, txn) => {
-        if (serverOrigin(txn.origin) || !event.keysChanged.has(Y_MAP_OWNERSHIP_SUMMARY)) return;
+        if (serverOrigin(txn.origin)) return;
+        if (
+          !event.keysChanged.has(Y_MAP_OWNERSHIP_SUMMARY) &&
+          !event.keysChanged.has(Y_MAP_OWNERSHIP_CHAT)
+        ) {
+          return;
+        }
         summaryRestoreOwed = true;
         scheduleRestore();
       });
+    }
+    // #2358 PR 5d: any change to chat, whatever its origin (a user's message,
+    // a reply that answers one, a handover's re-owe, a delete), may change a
+    // message's facts, the summary's chat or a document's chat waiting.
+    if (room === CTRL_ROOM && !watchedChat.has(doc)) {
+      watchedChat.add(doc);
+      doc.getMap(Y_MAP_CHAT).observe(() => requestOwnershipChatPublish());
     }
   } catch (err) {
     console.error(GUARD_FAILED, err instanceof Error ? err.name : "");
@@ -139,7 +172,10 @@ function runRestore(): void {
   try {
     restoresForTests++;
     if (rooms.length > 0) writePublishedOpenDocs(rooms);
-    if (summary) writeOwnershipSummary();
+    if (summary) {
+      writeOwnershipSummary();
+      writeChatOwners();
+    }
   } catch {
     console.error(RESTORE_FAILED);
   }
@@ -172,13 +208,53 @@ function writeOwnershipSummary(): void {
   });
 }
 
-/** The republish: the owner fields and the summary, each only where changed. */
+/**
+ * Write each unanswered message's facts (#2358 PR 5d) under
+ * `Y_MAP_OWNERSHIP_CHAT` in `CTRL_ROOM`'s `Y_MAP_USER_AWARENESS` where they
+ * changed, under `withInternal`, in both transports (an empty object when no
+ * message is unanswered, so a client tells "none" from "ownership off").
+ * Flag off it does nothing, so a dark server never writes the key.
+ */
+function writeChatOwners(): void {
+  if (!ownershipEnabled()) return;
+  const owners = publishedChatOwners();
+  if (owners === undefined) return;
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  guardOwnershipRoom(CTRL_ROOM, ctrl);
+  const awareness = ctrl.getMap(Y_MAP_USER_AWARENESS);
+  if (JSON.stringify(awareness.get(Y_MAP_OWNERSHIP_CHAT) ?? null) === JSON.stringify(owners)) {
+    return;
+  }
+  withInternal(ctrl, () => {
+    awareness.set(Y_MAP_OWNERSHIP_CHAT, owners);
+  });
+}
+
+/** The republish: the owner fields, the summary and the chat facts, each only where changed. */
 function publishNow(): void {
   if (!ownershipEnabled()) return;
   try {
     writePublishedOpenDocs();
     guardPublishedRooms();
     writeOwnershipSummary();
+    writeChatOwners();
+  } catch {
+    console.error(PUBLISH_FAILED);
+  }
+}
+
+/**
+ * The chat republish (#2358 PR 5d): the per-message facts, the summary, and
+ * the entries of the documents whose chat waiting time changed, each only
+ * where it changed.
+ */
+function publishChatNow(): void {
+  if (!ownershipEnabled()) return;
+  try {
+    writeChatOwners();
+    writeOwnershipSummary();
+    const documentIds = chatDocumentsToRefresh();
+    if (documentIds.length > 0) writePublishedOpenDocs(undefined, new Set(documentIds));
   } catch {
     console.error(PUBLISH_FAILED);
   }
@@ -195,17 +271,39 @@ export function requestOwnershipPublish(documentIds?: readonly string[]): void {
   if (!ownershipEnabled()) return;
   if (documentIds === undefined) fullOwed = true;
   else for (const id of documentIds) narrowOwed.add(id);
+  queuePublish();
+}
+
+/**
+ * Ask for the chat republish (#2358 PR 5d): a change to chat, or to a
+ * message's owner. Coalesced with {@link requestOwnershipPublish} into the
+ * same microtask; a full republish owed there subsumes it. Flag off it does
+ * nothing.
+ */
+export function requestOwnershipChatPublish(): void {
+  if (!ownershipEnabled()) return;
+  chatOwed = true;
+  queuePublish();
+}
+
+function queuePublish(): void {
   if (publishQueued) return;
   publishQueued = true;
   queueMicrotask(() => {
     publishQueued = false;
     const full = fullOwed;
+    const chat = chatOwed;
     const narrow = new Set(narrowOwed);
     fullOwed = false;
+    chatOwed = false;
     narrowOwed.clear();
-    // A full republish owed in the same run subsumes the narrow one.
-    if (full) publishNow();
-    else if (narrow.size > 0) publishDocsNow(narrow);
+    // A full republish owed in the same run subsumes the narrow one and the chat one.
+    if (full) {
+      publishNow();
+      return;
+    }
+    if (narrow.size > 0) publishDocsNow(narrow);
+    if (chat) publishChatNow();
   });
 }
 
@@ -307,6 +405,7 @@ export function stopOwnershipPublishingForTests(): void {
   summaryRestoreOwed = false;
   publishQueued = false;
   fullOwed = false;
+  chatOwed = false;
   narrowOwed.clear();
   restoresForTests = 0;
   setOpenDocsWrittenListener(undefined);
