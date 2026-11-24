@@ -1139,6 +1139,9 @@ describe("the agreement table: the decision answers as a fresh poll of Tandem's 
       documentId: w.closedId,
       documentOpen: false,
       localPeriod: false,
+      // #2358 PR 5d: the row's arrival, for the published pickup and stall clock.
+      timestamp: expect.any(Number),
+      writtenThisRun: true,
     });
   });
 
@@ -1894,14 +1897,21 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
   describe("before the first bind: Tandem's Claude is not present and holds nothing", () => {
     it("a user open of D gives it no owner, so step 5 is not reached: nothing is asked, no wake", async () => {
       const w = await stepWorld(false);
-      const owedToFreshReader = vi.fn(() => ownershipChatSide.owedToFreshReader());
+      // Who asked: since #2358 PR 5d the open's broadcast publishes the owner
+      // fields, whose look at chat (`lookAtChat`, a document's chat waiting
+      // time) reads the same member. Only step 5's asks count here.
+      const askers: string[] = [];
+      const owedToFreshReader = vi.fn(() => {
+        askers.push(new Error().stack ?? "");
+        return ownershipChatSide.owedToFreshReader();
+      });
       setOwnershipChatSide({ ...ownershipChatSide, owedToFreshReader });
       userChat(key("docless"));
       userChat(key("m"), w.id);
       expect(await userOpen(w.file)).toBe(w.id);
       expect(getDocOwner(w.id)).toBeUndefined();
       expect(w.probe).not.toHaveBeenCalled();
-      expect(owedToFreshReader).not.toHaveBeenCalled();
+      expect(askers.filter((stack) => !stack.includes("lookAtChat"))).toEqual([]);
       expect(w.all).toEqual([]);
     });
 

@@ -105,7 +105,8 @@ export interface OwnershipSummary {
 
 /**
  * How an unanswered message is held (ownership design §7.1; #2358 PR 5d):
- * - `message`: by its own per-message owner (§7.2), even on an open document;
+ * - `message`: by its own per-message owner (ownership design §7.2), even on
+ *   an open document;
  * - `document`: it follows its open document, held by the document's holder
  *   or claimable with it (its controls are that document's badge's);
  * - `presence`: doc-less or on a closed document, Tandem's Claude's while it
