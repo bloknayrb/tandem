@@ -526,9 +526,6 @@ let settingsModalOpen = $state(false);
 
 const firstRun = createFirstRunNeeded();
 
-// AI-readiness (#1018/#1022): keys on launcher status, not the doc-sync "Synced"
-// dot. Gate on the monotonic `firstRun.settled` (set true once, never reset) so
-// a `refetch()` during a server blip can't bounce the chip back to "booting".
 // #2358 PR 5e: stale chat drives the stall banner beside the delivery round
 // (ownership design §10.2; Bryan, 2026-11-24, "Yes, wire it (Recommended)").
 // The clock ticks only while a published message reads stale, so a dark build
@@ -548,6 +545,9 @@ const chatStaleMs = $derived(
   chatStaleWaitMs(yjsSync.chatOwners, Math.max(chatStaleNow, Date.now())),
 );
 
+// AI-readiness (#1018/#1022): keys on launcher status, not the doc-sync "Synced"
+// dot. Gate on the monotonic `firstRun.settled` (set true once, never reset) so
+// a `refetch()` during a server blip can't bounce the chip back to "booting".
 const aiReadiness = createAiReadiness({
   connected: () => yjsSync.connected,
   firstRunSettled: () => firstRun.settled,
