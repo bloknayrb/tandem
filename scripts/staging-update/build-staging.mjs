@@ -23,10 +23,12 @@
  *     compromised staging host can offer nothing but a genuine signed Tandem.
  *   - `version`: STAGING_VERSION, lower than every real release, so a real
  *     release's own manifest and artifacts read as an update without
- *     re-signing anything or faking a version, and the post-update check is
- *     simply "the version changed to the release's". It is also how the build
- *     is told apart from a real one (About, Copy Diagnostics, the exe's
- *     ProductVersion).
+ *     re-signing anything or faking a version. It is the SHELL's version
+ *     (`package_info().version`, what the updater and the pending-update
+ *     marker compare) and what the installer registers (Windows Apps list, the
+ *     exe's ProductVersion, macOS Get Info). About and Copy Diagnostics do NOT
+ *     show it: they report versions compiled from Cargo.toml and package.json,
+ *     so a staging build built from an RC tag already reads as the RC there.
  *   - `bundle.createUpdaterArtifacts: false`: a staging build is only ever an
  *     update CONSUMER, so it never needs the updater private key. Without this,
  *     `tauri build` fails at the end for want of TAURI_SIGNING_PRIVATE_KEY, and
@@ -90,7 +92,13 @@ export function validateManifestUrl(raw) {
     );
   }
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  const pathname = decodeURIComponent(url.pathname).toLowerCase().replace(/\/+/g, "/");
+  let decoded;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch {
+    throw new Error(`--manifest-url has a malformed percent-escape in its path: ${raw}`);
+  }
+  const pathname = decoded.toLowerCase().replace(/\/+/g, "/");
   if (
     (host === "github.com" || host === "www.github.com") &&
     pathname.startsWith("/bloknayrb/tandem/releases/latest")

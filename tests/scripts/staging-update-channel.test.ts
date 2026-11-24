@@ -69,6 +69,9 @@ describe("no release workflow can apply a staging overlay", () => {
       // tauri-action forwards `args` to `tauri build`; `-c`/`--config` there
       // would merge an overlay into the signed release.
       for (const m of text.matchAll(/^\s*args:\s*(.*)$/gm)) {
+        // A block scalar or a list on the following lines would hide its
+        // contents from the single-line check below, so require one line.
+        expect(m[1].trim(), `${f}: \`args:\` must be a single-line value`).not.toMatch(/^([|>]|$)/);
         expect(m[1], `${f}: ${m[0].trim()}`).not.toMatch(/(^|[\s"'])(--config|-c)(?=[\s=]|$)/);
       }
     });
@@ -131,6 +134,7 @@ describe("the staging overlay", () => {
     ["file:///tmp/latest.json", /https/],
     ["https://user:pw@example.com/latest.json", /credentials/],
     ["not a url", /not a URL/],
+    ["https://example.com/%E0%A4%A/latest.json", /malformed/],
     ["", /required/],
   ])("refuses %s", (u, why) => {
     expect(() => validateManifestUrl(u)).toThrow(why);

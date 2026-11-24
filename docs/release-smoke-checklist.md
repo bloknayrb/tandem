@@ -137,10 +137,13 @@ before it meets a paying user.
       test machine or VM, from a checkout of the RC tag, build the staging
       channel against the RC's per-tag manifest:
       `npm run build:tauri:staging -- --manifest-url https://github.com/bloknayrb/tandem/releases/download/<RC tag>/latest.json`.
-      The staging build reports version `0.0.1` and is otherwise the RC's code,
-      so the RC reads as newer with nothing re-signed. Install it, then confirm:
-      update dot appears → install → restart → About shows the RC's version and
-      **no** "may not have finished updating" banner appears (watch the window;
+      The staging build's shell version is `0.0.1` and it is otherwise the RC's
+      code, so the RC reads as newer with nothing re-signed. Install it, then
+      confirm: update dot appears → install → restart → the **installed app's**
+      version (Settings → Apps, or Get Info on `Tandem.app`) reads the RC's, not
+      `0.0.1`, and **no** "may not have finished updating" banner appears. About
+      proves nothing here: it shows the version compiled into the checkout, which
+      is the RC's before the update too. (Watch the window;
       a successful update logs nothing at the release log level, see
       [what the v0.25.0 run settled](#what-the-v0250-run-settled)). There is
       still no runtime updater-endpoint override: *decided 2026-10-22 (Bryan)*,

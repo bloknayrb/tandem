@@ -64,6 +64,10 @@ curl -sL https://github.com/bloknayrb/tandem/releases/latest/download/latest.jso
 what `publish.yml`'s recovery dispatch, the plugin ref and anyone's bug report point at, and a
 version an updater has seen cannot be offered again under the same number.
 
+**Do not re-run `vBAD`'s Tauri Release workflow** after this step. Its reuse branch PATCHes the
+release whenever the stored `prerelease` flag differs from the tag's, so a re-run sets `vBAD` back
+to a full release with `make_latest: 'legacy'`, and GitHub re-derives `latest` to `vBAD` again.
+
 ### 2. npm: move the dist-tag back and deprecate
 
 ```bash
@@ -87,8 +91,15 @@ gets `vGOOD`.
 
 If the release skill's step 9 already set `source.ref` in `.claude-plugin/marketplace.json` to
 `vBAD`, open a PR setting it back to `vGOOD`. `plugin-version-pin.test.ts` accepts the previous
-stable release, so CI stays green. If step 9 has not happened yet, do nothing, and don't do it for
-`vBAD`.
+stable release, so CI stays green on that PR. If step 9 has not happened yet, do nothing, and
+don't do it for `vBAD`.
+
+**This turns `vFIX`'s version-bump PR red.** That test allows only package.json's version or the
+stable release before it in `CHANGELOG.md`. Once the bump moves package.json to `vFIX`, the
+allowed pair is `vFIX` / `vBAD`, and a ref still on `vGOOD` fails `check`. The bump PR cannot move
+the ref to `vFIX` either (the tag does not exist yet, which is what the test guards). Decide with
+Bryan before cutting `vFIX`: either let the bump PR set the ref to `vBAD` for the window between
+merge and publish, or widen the test for this one release.
 
 ### 4. Licensed route
 
@@ -134,9 +145,14 @@ and runs the same three steps as `npm run build:tauri` with it. The overlay chan
 - **The updater endpoint**, to the URL you name. The public key is unchanged, so a staging build
   still installs only artifacts signed with the real updater key.
 - **The version**, to `0.0.1`, lower than every release. A real release's own `latest.json` and
-  artifacts then read as an update, with nothing re-signed and no fake version. After an update the
-  app shows the release's real version, and the "may not have finished updating" banner stays away.
-  Before it, About and Copy Diagnostics show `0.0.1`, which is how you tell a staging build apart.
+  artifacts then read as an update, with nothing re-signed and no fake version. This is the
+  desktop shell's version: what the updater compares, what the pending-update marker checks after
+  the restart, and what the installer registers (Windows: Settings → Apps, or the exe's
+  Properties → Details; macOS: Get Info on `Tandem.app`). That is where you tell a staging build
+  apart. **About and Copy Diagnostics do not show it**: they report the version compiled into the
+  checkout (`Cargo.toml` and `package.json`, which the release pins keep equal), so a staging build built from a checkout of release X already reads X there.
+  After an update the installed version is the release's, and the "may not have finished updating"
+  banner stays away.
 - **No updater artifacts.** A staging build only consumes updates, so the build never needs the
   updater private key. Do not put that key on the build machine.
 
@@ -181,20 +197,26 @@ Windows. Nothing here touches the real `latest` pointer.
    release's `latest.json`:
 
    ```bash
+   gh release download vOLD --repo bloknayrb/tandem -p latest.json -D old
+   gh release create vOLD old/latest.json --repo <owner>/tandem-update-staging --notes rehearsal
    gh release download vNEW --repo bloknayrb/tandem -p latest.json -D new
    gh release create vNEW new/latest.json --repo <owner>/tandem-update-staging --notes rehearsal
    ```
 
-   Do the same for `vOLD` first, so `vNEW` is created last. Make `vNEW` latest; it plays `vBAD`.
+   `vOLD` goes first, so `vNEW` is created last and is `latest`; it plays `vBAD`.
 2. **Staging build.** `npm run build:tauri:staging -- --manifest-url https://github.com/<owner>/tandem-update-staging/releases/latest/download/latest.json`.
-   Install it on the test machine. About shows `0.0.1`.
+   Install it on a fresh test machine or VM snapshot (step 6 installs `vOLD`, which is older than
+   the checkout you built from, so it must not inherit data a newer build wrote: #1792). The
+   installed app's version (Settings → Apps, or Get Info) reads `0.0.1`; About shows the
+   checkout's own version, not `0.0.1`.
 3. **See the bad release offered.** Tray → Check for Updates. Pass: the update to `vNEW` is
    offered. Don't install it.
 4. **Run step 1 against the staging repo**, with `--repo <owner>/tandem-update-staging` on both
    commands, and the `curl` check against the staging URL (`https://github.com/<owner>/tandem-update-staging/releases/latest/download/latest.json`). Note the times.
 5. **See the pointer move reach the client.** Tray → Check for Updates again. Pass: `vOLD` is
    offered, not `vNEW`. Note how long after step 4 it changed.
-6. **Finish the path.** Install `vOLD`. Pass: the app restarts showing `vOLD`'s version, and no
+6. **Finish the path.** Install `vOLD`. Pass: the app restarts, About and the installed app's
+   version both show `vOLD`'s version, and no
    "Tandem may not have finished updating" banner appears. Check the window, not `tandem.log`: a
    successful update logs nothing at the release log level
    ([why](release-smoke-checklist.md#what-the-v0250-run-settled)).
