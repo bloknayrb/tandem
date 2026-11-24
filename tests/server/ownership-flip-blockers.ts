@@ -49,6 +49,17 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
+      "The shipped skill (skills/tandem/SKILL.md) says wake frames on /api/events carry an id, " +
+      "a type and a timestamp. With ownership on, the stream also sends PR 4a's id-less " +
+      "`event: ownership-changed` / `data: {}` nudge, which the skill does not mention, so a " +
+      "session watching ?filter=wake as the skill describes is not told what it means.",
+    closedBy:
+      'A SKILL.md line saying an ownership-changed frame also means "call tandem_checkInbox", ' +
+      "with its frontmatter version bumped, landed with or before the flip (it reaches users, so " +
+      "not while dark).",
+  },
+  {
+    gap:
       "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
       "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
@@ -163,24 +174,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "turn of Tandem's Claude written after the message hides it even when the message is " +
       "another session's.",
     closedBy: "Bryan's review of the built banner (3b-2e2).",
-  },
-  {
-    gap:
-      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
-      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
-      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
-      "such a session waits for its next poll for a document that went unowned with work on it.",
-    closedBy:
-      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
-      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
-      "have landed.",
-  },
-  {
-    gap:
-      "Push paths (/api/events, /api/wake, the channel shim, the plugin monitor) still deliver " +
-      "every user chat:message to every consumer, so a session can be pushed chat it may not " +
-      "answer (the chat owners PR scoped the inbox and the reply, not pushes).",
-    closedBy: "PR 4 (push scope, design §9.1).",
   },
   {
     gap:

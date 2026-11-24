@@ -35,8 +35,9 @@
  * the `src/channel/run.ts` vs `src/channel/index.ts` split.
  *
  * **STDOUT IS RESERVED** (CLAUDE.md rule #3). The only writes to stdout are
- * the wake line inside the `onEvent` callback, the exhaustion notice and the
- * licence-refusal notice (#1521) inside `buildOptions`. Everything else — including anything that
+ * the wake line inside the `onEvent` callback, the exhaustion notice, the
+ * licence-refusal notice (#1521) and the ownership-changed wake line (#2358
+ * PR 4a) inside `buildOptions`. Everything else — including anything that
  * would otherwise call `console.log/warn/info` — is redirected to stderr by
  * the guard immediately below. When adding a new dependency, grep its source
  * for `process.stdout.write` and `console.log` before accepting; a
@@ -51,7 +52,7 @@
 
 import { Socket } from "node:net";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
-import { isWakeWorthy } from "../shared/events/wake-scope.js";
+import { isWakeWorthy, OWNERSHIP_CHANGED_SSE_EVENT } from "../shared/events/wake-scope.js";
 import {
   _resetSseConsumerStateForTests,
   _addOutstandingAwarenessForTests as _sharedAddOutstandingAwarenessForTests,
@@ -184,6 +185,15 @@ function buildOptions(): EventConsumerOptions {
       // learns why its wakes stopped. Still payload-free: this is the server's
       // fixed refusal copy, never document or chat content.
       process.stdout.write(`Tandem: ${message}\n`);
+    },
+    onOwnershipChanged: () => {
+      // #2358 PR 4a: work changed hands (a document or message went unowned,
+      // or to another session), so this session may now have something to
+      // claim. The same payload-free wake line as an event's: the frame names
+      // nothing, and the poll is where the session finds out what, if anything.
+      process.stdout.write(
+        `Tandem: ${OWNERSHIP_CHANGED_SSE_EVENT} — call tandem_checkInbox for details\n`,
+      );
     },
   };
 }
