@@ -33,9 +33,18 @@ FILE_PATH="${FILE_PATH//\\//}"
 # compares it without regard to case: on Windows the tool input is a drive
 # path, so a "starts with /" test never fires there and a sibling worktree
 # (../tandem-fix-x) would still be scanned against the wrong root.
-case "$FILE_PATH" in */.claude/worktrees/*) exit 0 ;; esac
 _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
 while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
+# The worktree test reads the path BELOW the project dir when the file is inside
+# it, so a session whose project dir is itself a worktree under
+# .claude/worktrees/ still scans its own files (the scanner then runs from that
+# worktree, the right root). Matched on the whole path, that session's every
+# edit was skipped, and this hook's own "inside the project" test failed in it.
+_REL_PATH="$FILE_PATH"
+if [[ -n "$_PROJECT_DIR" && "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
+  _REL_PATH="${FILE_PATH#"$_PROJECT_DIR"/}"
+fi
+case "/$_REL_PATH" in */.claude/worktrees/*) exit 0 ;; esac
 # Known limits, all of which skip the advisory scan rather than run it wrongly:
 # a project dir and a file path in different forms (/c/x against C:/x), a POSIX
 # path that differs from the project dir only by case, and `..` segments.

@@ -194,3 +194,55 @@ describe("handleModeRelease (WS-A2)", () => {
     expect(readModeState()).toBe("solo");
   });
 });
+
+describe("handleModeRelease clears every marker the hold honours (#2481)", () => {
+  it("clears a non-boolean marker, which the indeterminate hold treats as held, and leaves `false` alone", () => {
+    // Its own doc: the suite's shared one is left held by the origin-gate test.
+    const docId = "mode-release-nonboolean-doc";
+    const doc = getOrCreateDocument(docId);
+    addDoc(docId, {
+      id: docId,
+      filePath: `/tmp/${docId}.md`,
+      format: "md",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(docId);
+    const markers: Array<[string, unknown]> = [
+      ["r_string", "true"],
+      ["r_one", 1],
+      ["r_null", null],
+      ["r_false", false],
+    ];
+    withInternal(doc, () => {
+      const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+      for (const [id, heldInSolo] of markers) {
+        replies.set(id, {
+          id,
+          annotationId: "a1",
+          author: "user",
+          text: id,
+          timestamp: 1,
+          rev: 1,
+          heldInSolo,
+        });
+      }
+    });
+    setMode("tandem");
+
+    const { res, captured } = mockRes();
+    handleModeRelease(mockReq(), res);
+
+    // Three cleared; `false` is not a hold, so it is not counted or rewritten.
+    expect(captured.body.data.released).toBe(3);
+    const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    for (const id of ["r_string", "r_one", "r_null"]) {
+      const rec = replies.get(id) as Record<string, unknown>;
+      expect(rec).not.toHaveProperty("heldInSolo");
+      expect(rec.rev as number).toBeGreaterThan(1);
+    }
+    const kept = replies.get("r_false") as Record<string, unknown>;
+    expect(kept.heldInSolo).toBe(false);
+    expect(kept.rev).toBe(1);
+  });
+});
