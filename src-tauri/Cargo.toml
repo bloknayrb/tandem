@@ -30,6 +30,9 @@ log = "0.4"
 # default `minidump` feature enables on `sentry` (tauri-plugin-sentry 0.7
 # removed the old `tauri_plugin_sentry::minidump` re-export); no separate
 # `sentry-minidump` dependency is needed.
+# src/minidump_scrub.rs parses the stream layout of minidump-writer 0.12.0
+# (pulled in by sentry's minidump support). Re-check the scrub, and its test
+# against a real dump, whenever an update changes that version in Cargo.lock.
 sentry = "0.49"
 tauri-plugin-sentry = "0.9"
 # Substring search for the minidump scrub (`src/minidump_scrub.rs`, #2161),
