@@ -48,10 +48,12 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import {
   getDocOwner,
+  noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
   setDocOwner,
+  setGraceMsForTests,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
@@ -357,6 +359,28 @@ describe("an unmapped shim (ownership design §9.2, §9.3)", () => {
       expect(UNLINKED_REPLY).toContain("`tandem` server's `tandem_reply`");
     });
   }
+});
+
+describe("a lapsed record that still exists maps nothing (ownership design §9.1 rule 2)", () => {
+  it("its shim is accepted while the record is live, and refused with `unlinked` once it lapses", async () => {
+    // A transport that is still registered but whose stream has closed: the
+    // record lapses after its grace and is kept, so only the `lapsed` test
+    // of the mapping stops its shim from replying as it.
+    setGraceMsForTests(20);
+    view.push({ ownerId: A, openStreams: 1, streamEver: true });
+    noteTransportRegistered(A, { recordKind: "claude" });
+    expect(shimReply(ID_A, {}).status).toBe(200);
+    const entry = view.find((e) => e.ownerId === A) as TransportViewEntry;
+    entry.openStreams = 0;
+    noteTransportChanged(A);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(ownershipSnapshotForTests().records.find((r) => r.ownerId === A)?.lapsed).toBe(true);
+    heard = [];
+    const before = claudeRows().length;
+    const r = shimReply(ID_A, {});
+    expect(r.body.message).toBe(UNLINKED_REPLY);
+    expectNothingWritten(r, before);
+  });
 });
 
 describe("Tandem's Claude's session id never acts as Tandem's Claude (R3.3)", () => {

@@ -446,9 +446,11 @@ const chatAnswerer = new Map<string, string>();
 /**
  * Who wrote each accepted final reply row (the posts PR, R3.4): step 2 of
  * `settles` adds a confirmed hand-out's batch only to the confirming record's
- * own rows. Written for a final reply from a caller with a record (never a
- * post, an acknowledgement, a `/api/channel-reply` row or a local-model row,
- * which so settle only their target). Dropped with the row
+ * own rows. Written for a final reply from a caller with a record, through
+ * `tandem_reply` or, since the shim's permit (#2358 PR 4b), an accepted
+ * `/api/channel-reply` from a mapped shim (never a post, an acknowledgement,
+ * a channel row written while ownership was off or a local-model row, which
+ * so settle only their target). Dropped with the row
  * (`forgetChatMessageOwners`) and with the record (`deleteRecord`), so a
  * record created again under the same owner id inherits none. Bounded by
  * chat rows. Empty while ownership is off.
