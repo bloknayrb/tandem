@@ -132,7 +132,8 @@ export interface PublishedChatMessageOwner {
   readonly heldBy: PublishedChatHeldBy;
   /**
    * Release applies (ownership design §10.2: "when it has a per-message
-   * owner"): exactly the messages `POST /api/ownership`'s Release would move.
+   * owner"): exactly the messages `POST /api/ownership`'s Release would move,
+   * a per-message owner whose record is gone included (the Release drops it).
    */
   readonly release: boolean;
   /**

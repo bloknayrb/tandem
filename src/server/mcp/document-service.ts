@@ -14,10 +14,8 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_FIDELITY_REPORT,
   Y_MAP_OPEN_DOCUMENTS,
-  Y_MAP_OWNERSHIP_SUMMARY,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
-  Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
@@ -2044,19 +2042,14 @@ export async function restoreCtrlSession(): Promise<string | null> {
   const previousActiveDocId = (meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string) ?? null;
 
   // Clear stale document tracking — no docs are actually open after a restart.
-  // Chat history is preserved; only the document list is wiped.
-  // The ownership composer summary (#2358 PR 5a-3) describes the previous
-  // run's launcher and sessions, and rides in the saved CTRL snapshot. A
-  // flag-on server rewrites it at the start of publishing, but a dark one
-  // never writes the key, so a summary a lit run left would otherwise be
-  // published for good. Absent (every run that never lit it), the delete is
-  // a no-op.
-  const userAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+  // Chat history is preserved; only the document list is wiped. (The
+  // published ownership state a lit run left, the composer summary and the
+  // per-message facts, is already gone: `restoreCtrlDoc` drops both keys,
+  // #2358 PR 5d, so a dark run never shows them.)
   withInternal(ctrlDoc, () => {
     meta.delete(Y_MAP_OPEN_DOCUMENTS);
     meta.delete(Y_MAP_ACTIVE_DOCUMENT_ID);
     meta.delete(Y_MAP_ACTIVE_DOCUMENT_EPOCH);
-    if (userAwareness.has(Y_MAP_OWNERSHIP_SUMMARY)) userAwareness.delete(Y_MAP_OWNERSHIP_SUMMARY);
   });
 
   console.error("[Tandem] Restored chat history from session (cleared stale doc list)");

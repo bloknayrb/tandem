@@ -5141,9 +5141,11 @@ function attachedRecordCouldClaim(documentId: string): boolean {
 /**
  * The owner fields of one open document's published entry (#2358 PR 5a-3;
  * ownership design §10.2), or undefined while ownership is off, so a dark
- * entry gains no key. A reader: it writes nothing (the waiting probe can log,
- * as `documentWaiting` can). Never throws: a failure reads as unowned with no
- * flag or hint.
+ * entry gains no key. A reader: it makes no Y.Doc write (the waiting probe can
+ * log, as `documentWaiting` can; since #2358 PR 5d it ticks the message
+ * clocks through the chat look and records the chat waiting time it built
+ * the entry with, both server memory). Never throws: a failure reads as
+ * unowned with no flag or hint.
  *
  * - `owner`: the holder's label, display kind and kind (an entry whose record
  *   is gone reads as unowned, `readEntry`'s rule); null when unowned.
@@ -5360,7 +5362,12 @@ function lookAtChat(now: number): ChatPublishState {
       owner:
         record === undefined ? null : { label: record.label, displayKind: displayKindOf(record) },
       heldBy: control.heldBy,
-      release: control.perMessageOwner !== undefined,
+      // Exactly what `controlMessageOwner`'s Release acts on: a per-message
+      // owner, or one whose record is gone (its stale backstop drops it,
+      // since it holds nothing but would block every later take).
+      release:
+        control.perMessageOwner !== undefined ||
+        (control.heldBy !== "document" && !carriedOver.has(key) && ownerByMessage.has(key)),
       assign: control.heldBy !== "document",
       since,
       stale,

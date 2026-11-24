@@ -416,6 +416,29 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     expect(published()?.[mine]).toMatchObject({ heldBy: "presence", release: false });
   });
 
+  it("republishes on an open or a close that changes no owner (an unowned document, Tandem's Claude absent)", async () => {
+    const d = mkDoc("d");
+    const m = userChat(key("m"), d);
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "document", assign: false });
+    expect(awareness().get(Y_MAP_OWNERSHIP_SUMMARY)).toMatchObject({ chatWaiting: false });
+
+    // Closed: nobody holds it, claimable on its own, so Assign applies and it
+    // counts for the summary's chat waiting, with no tick.
+    removeDoc(d);
+    broadcastOpenDocs();
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "none", assign: true });
+    expect(awareness().get(Y_MAP_OWNERSHIP_SUMMARY)).toMatchObject({ chatWaiting: true });
+
+    // Reopened unowned: it follows its document again.
+    mkDoc("d");
+    broadcastOpenDocs();
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "document", assign: false });
+    expect(awareness().get(Y_MAP_OWNERSHIP_SUMMARY)).toMatchObject({ chatWaiting: false });
+  });
+
   it("carries no owner id, owner handle or session id", async () => {
     const held = mkDoc("held");
     setDocOwner(held, { ownerId: B, kind: "claimed" }, "take", B);

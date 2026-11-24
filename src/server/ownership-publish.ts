@@ -377,6 +377,19 @@ function onAckChanged(scope: string): void {
 }
 
 /**
+ * After each broadcast of the open documents (#2358 PR 5d review): guard the
+ * rooms it wrote, and ask the chat republish, because an open or a close
+ * changes whether a message follows an open document (its published
+ * `heldBy`, `assign` and clock, and the summary's chat waiting) even when no
+ * owner changes, as for an unowned document opened or closed while Tandem's
+ * Claude is not present. Coalesced, and written only where something changed.
+ */
+function onOpenDocsWritten(): void {
+  guardPublishedRooms();
+  requestOwnershipChatPublish();
+}
+
+/**
  * Start publishing (`src/server/index.ts`, once at boot, both transports):
  * guard `CTRL_ROOM` and every room each broadcast writes, write the summary,
  * arm the stale tick (unref'd), and attach the two waiting triggers: an
@@ -388,7 +401,7 @@ function onAckChanged(scope: string): void {
  */
 export function startOwnershipPublishing(): () => void {
   if (!ownershipEnabled()) return () => {};
-  setOpenDocsWrittenListener(guardPublishedRooms);
+  setOpenDocsWrittenListener(onOpenDocsWritten);
   // The queue's subscriber set makes a second start's subscribe a no-op.
   subscribe(onWaitingEvent, "internal");
   deliveryRegistry.setAckListener(onAckChanged);
