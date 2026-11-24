@@ -7,6 +7,7 @@ import {
 } from "../../shared/models/contract.js";
 import { noteModelsWriteRefused } from "../models/write-refusal.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { throwUnlessReadable } from "./useModelsWriteAccess.svelte.js";
 
 /**
  * Client mirror of the server's "let local models comment and suggest changes"
@@ -81,7 +82,7 @@ async function fetchEditing(abort?: AbortSignal): Promise<boolean> {
     method: "GET",
     signal: abort ? AbortSignal.any([abort, timeout]) : timeout,
   });
-  if (!res.ok) throw new Error(`GET ${API_MODELS_LOCAL_SETTINGS} → ${res.status}`);
+  await throwUnlessReadable(res, API_MODELS_LOCAL_SETTINGS);
   const body = (await res.json()) as LocalModelSettingsResponse;
   if (typeof body.editing !== "boolean") throw new Error("malformed local-model settings");
   return body.editing;
