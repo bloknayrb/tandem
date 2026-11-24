@@ -582,6 +582,8 @@ titlebar-brand-menu-popover
 titlebar-default-model
 titlebar-update-available-dot
 toast-action-{*}
+toast-announcer-assertive
+toast-announcer-polite
 toast-container
 toast-count-{*}
 toast-dismiss-{*}

@@ -1393,8 +1393,9 @@ const actionExecutor = mountActionExecutor({
   // `opts` lets a non-launcher caller (the executor's failure funnel) classify
   // its toast correctly instead of inheriting `type: "launcher"`, and supply a
   // deterministic id. The default id is millisecond-keyed and ToastContainer
-  // keys its `{#each}` on it, so two toasts pushed in the same millisecond are
-  // an `each_key_duplicate` throw.
+  // keys its `{#each}` on it when the toast has no `dedupKey` (`toastKey`), so
+  // two such toasts pushed in the same millisecond are an `each_key_duplicate`
+  // throw.
   notify: (severity, message, opts) => {
     notifications.push({
       id: opts?.id ?? `launcher-${Date.now()}`,
@@ -3397,7 +3398,11 @@ function dismissModelPicker() {
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
     />
 
-    <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+    <ToastContainer
+      toasts={notifications.toasts}
+      announced={notifications.announced}
+      onDismiss={notifications.dismiss}
+    />
 
     <ActivityTray
       items={notifications.activity}
