@@ -120,7 +120,11 @@ interface Props {
    * handler, for the same PanelSlot reason as `tandemClaudeControl`.
    */
   ownerLine: ComposerLine | null;
-  /** The take-back sentence a Start offered here adds, or null. */
+  /**
+   * The take-back sentence every Start offered here adds (the composer line's
+   * and, since Bryan's "Yes, all Starts (Recommended)" of 2026-11-24, the
+   * header's), or null; always null while ownership is off.
+   */
   ownerLineTakeBack: string | null;
   onOwnerLineRemedy: (remedy: "start" | "settings") => void;
 }
@@ -439,7 +443,9 @@ async function exportChat() {
           onclick={tandemClaudeControl === "start" ? onStartClaude : onTurnOffClaude}
           data-testid="chat-tandem-claude-toggle"
           data-action={tandemClaudeControl}
-          title={TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title}
+          title={tandemClaudeControl === "start" && ownerLineTakeBack
+            ? `${TANDEM_CLAUDE_CONTROL.start.title} ${ownerLineTakeBack}.`
+            : TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title}
           class="chat-header-action"
           style="margin-right: auto;"
         >
@@ -476,6 +482,13 @@ async function exportChat() {
           {clearing ? "Clearing…" : "Clear"}
         </button>
       {/if}
+    </div>
+  {/if}
+  {#if tandemClaudeControl === "start" && ownerLineTakeBack}
+    <!-- #2358 PR 5b: the header's Start says which documents it takes back
+         (design §10.2; Bryan, 2026-11-24, "Yes, all Starts (Recommended)"). -->
+    <div class="chat-owner-line" data-testid="chat-tandem-claude-take-back">
+      <span class="chat-owner-line-note">{ownerLineTakeBack}</span>
     </div>
   {/if}
 

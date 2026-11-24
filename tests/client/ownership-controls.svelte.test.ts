@@ -25,6 +25,7 @@ import {
   readOwnershipSummary,
 } from "../../src/client/ownership/owner-view";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
+import StatusBar from "../../src/client/status/StatusBar.svelte";
 import DocumentTabs from "../../src/client/tabs/DocumentTabs.svelte";
 import {
   buildTabMenuContext,
@@ -521,5 +522,99 @@ describe("wiring, from source", () => {
     expect(app).toMatch(
       /composerLine\(\s*yjsSync\.activeTabId === null \? undefined : yjsSync\.ownerFields\.get\(yjsSync\.activeTabId\),\s*yjsSync\.ownershipSummary,\s*\)/,
     );
+  });
+});
+
+/**
+ * Every Start says which documents it takes back (design §10.2; Bryan,
+ * 2026-11-24, "Yes, all Starts (Recommended)"): the chat header's Start and
+ * the status bar's Start chip, from the same `takeBackText` the popover and
+ * the composer line use. Null while ownership is off, which leaves both as today.
+ */
+describe("every Start lists what it takes back", () => {
+  const TAKE_BACK = "Starting takes back “a.md”";
+
+  function renderHeader(control: "start" | "turn-off", takeBack: string | null) {
+    return render(ChatPanel, {
+      props: { ...chatProps(null, () => {}, takeBack), tandemClaudeControl: control },
+    });
+  }
+
+  it("the chat header's Start shows the sentence and adds it to its title", () => {
+    const { getByTestId } = renderHeader("start", TAKE_BACK);
+    expect(getByTestId("chat-tandem-claude-take-back").textContent?.trim()).toBe(TAKE_BACK);
+    expect(getByTestId("chat-tandem-claude-toggle").getAttribute("title")).toBe(
+      `Start Tandem's Claude. Its conversation resumes. ${TAKE_BACK}.`,
+    );
+  });
+
+  it("Turn off says nothing about taking back", () => {
+    const { getByTestId, queryByTestId } = renderHeader("turn-off", TAKE_BACK);
+    expect(queryByTestId("chat-tandem-claude-take-back")).toBeNull();
+    expect(getByTestId("chat-tandem-claude-toggle").getAttribute("title")).not.toContain(
+      "takes back",
+    );
+  });
+
+  it("flag off (no sentence): the header renders as before", () => {
+    const { getByTestId, queryByTestId } = renderHeader("start", null);
+    expect(queryByTestId("chat-tandem-claude-take-back")).toBeNull();
+    expect(getByTestId("chat-tandem-claude-toggle").getAttribute("title")).toBe(
+      "Start Tandem's Claude. Its conversation resumes.",
+    );
+  });
+
+  const barProps = {
+    connected: true,
+    connectionStatus: "connected" as const,
+    reconnectAttempts: 0,
+    disconnectedSince: null,
+    claudeStatus: null,
+    claudeActive: false,
+    aiLiveIndicator: null,
+    aiLauncherAttached: false,
+    aiLocalChat: null,
+    aiLauncherRestarting: false,
+    aiLauncherStarting: false,
+    aiLauncherStandby: "off" as const,
+    aiLauncherStandbyRecent: false,
+    onStartClaude: () => {},
+    aiSessionCount: null,
+    aiNotice: null,
+    onOpenLicenseSettings: () => {},
+    aiState: "stopped" as const,
+    soloMode: false,
+    aiChip: "start" as const,
+  };
+
+  it("the status bar's Start chip adds the sentence to its title and name", () => {
+    const plain = render(StatusBar, { props: barProps });
+    const chip = plain.getByTestId("status-ai-indicator");
+    const title = chip.getAttribute("title") ?? "";
+    const label = chip.getAttribute("aria-label") ?? "";
+    const before = plain.container.innerHTML;
+    plain.unmount();
+
+    // Flag off: a null sentence renders exactly as the bar with no prop.
+    const dark = render(StatusBar, { props: { ...barProps, startTakeBack: null } });
+    expect(dark.container.innerHTML).toBe(before);
+    dark.unmount();
+
+    const lit = render(StatusBar, { props: { ...barProps, startTakeBack: TAKE_BACK } });
+    const litChip = lit.getByTestId("status-ai-indicator");
+    expect(litChip.getAttribute("title")).toBe(`${title} ${TAKE_BACK}.`);
+    expect(litChip.getAttribute("aria-label")).toBe(`${label} ${TAKE_BACK}.`);
+  });
+
+  it("only the Start chip carries it", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...barProps, aiChip: "restart" as const, startTakeBack: TAKE_BACK },
+    });
+    expect(getByTestId("status-ai-indicator").getAttribute("title")).not.toContain("takes back");
+  });
+
+  it("App hands the same sentence to the status bar", () => {
+    const app = readFileSync(join(import.meta.dirname, "../../src/client/App.svelte"), "utf8");
+    expect(app).toMatch(/startTakeBack=\{ownerTakeBackText\}/);
   });
 });

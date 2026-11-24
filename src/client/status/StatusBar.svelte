@@ -93,6 +93,13 @@ interface Props {
    *  forgotten mount a dead Start button rather than a type error. */
   onStartClaude: () => void;
   /**
+   * #2358 PR 5b (Bryan, 2026-11-24, "Yes, all Starts (Recommended)"): the
+   * sentence naming the documents a Start would take back
+   * (`takeBackText`), added to the `start` chip's title and accessible name.
+   * Null while ownership is off (no owner fields), which leaves both as today.
+   */
+  startTakeBack?: string | null;
+  /**
    * Open Settings → License — the `ai-off` chip's action (#1521). Required,
    * like `aiLauncherAttached`: a default would let a mount that forgets it
    * render a CTA that does nothing.
@@ -181,6 +188,7 @@ let {
   onConnectAi,
   onRestartClaude,
   onStartClaude,
+  startTakeBack = null,
   onOpenLicenseSettings,
   aiNotice,
   soloMode,
@@ -413,9 +421,11 @@ const aiCta = $derived.by(() => {
       : aiChip === "start" && aiView
         ? `${aiView.label}. `
         : "";
+  // #2358 PR 5b: a Start that takes documents back says so (design §10.2).
+  const tail = aiChip === "start" && startTakeBack ? ` ${startTakeBack}.` : "";
   return {
-    title: lead + AI_CTA[aiChip].title,
-    ariaLabel: lead + AI_CTA[aiChip].ariaLabel,
+    title: lead + AI_CTA[aiChip].title + tail,
+    ariaLabel: lead + AI_CTA[aiChip].ariaLabel + tail,
     onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
   };
 });

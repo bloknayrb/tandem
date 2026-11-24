@@ -3342,6 +3342,7 @@ function dismissModelPicker() {
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       onStartClaude={startClaude}
+      startTakeBack={ownerTakeBackText}
       onOpenLicenseSettings={openLicenseSettings}
       aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
