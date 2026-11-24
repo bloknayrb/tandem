@@ -267,6 +267,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `data-notice` carries its kind), and `chat-notice-live` (its own persistent
   live region)
 - `chat-tandem-claude-toggle` — Start / Turn off for Tandem's Claude in the chat panel header (#2195; `data-action` is `start` or `turn-off`)
+- `chat-tandem-claude-take-back` — below the header, while its control is Start and ownership is on: the documents a Start would take back (#2358 PR 5b, ownership design §10.2)
 - `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
 - `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
 - `chat-tandem-claude-resume-remedy` — that row's remedy button

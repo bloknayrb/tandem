@@ -78,6 +78,7 @@ chat-tab
 chat-tandem-claude-resume-failed
 chat-tandem-claude-resume-remedy
 chat-tandem-claude-resuming
+chat-tandem-claude-take-back
 chat-tandem-claude-toggle
 claude-code-ai-off-hint
 claude-typing-indicator-{*}
