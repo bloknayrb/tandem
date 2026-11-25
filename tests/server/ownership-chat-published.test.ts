@@ -55,10 +55,12 @@ import {
   applyUserOpenDefault,
   captureCarriedOverChat,
   controlMessageOwner,
+  DEFAULT_GRACE_MS,
   forgetChatMessageOwners,
   getOwnerRecord,
   type LauncherFacts,
   messageClocksForTests,
+  noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   ownershipSummary,
@@ -531,6 +533,132 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     for (const id of [A, B, C]) expect(wire).not.toContain(id);
     expect(wire).not.toContain('"tandem"');
     expect(wire).toContain(labelOf(A));
+  });
+
+  /** A fresh cursor reader's poll as `owner`: the chat keys it is handed. */
+  async function freshPoll(owner: string): Promise<string[]> {
+    expectDeliveryRoundsLive();
+    callingAs = owner;
+    const result = await client.callTool({
+      name: "tandem_checkInbox",
+      arguments: { cursor: "start" },
+    });
+    expect(parseResult(result).error, JSON.stringify(result)).toBe(false);
+    const content = (
+      result as unknown as { structuredContent: { chatMessages: Array<{ id: unknown }> } }
+    ).structuredContent;
+    return content.chatMessages.map((m) => String(m.id)).sort();
+  }
+
+  function lapseByGrace(owner: string): void {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    view = view.filter((e) => e.ownerId !== owner);
+    noteTransportChanged(owner);
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    vi.useRealTimers();
+  }
+
+  /**
+   * #2358, the stale-chat Start flip-blocker row: `tandemMayTake` says
+   * whether Tandem's Claude, once present, may take the message, and a
+   * present Tandem's Claude's poll is then handed exactly those.
+   */
+  it("publishes whether Tandem's Claude may take each message, and its poll once present takes exactly those", async () => {
+    const held = mkDoc("held");
+    const free = mkDoc("free");
+    // C, not B: B lapses below, which would give its document away.
+    setDocOwner(held, { ownerId: C, kind: "claimed" }, "take", C);
+    // Released from Tandem's Claude: Assigned to it, then Released.
+    tandemPresent();
+    present = false;
+    const mine = userChat(key("mine"));
+    const released = userChat(key("released"));
+    await poll(A);
+    present = true;
+    expect(controlMessageOwner(released, "assign", labelOf(TANDEM))).toBe("changed");
+    expect(controlMessageOwner(released, "release", undefined)).toBe("changed");
+    expect(ownershipSnapshotForTests().messageLosses).toContainEqual([
+      released,
+      { ownerId: TANDEM, cause: "released" },
+    ]);
+    // Assigned away from Tandem's Claude (which held it by presence) to B.
+    const assignedAway = userChat(key("assigned-away"));
+    expect(controlMessageOwner(assignedAway, "assign", labelOf(B))).toBe("changed");
+    present = false;
+    const loose = userChat(key("loose"));
+    const onHeld = userChat(key("on-held"), held);
+    const onFree = userChat(key("on-free"), free);
+    const carried = key("carried");
+    withInternal(ctrl(), () =>
+      chatMap().set(carried, {
+        id: carried,
+        author: "user",
+        text: "from before",
+        timestamp: Date.now() - 10 * MIN,
+        read: true,
+      }),
+    );
+    captureCarriedOverChat(() => [carried]);
+    await startPublishing();
+
+    const expected: Record<string, boolean> = {
+      [loose]: true,
+      [onFree]: true,
+      [mine]: false,
+      [onHeld]: false,
+      [carried]: false,
+      // The flip-blocker row's case: published `heldBy: "none"` with nobody
+      // holding it, yet a started Tandem's Claude may not take it.
+      [released]: false,
+      [assignedAway]: false,
+    };
+    const absent = published() ?? {};
+    expect(absent[released]).toMatchObject({ owner: null, heldBy: "none" });
+    for (const [k, may] of Object.entries(expected)) {
+      expect(absent[k]?.tandemMayTake, k).toBe(may);
+    }
+
+    // B lapses: the lapse ends the assigned loss (a change of owner), so the
+    // message is Tandem's Claude's to take again (see the message-control
+    // tests: it comes back to Tandem's Claude).
+    lapseByGrace(B);
+    await settle();
+    expected[assignedAway] = true;
+    expect(published()?.[assignedAway]).toMatchObject({ heldBy: "none", tandemMayTake: true });
+    expect(ownershipSnapshotForTests().messageLosses.map(([k]) => k)).not.toContain(assignedAway);
+
+    // A Start: Tandem's Claude present. The fact read with presence assumed
+    // does not change, and its poll is handed exactly the messages it names.
+    present = true;
+    requestOwnershipChatPublish();
+    await settle();
+    const now = published() ?? {};
+    for (const [k, may] of Object.entries(expected)) {
+      expect(now[k]?.tandemMayTake, k).toBe(may);
+    }
+    const handed = await freshPoll(TANDEM);
+    for (const [k, may] of Object.entries(expected)) {
+      expect(handed.includes(k), k).toBe(may);
+    }
+    // And its reply to the message released from it is refused.
+    const refused = await as(TANDEM, "tandem_reply", { text: "x", replyTo: released });
+    expect(refused.error).toBe(true);
+  });
+
+  it("publishes false for a message Assigned away from Tandem's Claude while its assignee holds it, true once Released back", async () => {
+    tandemPresent();
+    const m = userChat(key("m"));
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "presence", tandemMayTake: true });
+    expect(controlMessageOwner(m, "assign", labelOf(A))).toBe("changed");
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "message", tandemMayTake: false });
+    expect(await freshPoll(TANDEM)).not.toContain(m);
+    // Released from A: the loss now names A, and the table gives it back.
+    expect(controlMessageOwner(m, "release", undefined)).toBe("changed");
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "presence", tandemMayTake: true });
+    expect(await freshPoll(TANDEM)).toContain(m);
   });
 
   it("is an empty object with nothing unanswered, so a client tells none from ownership off", async () => {

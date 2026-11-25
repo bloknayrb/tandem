@@ -158,6 +158,16 @@ export interface PublishedChatMessageOwner {
    */
   readonly assign: boolean;
   /**
+   * Whether Tandem's Claude, once present (a Start makes it so), may take the
+   * message: owns it, or may take or claim it, by the rules its poll is
+   * judged by. False for a message whose loss names Tandem's Claude (Released
+   * from it, or Assigned away from it to a session that still holds it), one
+   * another session holds, and one carried over from before a restart. The
+   * composer's Start for stale chat reads it (#2358; ownership design §10.2:
+   * "where Start can help"), so it never offers a Start that cannot help.
+   */
+  readonly tandemMayTake: boolean;
+  /**
    * The pickup and stall clock's start, ms since the epoch (ownership design
    * §6.5): the message's last change of owner, or its arrival if it never
    * had one. A chat handover (a re-owe) restarts it too. An activity

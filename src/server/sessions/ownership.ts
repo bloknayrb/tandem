@@ -4804,6 +4804,43 @@ function releaseDestination(after: MessageStanding): PublishedChatReleaseTo {
 }
 
 /**
+ * Whether Tandem's Claude, present, may take the message under `key` (#2358,
+ * the stale-chat Start flip-blocker row; ownership design §7.1, §10.2): what
+ * the poll's `chatScopeOf` would answer a present Tandem's Claude (it owns
+ * the message, or may take or claim it), read through the same
+ * {@link messageStanding} and {@link lostMessage}. The composer's Start that
+ * reads it is offered while Tandem's Claude is not running, and a Start is
+ * what makes it present; the answer does not depend on presence, because
+ * presence changes only whether a message with no per-message owner and no
+ * open document reads as Tandem's Claude's (`owned`) or as claimable per
+ * message, and both answer `!lostMessage` for Tandem's Claude here. So it is
+ * false for a message whose loss names Tandem's Claude (the user Released it
+ * from Tandem's Claude, or Assigned it away from it to a session that still
+ * holds it; a lapse of that session ends the loss, and so gives it back),
+ * for one another record holds per message or by its open document, for a
+ * carried-over message (no poll hands it to anyone) and for local-period
+ * chat. A message that follows an open document nobody holds answers from
+ * the message alone: the poll's document half (its snapshot's `may-claim`:
+ * an idle queue, no loss of the document) is transient and nothing
+ * republishes when it changes, and a Start's presence gives such a document
+ * to Tandem's Claude by the default rule ({@link noteTandemPresence}), which
+ * ends any loss of it. Pure.
+ */
+function tandemMayTakeMessage(key: string, facts: ChatMessageFacts): boolean {
+  if (carriedOver.has(key)) return false;
+  const standing = messageStanding(key, facts);
+  switch (standing.kind) {
+    case "none":
+      return false;
+    case "owned":
+      return standing.ownerId === TANDEM_OWNER_ID;
+    case "with-document":
+    case "per-message":
+      return !lostMessage(key, TANDEM_OWNER_ID);
+  }
+}
+
+/**
  * Release or Assign of a carried-over message (#2358 PR 5a-2; Bryan's pick
  * "Let Assign own them", 2026-11-23). A carried-over message (a row the
  * boot's restore brought back read and unhandled, the posts amendment's
@@ -5521,6 +5558,7 @@ function lookAtChat(now: number): ChatPublishState {
           ? releaseDestination(messageStanding(key, facts, { lost: undefined }))
           : null),
       assign: control.heldBy !== "document",
+      tandemMayTake: tandemMayTakeMessage(key, facts),
       since,
       stale,
     };
