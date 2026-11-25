@@ -65,9 +65,12 @@ chat-claude-code-offer-setup
 chat-composer-input
 chat-greeting-late
 chat-greeting-late-action
+chat-greeting-late-take-back
 chat-messages
 chat-notice-live
 chat-notice-{*}
+chat-owner-line
+chat-owner-line-action
 chat-panel
 chat-pickup-live
 chat-pickup-status
@@ -75,7 +78,9 @@ chat-send-btn
 chat-tab
 chat-tandem-claude-resume-failed
 chat-tandem-claude-resume-remedy
+chat-tandem-claude-resume-take-back
 chat-tandem-claude-resuming
+chat-tandem-claude-take-back
 chat-tandem-claude-toggle
 claude-code-ai-off-hint
 claude-typing-indicator-{*}
@@ -421,6 +426,7 @@ outline-panel
 outline-search-input
 palette-empty
 palette-input
+palette-item-detail-{*}
 palette-item-new-scratchpad
 palette-item-{*}
 panel-edge-collapse-{*}
@@ -569,6 +575,13 @@ store-readonly-reclaim-error
 suggestion-diff-{*}
 suggestion-original-truncated-{*}
 tab-name-{*}
+tab-owner-announcer
+tab-owner-assign-{*}
+tab-owner-badge
+tab-owner-error
+tab-owner-menu
+tab-owner-release
+tab-owner-start
 tab-scroll-container
 tab-{*}
 testId ?? `{*}-panel-resize-handle`

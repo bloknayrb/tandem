@@ -185,13 +185,16 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The user's controls exist only on the server (#2358 PR 5a, 5a-2: POST /api/ownership for " +
-      "a document and for a chat message): nothing in the editor reaches them yet, so a stuck " +
-      "claim, a live acknowledger that never answers, or chat a tab close left with its closing " +
-      "holder can be moved only by a local process calling the route.",
+      "The user's controls for a chat message exist only on the server (#2358 PR 5a-2: " +
+      "POST /api/ownership with a messageId): nothing in the editor reaches them, so a live " +
+      "acknowledger that never answers, or chat a tab close left with its closing holder, can be " +
+      "moved only by a local process calling the route. The editor cannot build them yet: the " +
+      "published state names no message's owner. (Narrowed by PR 5b, per Bryan's 'Publish facts " +
+      "first (Recommended)', 2026-11-24: the document controls landed there.)",
     closedBy:
-      "PR 5b (the badge's Release and Assign, the Assign popover, the pickup row's Assign and " +
-      "Release of a message, the native menu's leaves).",
+      "PR 5d (publishing each unanswered message's owner facts beside its pickup and stall clock) " +
+      "and its client follow-up, PR 5e (the pickup row's Assign of a message, and Release where " +
+      "it has a per-message owner).",
   },
   {
     gap:

@@ -8,6 +8,7 @@ import { scrollFade } from "../actions/scrollFade.svelte.js";
 import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
+import type { ComposerLine } from "../ownership/owner-view";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { agentBylineLabel } from "../utils/agentLabel";
@@ -113,6 +114,20 @@ interface Props {
    * notice is announced too. Required.
    */
   noticeAnnouncement: string;
+  /**
+   * #2358 PR 5b: who will answer a message sent now (ownership design §10.2),
+   * or null while ownership is off, which renders nothing. Required, with its
+   * handler, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  ownerLine: ComposerLine | null;
+  /**
+   * The take-back sentence every Start offered here adds (the composer line's
+   * and, since Bryan's "Yes, all Starts (Recommended)" of 2026-11-24, the
+   * header's, the failed resume row's and the late-greeting note's), or null;
+   * always null while ownership is off.
+   */
+  ownerLineTakeBack: string | null;
+  onOwnerLineRemedy: (remedy: "start" | "settings") => void;
 }
 
 let {
@@ -145,6 +160,9 @@ let {
   localPickup,
   localPeriod,
   noticeAnnouncement,
+  ownerLine,
+  ownerLineTakeBack,
+  onOwnerLineRemedy,
 }: Props = $props();
 
 /** Render a row as a notice (#1123 part B, R6.1). Flag-gated: a dark editor
@@ -165,6 +183,21 @@ const TANDEM_CLAUDE_CONTROL = {
       "Turn off Tandem's Claude. It stays off, including the next time Tandem starts, until you start it again.",
   },
 } as const;
+
+/**
+ * #2358 PR 5b (design §10.2; Bryan, 2026-11-24, "Yes, all Starts
+ * (Recommended)"): the take-back sentence for a remedy that runs Start, or
+ * null. Keyed on the CTA's `action`, the handler `aiCtaHandler` dispatches, so
+ * any remedy that starts Tandem's Claude carries it. Null while ownership is off.
+ */
+function startTakeBack(remedy: keyof typeof AI_CTA): string | null {
+  return AI_CTA[remedy].action === "start" ? ownerLineTakeBack : null;
+}
+
+/** A Start's title or accessible name with the take-back sentence added. */
+function withTakeBack(text: string, takeBack: string | null): string {
+  return takeBack ? `${text} ${takeBack}.` : text;
+}
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
@@ -426,7 +459,10 @@ async function exportChat() {
           onclick={tandemClaudeControl === "start" ? onStartClaude : onTurnOffClaude}
           data-testid="chat-tandem-claude-toggle"
           data-action={tandemClaudeControl}
-          title={TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title}
+          title={withTakeBack(
+            TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title,
+            tandemClaudeControl === "start" ? ownerLineTakeBack : null,
+          )}
           class="chat-header-action"
           style="margin-right: auto;"
         >
@@ -463,6 +499,13 @@ async function exportChat() {
           {clearing ? "Clearing…" : "Clear"}
         </button>
       {/if}
+    </div>
+  {/if}
+  {#if tandemClaudeControl === "start" && ownerLineTakeBack}
+    <!-- #2358 PR 5b: the header's Start says which documents it takes back
+         (design §10.2; Bryan, 2026-11-24, "Yes, all Starts (Recommended)"). -->
+    <div class="chat-owner-line" data-testid="chat-tandem-claude-take-back">
+      <span class="chat-owner-line-note">{ownerLineTakeBack}</span>
     </div>
   {/if}
 
@@ -620,6 +663,7 @@ async function exportChat() {
       </div>
     {:else if tandemClaudeResume?.kind === "failed"}
       {@const remedy = tandemClaudeResume.remedy}
+      {@const takeBack = startTakeBack(remedy)}
       <div
         class="chat-status-row chat-status-row-wrap"
         data-testid="chat-tandem-claude-resume-failed"
@@ -631,18 +675,26 @@ async function exportChat() {
           type="button"
           class="chat-header-action"
           data-testid="chat-tandem-claude-resume-remedy"
-          title={AI_CTA[remedy].title}
-          aria-label={AI_CTA[remedy].ariaLabel}
+          title={withTakeBack(AI_CTA[remedy].title, takeBack)}
+          aria-label={withTakeBack(AI_CTA[remedy].ariaLabel, takeBack)}
           onclick={() => onResumeRemedy(remedy)}
         >
           {AI_CTA[remedy].label}
         </button>
+        {#if takeBack}
+          <!-- #2358 PR 5b: a Start says which documents it takes back. -->
+          <span class="chat-owner-line-note" data-testid="chat-tandem-claude-resume-take-back"
+            >{takeBack}</span
+          >
+        {/if}
       </div>
     {:else if tandemClaudeGreetingLate}
       {@const greet =
         tandemClaudeGreetingLate === "relaunch"
           ? GREETING_RELAUNCH
           : AI_CTA[tandemClaudeGreetingLate]}
+      {@const takeBack =
+        tandemClaudeGreetingLate === "relaunch" ? null : startTakeBack(tandemClaudeGreetingLate)}
       <div
         class="chat-status-row chat-status-row-wrap"
         data-testid="chat-greeting-late"
@@ -654,12 +706,18 @@ async function exportChat() {
           type="button"
           class="chat-header-action"
           data-testid="chat-greeting-late-action"
-          title={greet.title}
-          aria-label={greet.ariaLabel}
+          title={withTakeBack(greet.title, takeBack)}
+          aria-label={withTakeBack(greet.ariaLabel, takeBack)}
           onclick={() => onGreetingAction(tandemClaudeGreetingLate)}
         >
           {greet.label}
         </button>
+        {#if takeBack}
+          <!-- #2358 PR 5b: a Start says which documents it takes back. -->
+          <span class="chat-owner-line-note" data-testid="chat-greeting-late-take-back"
+            >{takeBack}</span
+          >
+        {/if}
       </div>
     {:else if pickup}
       <div
@@ -758,6 +816,32 @@ async function exportChat() {
        its own border + focus ring; the send button is a separate accent circle
        with a paper-plane glyph (the prototype's dark-warm fill maps to the
        app's accent primary so it stays on the semantic-token system). -->
+  {#if ownerLine}
+    <!-- #2358 PR 5b: who answers a message sent now (ownership design §10.2). -->
+    <div
+      class="chat-owner-line"
+      data-testid="chat-owner-line"
+      data-kind={ownerLine.kind}
+    >
+      <span>{ownerLine.text}</span>
+      {#if ownerLine.kind === "none"}
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-owner-line-action"
+          data-remedy={ownerLine.remedy}
+          onclick={() => {
+            if (ownerLine.kind === "none") onOwnerLineRemedy(ownerLine.remedy);
+          }}
+        >
+          {ownerLine.remedy === "start" ? "Start Tandem's Claude" : "Open Settings"}
+        </button>
+        {#if ownerLine.remedy === "start" && ownerLineTakeBack}
+          <span class="chat-owner-line-note">{ownerLineTakeBack}</span>
+        {/if}
+      {/if}
+    </div>
+  {/if}
   <div class="chat-input-area">
     <textarea
       bind:this={internalInputEl}
@@ -798,6 +882,22 @@ async function exportChat() {
 </div>
 
 <style>
+  .chat-owner-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--tandem-space-1) var(--tandem-space-2);
+    padding: var(--tandem-space-1) var(--tandem-space-3) 0;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .chat-owner-line[data-kind="none"] {
+    color: var(--tandem-warning-fg-strong);
+  }
+  .chat-owner-line-note {
+    flex-basis: 100%;
+    color: var(--tandem-fg-muted);
+  }
   .chat-bubble {
     margin-bottom: var(--tandem-space-3);
     padding: var(--tandem-space-2) var(--tandem-space-3);

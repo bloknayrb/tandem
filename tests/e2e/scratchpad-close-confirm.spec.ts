@@ -119,8 +119,8 @@ test("the tab's X: Cancel keeps the scratchpad open, and the X still works after
   const closeButton = page
     .locator("[role='tab']")
     .filter({ has: tabName })
-    .locator("button")
-    .first();
+    // Named: with ownership on, the owner badge is another button in the tab (#2358 PR 5b).
+    .getByRole("button", { name: /^Close / });
 
   await closeButton.click();
   await expect.poll(() => confirmCalls(page)).toBe(1);

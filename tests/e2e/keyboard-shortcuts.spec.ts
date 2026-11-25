@@ -537,8 +537,9 @@ test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", as
   // (Per CLAUDE.md the tab itself has data-testid="tab-{id}", and the close
   //  button is inside it with role="button" / appropriate aria.)
   const sample2Tab = page.locator("[role='tab']").filter({ has: sample2 });
-  // The close button is the only button inside the tab item.
-  await sample2Tab.locator("button").first().click();
+  // Name the close button: with ownership on, the owner badge is another
+  // button inside the tab, ahead of it (#2358 PR 5b).
+  await sample2Tab.getByRole("button", { name: /^Close / }).click();
   await expect(sample2).toHaveCount(0);
 
   await page.keyboard.press("Control+Alt+t");

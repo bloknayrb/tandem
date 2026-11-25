@@ -84,6 +84,9 @@ function renderChat(
       localPickup: over.localPickup === undefined ? inputs() : over.localPickup,
       localPeriod: over.localPeriod ?? false,
       noticeAnnouncement: over.noticeAnnouncement ?? "",
+      ownerLine: null,
+      ownerLineTakeBack: null,
+      onOwnerLineRemedy: () => {},
     },
   });
 }

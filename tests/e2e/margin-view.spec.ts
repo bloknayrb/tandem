@@ -533,9 +533,12 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
     // Switch to doc A. The bubble set must change — proving the column annotation
     // input (and, by extension, the $derived that produces the handlers reading
     // `activeTab.ydoc`/`activeTab.id`) re-evaluated against the new tab.
-    // Address tabs by exact aria-label so "sample.md" doesn't collide with
-    // "sample2.md" via substring matching.
-    const tabA = page.locator("[role='tab'][aria-label='sample.md']");
+    // Address the tab by its name span's exact text, so "sample.md" doesn't
+    // collide with "sample2.md" via substring matching. Not by aria-label: with
+    // ownership on that also carries the owner badge's text (#2358 PR 5b).
+    const tabA = page.locator("[role='tab']").filter({
+      has: page.locator("[data-testid^='tab-name-']", { hasText: /^sample\.md$/ }),
+    });
     await expect(tabA).toBeVisible({ timeout: 5_000 });
     await tabA.click();
 

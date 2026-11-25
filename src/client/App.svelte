@@ -154,6 +154,7 @@ import {
   startCommentReveal,
   toCommentAnswerItem,
 } from "./notifications/comment-attention";
+import { composerLine, takeBackNames, takeBackText } from "./ownership/owner-view";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -322,6 +323,23 @@ const pendingUpdateBanner = createPendingUpdateBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
+
+// #2358 PR 5b: the composer's "who answers" line (ownership design §10.2),
+// from the active document's published owner fields, or from the summary with
+// no tab. Null while ownership is off: a dark server publishes neither.
+const ownerComposerLine = $derived(
+  composerLine(
+    yjsSync.activeTabId === null ? undefined : yjsSync.ownerFields.get(yjsSync.activeTabId),
+    yjsSync.ownershipSummary,
+  ),
+);
+const ownerTakeBackText = $derived(
+  takeBackText(
+    takeBackNames(
+      yjsSync.tabs.map((t) => ({ fileName: t.fileName, fields: yjsSync.ownerFields.get(t.id) })),
+    ),
+  ),
+);
 
 // #1123 part B, R1.2: the switch's own notices are a trigger to re-read who
 // answers chat. Called from the stream's message handler (an event handler).
@@ -861,6 +879,18 @@ const tandemClaudeControl = $derived<"start" | "turn-off" | null>(
       : null,
 );
 
+// #2358 PR 5b: the palette's "Start Tandem's Claude" says what it takes back
+// (design §10.2; Bryan, 2026-11-24, "Yes, all Starts (Recommended)"). The
+// palette's commands are static, so the entry stays listed while Tandem's
+// Claude runs; the sentence shows only while a Start would start it. Empty
+// while ownership is off (no sentence), so the palette renders as before.
+const NO_PALETTE_DETAILS: ReadonlyMap<string, string> = new Map();
+const paletteDetails = $derived<ReadonlyMap<string, string>>(
+  ownerTakeBackText !== null && !aiReadiness.launcherRunning
+    ? new Map([["launcher-start", ownerTakeBackText]])
+    : NO_PALETTE_DETAILS,
+);
+
 /** The "hasn't said hello" note's action (#2197): restart a Claude that is
  *  still running, otherwise the stopped launcher's own remedy. */
 const greetingAction = $derived<GreetingAction | null>(
@@ -1339,6 +1369,12 @@ let nextSettingsTabId = $state<string | null>(null);
 
 function openModelsSettings() {
   if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.models;
+  openSettingsModalWithAck();
+}
+
+/** Settings → Claude Code (#2358 PR 5b): the composer line's "No AI will answer" pointer. */
+function openClaudeCodeSettings() {
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.claudeCode;
   openSettingsModalWithAck();
 }
 
@@ -3251,6 +3287,10 @@ function dismissModelPicker() {
             localPickup={localPickupInputs}
             localPeriod={localPeriodNow}
             noticeAnnouncement={chatNoticeAnnouncement}
+            ownerLine={ownerComposerLine}
+            ownerLineTakeBack={ownerTakeBackText}
+            onOwnerLineRemedy={(remedy) =>
+              remedy === "start" ? startClaude() : openClaudeCodeSettings()}
           />
           <PanelSlot
             kind="side"
@@ -3314,6 +3354,7 @@ function dismissModelPicker() {
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       onStartClaude={startClaude}
+      startTakeBack={ownerTakeBackText}
       onOpenLicenseSettings={openLicenseSettings}
       aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
@@ -3400,6 +3441,7 @@ function dismissModelPicker() {
       {editor}
       annotations={visibleAnnotations}
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
+      actionDetails={paletteDetails}
     />
 
     <ToastContainer
@@ -3484,6 +3526,9 @@ function dismissModelPicker() {
     renameTrigger={renameTabTrigger}
     closedTabTop={closedTabStack.top}
     onReopenClosed={documentWorkspace.reopenClosedTab}
+    ownerFields={yjsSync.ownerFields}
+    ownershipSummary={yjsSync.ownershipSummary}
+    onStartTandemClaude={startClaude}
   />
 {/snippet}
 
