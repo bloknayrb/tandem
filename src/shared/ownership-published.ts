@@ -162,7 +162,10 @@ export interface PublishedChatMessageOwner {
    * message: owns it, or may take or claim it, by the rules its poll is
    * judged by. False for a message whose loss names Tandem's Claude (Released
    * from it, or Assigned away from it to a session that still holds it), one
-   * another session holds, and one carried over from before a restart. The
+   * another session holds, and one carried over from before a restart. A
+   * message that follows an open document nobody holds answers from the
+   * message alone (the poll's transient document half, an idle queue, is left
+   * out), so it may read true while a poll could not claim it yet. The
    * composer's Start for stale chat reads it (#2358; ownership design §10.2:
    * "where Start can help"), so it never offers a Start that cannot help.
    */
