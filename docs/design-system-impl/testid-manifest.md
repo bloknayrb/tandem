@@ -292,7 +292,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `chat-message-owner-release-{*}` (Release, saying where it goes) and
   `chat-message-owner-assign-{*}` ("Assign…", which opens `chat-message-owner-menu`
   listing `chat-message-owner-choice-{*}`, keyed by the session's label), and
-  `chat-message-owner-error-{*}` for a refusal; nothing while ownership ships dark
+  `chat-message-owner-error-{*}` for a refusal (visible only; spoken by
+  `chat-message-owner-announcer`, the chat panel's always-mounted announcer,
+  mounted from the first published facts); nothing while ownership ships dark
 
 ### Banners
 - `banner-stack` — the measured wrapper around the five top-of-shell banners

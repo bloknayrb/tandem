@@ -537,23 +537,48 @@ const FIRST_TO_CHECK_IN: ComposerLine = { kind: "to", text: "→ the first sessi
 export function composerLine(
   active: PublishedOwnerFields | undefined,
   summary: OwnershipSummary | null,
+  chatOwners?: ReadonlyMap<string, PublishedChatMessageOwner>,
 ): ComposerLine | null {
   const line = whoAnswers(active, summary);
   // #2358 PR 5e (ownership design §10.2: the stale flag "drives ... the
   // composer's Start offer (where Start can help)"; Bryan, 2026-11-24, "Yes
-  // (Recommended)"): a stale chat message with no controlling badge, and
-  // Tandem's Claude could answer it, so the line offers 5b's Start. A "no AI"
-  // line already carries its own remedy. Not while Tandem's Claude is already
-  // running: Start cannot help then (the same test as the not-present offer).
+  // (Recommended)", asked as "where Tandem's Claude could answer"): a stale
+  // chat message with no controlling badge, and Tandem's Claude could answer
+  // it, so the line offers 5b's Start. A "no AI" line already carries its own
+  // remedy. Not while Tandem's Claude is already running: Start cannot help
+  // then (the same test as the not-present offer). With the per-message facts
+  // (`chatOwners`, which App passes), not when every such stale message is
+  // held per message by another session: a per-message owner wins over
+  // presence (§7.1), so a started Tandem's Claude could not answer it.
   if (
     line?.kind === "to" &&
     summary?.chatStale === true &&
     summary.tandemStartable &&
-    !summary.tandemRunning
+    !summary.tandemRunning &&
+    (chatOwners === undefined || startCouldAnswerStaleChat(chatOwners))
   ) {
     return { ...line, remedy: "start" };
   }
   return line;
+}
+
+/**
+ * Whether some stale message with no controlling badge (the summary's
+ * `chatStale` set, as {@link chatStaleWaitMs} reads it) is one a started
+ * Tandem's Claude could answer: not held per message by another session.
+ */
+function startCouldAnswerStaleChat(
+  chatOwners: ReadonlyMap<string, PublishedChatMessageOwner>,
+): boolean {
+  for (const facts of chatOwners.values()) {
+    if (!facts.stale || facts.heldBy === "document") continue;
+    const heldByAnother =
+      facts.heldBy === "message" &&
+      facts.owner !== null &&
+      facts.owner.displayKind !== "Tandem's Claude";
+    if (!heldByAnother) return true;
+  }
+  return false;
 }
 
 function whoAnswers(

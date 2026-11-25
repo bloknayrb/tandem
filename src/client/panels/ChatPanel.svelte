@@ -7,6 +7,7 @@ import type { FlatOffset } from "../../shared/positions/types";
 import { type CapturedAnchor, type ChatMessage, isChatNoticeRow } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import LiveRegion from "../components/LiveRegion.svelte";
+import { SR_ONLY_STYLE } from "../components/live-region.js";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import { type ComposerLine, messageControlView } from "../ownership/owner-view";
@@ -226,6 +227,22 @@ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth"
 
 let inputText = $state("");
 let actionError = $state<string | null>(null);
+
+/**
+ * #2358 PR 5e: a message control's refusal, as spoken (#1431, #2489, the
+ * shape 5b's `tab-owner-announcer` takes). A control line's inline refusal is
+ * inserted together with its text, which is commonly announced by nothing, and
+ * a refusal such as "already answered" arrives as its republish unmounts the
+ * line. So this always-mounted announcer speaks it instead. Mounted from the
+ * first published facts and never unmounted after (a dark server publishes
+ * none, so a dark build renders nothing new); emptied at every new attempt, so
+ * a repeat refusal is a change again.
+ */
+let messageOwnerAnnouncement = $state("");
+let messageOwnerAnnouncerMounted = $state(false);
+$effect(() => {
+  if (messageOwners.size > 0) messageOwnerAnnouncerMounted = true;
+});
 let clearing = $state(false);
 let exporting = $state(false);
 
@@ -662,7 +679,11 @@ async function exportChat() {
       {#if control}
         <!-- #2358 PR 5e: who holds this unanswered message, with its Release
              and Assign (ownership design §10.2). Never while ownership is off. -->
-        <ChatMessageOwnerLine messageId={msg.id} view={control} />
+        <ChatMessageOwnerLine
+          messageId={msg.id}
+          view={control}
+          onerror={(text) => (messageOwnerAnnouncement = text ?? "")}
+        />
       {/if}
       {/if}
     {/each}
@@ -818,6 +839,9 @@ async function exportChat() {
          one host per message (LiveRegion's rule), never the reply chime. -->
     {#if BYO_MODELS_ENABLED}
       <LiveRegion srOnly message={noticeAnnouncement} data-testid="chat-notice-live" />
+    {/if}
+    {#if messageOwnerAnnouncerMounted}
+      <div role="alert" aria-live="assertive" style={SR_ONLY_STYLE} data-testid="chat-message-owner-announcer">{messageOwnerAnnouncement}</div>
     {/if}
   </div>
 

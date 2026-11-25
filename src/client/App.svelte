@@ -331,6 +331,7 @@ const ownerComposerLine = $derived(
   composerLine(
     yjsSync.activeTabId === null ? undefined : yjsSync.ownerFields.get(yjsSync.activeTabId),
     yjsSync.ownershipSummary,
+    yjsSync.chatOwners,
   ),
 );
 const ownerTakeBackText = $derived(

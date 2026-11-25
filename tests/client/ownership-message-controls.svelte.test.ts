@@ -294,6 +294,51 @@ describe("the control line under each unanswered message", () => {
     const error = getByTestId("chat-message-owner-error-m");
     expect(error.textContent?.trim()).toBe(text);
     expect(getByTestId("chat-message-owner-m").contains(error)).toBe(true);
+    // Spoken by the panel's always-mounted announcer (#1431, #2489), not by
+    // the inline copy, which is inserted together with its text.
+    expect(error.getAttribute("role")).toBeNull();
+    expect(error.getAttribute("aria-hidden")).toBe("true");
+    expect(getByTestId("chat-message-owner-announcer").textContent).toBe(text);
+  });
+
+  it("the refusal announcer is mounted before any refusal, outlives the line, and empties at a new attempt", async () => {
+    let answer: (r: unknown) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const props = chatProps([user("m")], new Map([["m", facts()]]), SUMMARY);
+    const { getByTestId, queryByTestId, rerender } = render(ChatPanel, { props });
+    await settle();
+    const announcer = getByTestId("chat-message-owner-announcer");
+    expect(announcer.getAttribute("role")).toBe("alert");
+    expect(announcer.textContent).toBe("");
+    await fireEvent.click(getByTestId("chat-message-owner-release-m"));
+    // The message is answered and its facts go before the refusal lands.
+    await rerender({ ...props, messageOwners: new Map(), pickupClock: new Map() });
+    expect(queryByTestId("chat-message-owner-m")).toBeNull();
+    answer(jsonResponse(409, { error: "answered" }));
+    await settle();
+    expect(getByTestId("chat-message-owner-announcer")).toBe(announcer);
+    expect(announcer.textContent).toBe("This message was already answered");
+  });
+
+  it("a successful Release hands focus back to the line rather than leaving it on the page", async () => {
+    let answer: (r: unknown) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const { getByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts()]]), SUMMARY),
+    });
+    const release = getByTestId("chat-message-owner-release-m");
+    release.focus();
+    await fireEvent.click(release);
+    await settle();
+    // A browser drops focus from a control disabled while it is focused;
+    // happy-dom does not, so stand that in: focus goes to a node that leaves.
+    const away = document.body.appendChild(document.createElement("button"));
+    away.focus();
+    away.remove();
+    expect(document.activeElement).toBe(document.body);
+    answer(jsonResponse(200, { data: { changed: true } }));
+    await settle();
+    expect(document.activeElement).toBe(release);
   });
 
   it("Assign… opens the owners list, and picking one assigns the message by label and closes it", async () => {
@@ -414,6 +459,41 @@ describe("the control line under each unanswered message", () => {
     await settle();
     expect(queryByTestId("chat-message-owner-menu")).toBeNull();
     expect(document.activeElement).toBe(assign);
+  });
+
+  it("the owners list is moved out of the masked messages list, takes focus, and an Escape another handler took leaves it open", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        data: [{ label: "owner-p2zt", displayKind: "terminal", holds: [], canTake: true }],
+      }),
+    );
+    const { getByTestId, queryByTestId } = render(ChatPanel, {
+      props: chatProps([user("m")], new Map([["m", facts()]]), SUMMARY),
+    });
+    await fireEvent.click(getByTestId("chat-message-owner-assign-m"));
+    await settle();
+    const menu = getByTestId("chat-message-owner-menu");
+    expect(menu.parentElement).toBe(document.body);
+    expect(getByTestId("chat-messages").contains(menu)).toBe(false);
+    expect(document.activeElement).toBe(getByTestId("chat-message-owner-choice-owner-p2zt"));
+    const taken = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    taken.preventDefault();
+    document.dispatchEvent(taken);
+    await settle();
+    expect(queryByTestId("chat-message-owner-menu")).toBeTruthy();
+  });
+
+  it("closes the owners list when a republish stops offering Assign, and leaves nothing in the page", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const props = chatProps([user("m")], new Map([["m", facts()]]), SUMMARY);
+    const { getByTestId, queryByTestId, rerender } = render(ChatPanel, { props });
+    await fireEvent.click(getByTestId("chat-message-owner-assign-m"));
+    await settle();
+    expect(getByTestId("chat-message-owner-menu")).toBeTruthy();
+    await rerender({ ...props, messageOwners: new Map([["m", facts({ assign: false })]]) });
+    await settle();
+    expect(queryByTestId("chat-message-owner-menu")).toBeNull();
+    expect(document.querySelector('[data-testid="chat-message-owner-menu"]')).toBeNull();
   });
 
   it("an empty owners list says so", async () => {

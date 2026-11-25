@@ -655,7 +655,7 @@ describe("wiring, from source", () => {
     expect(app).toMatch(/ownerLine=\{ownerComposerLine\}/);
     expect(app).toMatch(/ownerLineTakeBack=\{ownerTakeBackText\}/);
     expect(app).toMatch(
-      /composerLine\(\s*yjsSync\.activeTabId === null \? undefined : yjsSync\.ownerFields\.get\(yjsSync\.activeTabId\),\s*yjsSync\.ownershipSummary,\s*\)/,
+      /composerLine\(\s*yjsSync\.activeTabId === null \? undefined : yjsSync\.ownerFields\.get\(yjsSync\.activeTabId\),\s*yjsSync\.ownershipSummary,\s*yjsSync\.chatOwners,\s*\)/,
     );
   });
 });

@@ -670,6 +670,56 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
     ).toEqual({ kind: "to", text: "→ terminal owner-k7qx" });
   });
 
+  it("with the per-message facts, offers Start only where a started Tandem's Claude could answer a stale message", () => {
+    const stale = summary({ chatStale: true, tandemStartable: true, tandemRunning: false });
+    const offered = { kind: "to", text: "→ terminal owner-k7qx", remedy: "start" };
+    const plain = { kind: "to", text: "→ terminal owner-k7qx" };
+    // Held per message by another session: a per-message owner wins over
+    // presence, so Start cannot answer it.
+    const byTerminal = chatFacts({ stale: true, heldBy: "message" });
+    expect(composerLine(terminal, stale, new Map([["m", byTerminal]]))).toEqual(plain);
+    // A stale message that follows its document is its badge's, not this line's.
+    const followsDoc = chatFacts({
+      stale: true,
+      heldBy: "document",
+      release: false,
+      releaseTo: null,
+    });
+    expect(composerLine(terminal, stale, new Map([["m", followsDoc]]))).toEqual(plain);
+    // Nobody holds it, Tandem's Claude holds it per message, or by presence: Start can help.
+    const nobody = chatFacts({
+      stale: true,
+      owner: null,
+      heldBy: "none",
+      release: false,
+      releaseTo: null,
+    });
+    const byTandem = chatFacts({
+      stale: true,
+      heldBy: "message",
+      owner: { label: "owner-t", displayKind: "Tandem's Claude" },
+    });
+    const byPresence = chatFacts({
+      stale: true,
+      heldBy: "presence",
+      owner: { label: "owner-t", displayKind: "Tandem's Claude" },
+      release: false,
+      releaseTo: null,
+    });
+    for (const f of [nobody, byTandem, byPresence]) {
+      expect(
+        composerLine(
+          terminal,
+          stale,
+          new Map([
+            ["m", byTerminal],
+            ["n", f],
+          ]),
+        ),
+      ).toEqual(offered);
+    }
+  });
+
   it("leaves a no-AI line's own remedy alone", () => {
     const none = summary({
       tandemPresent: false,

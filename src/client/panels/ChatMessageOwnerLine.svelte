@@ -6,14 +6,23 @@
  * Release (saying where it goes) where it applies, and "Assign…", which opens
  * the owners list (`GET /api/ownership/owners`, the list the badge's popover
  * reads, fetched on open) in a popover hung from the line. A refusal shows
- * inline on the line.
+ * inline on the line, and the chat panel speaks it through its always-mounted
+ * announcer (`onerror`; #1431, #2489): this line's own nodes are inserted
+ * together with their text, and a refusal such as "already answered" can
+ * unmount the line before it is read.
+ *
+ * The owners list is moved to `<body>` while open (`toBody`): the messages list
+ * carries a scroll-fade `mask-image`, which clips and fades every descendant's
+ * painting to the list's box, `position: fixed` included. Since it then sits
+ * last in the document, it takes focus when it opens, as 5b's badge popover
+ * does, and closes when focus moves to anything outside it.
  *
  * Mounted only where `messageControlView` answers a view, which needs the
  * message's published facts, so a dark build never mounts it. It writes no
  * Y.Doc: every change goes through `POST /api/ownership` `{messageId, action,
  * ownerLabel?}`, and the result arrives as the server's republish.
  */
-import { tick } from "svelte";
+import { tick, untrack } from "svelte";
 import {
   holderName,
   type MessageControlView,
@@ -29,9 +38,15 @@ import { onOutsideEvent } from "../utils/dismiss-outside";
 interface Props {
   messageId: string;
   view: MessageControlView;
+  /**
+   * The refusal shown now, or null at each new attempt: the chat panel speaks
+   * it through its always-mounted announcer, so this line's visible copy is
+   * `aria-hidden`.
+   */
+  onerror?: (text: string | null) => void;
 }
 
-const { messageId, view }: Props = $props();
+const { messageId, view, onerror }: Props = $props();
 
 let error = $state<string | null>(null);
 let pending = $state(false);
@@ -40,6 +55,23 @@ let menuAt = $state<{ left: number; top: number | null; bottom: number | null } 
 let choices = $state<OwnerChoice[] | null>(null);
 let assignEl: HTMLButtonElement | null = $state(null);
 let menuEl: HTMLDivElement | null = $state(null);
+let lineEl: HTMLDivElement | null = $state(null);
+
+/**
+ * Move the owners list to `<body>` for as long as it is open, out of the
+ * messages list's scroll-fade mask (see the header), then focus it: here, not
+ * in an effect, because moving a focused node drops its focus. Removed on
+ * teardown too, so a line unmounted with its list open leaves nothing behind.
+ */
+function toBody(node: HTMLElement) {
+  document.body.appendChild(node);
+  node.focus({ preventScroll: true });
+  return {
+    destroy() {
+      node.remove();
+    },
+  };
+}
 
 // Bumped on every open and close, so an owners list fetched for an earlier
 // opening never fills a later one (5b's late-result rule for the badge popover).
@@ -68,13 +100,24 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   if (pending) return;
   pending = true;
   error = null;
+  onerror?.(null);
   const result = await postMessageOwnership(messageId, action, ownerLabel);
   pending = false;
   if (result.ok) {
     await closeMenu(true);
+    // A Release with no list open: its button was disabled while the request
+    // ran, which dropped focus. The line stays up until the republish arrives,
+    // so focus comes back to a control on it rather than staying on <body>.
+    await tick();
+    if (focusLost() && lineEl?.isConnected) {
+      lineEl
+        .querySelector<HTMLButtonElement>("button.message-owner-action:not(:disabled)")
+        ?.focus();
+    }
     return;
   }
   error = messageOwnershipErrorText(result.error);
+  onerror?.(error);
   // The pressed control was disabled while the request ran, which dropped
   // focus; a refusal keeps the line (and an open list) up, so focus comes back.
   await tick();
@@ -92,7 +135,8 @@ function toggleMenu() {
     void closeMenu();
     return;
   }
-  // Fixed, so the messages list's overflow does not clip it; opened upward
+  // Fixed and moved to <body> (`toBody`), so neither the messages list's
+  // overflow nor its scroll-fade mask clips it; opened upward
   // when the line sits in the lower half of the window (the composer is below),
   // and kept inside the window's right edge (the chat panel usually sits there).
   const r = assignEl.getBoundingClientRect();
@@ -120,6 +164,10 @@ $effect(() => {
     },
   );
   const onKey = (e: KeyboardEvent) => {
+    // Another handler already took this Escape (the command palette's capture
+    // listener closes itself and preventDefaults), or an IME is composing (the
+    // composer sits in the same panel): 5b's badge popover rule.
+    if (e.defaultPrevented || e.isComposing) return;
     if (e.key === "Escape") void closeMenu(true);
   };
   document.addEventListener("keydown", onKey);
@@ -128,9 +176,40 @@ $effect(() => {
     document.removeEventListener("keydown", onKey);
   };
 });
+
+// The list takes focus when it opens (`toBody`; it sits last in the
+// document, so Tab from "Assign…" would never reach it): itself until the
+// owners list brings a row, then its first row if focus is still parked on it.
+$effect(() => {
+  if (!choices || !menuEl) return;
+  const el = menuEl;
+  untrack(() => {
+    if (document.activeElement === el) {
+      el.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    }
+  });
+});
+
+// A republish that stops offering Assign (the message now follows its
+// document, say) takes the open list with it, as 5b's popover goes when its
+// entry loses its owner fields.
+$effect(() => {
+  if (view.assign) return;
+  untrack(() => void closeMenu(true));
+});
+
+/** Focus moved to something outside the list and its "Assign…": close it. */
+function onMenuFocusOut(e: FocusEvent) {
+  const next = e.relatedTarget;
+  // No target: a pressed row was disabled while its request runs, or focus
+  // left the window. Neither is a move elsewhere in the editor.
+  if (!(next instanceof Node)) return;
+  if (menuEl?.contains(next) || assignEl?.contains(next)) return;
+  void closeMenu();
+}
 </script>
 
-<div class="message-owner-line" data-testid={`chat-message-owner-${messageId}`}>
+<div class="message-owner-line" bind:this={lineEl} data-testid={`chat-message-owner-${messageId}`}>
   <span>{view.holder}</span>
   {#if view.release}
     <button
@@ -158,15 +237,21 @@ $effect(() => {
     </button>
   {/if}
   {#if error}
-    <span class="message-owner-error" role="alert" data-testid={`chat-message-owner-error-${messageId}`}>
+    <!-- Not a live region: inserted together with its text, which is commonly
+         announced by nothing (#1431). The chat panel's always-mounted
+         `chat-message-owner-announcer` speaks it (`onerror`). -->
+    <span class="message-owner-error" aria-hidden="true" data-testid={`chat-message-owner-error-${messageId}`}>
       {error}
     </span>
   {/if}
   {#if menuAt}
     <div
       bind:this={menuEl}
+      use:toBody
       class="message-owner-menu"
       role="dialog"
+      tabindex="-1"
+      onfocusout={onMenuFocusOut}
       aria-label="Assign this message"
       data-testid="chat-message-owner-menu"
       style:left={`${menuAt.left}px`}
