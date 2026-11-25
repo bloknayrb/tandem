@@ -280,16 +280,29 @@ describe("workspace", () => {
     // No -z: git C-quotes names with a tab or newline, so one file is one
     // line and a filename cannot forge or hide an entry.
     expect(prep).toContain(
-      '--no-renames --numstat --merge-base "origin/$BASE_REF" "$HEAD_SHA" \\\n' +
+      'git -C pr -c core.quotePath=false --attr-source="origin/$DEFAULT_BRANCH" diff \\\n' +
+        "  --no-textconv --no-ext-diff --no-renames --numstat \\\n" +
+        '  --merge-base "origin/$BASE_REF" "$HEAD_SHA" \\\n' +
         "  | awk '/^-\\t-\\t/ { print substr($0, 5) }' > inputs/binary-paths.txt",
     );
     expect(prep).not.toMatch(/--numstat -z|tr '\\0'/);
-    expect(prep).toContain(
-      "cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/",
-    );
+    expect(prep).toContain("cp inputs/pr.json inputs/binary-paths.txt pr/.review-input/");
     const prompt = readFileSync(path.join(ROOT, ".github/claude-review/prompt.md"), "utf8");
     expect(prompt).toContain("`.review-input/binary-paths.txt`");
     expect(prompt).toContain("file names (including those in `binary-paths.txt`)");
+  });
+
+  it("gives the model a line-numbered diff and keeps the raw diff, outside its reach, for posting", () => {
+    const prep = stepNamed("Prepare review inputs").run ?? "";
+    expect(prep).toContain(
+      "node trusted/.github/claude-review/number-diff.mjs inputs/pr.diff > pr/.review-input/pr.diff",
+    );
+    // The raw diff stays in inputs/ (post.mjs maps lines against it); the
+    // model's copy is the numbered one, never a copy of the raw file.
+    expect(prep).not.toMatch(/cp [^\n]*inputs\/pr\.diff/);
+    const prompt = readFileSync(path.join(ROOT, ".github/claude-review/prompt.md"), "utf8");
+    expect(prompt).toContain("**line number in the new version of the file**");
+    expect(prompt).toContain("**never** from a line's position within `pr.diff`");
   });
 
   it("keeps the step order the controls depend on", () => {
