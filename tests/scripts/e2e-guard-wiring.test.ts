@@ -218,6 +218,25 @@ describe("#1492 — the E2E harness runs on its own reserved ports", () => {
     expect(doc).toContain(`(:${DEFAULT_WS_PORT}/:${DEFAULT_MCP_PORT})`);
   });
 
+  it("ci.yml's port-clearing step names every E2E harness port (#1825)", () => {
+    // The `Clear ports before E2E` step hand-copies the harness ports into an
+    // `lsof` and a `fuser -k` list, under a "keep in sync" comment nothing
+    // enforced. A renumbering that missed it would leave the new pair
+    // unchecked on the runner: a stale listener there fails Playwright's boot
+    // with no line in the log saying what held the port.
+    const ci = readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    const step = /- name: Clear ports before E2E\n\s+run: \|\n([\s\S]*?)\n\s*\n/.exec(ci)?.[1];
+    expect(step, "ci.yml no longer has a `Clear ports before E2E` step").toBeDefined();
+    const lsof = step?.split("\n").find((l) => l.trim().startsWith("lsof "));
+    const fuser = step?.split("\n").find((l) => l.trim().startsWith("fuser -k "));
+    expect(lsof, "the step no longer runs lsof").toBeDefined();
+    expect(fuser, "the step no longer runs fuser -k").toBeDefined();
+    for (const port of [E2E_VITE_PORT, E2E_WS_PORT, E2E_MCP_PORT]) {
+      expect(lsof, `lsof misses harness port ${port}`).toContain(`-i :${port} `);
+      expect(fuser, `fuser -k misses harness port ${port}`).toContain(` ${port}/tcp`);
+    }
+  });
+
   it("keeps product-port literals out of tests/e2e entirely", () => {
     // FINDING 2: the one raw `http://127.0.0.1:3479` fetch in scroll-pill
     // escaped the constant-import inventory and would have driven the

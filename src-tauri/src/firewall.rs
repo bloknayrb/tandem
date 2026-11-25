@@ -814,7 +814,9 @@ fn looks_like_ipv4_cidr(line: &str) -> bool {
     let Some((ip, prefix)) = line.split_once('/') else {
         return false;
     };
-    if prefix.trim().parse::<u8>().is_err() {
+    // An IPv4 prefix is 0..=32. A larger one is not address-shaped, so it must
+    // not count as a candidate the `/20` floor refused (#1825).
+    if !matches!(prefix.trim().parse::<u8>(), Ok(p) if p <= 32) {
         return false;
     }
     let octets: Vec<&str> = ip.trim().split('.').collect();
@@ -847,7 +849,15 @@ fn parse_cidr_from_line(line: &str) -> Option<String> {
 }
 
 /// Mask off host bits to get the network address.
+///
+/// `None` for a prefix above 32: `32 - prefix` would underflow `u8` (a panic in
+/// debug, a wrapped shift in release). Unreachable through `parse_cidr_from_line`
+/// today only because `looks_like_ipv4_cidr` screens first; this function no
+/// longer relies on that (#1825).
 fn host_to_network(ip: &str, prefix: u8) -> Option<String> {
+    if prefix > 32 {
+        return None;
+    }
     let parts: Vec<u8> = ip
         .split('.')
         .map(|p| p.parse::<u8>().ok())
@@ -896,7 +906,7 @@ pub fn add_cowork_allow_rule(cidr: &str) -> Result<(), FirewallError> {
         "dir=in",
         "action=allow",
         "protocol=TCP",
-        "localport=3479",
+        concat!("localport=", sidecar_mcp_port!()),
         &format!("remoteip={cidr}"),
     ])
 }
@@ -927,7 +937,7 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
         "dir=in",
         "action=block",
         "protocol=TCP",
-        "localport=3479",
+        concat!("localport=", sidecar_mcp_port!()),
         &format!("remoteip={cidr}"),
     ])
 }
@@ -1483,6 +1493,19 @@ mod tests {
             host_to_network("10.0.0.1", 8),
             Some("10.0.0.0".to_string())
         );
+    }
+
+    #[test]
+    fn host_to_network_refuses_a_prefix_above_32_rather_than_underflowing() {
+        // #1825: `32 - prefix` on a `u8` panicked in debug for any prefix > 32.
+        assert_eq!(host_to_network("10.0.0.1", 33), None);
+        assert_eq!(host_to_network("10.0.0.1", 255), None);
+        assert_eq!(host_to_network("10.0.0.1", 32), Some("10.0.0.1".to_string()));
+        assert_eq!(parse_cidr_from_line("172.20.0.1/40"), None);
+        // ...and such a line is not an address-shaped candidate, so it cannot be
+        // reported as a subnet the /20 floor refused.
+        assert!(!looks_like_ipv4_cidr("172.20.0.1/40"));
+        assert!(looks_like_ipv4_cidr("172.20.0.1/32"));
     }
 
     #[test]
