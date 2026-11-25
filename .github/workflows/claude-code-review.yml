@@ -1,43 +1,244 @@
 name: Claude Code Review
 
+# Advisory Claude review of every new same-repo PR (#1831).
+#
+# - Authentication is the owner's Claude subscription (CLAUDE_CODE_OAUTH_TOKEN),
+#   never an API key; tests/scripts/claude-review-wiring.test.ts refuses any
+#   API-key path in any workflow.
+# - The model gets Read/Grep/Glob only, confined to the PR checkout by
+#   --restricted, with no MCP servers and no GitHub token in its step. It
+#   returns JSON; scripts taken from master scan that JSON for the token and
+#   only then post it as github-actions[bot].
+# - The run's conclusion is the signal the merge gate reads
+#   (scripts/ci/await-claude-review.mjs): green means a review or a
+#   "did not complete" note is on the PR, red means a person should look.
+#
+# The bound on all of this is push access: a pull_request run executes the
+# PR's own copy of this file. See the Claude review entry under "Accepted
+# (bounded)" in docs/security.md.
+
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.claude/**'
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Number of the PR to (re-)review
+        required: true
+        type: number
 
-concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# Quoted: unquoted, " #" starts a YAML comment and the title loses the number
+# the merge gate matches on.
+run-name: "Claude review PR #${{ github.event.pull_request.number || inputs.pr }}"
 
 permissions:
   contents: read
   pull-requests: write
-  issues: read # gh issue view (in --allowedTools) needs read; omitting the key entirely would set it to none
-  id-token: write # claude-code-action fetches an OIDC token; the permissions block zeroes unlisted scopes
 
 jobs:
   review:
-    if: >
+    if: >-
+      (github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.type != 'Bot' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot') ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner)
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # cost guard: cap a hung/runaway LLM run (default is 360)
+    timeout-minutes: 60
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: false
+    env:
+      # The exact native build of the Claude Code CLI and the sha512 of its npm
+      # tarball. Bumped by hand: Dependabot does not see this.
+      CLAUDE_CODE_VERSION: "2.1.331"
+      CLAUDE_CODE_INTEGRITY: "sha512-IpvZ9c/NopO/sr8ThWLVAUDXVAFT3auLWrhbR6wq1dgkuJfZYdTtoXf6GajE5KL9R58iTt/86OPXrJAsM4+l8g=="
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 1 # bundled /code-review skill uses `gh pr diff`; no history needed
+      # A fork, draft, bot or closed PR is refused with skip=true (no failure,
+      # no comment). A PR number that does not exist fails the step.
+      - name: Re-check the PR
+        id: recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p inputs
+          gh pr view "$PR" -R "$REPO" \
+            --json number,title,body,isCrossRepository,isDraft,state,author,headRefOid,baseRefName \
+            > inputs/pr-meta.json
+          cross=$(jq -r .isCrossRepository inputs/pr-meta.json)
+          draft=$(jq -r .isDraft inputs/pr-meta.json)
+          state=$(jq -r .state inputs/pr-meta.json)
+          bot=$(jq -r .author.is_bot inputs/pr-meta.json)
+          if [ "$cross" != "false" ] || [ "$draft" != "false" ] || [ "$state" != "OPEN" ] || [ "$bot" = "true" ]; then
+            echo "Refused: cross-repo=$cross draft=$draft state=$state bot=$bot"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq '{number, title, body, headRefOid, baseRefName}' inputs/pr-meta.json > inputs/pr.json
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r .headRefOid inputs/pr-meta.json)" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$(jq -r .baseRefName inputs/pr-meta.json)" >> "$GITHUB_OUTPUT"
 
-      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
+      - name: Check out master's review config
+        if: steps.recheck.outputs.skip == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR: ${{ github.event.pull_request.number }}
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CLAUDE.md
+            /AGENTS.md
+            /.github/claude-review/
+            /.claude/agents/
 
-            /code-review high --comment
-          claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh search:*),Read,Grep,Glob"
+      - name: Check out the PR
+        if: steps.recheck.outputs.skip == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.recheck.outputs.head_sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.recheck.outputs.skip == 'false'
+        with:
+          node-version: 22
+
+      # Symlinks first, so nothing below can write through one. Then every
+      # agent-config name at every depth (a nested CLAUDE.md is loaded as
+      # instructions when the model reads that directory), then master's root
+      # copies back. The PR's changes to these files still show in the diff.
+      - name: Neutralise the PR checkout
+        if: steps.recheck.outputs.skip == 'false'
+        working-directory: pr
+        run: |
+          set -o pipefail
+          find . -path ./.git -prune -o -type l -print0 | xargs -0 -r rm -f
+          find . -path ./.git -prune -o \
+            \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \
+               -o -name '.claude*' -o -name '.mcp.json' -o -name '.review-input' \) \
+            -prune -print0 | xargs -0 -r rm -rf
+          # Verify rather than trust: nothing a find error could have left behind.
+          left=$(find . -path ./.git -prune -o \( -type l -o -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' \
+            -o -name 'AGENTS.md' -o -name '.claude*' -o -name '.mcp.json' -o -name '.review-input' \) -print | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "neutralising left $left entries behind"
+            exit 1
+          fi
+          cp ../trusted/CLAUDE.md ../trusted/AGENTS.md .
+
+      - name: Prepare review inputs
+        if: steps.recheck.outputs.skip == 'false'
+        env:
+          BASE_REF: ${{ steps.recheck.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.recheck.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -o pipefail
+          # Attributes come from the default branch, not the PR, so a PR's
+          # .gitattributes cannot mark a source file binary (-diff) to hide it.
+          # Real binaries still show as "Binary files differ". No textconv or
+          # external diff drivers, which a PR could also name.
+          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
+            --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
+          # Git also calls any file with a NUL byte binary, whatever the
+          # attributes, so a source file could hide its change that way. List
+          # every path shown as binary; the prompt has the model Read the ones
+          # that are source by their name. No -z: git then C-quotes any name
+          # with a tab, newline or quote, so each file is exactly one line and
+          # a filename cannot forge or hide an entry.
+          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
+            --no-renames --numstat --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
+            | awk '/^-\t-\t/ { print substr($0, 5) }' > inputs/binary-paths.txt
+          node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
+          mkdir pr/.review-input
+          cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/
+
+      # The native build has no install script and no dependencies; its
+      # tarball is checked against the pinned sha512 before it is unpacked.
+      - name: Install Claude Code
+        if: steps.recheck.outputs.skip == 'false'
+        run: |
+          cd "$RUNNER_TEMP"
+          tarball=$(npm pack "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" --silent)
+          actual="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          if [ "$actual" != "$CLAUDE_CODE_INTEGRITY" ]; then
+            echo "integrity mismatch for $tarball"
+            exit 1
+          fi
+          mkdir claude-cli
+          tar -xzf "$tarball" -C claude-cli
+          "$RUNNER_TEMP/claude-cli/package/claude" --version
+
+      - name: Mark review started
+        id: mark-started
+        if: steps.recheck.outputs.skip == 'false'
+        run: echo "review_started=true" >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        id: review
+        if: steps.recheck.outputs.skip == 'false'
+        continue-on-error: true
+        timeout-minutes: 40
+        working-directory: pr
+        # No CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: there is no shell for it to
+        # protect, and setting it silently forces the permission mode back to
+        # default, overriding dontAsk (seen on CLI 2.1.331). Background tasks
+        # are off so specialists finish before the answer is written.
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+        run: |
+          prompt=$(cat ../trusted/.github/claude-review/prompt.md)
+          schema=$(cat ../trusted/.github/claude-review/schema.json)
+          "$RUNNER_TEMP/claude-cli/package/claude" -p "$prompt" \
+            --model opus --max-turns 80 \
+            --restricted --permission-mode dontAsk --permission-prompts none \
+            --setting-sources user --strict-mcp-config \
+            --tools "Read,Grep,Glob,Agent" \
+            --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch" \
+            --agents ../inputs/agents.json \
+            --json-schema "$schema" \
+            --output-format stream-json --verbose > ../stream.jsonl
+
+      - name: Classify and scan for secrets
+        id: classify
+        if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: node trusted/.github/claude-review/classify.mjs stream.jsonl inputs
+
+      - name: Summarise tool use
+        if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true'
+        run: node trusted/.github/claude-review/observe.mjs stream.jsonl
+
+      - name: Post to the PR
+        if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true' && steps.classify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node trusted/.github/claude-review/post.mjs inputs
+
+      # Red means a person should look: a withheld review, or a review system
+      # that is down (missing or expired token, usage limit, API outage).
+      - name: Fail if the review was withheld or the review system is down
+        if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true' && steps.classify.outcome == 'success'
+        run: |
+          outcome=$(jq -r .outcome inputs/outcome.json)
+          reason=$(jq -r '.reason // ""' inputs/outcome.json)
+          if [ "$outcome" = "withheld" ]; then
+            echo "The review output matched a secret pattern; nothing but the notice was posted."
+            exit 1
+          fi
+          if [ "$reason" = "api-error" ] || [ "$reason" = "no-token" ]; then
+            echo "The review could not run ($reason): check CLAUDE_CODE_OAUTH_TOKEN and the subscription's usage."
+            exit 1
+          fi

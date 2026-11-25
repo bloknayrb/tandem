@@ -24,6 +24,8 @@ import {
   API_MODE_RELEASE,
   API_NOTIFY_STREAM,
   API_OPEN,
+  API_OWNERSHIP,
+  API_OWNERSHIP_OWNERS,
   API_READ_ONLY_FILE_RESOLVE,
   API_REMOVE_ANNOTATION,
   API_RENAME,
@@ -40,6 +42,7 @@ import {
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import { ERROR_CODE_BAD_ORIGIN } from "../../shared/integrations/contract.js";
 import { isLoopback } from "../auth/middleware.js";
+import { ownershipEnabled } from "../ownership-flag.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
@@ -61,6 +64,11 @@ import { handleMode } from "./routes/mode.js";
 import { handleModeRelease } from "./routes/mode-release.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
+import {
+  handleOwnershipControl,
+  handleOwnersList,
+  ownershipRouteGate,
+} from "./routes/ownership.js";
 import { handleResolveReadOnlyFile } from "./routes/read-only-file.js";
 import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
 import { handleRename } from "./routes/rename.js";
@@ -523,6 +531,21 @@ export function registerApiRoutes(
 
   app.options(API_REMOVE_ANNOTATION, mw);
   app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+
+  // Document ownership's controls (#2358 PR 5a, ADR-054; ownership design
+  // §10.1). Dark: registered only while ownership is on, because a registered
+  // path answers OPTIONS with its `Allow` list even when every handler skips
+  // it; `ownershipRouteGate` also skips the route per request, for a flag read
+  // that changes after registration (tests). Flag off each path answers as an
+  // unknown route does. The POST gates on origin allowlist + loopback inside
+  // the handler and requires a parsed JSON body; the GET checks the peer
+  // address itself. No route-level parser: the body is the SDK sub-app's
+  // 100 kB parse, as for any route with no `ROUTE_OWNED_BODY_PARSERS` row.
+  if (ownershipEnabled()) {
+    app.options(API_OWNERSHIP, ownershipRouteGate, mw);
+    app.post(API_OWNERSHIP, ownershipRouteGate, mw, handleOwnershipControl);
+    app.get(API_OWNERSHIP_OWNERS, ownershipRouteGate, mw, handleOwnersList);
+  }
 
   // Stale store.lock reclaim (#1077). Mutating: the handler gates on origin
   // allowlist + loopback before touching the lockfile (same posture as the

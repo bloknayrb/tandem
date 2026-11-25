@@ -11,7 +11,7 @@ import type {
 } from "../../shared/positions/index.js";
 import { isAnchorVerdict } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
-import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, isHeldInSoloMarker, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -206,7 +206,8 @@ function ownedIdKeyed(
  * the parent must project to the channel (`narrowForChannel`: no note, no
  * private record, no unknown type) and pass the Solo hold; replies go through
  * `channelVisibleReplies` (no `private` reply). A reply the user wrote during
- * Solo carries `heldInSolo` until release and is skipped, in every mode, so
+ * Solo carries `heldInSolo` until release and is skipped, in every mode (any
+ * marker but `false` or absent counts: `isHeldInSoloMarker`, #2481), so
  * the item is the same before, during and after a hold until that reply is
  * released — and an answer given during Solo is recorded against the item
  * Claude could see.
@@ -231,7 +232,7 @@ function threadItemAnsweredBy(
   const visible = channelVisibleReplies(store.reconciled(), parent);
   for (let i = visible.length - 1; i >= 0; i--) {
     const reply = visible[i];
-    if (reply.author === "user" && reply.heldInSolo !== true) {
+    if (reply.author === "user" && !isHeldInSoloMarker(reply.heldInSolo)) {
       return { annotationId, item: `r:${reply.id}` };
     }
   }

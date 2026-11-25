@@ -324,7 +324,7 @@ const POSTS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
 const TAKE_BACK_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
   [
     'An item Tandem handed or pushed to you is not such a request."',
-    "An item Tandem handed or pushed to you is not such a request. If Tandem's Claude took one back from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.\"",
+    "An item Tandem handed or pushed to you is not such a request. If Tandem's Claude took one back from you, or the user released it from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.\"",
   ],
 ];
 
@@ -341,6 +341,21 @@ const TAKE_BACK_CAUSE_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> =
   [
     'and this session stopped holding it"',
     'and this session stopped holding it; \\"Tandem\'s Claude took it back\\": Tandem\'s Claude took it from this session, when a run of it started or when it opened the document"',
+  ],
+];
+
+/**
+ * #2358 PR 5a's change to the flag-on schema: three new cause words, Release
+ * and Assign's, in the enum and in the cause description.
+ */
+const RELEASE_ASSIGN_CAUSE_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    '"Tandem\'s Claude took it back"\n',
+    '"Tandem\'s Claude took it back",\n"it was released",\n"it was assigned to another session",\n"it was assigned to this session"\n',
+  ],
+  [
+    'when a run of it started or when it opened the document"',
+    'when a run of it started or when it opened the document; \\"it was released\\": it was released from this session; \\"it was assigned to another session\\": it was assigned to another session; \\"it was assigned to this session\\": it was assigned to this session"',
   ],
 ];
 
@@ -1523,6 +1538,7 @@ describe("the dark guard", () => {
           ...POSTS_SCHEMA_CHANGES,
           ...TAKE_BACK_SCHEMA_CHANGES,
           ...TAKE_BACK_CAUSE_SCHEMA_CHANGES,
+          ...RELEASE_ASSIGN_CAUSE_SCHEMA_CHANGES,
         ]) {
           expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
           masterText = masterText.replace(before, after);

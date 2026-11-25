@@ -29,6 +29,10 @@ macro_rules! sidecar_url {
 }
 
 mod autostart;
+// Tandem's own HKCU-only start-at-login registration (#2160); on every other
+// platform `autostart.rs` uses `tauri-plugin-autostart`.
+#[cfg(target_os = "windows")]
+mod autostart_win;
 mod context_menu;
 mod cowork_commands;
 mod native_theme;
@@ -1139,6 +1143,43 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_sentry::init_with_no_injection(guard.client()));
     }
 
+    // Start-at-login (#1236). Default OFF — registering the plugin only
+    // makes the capability available; it never writes a registration on its
+    // own. The flag is what makes a login launch distinguishable from a
+    // user-initiated one downstream.
+    //
+    // NOT registered on Windows, where the plugin is not even a dependency
+    // (#2160): its `auto-launch` 0.6 writes the machine-wide HKLM Run key
+    // from any elevated launch, so `autostart_win.rs` writes Tandem's own
+    // HKCU-only registration instead.
+    //
+    // macOS launcher variant — LaunchAgent, and the deciding factor is the
+    // READ path, not the write path.
+    //
+    // In `auto-launch` 0.5 and 0.6 (the plugin's 2.6 and 2.7 lines), AppleScript mode's
+    // `is_enabled()` shells out to `osascript` ("get the name of every login
+    // item"), which needs Automation (TCC) approval. `autostart_get_status`
+    // runs on every Settings open, so choosing AppleScript would pop a
+    // scary "Tandem wants to control System Events" prompt at users who
+    // never asked for autostart at all. LaunchAgent's `is_enabled()` is a
+    // plain `plist.exists()` — free, silent, no permissions. Enabling costs
+    // two pop-ups under AppleScript versus none here.
+    //
+    // The known trade-off: a LaunchAgent plist points at the Mach-O inside
+    // the bundle and launches it outside LaunchServices, which may weaken
+    // the Apple Events (`RunEvent::Opened`) that file associations rely on.
+    // That risk is narrower than prompting every macOS user, it only
+    // affects login-launched instances, and `RunEvent::Reopen` plus
+    // single-instance still work. If real hardware shows Apple Events
+    // break (S4), this is a one-constant change. See ADR-046.
+    #[cfg(not(target_os = "windows"))]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ));
+    }
+
     builder
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
         // DevTools, Find, Print, and right-click are preserved. Fixes #541.
@@ -1165,34 +1206,6 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
-        // Start-at-login (#1236). Default OFF — registering the plugin only
-        // makes the capability available; it never writes a registration on its
-        // own. The flag is what makes a login launch distinguishable from a
-        // user-initiated one downstream.
-        //
-        // macOS launcher variant — LaunchAgent, and the deciding factor is the
-        // READ path, not the write path.
-        //
-        // In `auto-launch` 0.5 (what the plugin pins), AppleScript mode's
-        // `is_enabled()` shells out to `osascript` ("get the name of every login
-        // item"), which needs Automation (TCC) approval. `autostart_get_status`
-        // runs on every Settings open, so choosing AppleScript would pop a
-        // scary "Tandem wants to control System Events" prompt at users who
-        // never asked for autostart at all. LaunchAgent's `is_enabled()` is a
-        // plain `plist.exists()` — free, silent, no permissions. Enabling costs
-        // two pop-ups under AppleScript versus none here.
-        //
-        // The known trade-off: a LaunchAgent plist points at the Mach-O inside
-        // the bundle and launches it outside LaunchServices, which may weaken
-        // the Apple Events (`RunEvent::Opened`) that file associations rely on.
-        // That risk is narrower than prompting every macOS user, it only
-        // affects login-launched instances, and `RunEvent::Reopen` plus
-        // single-instance still work. If real hardware shows Apple Events
-        // break (S4), this is a one-constant change. See ADR-046.
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![AUTOSTART_FLAG]),
-        ))
         // Chat-reply notifications (#2168). Order-insensitive; it only has to
         // be registered before `setup()`, which installs its click handler.
         .plugin(tauri_plugin_notification::init())
@@ -1637,7 +1650,8 @@ pub fn run() {
             // case it exists to fix. The guard is needed because `enable()`
             // bakes this launch's executable path — see the predicate.
             //
-            // The path handed to the predicate is the one the PLUGIN will bake,
+            // The path handed to the predicate is the one the backend will
+            // bake (the plugin on macOS/Linux, `autostart_win.rs` on Windows),
             // resolved the same way it resolves it: `$APPIMAGE` first on Linux,
             // else `current_exe()`. Passing bare `current_exe()` would put every
             // non-autostart AppImage launch under `/tmp/.mount_XXXXXX/` and

@@ -40,9 +40,19 @@ describe("WS-A2: heldInSolo survives sanitizeAnnotation", () => {
     expect(result.heldInSolo).toBeUndefined();
   });
 
-  it("ignores a non-boolean heldInSolo rather than passing junk through", () => {
-    const result = sanitize({ ...baseAnn, type: "comment", heldInSolo: "yes" });
-    expect(result.heldInSolo).toBeUndefined();
+  // #2481: dropping a non-boolean marker read it as ABSENT, which surfaced the
+  // record in the indeterminate mode. It now reads as held and is normalised to
+  // a real `true`, so junk still never passes through.
+  it.each([
+    ["yes", "yes"],
+    ["the string true", "true"],
+    ["the string false", "false"],
+    ["1", 1],
+    ["0", 0],
+    ["null", null],
+  ])("normalises a non-boolean heldInSolo (%s) to true rather than dropping it", (_l, marker) => {
+    const result = sanitize({ ...baseAnn, type: "comment", heldInSolo: marker });
+    expect(result.heldInSolo).toBe(true);
   });
 
   it("survives a promoted note→comment (author user, promotedFrom note)", () => {

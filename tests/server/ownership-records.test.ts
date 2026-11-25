@@ -457,6 +457,7 @@ describe("reset", () => {
       carriedOver: [],
       chatAnswerers: [],
       repliers: [],
+      messageLosses: [],
     });
   });
 });
@@ -491,6 +492,7 @@ describe("flag off: nothing is ever created", () => {
       carriedOver: [],
       chatAnswerers: [],
       repliers: [],
+      messageLosses: [],
     });
   });
 });

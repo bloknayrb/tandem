@@ -16,6 +16,7 @@
  * Consumers read the getters; never destructure them.
  */
 
+import { ERROR_CODE_OWN_WINDOW_ONLY } from "../../shared/models/contract";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { type ModelsWriteAccess, modelsWriteAccess, ownWindowNotice } from "../models/own-window";
 import {
@@ -49,6 +50,28 @@ export function modelsPageAccess(): ModelsWriteAccess {
   return modelsWriteAccess(pageOrigin(), isTauriRuntime(), MCP_BASE_URL);
 }
 
+function modelsOwnWindowNotice(): string {
+  return ownWindowNotice(modelsPageAccess(), pageOrigin(), MCP_BASE_URL);
+}
+
+/**
+ * Throw for a non-OK settings read. An `OWN_WINDOW_ONLY` refusal's message
+ * carries the Models tab's notice, so the load's log says what to do (on the
+ * Vite page or in `dev:tauri`, which variable to set) instead of "→ 403".
+ */
+export async function throwUnlessReadable(res: Response, path: string): Promise<void> {
+  if (res.ok) return;
+  if (res.status === 403) {
+    const body = (await res.json().catch(() => null)) as { code?: unknown } | null;
+    if (body?.code === ERROR_CODE_OWN_WINDOW_ONLY) {
+      throw new Error(
+        `GET ${path} → 403 ${ERROR_CODE_OWN_WINDOW_ONLY}. ${modelsOwnWindowNotice()}`,
+      );
+    }
+  }
+  throw new Error(`GET ${path} → ${res.status}`);
+}
+
 export interface ModelsWriteAccessState {
   /** These settings cannot be changed from this page. */
   readonly blocked: boolean;
@@ -68,7 +91,7 @@ export function createModelsWriteAccess(): ModelsWriteAccessState {
       return modelsPageAccess() === "foreign";
     },
     get notice() {
-      return ownWindowNotice(modelsPageAccess(), pageOrigin(), MCP_BASE_URL);
+      return modelsOwnWindowNotice();
     },
   };
 }
