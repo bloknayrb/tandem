@@ -162,6 +162,18 @@ describe("launcher-turn-off / turnOffTandemClaude", () => {
     await until(() => afterLauncherAction.mock.calls.length > 0);
   });
 
+  // The desktop app's confirm resolves a Promise; read as a value it was
+  // always truthy, so Cancel turned Claude off mid-turn anyway.
+  it("an asynchronous (desktop) 'no' sends nothing either", async () => {
+    status = { available: true, running: true, busy: true };
+    vi.mocked(confirm).mockImplementation((async () => false) as unknown as typeof confirm);
+    turnOffTandemClaude();
+    await until(() => vi.mocked(confirm).mock.calls.length > 0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(postTo(SETTINGS_URL)).toBeUndefined();
+    expect(afterLauncherAction).not.toHaveBeenCalled();
+  });
+
   it("asks first when a turn is in flight, and a 'no' sends nothing", async () => {
     status = { available: true, running: true, busy: true };
     vi.mocked(confirm).mockReturnValue(false);

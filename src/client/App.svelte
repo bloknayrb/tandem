@@ -194,6 +194,7 @@ import { NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
+import { confirmDialog } from "./utils/confirm";
 import { createLaunchLatch } from "./utils/launch-latch.svelte";
 import { planLicenseGraceNotice } from "./utils/license-ui";
 import { resolveDefaultModelChip } from "./utils/model-chip";
@@ -1440,9 +1441,9 @@ const actionExecutor = mountActionExecutor({
       findBarOpen = true;
     }
   },
-  closeActiveTab: () => {
+  closeActiveTab: async () => {
     const id = yjsSync.activeTabId;
-    if (id) documentWorkspace.closeTabAndRecord(id);
+    if (id) await documentWorkspace.closeTabAndRecord(id);
   },
   openFileDialog: () => requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
@@ -2072,7 +2073,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const id = yjsSync.activeTabId;
-    if (id) documentWorkspace.closeTabAndRecord(id);
+    if (id) void documentWorkspace.closeTabAndRecord(id);
   },
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -2424,7 +2425,9 @@ const documentWorkspace = createDocumentWorkspace({
   triggerSave,
   triggerSaveAs,
   pushNotification: (notification, action) => notifications.push(notification, action),
-  confirm: (message) => window.confirm(message),
+  // Never `window.confirm`: the desktop app's dialog plugin makes it return a
+  // Promise, which reads as an instant OK (utils/confirm.ts).
+  confirm: confirmDialog,
   closeEditorOverlays: () => {
     findBarOpen = false;
     slashCommandMenuOpen = false;

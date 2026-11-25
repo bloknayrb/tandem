@@ -89,7 +89,8 @@ interface Harness {
   state: { tabs: OpenTab[]; activeTabId: string | null; readOnly: boolean };
   stack: ClosedTabRecord[];
   /** Queued confirm() answers, consumed in order. */
-  confirmReplies: boolean[];
+  /** A pending Promise models a dialog the user has not answered yet. */
+  confirmReplies: Array<boolean | Promise<boolean>>;
   calls: {
     saveAsArgs: { activeDocId: string; defaultName: string; sourceFormat: string }[];
     /**
@@ -160,7 +161,7 @@ function harness(init: HarnessInit = {}): Harness {
     },
   };
   const stack: ClosedTabRecord[] = [];
-  const confirmReplies: boolean[] = [];
+  const confirmReplies: Array<boolean | Promise<boolean>> = [];
   const calls: Harness["calls"] = {
     saveAsArgs: [],
     log: [],
@@ -233,7 +234,10 @@ function harness(init: HarnessInit = {}): Harness {
     // Each spec queues its answers. An unqueued confirm throws rather than
     // defaulting, so a spec that stops reaching a guard fails instead of
     // quietly taking the accept branch.
-    confirm: () => {
+    // Async, like the production `confirmDialog`: the desktop app's dialog
+    // resolves a Promise, and a funnel that forgot to await it read every
+    // Cancel as OK. An unqueued confirm REJECTS, so every close is awaited.
+    confirm: async () => {
       const reply = confirmReplies.shift();
       if (reply === undefined) throw new Error("unexpected confirm()");
       return reply;
@@ -737,9 +741,9 @@ describe("createDocumentWorkspace — source view commands", () => {
 });
 
 describe("createDocumentWorkspace — the close funnel", () => {
-  it("closes, records to the stack, and evicts scroll memory before the close lands", () => {
+  it("closes, records to the stack, and evicts scroll memory before the close lands", async () => {
     const h = harness();
-    h.ws.closeTabAndRecord("a");
+    await h.ws.closeTabAndRecord("a");
     // The ordered log, not the two per-collaborator arrays: this title claims a
     // sequence, and swapping the two calls left every previous assertion green.
     // App evicts scroll memory keyed by tab id, so it must run while the tab is
@@ -749,7 +753,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
-  it("evicting the closed tab's source-view flag notifies, it does not mutate in place", () => {
+  it("evicting the closed tab's source-view flag notifies, it does not mutate in place", async () => {
     const h = harness();
     h.ws.enterSourceView();
     flushSync();
@@ -763,7 +767,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
     flushSync();
     expect(runs).toBe(1);
 
-    h.ws.closeTabAndRecord("a");
+    await h.ws.closeTabAndRecord("a");
     flushSync();
     // No spec read `sourceViewTabs` after a close before this one, so the
     // funnel's own eviction could mutate the boxed Set in place and stay green.
@@ -774,18 +778,18 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
-  it("does not record an upload-backed tab — it has no path to reopen", () => {
+  it("does not record an upload-backed tab — it has no path to reopen", async () => {
     const h = harness({
       tabs: [tab({ id: "u", filePath: "upload://u/doc.md", source: "upload" })],
       activeTabId: "u",
     });
-    h.ws.closeTabAndRecord("u");
+    await h.ws.closeTabAndRecord("u");
     expect(h.calls.closeTab).toEqual(["u"]);
     expect(h.stack).toEqual([]);
     h.dispose();
   });
 
-  it("a declined scratchpad confirm aborts the close entirely", () => {
+  it("a declined scratchpad confirm aborts the close entirely", async () => {
     const h = harness({
       tabs: [
         tab({ id: "s", filePath: "upload://scratchpad/uuid-1/Scratchpad.md", source: "upload" }),
@@ -794,40 +798,40 @@ describe("createDocumentWorkspace — the close funnel", () => {
       hasUnsaved: true,
     });
     h.confirmReplies.push(false);
-    h.ws.closeTabAndRecord("s");
+    await h.ws.closeTabAndRecord("s");
     expect(h.calls.closeTab).toEqual([]);
     expect(h.calls.onTabClosed).toEqual([]);
     expect(h.calls.scratchpadCleared).toEqual([]);
     h.dispose();
   });
 
-  it("confirms before closing a dirty tab whose read-only file refused the save (#2273)", () => {
+  it("confirms before closing a dirty tab whose read-only file refused the save (#2273)", async () => {
     const blocked = tab({ id: "r" });
     const meta = blocked.ydoc.getMap(Y_MAP_DOCUMENT_META);
     meta.set(Y_MAP_READ_ONLY_FILE, { detectedAt: 1, declined: true, canOverwrite: true });
     meta.set(Y_MAP_DIRTY, true);
     const h = harness({ tabs: [blocked], activeTabId: "r" });
     h.confirmReplies.push(false);
-    expect(h.ws.closeTabAndRecord("r")).toBe(false);
+    expect(await h.ws.closeTabAndRecord("r")).toBe(false);
     expect(h.calls.closeTab).toEqual([]);
     h.confirmReplies.push(true);
-    expect(h.ws.closeTabAndRecord("r")).toBe(true);
+    expect(await h.ws.closeTabAndRecord("r")).toBe(true);
     expect(h.calls.closeTab).toEqual(["r"]);
     h.dispose();
   });
 
-  it("does not confirm for a read-only-file prompt once the tab is clean", () => {
+  it("does not confirm for a read-only-file prompt once the tab is clean", async () => {
     const clean = tab({ id: "c" });
     const meta = clean.ydoc.getMap(Y_MAP_DOCUMENT_META);
     meta.set(Y_MAP_READ_ONLY_FILE, { detectedAt: 1, declined: false, canOverwrite: true });
     meta.set(Y_MAP_DIRTY, false);
     const h = harness({ tabs: [clean], activeTabId: "c" });
-    h.ws.closeTabAndRecord("c"); // an unqueued confirm would throw
+    await h.ws.closeTabAndRecord("c"); // an unqueued confirm would throw
     expect(h.calls.closeTab).toEqual(["c"]);
     h.dispose();
   });
 
-  it("an accepted scratchpad confirm closes and discards the recovery copy", () => {
+  it("an accepted scratchpad confirm closes and discards the recovery copy", async () => {
     const h = harness({
       tabs: [
         tab({ id: "s", filePath: "upload://scratchpad/uuid-1/Scratchpad.md", source: "upload" }),
@@ -836,24 +840,24 @@ describe("createDocumentWorkspace — the close funnel", () => {
       hasUnsaved: true,
     });
     h.confirmReplies.push(true);
-    h.ws.closeTabAndRecord("s");
+    await h.ws.closeTabAndRecord("s");
     expect(h.calls.closeTab).toEqual(["s"]);
     expect(h.calls.scratchpadCleared).toEqual(["uuid-1"]);
     h.dispose();
   });
 
-  it("a declined source-dirty confirm aborts; an accepted one closes and clears the draft", () => {
+  it("a declined source-dirty confirm aborts; an accepted one closes and clears the draft", async () => {
     const h = harness();
     h.ws.updateSourceDraft("a", "unsaved", true);
     flushSync();
 
     h.confirmReplies.push(false);
-    h.ws.closeTabAndRecord("a");
+    await h.ws.closeTabAndRecord("a");
     expect(h.calls.closeTab).toEqual([]);
     expect(h.ws.sourceDirtyTabs.has("a")).toBe(true);
 
     h.confirmReplies.push(true);
-    h.ws.closeTabAndRecord("a");
+    await h.ws.closeTabAndRecord("a");
     flushSync();
     expect(h.calls.closeTab).toEqual(["a"]);
     expect(h.ws.sourceDirtyTabs.has("a")).toBe(false);
@@ -862,7 +866,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
-  it("declining the source-dirty confirm after accepting the scratchpad one keeps the recovery copy", () => {
+  it("declining the source-dirty confirm after accepting the scratchpad one keeps the recovery copy", async () => {
     // cr-1: a scratchpad (format "md", so source-viewable) with unsaved
     // scratchpad content AND unsaved source-view edits hits both guards. The
     // first confirm accepts the scratchpad loss; the second declines and must
@@ -881,7 +885,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
     expect(h.ws.sourceDirtyTabs.has("s")).toBe(true);
 
     h.confirmReplies.push(true, false);
-    const result = h.ws.closeTabAndRecord("s");
+    const result = await h.ws.closeTabAndRecord("s");
 
     expect(result).toBe(false);
     expect(h.calls.closeTab).toEqual([]);
@@ -894,39 +898,39 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
-  it("bulk closes snapshot the id list before the loop mutates the tab list", () => {
+  it("bulk closes snapshot the id list before the loop mutates the tab list", async () => {
     const h = harness({
       tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],
       activeTabId: "b",
     });
-    h.ws.closeOtherTabs("b");
+    await h.ws.closeOtherTabs("b");
     // Iterating the live list would skip "c" once "a" was removed.
     expect([...h.calls.closeTab].sort()).toEqual(["a", "c"]);
     h.dispose();
   });
 
-  it("bulk closes follow DISPLAY order, not document order", () => {
+  it("bulk closes follow DISPLAY order, not document order", async () => {
     // `useTabOrder` reorders tabs independently of the document list, so these
     // two must not be the same array. With the harness defaulting them to one
     // list, swapping `getOrderedTabs()` for `getTabs()` in the source passed
     // every bulk-close spec.
     const tabs = [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })];
     const h = harness({ tabs, orderedTabs: [tabs[2], tabs[1], tabs[0]] });
-    h.ws.closeTabsToLeft("a");
+    await h.ws.closeTabsToLeft("a");
     // Display order is c, b, a — so "left of a" is c and b, which is the exact
     // opposite of what document order would give.
     expect([...h.calls.closeTab].sort()).toEqual(["b", "c"]);
     h.dispose();
   });
 
-  it("closeTabsToLeft and closeTabsToRight close only their side", () => {
+  it("closeTabsToLeft and closeTabsToRight close only their side", async () => {
     const left = harness({ tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })] });
-    left.ws.closeTabsToLeft("c");
+    await left.ws.closeTabsToLeft("c");
     expect([...left.calls.closeTab].sort()).toEqual(["a", "b"]);
     left.dispose();
 
     const right = harness({ tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })] });
-    right.ws.closeTabsToRight("a");
+    await right.ws.closeTabsToRight("a");
     expect([...right.calls.closeTab].sort()).toEqual(["b", "c"]);
     right.dispose();
   });
@@ -934,7 +938,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
   // #1824 item H: before this fix the three bulk-close loops had no `break`,
   // so Cancel on one dirty tab still prompted for (and closed) the rest of
   // the batch. Cancel must abort the whole remaining batch.
-  it("Cancel on the 2nd of 3 dirty tabs aborts the rest of the bulk close", () => {
+  it("Cancel on the 2nd of 3 dirty tabs aborts the rest of the bulk close", async () => {
     const h = harness({
       tabs: [tab({ id: "keep" }), tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],
       activeTabId: "keep",
@@ -948,7 +952,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
 
     // accept a, decline b — c must never even prompt.
     h.confirmReplies.push(true, false);
-    h.ws.closeOtherTabs("keep");
+    await h.ws.closeOtherTabs("keep");
 
     expect(h.calls.closeTab).toEqual(["a"]);
     expect(h.confirmReplies).toEqual([]); // both queued replies were consumed, none left for "c"
@@ -958,7 +962,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
   // #1708 item 7: an unresolvable id used to skip both confirms and the stack
   // push and then run the rest of the funnel anyway — draft cleanup,
   // `onTabClosed` and `closeTab`, all on a tab that was not there.
-  it("a tab id that no longer resolves runs NO part of the funnel", () => {
+  it("a tab id that no longer resolves runs NO part of the funnel", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const h = harness();
     // Keyed by the GHOST id on purpose: `clearSourceDraft(tabId)` was the first
@@ -969,15 +973,15 @@ describe("createDocumentWorkspace — the close funnel", () => {
 
     // `true`, not `false`: `false` means "the user cancelled" and
     // `closeEachUntilCancelled` breaks on it.
-    expect(h.ws.closeTabAndRecord("ghost")).toBe(true);
+    expect(await h.ws.closeTabAndRecord("ghost")).toBe(true);
 
     expect(h.calls.closeTab).toEqual([]);
     expect(h.calls.onTabClosed).toEqual([]);
     expect(h.stack).toEqual([]);
     expect(h.ws.sourceDrafts.has("ghost")).toBe(true);
     // The log is the only evidence a developer gets. It does not notify: a
-    // ghost id is not a state the user can cause, so a toast would name one
-    // that does not exist.
+    // ghost id is a race the user cannot see, so a toast would name a tab that
+    // is not there.
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain("ghost");
     expect(h.calls.notifications).toEqual([]);
@@ -986,7 +990,7 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
-  it("a ghost id in the middle of a bulk close does not truncate the batch", () => {
+  it("a ghost id in the middle of a bulk close does not truncate the batch", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const keep = tab({ id: "keep" });
     const a = tab({ id: "a" });
@@ -1001,10 +1005,140 @@ describe("createDocumentWorkspace — the close funnel", () => {
       activeTabId: "keep",
     });
 
-    h.ws.closeOtherTabs("keep");
+    await h.ws.closeOtherTabs("keep");
 
     expect(h.calls.closeTab).toEqual(["a", "c"]);
     warn.mockRestore();
+    h.dispose();
+  });
+
+  // ---- the confirm is asynchronous ----------------------------------------
+  // In the desktop app `window.confirm` resolves a Promise. Before the funnel
+  // awaited it, the Promise itself read as OK: the tab closed while the
+  // "unsaved content" dialog was still on its way, and Cancel did nothing.
+
+  function deferred(): { promise: Promise<boolean>; answer: (ok: boolean) => void } {
+    let answer!: (ok: boolean) => void;
+    const promise = new Promise<boolean>((resolve) => (answer = resolve));
+    return { promise, answer };
+  }
+
+  const scratchpadTab = (): OpenTab =>
+    tab({ id: "s", filePath: "upload://scratchpad/uuid-1/Scratchpad.md", source: "upload" });
+
+  it("does not close a scratchpad until its confirm is answered, and Cancel keeps it", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+
+    const closing = h.ws.closeTabAndRecord("s");
+    await Promise.resolve();
+    // The dialog is up: nothing may have happened yet.
+    expect(h.calls.log).toEqual([]);
+    expect(h.calls.scratchpadCleared).toEqual([]);
+
+    dialog.answer(false);
+    expect(await closing).toBe(false);
+    expect(h.calls.closeTab).toEqual([]);
+    expect(h.calls.onTabClosed).toEqual([]);
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    expect(h.stack).toEqual([]);
+    h.dispose();
+  });
+
+  it("OK on a pending confirm closes the scratchpad and discards its recovery copy", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const closing = h.ws.closeTabAndRecord("s");
+    dialog.answer(true);
+    expect(await closing).toBe(true);
+    expect(h.calls.log).toEqual(["onTabClosed:s", "closeTab:s"]);
+    expect(h.calls.scratchpadCleared).toEqual(["uuid-1"]);
+    h.dispose();
+  });
+
+  it("a second close of the same tab while its dialog is open shares the answer", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const first = h.ws.closeTabAndRecord("s");
+    // A held Ctrl+W: an unqueued second confirm would reject.
+    const second = h.ws.closeTabAndRecord("s");
+    dialog.answer(false);
+    expect(await first).toBe(false);
+    expect(await second).toBe(false);
+    expect(h.calls.closeTab).toEqual([]);
+
+    // Settled, so a fresh close asks again.
+    h.confirmReplies.push(true);
+    expect(await h.ws.closeTabAndRecord("s")).toBe(true);
+    expect(h.calls.closeTab).toEqual(["s"]);
+    h.dispose();
+  });
+
+  it("a tab closed elsewhere while its dialog is open gets no side effects", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const closing = h.ws.closeTabAndRecord("s");
+    h.state.tabs = [];
+    dialog.answer(true);
+    // `true`, not `false`: nothing was cancelled, and a bulk close must go on.
+    expect(await closing).toBe(true);
+    expect(h.calls.log).toEqual([]);
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    expect(h.stack).toEqual([]);
+    h.dispose();
+  });
+
+  it("a tab replaced under the same id while its dialog is open is not closed", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const closing = h.ws.closeTabAndRecord("s");
+    // Same path reopened: same id (a path hash), new Y.Doc.
+    h.state.tabs = [scratchpadTab()];
+    dialog.answer(true);
+    expect(await closing).toBe(true);
+    expect(h.calls.log).toEqual([]);
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    h.dispose();
+  });
+
+  it("a workspace torn down while the dialog is open runs no side effects", async () => {
+    const h = harness({ tabs: [scratchpadTab()], activeTabId: "s", hasUnsaved: true });
+    // The latch is an `$effect` teardown: it must have RUN before disposing
+    // the root can fire it.
+    flushSync();
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const closing = h.ws.closeTabAndRecord("s");
+    h.dispose(); // "Try to recover" remounted App
+    dialog.answer(true);
+    expect(await closing).toBe(true);
+    expect(h.calls.log).toEqual([]);
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    expect(h.stack).toEqual([]);
+  });
+
+  it("a bulk close waits for each dialog and stops at a pending Cancel", async () => {
+    const h = harness({
+      tabs: [tab({ id: "keep" }), tab({ id: "a" }), tab({ id: "b" })],
+      activeTabId: "keep",
+    });
+    h.ws.updateSourceDraft("a", "unsaved a", true);
+    h.ws.updateSourceDraft("b", "unsaved b", true);
+    flushSync();
+    const dialog = deferred();
+    h.confirmReplies.push(dialog.promise);
+    const bulk = h.ws.closeOtherTabs("keep");
+    await Promise.resolve();
+    expect(h.calls.closeTab).toEqual([]);
+    dialog.answer(false);
+    await bulk;
+    // "b" never prompted (an unqueued confirm would have rejected the batch).
+    expect(h.calls.closeTab).toEqual([]);
     h.dispose();
   });
 });
