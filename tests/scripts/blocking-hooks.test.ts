@@ -184,10 +184,14 @@ describe("check-token-violation.sh worktree guard", () => {
   });
 
   bashOnly("still runs the scanner for a file inside the project", () => {
+    // `project`, not ROOT: the guard skips any path with a `.claude/worktrees/`
+    // segment, so a ROOT that is itself a worktree checkout (where workflow
+    // agents run this suite before pushing) would read as skipped. The scanner
+    // still runs from ROOT and reports the missing file on stderr.
     const run = runBashHook(
       "check-token-violation.sh",
-      editEvent(`${ROOT}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: ROOT },
+      editEvent(`${project}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: project },
     );
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
