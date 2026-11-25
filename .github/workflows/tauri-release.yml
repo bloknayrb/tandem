@@ -892,6 +892,16 @@ jobs:
             Write-Host '::error::Verify Windows signatures: no .exe/.msi artifacts found under src-tauri/target/release/'
             exit 1
           }
+          # The signer identity, pinned (#1825). A `Valid` status only says SOME
+          # trusted CA vouches for the signer; this says it is ours. With
+          # Trusted Signing's Individual validation the subject carries the
+          # validated legal name, not the account name 'Tandem'. Read off the
+          # v0.30.0, v0.31.0 and v0.32.0 logs of this step (every artifact
+          # printed 'CN=Bryan Kolb, O=Bryan Kolb, ...'); anchored on CN and O
+          # only, so the certificate's address fields can change without
+          # failing a release. A changed validation (Organization) fails here,
+          # loudly -- update this value deliberately when it does.
+          $expectedSigner = '^CN=Bryan Kolb, O=Bryan Kolb(,|$)'
           $errors = @()
           foreach ($f in $bundleFiles) {
             $sig = Get-AuthenticodeSignature -FilePath $f.FullName
@@ -899,13 +909,9 @@ jobs:
               $errors += "$($f.FullName): Status=$($sig.Status) StatusMessage=$($sig.StatusMessage)"
             } elseif (-not $sig.TimeStamperCertificate) {
               $errors += "$($f.FullName): signature missing RFC 3161 timestamp"
+            } elseif ($sig.SignerCertificate.Subject -cnotmatch $expectedSigner) {
+              $errors += "$($f.FullName): signed by '$($sig.SignerCertificate.Subject)', not the pinned signer"
             } else {
-              # TODO(#428): after first signed rc, harden this by asserting
-              # the cert subject matches the expected Trusted Signing DN.
-              # With Individual validation, the CN reflects the validated
-              # legal name (e.g. CN=Bryan Kolb), NOT the Trusted Signing
-              # account name 'Tandem'. Capture the actual subject from the
-              # first green build log below and pin it via -match here.
               $tsSubject = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { '(none)' }
               Write-Host "ok: $($f.Name) signed by '$($sig.SignerCertificate.Subject)'; timestamped by '$tsSubject'"
             }
