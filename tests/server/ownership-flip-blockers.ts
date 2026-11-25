@@ -171,6 +171,20 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
+      "The published state (#2358 PR 5a-3) leaves chat out, by Bryan's pick 'Defer to 5d " +
+      "(Recommended)' (2026-11-23): the CTRL_ROOM composer summary carries no 'chat waiting' " +
+      "or 'chat stale' for a message with no controlling badge (doc-less, on a closed " +
+      "document, or owned per message), and a document's waiting time (its stale flag, its " +
+      "hints and waitingSince) counts user comments and thread replies only, never chat that " +
+      "follows the document, so a badge can read as nothing waiting while a chat message on " +
+      "that document waits (design §10.2).",
+    closedBy:
+      "PR 5d (the pickup and stall clock from a message's last change of owner, design §6.5), " +
+      "publishing chat waiting and chat stale in the summary and counting a document's chat in " +
+      "its waiting time.",
+  },
+  {
+    gap:
       "The user's controls exist only on the server (#2358 PR 5a, 5a-2: POST /api/ownership for " +
       "a document and for a chat message): nothing in the editor reaches them yet, so a stuck " +
       "claim, a live acknowledger that never answers, or chat a tab close left with its closing " +

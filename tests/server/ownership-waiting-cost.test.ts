@@ -28,11 +28,18 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
-import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { broadcastOpenDocs } from "../../src/server/documents/registry.js";
+import {
+  addDoc,
+  removeDoc,
+  resetPublished,
+  setActiveDocId,
+} from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   documentWaiting,
   handOverDocumentInbox,
+  oldestDocumentWaiting,
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
@@ -42,12 +49,21 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import {
+  requestOwnershipPublish,
+  runOwnershipTickForTests,
+  startOwnershipPublishing,
+  stopOwnershipPublishingForTests,
+} from "../../src/server/ownership-publish.js";
+import {
+  noteRecordPoll,
   noteTransportRegistered,
   resetOwnershipForTests,
   setDocOwner,
+  setOldestWaitingProbe,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
+  setOwnershipPublishSink,
   setOwnershipSeqSource,
   setTandemPresenceSource,
   setTransportView,
@@ -202,6 +218,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await close?.();
   close = undefined;
+  stopOwnershipPublishingForTests();
+  resetPublished();
   setWaitingProbe(() => false);
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   withInternal(ctrl(), () => {
@@ -276,5 +294,86 @@ describe("the waiting decision's cost (3b-2b4c's measurement)", () => {
     );
     expect(whole.max).toBeLessThan(LOOSE_BOUND_MS);
     expect(half.max).toBeLessThan(LOOSE_BOUND_MS);
+  }, 120_000);
+});
+
+describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Republish on check-in', then 'Recompute own docs (Recommended)')", () => {
+  it(`records a check-in's republish for a session holding 1 document and for one holding ${DOCUMENTS}, over ${DOCUMENTS + 1} published documents`, async () => {
+    // The same check-in with no published state wired, for comparison.
+    const baseline: number[] = [];
+    for (let run = 0; run < 5; run++) {
+      const t0 = performance.now();
+      await pollAs(TANDEM, {});
+      await Promise.resolve();
+      baseline.push(performance.now() - t0);
+    }
+    // The lines of `src/server/index.ts` for the published state, the scan counted.
+    let scans = 0;
+    setOldestWaitingProbe((documentId) => {
+      scans += 1;
+      return oldestDocumentWaiting(documentId);
+    });
+    let asked = 0;
+    setOwnershipPublishSink((documentIds) => {
+      asked += 1;
+      requestOwnershipPublish(documentIds);
+    });
+    startOwnershipPublishing();
+    broadcastOpenDocs();
+    await Promise.resolve();
+
+    /** One check-in's republish, as the microtask runs it after `noteRecordPoll`. */
+    async function checkIn(owner: string): Promise<number> {
+      const t0 = performance.now();
+      noteRecordPoll(owner);
+      await Promise.resolve();
+      return performance.now() - t0;
+    }
+    // The terminal holds one document; Tandem's Claude holds the other fifty.
+    const one: number[] = [];
+    const all: number[] = [];
+    for (let run = 0; run < RUNS; run++) {
+      scans = 0;
+      one.push(await checkIn(A));
+      expect(scans, "the terminal's check-in scans its one document").toBe(1);
+      scans = 0;
+      all.push(await checkIn(TANDEM));
+      expect(scans, "Tandem's Claude's check-in scans its fifty").toBe(DOCUMENTS);
+    }
+    // The full republish (step 4, the tick), for reference.
+    const full: number[] = [];
+    for (let run = 0; run < 5; run++) full.push(timed(() => runOwnershipTickForTests()).ms);
+    // And a whole check-in through the real tool (`response.ts` calls
+    // `noteRecordPoll` for every tandem_checkInbox): each asks one.
+    const polls: number[] = [];
+    asked = 0;
+    for (let run = 0; run < 5; run++) {
+      const t0 = performance.now();
+      await pollAs(A, {});
+      await Promise.resolve();
+      polls.push(performance.now() - t0);
+    }
+    expect(asked, "one republish asked per real check-in").toBe(5);
+    const before = stats(baseline);
+    const oneDoc = stats(one);
+    const allDocs = stats(all);
+    const whole = stats(full);
+    const poll = stats(polls);
+    record(
+      `a holder's cursor-less tandem_checkInbox without the published state: median ${fmt(before.median)} ms, max ${fmt(before.max)} ms`,
+    );
+    record(
+      `check-in republish, holding 1 document: median ${fmt(oneDoc.median)} ms, max ${fmt(oneDoc.max)} ms`,
+    );
+    record(
+      `check-in republish, holding ${DOCUMENTS} documents: median ${fmt(allDocs.median)} ms, max ${fmt(allDocs.max)} ms`,
+    );
+    record(
+      `full republish (${DOCUMENTS + 1} published documents): median ${fmt(whole.median)} ms, max ${fmt(whole.max)} ms`,
+    );
+    record(
+      `the terminal's tandem_checkInbox with its check-in republish: median ${fmt(poll.median)} ms, max ${fmt(poll.max)} ms`,
+    );
+    expect(allDocs.max).toBeLessThan(LOOSE_BOUND_MS);
   }, 120_000);
 });

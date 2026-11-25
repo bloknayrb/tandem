@@ -127,8 +127,11 @@ export function shouldSkipDurableSync(origin: unknown): boolean {
  * it? (#2069)
  *
  * The one exception to {@link shouldSkipChannel}, and narrower than it on
- * purpose. Those keys are written only by `broadcastOpenDocs`
- * (`documents/registry.ts`), always under `withInternal` because they are
+ * purpose. Those keys are written only by `documents/registry.ts` —
+ * `broadcastOpenDocs`, and (`openDocuments` alone) `writePublishedOpenDocs`,
+ * the ownership republish and restore (#2358 PR 5a-3) — and by
+ * `restoreCtrlSession`'s boot-time clear in `mcp/document-service.ts`, always under
+ * `withInternal` because they are
  * server bookkeeping mirrored to clients — so the general channel rule made
  * `document:opened` / `closed` / `switched` unreachable, while the local-model
  * collaborator's abort-on-close/switch and the channel shim's advertised

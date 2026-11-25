@@ -45,7 +45,10 @@
  * ({@link greetingTransportBound}). PR 5a: the user's Release and Assign of a
  * document ({@link controlDocumentOwner}). PR 5a-2: of a chat message
  * ({@link controlMessageOwner}), with the message's loss record, and a
- * document's control moving the messages its close gave an owner.
+ * document's control moving the messages its close gave an owner. PR 5a-3:
+ * the published state's readers ({@link publishedOwnerFields},
+ * {@link ownershipSummary}) and step 4's publish sink; the registry and
+ * `ownership-publish.ts` write what they answer.
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -67,6 +70,12 @@
 
 import { randomInt } from "node:crypto";
 import { crossBasename } from "../../shared/cross-basename.js";
+import {
+  type NotPresentReason,
+  OWNERSHIP_STALE_AFTER_MS,
+  type OwnershipSummary,
+  type PublishedOwnerFields,
+} from "../../shared/ownership-published.js";
 import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-registry.js";
 import { ownershipEnabled } from "../ownership-flag.js";
 import { runOutsideMcpContext } from "./context.js";
@@ -620,6 +629,9 @@ let startOrWakeSink: (
 ) => void = () => {};
 let requestWakeSink: () => void = () => {};
 let ownershipFrameSink: () => void = () => {};
+let publishSink: (documentIds?: readonly string[]) => void = () => {};
+let launcherFactsSource: () => LauncherFacts | null | undefined = () => undefined;
+let oldestWaitingProbe: (documentId: string) => number | null = () => null;
 let roundOpener:
   | ((owed: { documents: readonly string[]; messages: readonly string[] }) => void)
   | undefined;
@@ -1051,6 +1063,10 @@ export function noteTransportRegistered(
   if (!record) return;
   record.clientName = info.clientName;
   rejudge(record);
+  // A new session can change the summary's `otherAiAttached` and who could
+  // claim an unowned document (#2358 PR 5a-3). Once per `initialize`, never
+  // per request.
+  requestPublish();
 }
 
 /**
@@ -1083,7 +1099,22 @@ function rejudge(record: OwnerRecord): void {
 export function noteRecordPoll(ownerId: string | undefined): void {
   if (!ownershipEnabled() || ownerId === undefined) return;
   const record = records.get(ownerId);
-  if (record) record.lastPollAt = Date.now();
+  if (!record) return;
+  record.lastPollAt = Date.now();
+  // A check-in republishes at once (#2358 PR 5a-3; Bryan, 2026-11-24:
+  // "Republish on check-in"), so a "not-checking-in" flag clears without
+  // waiting for the tick. After the poll time is recorded, before the handler
+  // runs: the republish is a microtask later, so it reads this time, and a
+  // claim the poll then makes asks its own through step 4. Only the
+  // documents this record holds are recomputed (Bryan, 2026-11-24:
+  // "Recompute own docs (Recommended)"): `lastPollAt` is read by nothing
+  // published but its own holder's stale flag. None held, nothing asked here.
+  // The documents the poll acknowledges items on are asked separately, by the
+  // delivery registry's acknowledgement listener (`ownership-publish.ts`'s
+  // `onAckChanged`), since an acknowledgement moves their waiting whoever
+  // holds them. Coalesced, written only where something changed.
+  const held = heldDocumentIds(ownerId);
+  if (held.length > 0) requestPublish(held);
 }
 
 /** The record for `ownerId`, or undefined. */
@@ -1258,9 +1289,16 @@ function recompute(record: OwnerRecord): void {
   if (isBuiltin(record)) return;
   const { registered, attached } = readAttachment();
   if (attached.has(record.ownerId)) {
+    // A record leaving its grace (#2358 PR 5a-3): a holder stops reading as
+    // "disconnected", and any record counts again for the summary's
+    // `otherAiAttached` (Bryan, 2026-11-24: "Republish on check-in", which
+    // also asked this for a record holding nothing). Only on that change,
+    // never for an attached record's every request.
+    const wasDetached = record.graceTimer !== undefined || record.lapsed === true;
     clearGrace(record);
     clearReOweRetry(record.ownerId);
     record.lapsed = undefined;
+    if (wasDetached) requestPublish();
     return;
   }
   if (record.lapsed && !recordHoldsState(record)) {
@@ -1540,6 +1578,9 @@ export function keyedDeliveryRounds(): boolean {
 }
 
 function armGrace(record: OwnerRecord): void {
+  // Whether a grace is starting, not being re-armed by a detached record's
+  // later request (`recompute` re-arms on each one).
+  const starting = record.graceTimer === undefined;
   clearGrace(record);
   record.graceArmedAt = Date.now();
   // Armed outside any MCP request context: the event that detached this record
@@ -1552,6 +1593,13 @@ function armGrace(record: OwnerRecord): void {
   timer.unref?.();
   record.graceTimer = timer;
   enforceDetachedCap();
+  // A record entering its grace (#2358 PR 5a-3): a holder reads as
+  // "disconnected", and any record stops counting for the summary's
+  // `otherAiAttached` (Bryan, 2026-11-24: "Republish on check-in"). Once per
+  // grace, not per re-arm. Asked even when the cap above lapsed and deleted
+  // this record: it counted for `otherAiAttached` until now, and a record
+  // holding nothing moves no document, so nothing else would ask.
+  if (starting) requestPublish();
 }
 
 function onGraceExpired(ownerId: string, timer: ReturnType<typeof setTimeout>): void {
@@ -1576,9 +1624,18 @@ function enforceDetachedCap(): void {
   // landed in the registry before its own re-judge ran) is not detached: its
   // grace ends here instead of counting against the cap.
   const { attached } = readAttachment();
+  let graceEnded = false;
   for (const r of records.values()) {
-    if (r.graceTimer !== undefined && attached.has(r.ownerId)) clearGrace(r);
+    if (r.graceTimer !== undefined && attached.has(r.ownerId)) {
+      clearGrace(r);
+      graceEnded = true;
+    }
   }
+  // A record leaving its grace here (#2358 PR 5a-3) asks the republish
+  // `recompute` would have asked: its own re-judge then finds no grace and
+  // asks nothing, so its "disconnected" and `otherAiAttached` would wait for
+  // the tick.
+  if (graceEnded) requestPublish();
   const inGrace = [...records.values()].filter((r) => r.graceTimer !== undefined);
   if (inGrace.length <= MAX_DETACHED_RECORDS) return;
   // Records that hold nothing go first: lapsing one early costs nothing, so
@@ -1767,8 +1824,13 @@ export function setDocOwner(
     if (previousId !== next?.ownerId) {
       queueChangeNotices(documentId, previousId, next?.ownerId, cause);
     }
-    // Step 4, publishing (PR 5): no body yet.
+    // Step 4, publishing (#2358 PR 5a-3; ownership design §4.3): the owner
+    // fields republished through the registry (`index.ts` wires the sink to
+    // `requestOwnershipPublish`, coalesced to one republish after the
+    // current synchronous run, so a change inside a registry composite never
+    // publishes a half-made tab list). Its own catch: the change stands.
     compositeObserver?.("publish", documentId);
+    requestPublish();
     // Step 5 (ownership design §4.4). For Tandem's Claude it asks
     // `waitingAtDocumentChange`: the waiting probe, then the chat that
     // follows this document (3b-2b1b-chat-step5). After the re-owe above, so
@@ -2195,6 +2257,9 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
  */
 export function noteTandemPresence(present: boolean): void {
   if (!ownershipEnabled()) return;
+  // The composer summary's `tandemPresent` (#2358 PR 5a-3) changes here, even
+  // when no document moves.
+  requestPublish();
   total("noteTandemPresence", undefined, () => {
     if (present) {
       for (const documentId of [...openDocumentIds()]) {
@@ -2397,6 +2462,15 @@ let modeKnownAsked = false;
  */
 export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
   if (!ownershipEnabled()) return;
+  // The mode feeds every document's waiting (`documentWaiting` counts
+  // nothing unless it reads Tandem), so a change of it asks the full
+  // republish (#2358 PR 5a-3 review): a Solo→Tandem change publishes the
+  // hints the Solo hold kept back at once, and the reverse clears them,
+  // without waiting for the tick. Rare, so the full cost is accepted. Before
+  // the latch, which governs only the start-or-wake forward. At install
+  // (boot, before the sink is wired, or a swap) it asks too; coalesced, and
+  // written only where something changed.
+  requestPublish();
   if (modeKnownAsked) return;
   if (state === "indeterminate") {
     modeUnknownSeen = true;
@@ -4794,6 +4868,221 @@ export function forgetThreadAnswerers(documentId: string, annotationId: string):
 }
 
 // ---------------------------------------------------------------------------
+// The published state (#2358 PR 5a-3; ownership design §10.2, §10.3): the
+// owner fields on each `Y_MAP_OPEN_DOCUMENTS` entry and the `CTRL_ROOM`
+// composer summary. Computed here; written by the registry and by
+// `ownership-publish.ts`, which call these readers. This module still never
+// imports the registry or writes a Y.Doc.
+
+/**
+ * The launcher's facts the published state reads (the supervisor's
+ * `tandemPresence().launcherFacts()`, wired in `index.ts`). Each is a fact
+ * about Tandem's Claude, never about a record.
+ */
+export interface LauncherFacts {
+  /** A child process is alive. */
+  readonly running: boolean;
+  /** A start is pending: a queued start pass, a spawn under way or a scheduled restart. */
+  readonly startPending: boolean;
+  /** The live standby is Off. */
+  readonly off: boolean;
+  /** The last plan found no launchable Claude Code integration. */
+  readonly notSetUp: boolean;
+  /** An error with no restart underway, or a tripped breaker (ownership design §8.1). */
+  readonly stayingDown: boolean;
+  /** The latest run failed to bind (ownership design §8.7). */
+  readonly bindFailed: boolean;
+  /** Start can help (ownership design §10.2, "Where Start can help"). */
+  readonly startable: boolean;
+}
+
+/**
+ * Step 4's publish (#2358 PR 5a-3). `src/server/index.ts` wires it to
+ * `requestOwnershipPublish` (`ownership-publish.ts`). Only stored; called by
+ * a flag-on change of owner, a record's grace starting or ending, presence,
+ * a new session, a mode change, and a holder's check-in. With `documentIds`
+ * (a check-in only, from this module) it asks for those documents' entries
+ * alone; without, the full republish.
+ */
+export function setOwnershipPublishSink(sink: (documentIds?: readonly string[]) => void): void {
+  publishSink = sink;
+}
+
+/** The launcher's facts (#2358 PR 5a-3). Unwired, or null: no launcher. */
+export function setLauncherFactsSource(source: () => LauncherFacts | null | undefined): void {
+  launcherFactsSource = source;
+}
+
+/**
+ * When the document's oldest waiting item was written, or null when nothing
+ * waits (#2358 PR 5a-3): `documentWaiting`'s rule (`oldestDocumentWaitingAt`
+ * in `mcp/awareness.ts`), wired in `index.ts` beside the waiting probe.
+ */
+export function setOldestWaitingProbe(probe: (documentId: string) => number | null): void {
+  oldestWaitingProbe = probe;
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const PUBLISH_FAILED =
+  "[ownership] the owner fields could not be republished; the next change or tick republishes them.";
+
+function requestPublish(documentIds?: readonly string[]): void {
+  try {
+    if (documentIds === undefined) publishSink();
+    else publishSink(documentIds);
+  } catch {
+    logLimited("publish-failed", PUBLISH_FAILED);
+  }
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const FACTS_FAILED =
+  "[ownership] the launcher's facts could not be read; the published state reads no launcher.";
+
+function readLauncherFacts(): LauncherFacts | undefined {
+  try {
+    return launcherFactsSource() ?? undefined;
+  } catch {
+    logLimited("facts-failed", FACTS_FAILED);
+    return undefined;
+  }
+}
+
+/** Fixed text: no id, no record, nothing from the error. */
+const OLDEST_WAITING_FAILED =
+  "[ownership] a document's oldest waiting item could not be read; it is read as nothing waiting.";
+
+function oldestWaiting(documentId: string): number | null {
+  try {
+    const at = oldestWaitingProbe(documentId);
+    return typeof at === "number" && Number.isFinite(at) ? at : null;
+  } catch {
+    logLimited("oldest-waiting-failed", OLDEST_WAITING_FAILED);
+    return null;
+  }
+}
+
+/**
+ * Whether some record that can take a document now ({@link canTakeNow}) may
+ * claim `documentId`, which nobody holds: its standing allows a claim (a
+ * record, no blocking loss, and for Tandem's Claude present). The queue's
+ * busy state is not read, so a running write does not flicker the hint.
+ */
+function attachedRecordCouldClaim(documentId: string): boolean {
+  for (const record of records.values()) {
+    if (!canTakeNow(record)) continue;
+    const standing = standingOf(documentId, record.ownerId, undefined);
+    if (standing.ok && !standing.holds && standing.claim !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * The owner fields of one open document's published entry (#2358 PR 5a-3;
+ * ownership design §10.2), or undefined while ownership is off, so a dark
+ * entry gains no key. A reader: it writes nothing (the waiting probe can log,
+ * as `documentWaiting` can). Never throws: a failure reads as unowned with no
+ * flag or hint.
+ *
+ * - `owner`: the holder's label, display kind and kind (an entry whose record
+ *   is gone reads as unowned, `readEntry`'s rule); null when unowned.
+ * - `stale`: `disconnected` while the holder is in its grace (or has lapsed
+ *   with the document still on it); otherwise `not-checking-in` when the
+ *   oldest waiting item is more than {@link OWNERSHIP_STALE_AFTER_MS} old and
+ *   the holder has not polled since it was written, except for Tandem's
+ *   Claude while a start is pending (ownership design §10.2: "Suppressed
+ *   while a start is pending"; a pending start of Tandem's Claude helps no
+ *   other holder, so it suppresses nothing else).
+ * - `hint`: `unowned-waiting` for an unowned document with an item waiting,
+ *   at once when no record that can take a document could claim it, after
+ *   {@link OWNERSHIP_STALE_AFTER_MS} otherwise; `start-to-answer` for a
+ *   document Tandem's Claude holds with an item waiting while its process is
+ *   not running and no start is pending (never without a launcher).
+ * - `waitingSince`: the oldest waiting item's time, only while a hint shows.
+ */
+export function publishedOwnerFields(
+  documentId: string,
+  now: number = Date.now(),
+): PublishedOwnerFields | undefined {
+  if (!ownershipEnabled()) return undefined;
+  const none: PublishedOwnerFields = { owner: null, stale: null, hint: null, waitingSince: null };
+  return total("publishedOwnerFields", none, () => {
+    const entry = readEntry(documentId);
+    const waitingAt = oldestWaiting(documentId);
+    const waitedLong = waitingAt !== null && now - waitingAt > OWNERSHIP_STALE_AFTER_MS;
+    if (entry === undefined) {
+      const hinted = waitingAt !== null && (waitedLong || !attachedRecordCouldClaim(documentId));
+      return hinted ? { ...none, hint: "unowned-waiting", waitingSince: waitingAt } : none;
+    }
+    const record = records.get(entry.ownerId) as OwnerRecord;
+    const isTandem = record.recordKind === "tandem";
+    const facts = isTandem ? readLauncherFacts() : undefined;
+    let stale: PublishedOwnerFields["stale"] = null;
+    if (record.graceTimer !== undefined || record.lapsed === true) {
+      stale = "disconnected";
+    } else if (
+      waitedLong &&
+      (record.lastPollAt === undefined || record.lastPollAt < (waitingAt as number)) &&
+      !(isTandem && facts?.startPending === true)
+    ) {
+      stale = "not-checking-in";
+    }
+    const startToAnswer =
+      isTandem &&
+      waitingAt !== null &&
+      facts !== undefined &&
+      !facts.running &&
+      !facts.startPending;
+    return {
+      owner: { label: record.label, displayKind: displayKindOf(record), kind: entry.kind },
+      stale,
+      hint: startToAnswer ? "start-to-answer" : null,
+      waitingSince: startToAnswer ? waitingAt : null,
+    };
+  });
+}
+
+/**
+ * The composer summary (#2358 PR 5a-3; ownership design §10.2), or undefined
+ * when none is written: ownership off, stdio mode, or no launcher (its facts
+ * unwired or null). `notPresentReason` takes the first that holds of `off`,
+ * `not-set-up`, `staying-down`, `bind-failed`, `not-started` (Bryan's pick
+ * "Add 'not set up'", 2026-11-23, with that order). `otherAiAttached`: some
+ * record other than Tandem's Claude that can take a document now
+ * ({@link canTakeNow}: attached and not lapsed). A reader; never throws.
+ */
+export function ownershipSummary(): OwnershipSummary | undefined {
+  if (!ownershipEnabled() || transportMode !== "http") return undefined;
+  return total("ownershipSummary", undefined as OwnershipSummary | undefined, () => {
+    const facts = readLauncherFacts();
+    if (facts === undefined) return undefined;
+    const present = isTandemPresent();
+    let reason: NotPresentReason | null = null;
+    if (!present) {
+      if (facts.off) reason = "off";
+      else if (facts.notSetUp) reason = "not-set-up";
+      else if (facts.stayingDown) reason = "staying-down";
+      else if (facts.bindFailed) reason = "bind-failed";
+      else reason = "not-started";
+    }
+    let otherAiAttached = false;
+    for (const record of records.values()) {
+      if (record.recordKind !== "tandem" && canTakeNow(record)) {
+        otherAiAttached = true;
+        break;
+      }
+    }
+    return {
+      tandemPresent: present,
+      tandemRunning: facts.running,
+      tandemStartable: facts.startable,
+      notPresentReason: reason,
+      otherAiAttached,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Test seams.
 
 /** Everything this module holds, for "nothing was created" assertions. */
@@ -4993,6 +5282,9 @@ export function resetOwnershipForTests(): void {
   modeKnownAsked = false;
   requestWakeSink = () => {};
   ownershipFrameSink = () => {};
+  publishSink = () => {};
+  launcherFactsSource = () => undefined;
+  oldestWaitingProbe = () => null;
   roundOpener = undefined;
   reopenRoundOwed.clear();
   graceMs = DEFAULT_GRACE_MS;

@@ -45,7 +45,7 @@ import {
   selectionMayBeHanded,
   wasOwedAtSwitch,
 } from "../models/local-period.js";
-import { inboxOwnership } from "../sessions/ownership.js";
+import { inboxOwnership, logLimited } from "../sessions/ownership.js";
 import {
   inboxExcludedAllNote,
   inboxExcludedNamedNote,
@@ -71,7 +71,12 @@ import {
   seenBy,
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
-import { chatRowsOwedToFreshReader, isDocumentWaiting } from "./inbox-selection.js";
+import {
+  chatRowsOwedToFreshReader,
+  type DocumentWaitingInput,
+  isDocumentWaiting,
+  oldestDocumentWaitingAt,
+} from "./inbox-selection.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -614,26 +619,60 @@ const DOCUMENT_WAITING_FAILED =
  */
 export function documentWaiting(documentId: string): boolean {
   try {
-    const doc = getCurrentDoc(documentId);
-    const ydoc = getDocument(documentId);
-    if (!doc || !ydoc) return false;
-    const store = new YDocStore(ydoc, doc.filePath, doc.id);
-    const reconciled = store.reconciled();
-    return isDocumentWaiting({
-      documentId,
-      annotations: structuredClone(store.listAnnotations()),
-      repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
-      mode: readModeState(),
-      handedAtOrAbove: (kind, id, editedAt) =>
-        deliveryRegistry
-          .versionsOf(kind, ledgerKey(documentId, id))
-          .some((entry) => entry.acked && entry.editedAt >= editedAt),
-      isLocalModelRecord,
-      writtenSince: waitingWrittenSince,
-    });
+    const input = documentWaitingInput(documentId);
+    return input !== null && isDocumentWaiting(input);
   } catch {
     console.error(DOCUMENT_WAITING_FAILED);
     return false;
+  }
+}
+
+/** The waiting rule's inputs for an open document, or null when it is not open. May throw. */
+function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
+  const doc = getCurrentDoc(documentId);
+  const ydoc = getDocument(documentId);
+  if (!doc || !ydoc) return null;
+  const store = new YDocStore(ydoc, doc.filePath, doc.id);
+  const reconciled = store.reconciled();
+  return {
+    documentId,
+    annotations: structuredClone(store.listAnnotations()),
+    repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
+    mode: readModeState(),
+    handedAtOrAbove: (kind, id, editedAt) =>
+      deliveryRegistry
+        .versionsOf(kind, ledgerKey(documentId, id))
+        .some((entry) => entry.acked && entry.editedAt >= editedAt),
+    isLocalModelRecord,
+    writtenSince: waitingWrittenSince,
+  };
+}
+
+/** Fixed text: nothing from the error, no record and no document. */
+const OLDEST_WAITING_FAILED =
+  "[Tandem] a document's oldest waiting item could not be computed; it is read as nothing waiting.";
+
+/**
+ * When the oldest item {@link documentWaiting} counts on `documentId` was last
+ * written, or null when it counts none (#2358 PR 5a-3; ownership design
+ * §10.2's stale flag and hints). The same inputs and rule
+ * (`oldestDocumentWaitingAt`) and the same reads. Not quite write-free:
+ * `store.reconciled()` runs the key-identity repair (`reconcileAnnotationKeys`,
+ * a `withInternal` write) when the document holds an aliased key, as every
+ * Claude-facing read of the document does; idempotent, so it writes at most
+ * once per alias however often a publish or the tick asks. Reached
+ * only through the ownership module's seam (`setOldestWaitingProbe`), which
+ * only a flag-on publish asks. Total: a throw answers null with one fixed
+ * line, rate-limited here (`logLimited`), since every publish and every tick
+ * asks it once per published document.
+ */
+export function oldestDocumentWaiting(documentId: string): number | null {
+  try {
+    const input = documentWaitingInput(documentId);
+    return input === null ? null : oldestDocumentWaitingAt(input);
+  } catch {
+    logLimited("oldest-waiting-computed", OLDEST_WAITING_FAILED);
+    return null;
   }
 }
 

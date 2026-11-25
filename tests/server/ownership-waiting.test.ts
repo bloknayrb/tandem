@@ -42,6 +42,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   documentWaiting,
   handOverDocumentInbox,
+  oldestDocumentWaiting,
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
@@ -55,6 +56,7 @@ import { CHAT_SCOPE, deliveryRegistry } from "../../src/server/mcp/inbox-cursor.
 import {
   type DocumentWaitingInput,
   isDocumentWaiting,
+  oldestDocumentWaitingAt,
 } from "../../src/server/mcp/inbox-selection.js";
 import {
   checkInboxOutputShape,
@@ -1139,6 +1141,9 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
         .flatMap((spy, i) => spy.mock.calls.slice(before[i]))
         .filter((call) => !String(call[0]).startsWith("[ANNOTATION-STORE] legacy migration:"));
       expect(during, "documentWaiting logged").toEqual([]);
+      // #2358 PR 5a-3: the oldest-waiting sibling answers a time exactly when
+      // waiting is true, world by world.
+      expect(oldestDocumentWaiting(w.d.id) !== null, "the oldest waiting time").toBe(waiting);
       const inbox = await reader(TANDEM).poll(w.d.id);
       const pollHands = handed(inbox).includes(w.candidate);
       // One candidate: nothing else answerable is handed.
@@ -1416,6 +1421,26 @@ describe("isDocumentWaiting, the module alone", () => {
       isLocalModelRecord: () => false,
       ...over,
     } as DocumentWaitingInput);
+
+  it("#2358 PR 5a-3: the oldest waiting time is the earliest write of a counted item, edits included", () => {
+    const anns = [
+      userCommentRecord("late", { timestamp: 500 }),
+      userCommentRecord("edited", { timestamp: 100, editedAt: 900 }),
+      userCommentRecord("settled", { timestamp: 50, status: "accepted" }),
+    ] as never;
+    expect(oldestDocumentWaitingAt(input({ annotations: anns }))).toBe(500);
+    const withReply = input({
+      annotations: [userCommentRecord("p", { timestamp: 800 })] as never,
+      repliesOf: () =>
+        deepFreeze([{ id: "r", annotationId: "p", author: "user", text: "t", timestamp: 300 }]),
+    });
+    expect(oldestDocumentWaitingAt(withReply)).toBe(300);
+    expect(oldestDocumentWaitingAt(input({ annotations: anns, mode: "solo" }))).toBeNull();
+    expect(
+      oldestDocumentWaitingAt(input({ annotations: anns, handedAtOrAbove: () => true })),
+    ).toBeNull();
+    expect(oldestDocumentWaitingAt(input({}))).toBeNull();
+  });
 
   it("answers over deep-frozen inputs (a mutation would throw)", () => {
     const anns = [userCommentRecord("c1")] as never;

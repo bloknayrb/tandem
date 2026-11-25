@@ -363,6 +363,8 @@ const FAN_IN = [
   "server/mcp/routes/open.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/scratchpad.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/upload.ts -> server/documents/open.ts (value) x1",
+  // #2358 PR 5a-3: the published ownership state's republish, restore and guard.
+  "server/ownership-publish.ts -> server/documents/registry.ts (value) x1",
   "server/startup-file.ts -> server/documents/open.ts (value) x1",
 ];
 
@@ -512,6 +514,9 @@ const FAN_OUT = [
   "server/documents/short-name-records.ts -> server/events/queue.ts (value) x1",
   "server/documents/short-name-records.ts -> server/session/manager.ts (value) x1",
   "server/documents/short-name-records.ts -> shared/constants.ts (value) x1",
+  // #2358 PR 5a-3: each published entry's owner fields (`publishedOwnerFields`,
+  // undefined while ownership is off). The ownership module never imports back.
+  "server/documents/registry.ts -> server/sessions/ownership.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",

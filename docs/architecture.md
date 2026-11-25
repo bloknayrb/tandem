@@ -692,8 +692,8 @@ Each open document has its own Y.Doc (one per Hocuspocus room). Each Y.Doc conta
 | `Y.XmlFragment('default')` | Document content | Paragraphs, headings as Y.XmlElement nodes with Y.XmlText children |
 | `Y.Map('annotations')` | Annotation metadata | Highlights, comments, notes keyed by annotation ID |
 | `Y.Map('awareness')` | Claude's presence | Status text, focus paragraph, active flag |
-| `Y.Map('userAwareness')` | User's presence | Selection range, typing state, cursor position |
-| `Y.Map('documentMeta')` | Document metadata | `openDocuments` array, `activeDocumentId`, `activeDocumentEpoch` (monotonic activation counter), readOnly flag, format |
+| `Y.Map('userAwareness')` | User's presence | Selection range, typing state, cursor position. In `CTRL_ROOM` also the mode, the dwell setting and, flag on in HTTP mode with a launcher, the ownership composer summary (`ownershipSummary`, #2358 PR 5a-3) |
+| `Y.Map('documentMeta')` | Document metadata | `openDocuments` array, `activeDocumentId`, `activeDocumentEpoch` (monotonic activation counter), readOnly flag, format. With multi-session ownership on (ships dark, ADR-054), each `openDocuments` entry also carries `owner`, `stale`, `hint` and `waitingSince` (#2358 PR 5a-3) |
 
 ### Y.Doc Identity and Multi-Document Rooms
 
@@ -705,6 +705,8 @@ Each open document gets its own Hocuspocus room. The room name is a stable docum
 4. The Hocuspocus doc replaces the map entry -- both sides now reference the same instance
 
 A bootstrap room (`__tandem_ctrl__`) provides the coordination channel for the browser to discover which documents are open. The server writes the `openDocuments` list to `Y.Map('documentMeta')` on the active document whenever docs are opened, closed, or switched.
+
+**Published ownership state (#2358 PR 5a-3, ships dark).** With ownership on, `broadcastOpenDocs` adds each entry's owner fields (`toPublishedEntry`; the tool shape `toDocListEntry` is unchanged), and `src/server/ownership-publish.ts` republishes them where they changed (step 4 of `setDocOwner`, the launcher's facts, a 60-second stale tick) through the registry's `writePublishedOpenDocs`, which rebuilds the list from the docs the last broadcast published and writes only `openDocuments`, under `withInternal`. The same module writes `CTRL_ROOM`'s composer summary and guards both: an observer on `documentMeta` in `CTRL_ROOM` and each open document's room, and on the summary key, restores the server's value after any transaction not made by a server helper, once per event-loop turn, re-attached from `onDocSwapped`. A restore that undoes a forged tab id emits `document:*` like any `withInternal` tab-list write (#2069). See ADR-054's 5a-3 amendment.
 
 This is documented in [ADR decisions](decisions.md) and [lessons learned](lessons-learned.md).
 
