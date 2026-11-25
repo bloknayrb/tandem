@@ -54,6 +54,7 @@ import {
 import {
   applyUserOpenDefault,
   captureCarriedOverChat,
+  controlDocumentOwner,
   controlMessageOwner,
   DEFAULT_GRACE_MS,
   forgetChatMessageOwners,
@@ -552,10 +553,17 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
 
   function lapseByGrace(owner: string): void {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    view = view.filter((e) => e.ownerId !== owner);
-    noteTransportChanged(owner);
-    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
-    vi.useRealTimers();
+    // Real timers come back even if the lapse throws, so a failure here is
+    // not hidden by later awaits hanging on fake ones (#2572 review). Clocks
+    // stamped during the lapse sit one grace period ahead of real time; no
+    // row that calls this reads `since` or `stale` afterwards.
+    try {
+      view = view.filter((e) => e.ownerId !== owner);
+      noteTransportChanged(owner);
+      vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   }
 
   /**
@@ -658,6 +666,22 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     expect(controlMessageOwner(m, "release", undefined)).toBe("changed");
     await settle();
     expect(published()?.[m]).toMatchObject({ heldBy: "presence", tandemMayTake: true });
+    expect(await freshPoll(TANDEM)).toContain(m);
+  });
+
+  it("a document Released from a present Tandem's Claude goes straight back to it, so its chat reads true and is handed to it (#2572 review)", async () => {
+    // The review's case (a present Tandem's Claude blocked by a released loss
+    // on an unowned document) does not arise: while it is present, the default
+    // rule gives the released document back at once, with no loss (ownership
+    // design §5.3: a Release lasts while Tandem's Claude is not present).
+    tandemPresent();
+    const d = mkDoc("released-doc");
+    setDocOwner(d, { ownerId: TANDEM, kind: "claimed" }, "claim", TANDEM);
+    expect(await controlDocumentOwner(d, "release", undefined, () => true)).toBe("changed");
+    expect(ownershipSnapshotForTests().losses).toEqual([]);
+    const m = userChat(key("on-released"), d);
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "document", tandemMayTake: true });
     expect(await freshPoll(TANDEM)).toContain(m);
   });
 
