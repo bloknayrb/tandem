@@ -52,6 +52,12 @@ interface Props {
    */
   returnFocus?: HTMLElement | null;
   onclose: () => void;
+  /**
+   * The refusal shown now, or null: the strip speaks it through its
+   * always-mounted announcer (#1431, #2489), since this keyed popover's own
+   * nodes are inserted together with their text.
+   */
+  onerror?: (text: string | null) => void;
   onstart: () => void;
 }
 
@@ -66,6 +72,7 @@ const {
   initialError = null,
   returnFocus = null,
   onclose,
+  onerror,
   onstart,
 }: Props = $props();
 
@@ -158,6 +165,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
   if (pending) return;
   pending = true;
   error = null;
+  onerror?.(null);
   const result = await postDocumentOwnership(documentId, action, ownerLabel);
   if (!live) return;
   pending = false;
@@ -166,6 +174,7 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
     return;
   }
   error = ownershipErrorText(result.error);
+  onerror?.(error);
   // The pressed row was disabled while the request ran, which dropped focus;
   // a refusal keeps the popover open, so focus comes back into it.
   await tick();
@@ -187,7 +196,10 @@ async function run(action: "release" | "assign", ownerLabel?: string) {
 >
   <div class="owner-heading" data-stale={view.stale ?? undefined}>{view.detail}</div>
   {#if error}
-    <div class="owner-error" role="alert" data-testid="tab-owner-error">{error}</div>
+    <!-- Not a live region: it is inserted together with its text, which is
+         commonly announced by nothing (#1431). The strip's always-mounted
+         `tab-owner-announcer` speaks it (`onerror`). -->
+    <div class="owner-error" aria-hidden="true" data-testid="tab-owner-error">{error}</div>
   {/if}
   {#if showRelease}
     <button

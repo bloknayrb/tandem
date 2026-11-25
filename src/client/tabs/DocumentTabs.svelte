@@ -3,6 +3,7 @@ import { onDestroy, untrack } from "svelte";
 import { flip } from "svelte/animate";
 import type { OwnershipSummary, PublishedOwnerFields } from "../../shared/ownership-published.js";
 import { createScratchpad } from "../actions/builtin.svelte.js";
+import { SR_ONLY_STYLE } from "../components/live-region.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
@@ -148,11 +149,28 @@ function anchorOf(el: Element): { left: number; bottom: number } {
   return { left: r.left, bottom: r.bottom };
 }
 
+/**
+ * The popover's refusal, as spoken (#1431, #2489). The popover is keyed on its
+ * open request, so a `role="alert"` inside it is inserted together with its
+ * text (and a native-menu Release refusal mounts the popover WITH its text),
+ * the shape commonly announced by nothing. This always-mounted announcer
+ * (while any entry carries owner fields, so a dark build renders nothing new)
+ * speaks it instead; the popover's visible copy is `aria-hidden`. Emptied on
+ * every close and at every new attempt, so a repeat refusal is a change again.
+ */
+let ownerAnnouncement = $state("");
+
+function closeOwnerPopover() {
+  ownerPopover = null;
+  ownerAnnouncement = "";
+}
+
 function toggleOwnerPopover(tabId: string, anchor: HTMLElement) {
   if (ownerPopover?.tabId === tabId) {
-    ownerPopover = null;
+    closeOwnerPopover();
     return;
   }
+  ownerAnnouncement = "";
   ownerPopover = { tabId, anchor: anchorOf(anchor), error: null, opener: anchor };
 }
 
@@ -161,19 +179,23 @@ function openOwnerPopoverForTab(tabId: string, error: string | null = null) {
   const pill = scrollEl?.querySelector(`[data-testid="tab-${CSS.escape(tabId)}"][role="tab"]`);
   const anchor = pill ? anchorOf(pill) : { left: 8, bottom: 40 };
   const active = document.activeElement;
-  ownerPopover = {
-    tabId,
-    anchor,
-    error,
-    opener: active instanceof HTMLElement && active !== document.body ? active : null,
-  };
+  // Focus inside a popover being replaced is about to leave the DOM: hand
+  // focus back to that popover's own opener instead.
+  const insideOld = active instanceof Element && active.closest('[data-testid="tab-owner-menu"]');
+  const opener = insideOld
+    ? (ownerPopover?.opener ?? null)
+    : active instanceof HTMLElement && active !== document.body
+      ? active
+      : null;
+  ownerPopover = { tabId, anchor, error, opener };
+  ownerAnnouncement = error ?? "";
 }
 
 // A popover whose tab closed, or whose entry lost its owner fields, goes away.
 $effect(() => {
   const open = ownerPopover;
   if (open && (!tabs.some((t) => t.id === open.tabId) || !ownerFields.has(open.tabId))) {
-    ownerPopover = null;
+    closeOwnerPopover();
   }
 });
 
@@ -1494,11 +1516,15 @@ $effect(() => {
         initialError={open.error}
         returnFocus={open.opener}
         {takeBack}
-        onclose={() => (ownerPopover = null)}
+        onclose={closeOwnerPopover}
+        onerror={(text) => (ownerAnnouncement = text ?? "")}
         onstart={() => onStartTandemClaude?.()}
       />
     {/key}
   {/if}
+{/if}
+{#if ownerFields.size > 0}
+  <div role="alert" aria-live="assertive" style={SR_ONLY_STYLE} data-testid="tab-owner-announcer">{ownerAnnouncement}</div>
 {/if}
 
 <style>

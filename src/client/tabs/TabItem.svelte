@@ -375,8 +375,11 @@ function handleMouseLeaveClose() {
         onowneropen?.(tab.id, e.currentTarget);
       }}
       onpointerdown={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
     >
+      <!-- No keydown stopPropagation, like the close button beside it: focus
+           comes back here whenever the popover closes, and stopping keydown
+           would swallow every window-level shortcut (save, close, the palette,
+           tab cycling) while the badge holds focus. -->
       {ownerBadge.text}
     </button>
   {/if}

@@ -257,6 +257,49 @@ describe("the owner badge and its popover", () => {
     expect(getByTestId("tab-owner-menu")).toBeTruthy();
   });
 
+  it("speaks a refusal through a region mounted before it (#1431, #2489)", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/ownership/owners")) return jsonResponse(200, { data: [] });
+      if (init?.method === "POST") return jsonResponse(409, { error: "busy" });
+      throw new Error(`unexpected ${url}`);
+    });
+    const { getByTestId, queryByTestId } = renderHeld();
+    // The region exists, empty, before any popover or refusal.
+    const region = getByTestId("tab-owner-announcer");
+    expect(region.getAttribute("role")).toBe("alert");
+    expect(region.textContent).toBe("");
+    await fireEvent.click(getByTestId("tab-owner-badge"));
+    await settle();
+    await fireEvent.click(getByTestId("tab-owner-release"));
+    await settle();
+    // The same node now holds the sentence: a mutation, not an insertion.
+    expect(getByTestId("tab-owner-announcer")).toBe(region);
+    expect(region.textContent).toBe("An operation is in progress — try again");
+    // The visible copy, inserted with its text, is not itself a live region.
+    const visible = getByTestId("tab-owner-error");
+    expect(visible.getAttribute("role")).toBeNull();
+    expect(visible.getAttribute("aria-hidden")).toBe("true");
+    // Closing empties it, so the same refusal next time is a change again.
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await settle();
+    expect(queryByTestId("tab-owner-menu")).toBeNull();
+    expect(region.textContent).toBe("");
+  });
+
+  it("lets window shortcuts through while the badge holds focus", async () => {
+    const { getByTestId } = renderHeld();
+    const badge = getByTestId("tab-owner-badge");
+    badge.focus();
+    const seen = vi.fn();
+    window.addEventListener("keydown", seen);
+    try {
+      await fireEvent.keyDown(badge, { key: "s", ctrlKey: true });
+    } finally {
+      window.removeEventListener("keydown", seen);
+    }
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
   it("hides Release where it changes nothing and Assign when nobody can take it", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
     const { getByTestId, queryByTestId } = renderHeld(

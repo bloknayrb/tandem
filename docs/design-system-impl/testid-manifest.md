@@ -167,6 +167,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `data-stale` / `data-hint` carry the published state), its popover
   `tab-owner-menu`, and in it `tab-owner-release`, `tab-owner-assign-{*}`
   (keyed by the session's label), `tab-owner-start` and `tab-owner-error`
+  (visible, `aria-hidden`); the strip's always-mounted `tab-owner-announcer`
+  speaks a refusal (#1431, #2489)
 
 ### Saved sessions (file-open dialog)
 - `sessions-section`, `sessions-toggle` (the disclosure),
