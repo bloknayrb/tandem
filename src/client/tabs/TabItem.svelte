@@ -265,6 +265,9 @@ function handleMouseLeaveClose() {
   axe's nested-interactive rule fires on this pattern; it is suppressed in the a11y spec
   with justification (see tests/e2e/accessibility.spec.ts).
 -->
+<!-- The owner badge's text (#2358 PR 5b) follows the filename directly in the
+     label: axe's label-content-name-mismatch needs the tab's visible text, name
+     then badge, to appear unbroken in it. -->
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div
   class="tab-pill"
@@ -274,7 +277,7 @@ function handleMouseLeaveClose() {
   role="tab"
   tabindex={0}
   aria-selected={isActive}
-  aria-label={`${tab.fileName}${tab.readOnly ? ", read-only" : ""}${dirty ? ", unsaved changes" : ""}`}
+  aria-label={`${tab.fileName}${ownerBadge ? `, ${ownerBadge.text}` : ""}${tab.readOnly ? ", read-only" : ""}${dirty ? ", unsaved changes" : ""}`}
   style={tabStyle}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}
@@ -369,7 +372,7 @@ function handleMouseLeaveClose() {
       title={ownerBadge.detail}
       aria-haspopup="dialog"
       aria-expanded={ownerOpen}
-      aria-label={`Who works on ${tab.fileName}: ${ownerBadge.detail}`}
+      aria-label={`${ownerBadge.text}: who works on ${tab.fileName}. ${ownerBadge.detail}`}
       onclick={(e) => {
         e.stopPropagation();
         onowneropen?.(tab.id, e.currentTarget);
