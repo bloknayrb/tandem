@@ -656,7 +656,11 @@ const OLDEST_WAITING_FAILED =
  * When the oldest item {@link documentWaiting} counts on `documentId` was last
  * written, or null when it counts none (#2358 PR 5a-3; ownership design
  * §10.2's stale flag and hints). The same inputs and rule
- * (`oldestDocumentWaitingAt`), the same reads and no Y.Doc write. Reached
+ * (`oldestDocumentWaitingAt`) and the same reads. Not quite write-free:
+ * `store.reconciled()` runs the key-identity repair (`reconcileAnnotationKeys`,
+ * a `withInternal` write) when the document holds an aliased key, as every
+ * Claude-facing read of the document does; idempotent, so it writes at most
+ * once per alias however often a publish or the tick asks. Reached
  * only through the ownership module's seam (`setOldestWaitingProbe`), which
  * only a flag-on publish asks. Total: a throw answers null with one fixed
  * line, rate-limited here (`logLimited`), since every publish and every tick

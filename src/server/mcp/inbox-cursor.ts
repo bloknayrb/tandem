@@ -145,7 +145,6 @@ export class DeliveryRegistry {
     this.reset();
   }
 
-  /** Changes on every reset; a cursor from another epoch reads as fresh. */
   /** Set or clear the acknowledgement listener (see `#ackListener`). */
   setAckListener(listener: ((scope: string) => void) | undefined): void {
     this.#ackListener = listener;
@@ -159,6 +158,7 @@ export class DeliveryRegistry {
     }
   }
 
+  /** Changes on every reset; a cursor from another epoch reads as fresh. */
   get epoch(): string {
     return this.#epoch;
   }
