@@ -97,8 +97,15 @@ import {
   type PublishedChatOwners,
 } from "../../src/shared/ownership-published.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const A = "claude:chatpub-a";
 const B = "claude:chatpub-b";
@@ -187,6 +194,7 @@ async function as(owner: string, tool: string, args: Record<string, unknown> = {
 
 /** A cursor-less poll as `owner`: it takes what it may and stamps it read. */
 async function poll(owner: string): Promise<void> {
+  expectDeliveryRoundsLive();
   const result = await as(owner, "tandem_checkInbox");
   expect(result.error, JSON.stringify(result)).toBe(false);
 }

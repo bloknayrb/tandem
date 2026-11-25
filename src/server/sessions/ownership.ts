@@ -2168,14 +2168,18 @@ function frameOwedAtDocumentChange(
  * that chat's standing names the new holder, or the document's claim. Each
  * half in its own catch, read as false with one fixed, rate-limited line.
  */
-function workWaitingOnDocument(documentId: string, ownerId: string | undefined): boolean {
+function workWaitingOnDocument(
+  documentId: string,
+  ownerId: string | undefined,
+  owed?: readonly string[],
+): boolean {
   try {
     if (waitingProbe(documentId, ownerId ?? "")) return true;
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
   }
   try {
-    for (const key of chatSide.owedToFreshReader()) {
+    for (const key of owed ?? chatSide.owedToFreshReader()) {
       if (carriedOver.has(key)) continue;
       const facts = chatSide.message(key);
       if (facts === undefined || facts.documentId !== documentId) continue;
@@ -2527,8 +2531,10 @@ let modeKnownAsked = false;
  * the two do not both forward a change from a Solo the room saw (a window
  * that toggled before its CTRL_ROOM sync writes only `tandem`, then posts the
  * release, so both forward; the supervisor's pass joins or repeats the ask).
- * At most once per server run. Flag
- * off: nothing, and nothing recorded. Total, since it runs inside a
+ * At most once per server run. The same first Tandem reading also sends the
+ * `ownership` frame when work waits for another session or for nobody
+ * ({@link otherOwnersWorkWaiting}), the restart question's other-owner half.
+ * Flag off: nothing, and nothing recorded. Total, since it runs inside a
  * `CTRL_ROOM` transaction's observer.
  */
 export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
@@ -2558,6 +2564,60 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
   }
+  // The other-owner half (#2358, the flip-blocker row "The restart question's
+  // other-owner half"): a comment made while the mode was unknown was dropped
+  // by `pushEvent`'s Solo gate for every session, so sessions other than
+  // Tandem's Claude are told too, by step 5's frame and only when work waits
+  // for one of them. Its own catches; `total` for anything else.
+  total("modeKnownFrame", undefined, () => {
+    const waiting = otherOwnersWorkWaiting();
+    if (waiting === undefined) return;
+    sendOwnershipFrame();
+    // Rounds open wherever a wake was sent for the work (`openOwedRounds`'
+    // contract), so /health and the stall banner see a session that never
+    // polls after it.
+    openOwedRounds(waiting.documents, waiting.keys);
+  });
+}
+
+/**
+ * Whether work waits for a session other than Tandem's Claude, or for nobody
+ * (#2358, the restart question's other-owner half), read when the mode first
+ * reads Tandem after reading unknown: an open document Tandem's Claude does not
+ * hold (another record holds it, or nobody does) with work waiting on it, by
+ * step 5's check ({@link workWaitingOnDocument}: the waiting probe after every
+ * privacy gate, then the chat that follows it), or a user chat message a fresh
+ * reader would be handed that is now another record's or claimable
+ * ({@link frameOwedForMessages}, the release's check). Unscoped as the frame
+ * is (ownership design §9.4): it says whether to wake, not whom. Answers the
+ * documents with work waiting and, when the chat half frames, the owed chat,
+ * for the delivery rounds the frame opens; undefined when nothing waits. The
+ * owed chat is read once for every document. The open documents and the chat
+ * side are each read in their own catch: nothing, one fixed line.
+ */
+function otherOwnersWorkWaiting(): { documents: string[]; keys: readonly string[] } | undefined {
+  let documents: string[] = [];
+  try {
+    documents = [...openDocumentIds()];
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  // Read once: each document's check walks the same owed chat.
+  let owed: readonly string[] = [];
+  try {
+    owed = chatSide.owedToFreshReader();
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  const waitingDocuments: string[] = [];
+  for (const documentId of documents) {
+    const holder = readEntry(documentId)?.ownerId;
+    if (holder === TANDEM_OWNER_ID) continue;
+    if (workWaitingOnDocument(documentId, holder, owed)) waitingDocuments.push(documentId);
+  }
+  const keys = owed.length > 0 && frameOwedForMessages(owed) ? owed : [];
+  if (waitingDocuments.length === 0 && keys.length === 0) return undefined;
+  return { documents: waitingDocuments, keys };
 }
 
 /**
@@ -2692,7 +2752,9 @@ export function onDocumentClosed(documentId: string, filePath?: string): void {
  * "close": the holder at the close if its record exists and has not lapsed;
  * if the document was unowned, Tandem's Claude while present; otherwise
  * nobody (a lapsed holder's messages are then owned as closed-document
- * messages are, so none is left with a record nothing will arm or delete).
+ * messages are, so none is left with a record nothing will arm or delete;
+ * they are re-owed, and their new standing is told once the document is
+ * untracked: {@link forwardClosedChatAfterUntrack}).
  * An existing per-message owner is never overwritten. Never throws.
  */
 function assignClosedDocumentChat(documentId: string, heldBy: string | undefined): void {
@@ -2710,12 +2772,16 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
       // record is gone: the chat that followed the document leaves that
       // record here, and the deferred move never runs once the entry is gone,
       // so this is the message's change of owner away from a record (R6.1).
-      // Re-owe it, or a message the holder had read would be owed to nobody.
+      // Re-owe it, or a message the holder had read would be owed to nobody,
+      // and tell its new standing once the document is untracked.
       if (heldBy !== undefined) {
         const keys = chatSide
           .messagesOn(documentId)
           .filter((key) => !ownerByMessage.has(key) && !carriedOver.has(key));
-        if (keys.length > 0) chatSide.reOwe(keys);
+        // Through `reOweChat`, as every other handover: it also restarts each
+        // message's pickup and stall clock (ownership design §6.5) and asks
+        // a chat republish. A failed re-owe tells nothing.
+        if (keys.length > 0 && reOweChat(keys)) forwardClosedChatAfterUntrack(keys);
       }
       return;
     }
@@ -2726,6 +2792,39 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
   } catch {
     logLimited("chat-close-failed", CHAT_CLOSE_FAILED);
   }
+}
+
+/**
+ * The wake for chat a lapsed holder's close re-owed with no owner (#2358, the
+ * flip-blocker row "A lapsed holder whose deferred move has not run leaves a
+ * closed document's chat with no owner"). Once the document is closed such a
+ * message stands as a closed document's does (ownership design §7.1): Tandem's
+ * Claude's while it is present, otherwise claimable per message. That is a
+ * change of owner away from a record, so it is told as the release loop tells
+ * one ({@link releaseMessageOwners}): each key through the message forward as
+ * a departure (`messageOwnerChanged`, whose admit asks that no other session
+ * is connected and that the message waits for Tandem's Claude), the
+ * `ownership` frame once when a released message is now another record's or
+ * claimable ({@link frameOwedForMessages}), and the delivery rounds of what
+ * either woke someone for. Deferred to a microtask: the close calls
+ * {@link onDocumentClosed} immediately before the registry untracks the
+ * document, with no await between, and until then the message still reads as
+ * following an open document nobody holds. Outside any MCP request context, in
+ * its own `total`, so the close stands whatever this does.
+ */
+function forwardClosedChatAfterUntrack(keys: readonly string[]): void {
+  runOutsideMcpContext(() =>
+    queueMicrotask(() => {
+      total("closedChatForward", undefined, () => {
+        if (!ownershipEnabled()) return;
+        let forwarded = false;
+        for (const key of keys) if (messageOwnerChanged({ key })) forwarded = true;
+        const framed = frameOwedForMessages(keys);
+        if (framed) sendOwnershipFrame();
+        if (forwarded || framed) openOwedRounds([], keys);
+      });
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
