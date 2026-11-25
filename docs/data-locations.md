@@ -157,7 +157,9 @@ macOS Keychain, Linux Secret Service):
   back to that same file at the npm location (and reads it first if the keychain
   holds no token), so it can create or adopt that file too. An adopted token is
   never copied into the keychain, so on a machine where the npm install came
-  first this entry does not exist: that is by design, not a keychain failure.
+  first this entry does not exist, by design. A desktop whose keychain write
+  failed on an earlier launch has no entry either, so the entry's absence
+  alone does not say which.
 - `tandem-integrations` — Tandem's own integration auth tokens.
 - `tandem-models` — API keys for cloud model providers. No version from v0.32.0 offers one, so a
   key is here only if an earlier version saved it.

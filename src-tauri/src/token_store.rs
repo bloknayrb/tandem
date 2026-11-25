@@ -35,11 +35,19 @@ fn token_file_path() -> Option<PathBuf> {
     data_dir().map(|d| d.join(TOKEN_FILE_NAME))
 }
 
-fn read_from_file() -> Option<String> {
-    let path = token_file_path()?;
-    let content = std::fs::read_to_string(&path).ok()?;
-    let trimmed = content.trim().to_string();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+/// `Ok(None)` only when there is no file (or it is empty). A file that exists
+/// but cannot be read is an `Err`, so no caller overwrites the npm install's
+/// token on a read error.
+fn read_from_file() -> Result<Option<String>, String> {
+    let Some(path) = token_file_path() else { return Ok(None) };
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            let trimmed = content.trim();
+            Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("token file exists but cannot be read ({}): {e}", path.display())),
+    }
 }
 
 fn write_to_file(token: &str) -> Result<(), String> {
@@ -78,11 +86,11 @@ fn generate_token() -> String {
 ///   3. Generate, persist to keyring or file, return.
 ///
 /// An adopted file token is deliberately never copied into the keyring, so
-/// the machine keeps one token that `tandem rotate-token` reaches (why:
+/// the machine keeps one token, the one `tandem rotate-token` rewrites (why:
 /// docs/security.md, "Auth tokens"). Every keyring fallback below logs
 /// [`KEYRING_LOG_PREFIX`] at `warn!`, the release log floor, which is how the
-/// smoke row "Credentials survive a restart (#1761)" tells that apart from a
-/// failing keyring.
+/// smoke row "Credentials survive a restart (#1761)" tells an adopted token
+/// apart from a keyring failing on this launch.
 pub fn get_or_create_token() -> Result<String, String> {
     // `Entry::new` fails when the platform credential store could not be
     // initialised at all (keyring 4's one-time `set_credential_store()`).
@@ -118,9 +126,14 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
         }
     }
 
-    // 2. Try env-paths file.
-    if let Some(token) = read_from_file() {
-        return Ok(token);
+    // 2. Try env-paths file. An unreadable one is minted past into the
+    // keyring, never overwritten: the desktop then holds its own token
+    // (`tandem rotate-token` no longer reaches it) but still starts, where a
+    // token-less sidecar would die on the same unreadable file.
+    match read_from_file() {
+        Ok(Some(token)) => return Ok(token),
+        Ok(None) => {}
+        Err(e) => log::warn!("{KEYRING_LOG_PREFIX} storing a new token because the {e}"),
     }
 
     // 3. Generate a fresh token and persist it.
@@ -137,7 +150,7 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
 
 /// Steps 2–3 when there is no credential store to talk to at all.
 fn token_from_file_or_generate() -> Result<String, String> {
-    if let Some(token) = read_from_file() {
+    if let Some(token) = read_from_file()? {
         return Ok(token);
     }
 
@@ -221,7 +234,7 @@ mod tests {
     #[test]
     fn keyring_fallback_lines_match_the_smoke_checklist() {
         let src = include_str!("token_store.rs");
-        // Production code only, with commented-out lines dropped.
+        // Production code only, with comment lines dropped.
         let prod: String = src
             .split("#[cfg(test)]")
             .next()
@@ -229,8 +242,7 @@ mod tests {
             .lines()
             .filter(|l| !l.trim_start().starts_with('/'))
             .collect::<Vec<_>>()
-            .join("
-");
+            .join("\n");
         let checklist = include_str!("../../docs/release-smoke-checklist.md");
 
         assert!(
@@ -240,7 +252,12 @@ mod tests {
         assert!(!prod.contains("eprintln!"), "keyring fallbacks must log with log::warn!, which reaches tandem.log");
         let warns = prod.matches("log::warn!(").count();
         let prefixed = prod.matches("\"{KEYRING_LOG_PREFIX}").count();
-        assert_eq!(warns, 3, "three keyring fallbacks: unavailable, read failed, write failed");
+        assert_eq!(warns, 4, "four keyring fallbacks: unavailable, read failed, unreadable file, write failed");
         assert_eq!(prefixed, warns, "every fallback line must start with KEYRING_LOG_PREFIX");
+        // `{e:?}` prints a keyring error's payload, and `BadEncoding` carries
+        // the stored secret's bytes; these lines reach a file that persists.
+        for line in prod.lines().filter(|l| l.contains("{KEYRING_LOG_PREFIX}")) {
+            assert!(!line.contains(":?}"), "keyring lines must use Display, not Debug: {line}");
+        }
     }
 }
