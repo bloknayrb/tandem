@@ -124,12 +124,23 @@ export function ownerFieldsFromList(
 /** The composer summary under `Y_MAP_OWNERSHIP_SUMMARY`, or null when absent or malformed. */
 export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
   if (!isRecord(v)) return null;
-  const { tandemPresent, tandemRunning, tandemStartable, notPresentReason, otherAiAttached } = v;
+  const {
+    tandemPresent,
+    tandemRunning,
+    tandemStartable,
+    notPresentReason,
+    otherAiAttached,
+    chatWaiting,
+    chatStale,
+  } = v;
   if (
     typeof tandemPresent !== "boolean" ||
     typeof tandemRunning !== "boolean" ||
     typeof tandemStartable !== "boolean" ||
-    typeof otherAiAttached !== "boolean"
+    typeof otherAiAttached !== "boolean" ||
+    // #2358 PR 5d: chat waiting and chat stale (read here, shown by PR 5e).
+    typeof chatWaiting !== "boolean" ||
+    typeof chatStale !== "boolean"
   )
     return null;
   let reason: NotPresentReason | null = null;
@@ -143,6 +154,8 @@ export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
     tandemStartable,
     notPresentReason: reason,
     otherAiAttached,
+    chatWaiting,
+    chatStale,
   };
 }
 
@@ -170,7 +183,9 @@ export function sameSummary(a: OwnershipSummary | null, b: OwnershipSummary | nu
     a.tandemRunning === b.tandemRunning &&
     a.tandemStartable === b.tandemStartable &&
     a.notPresentReason === b.notPresentReason &&
-    a.otherAiAttached === b.otherAiAttached
+    a.otherAiAttached === b.otherAiAttached &&
+    a.chatWaiting === b.chatWaiting &&
+    a.chatStale === b.chatStale
   );
 }
 

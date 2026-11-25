@@ -609,6 +609,8 @@ describe("in process", () => {
         tandemStartable: true,
         notPresentReason: "not-started",
         otherAiAttached: false,
+        chatWaiting: false,
+        chatStale: false,
       });
       present = true;
       facts = { ...FACTS, running: true };
@@ -620,6 +622,8 @@ describe("in process", () => {
         tandemStartable: true,
         notPresentReason: null,
         otherAiAttached: true,
+        chatWaiting: false,
+        chatStale: false,
       });
     });
 

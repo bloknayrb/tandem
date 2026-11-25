@@ -74,7 +74,11 @@ import {
 } from "./mcp/server.js";
 import { readModeState } from "./mode.js";
 import { pushNotification } from "./notifications.js";
-import { requestOwnershipPublish, startOwnershipPublishing } from "./ownership-publish.js";
+import {
+  requestOwnershipChatPublish,
+  requestOwnershipPublish,
+  startOwnershipPublishing,
+} from "./ownership-publish.js";
 import {
   decideStartupAction,
   freePort,
@@ -107,6 +111,7 @@ import {
   setLauncherFactsSource,
   setOldestWaitingProbe,
   setOpenDocumentIdsSource,
+  setOwnershipChatPublishSink,
   setOwnershipChatSide,
   setOwnershipFrameSink,
   setOwnershipInboxHandover,
@@ -977,6 +982,11 @@ async function main() {
   // `startOwnershipPublishing` attaches nothing and arms no timer.
   setOldestWaitingProbe(oldestDocumentWaiting);
   setOwnershipPublishSink(requestOwnershipPublish);
+  // #2358 PR 5d: a change of a message's owner (or its loss, its carried-over
+  // status, a chat handover) asks the chat republish: each unanswered
+  // message's facts, the summary's chat, and the documents whose chat waiting
+  // changed. Flag off the sink is never called.
+  setOwnershipChatPublishSink(requestOwnershipChatPublish);
   startOwnershipPublishing();
 
   if (transportMode === "http") {
