@@ -68,6 +68,34 @@ const changelogVersions = [
   ...readFileSync(join(repoRoot, "CHANGELOG.md"), "utf8").matchAll(/^## \[(\d[^\]]*)\]/gm),
 ].map((m) => m[1]);
 
+/**
+ * Releases withdrawn under docs/bad-release-runbook.md. One entry per release
+ * whose `latest` pointer was moved back: it is never a valid marketplace ref,
+ * and "the previous stable release" skips it, so while the fix release is cut
+ * the ref can stay on the last good release. Add the entry in the same PR that
+ * points the ref back (runbook step 3). Entries stay: the release stays
+ * withdrawn, and an entry older than the window the marketplace test looks at
+ * changes nothing.
+ */
+const WITHDRAWN_RELEASES: ReadonlyArray<{ version: string; issue: string; reason: string }> = [];
+
+/**
+ * The versions the marketplace ref may name: package.json's own, or the newest
+ * stable release before it in CHANGELOG.md that was not withdrawn. Withdrawn
+ * versions are never allowed, even as package.json's version.
+ */
+function allowedRefVersions(
+  changelog: readonly string[],
+  current: string,
+  withdrawn: ReadonlySet<string>,
+): string[] {
+  const at = changelog.indexOf(current);
+  const previousStable = changelog.slice(at + 1).find((v) => !v.includes("-") && !withdrawn.has(v));
+  return [current, previousStable].filter(
+    (v): v is string => v !== undefined && !v.includes("-") && !withdrawn.has(v),
+  );
+}
+
 /** Pull the version from the first `[package]` table in Cargo.toml. */
 function cargoPackageVersion(toml: string): string {
   const pkgSection = toml.split(/^\[/m).find((s) => s.startsWith("package]"));
@@ -167,10 +195,31 @@ describe("plugin/version pin drift guard", () => {
 
     const current = changelogVersions.indexOf(expected);
     expect(current, `CHANGELOG.md has no ## [${expected}] heading`).toBeGreaterThanOrEqual(0);
-    const previousStable = changelogVersions.slice(current + 1).find((v) => !v.includes("-"));
-    const allowed = [expected, previousStable].filter(
-      (v): v is string => v !== undefined && !v.includes("-"),
-    );
-    expect(allowed).toContain(refVersion);
+    const withdrawn = new Set(WITHDRAWN_RELEASES.map((r) => r.version));
+    expect(allowedRefVersions(changelogVersions, expected, withdrawn)).toContain(refVersion);
+  });
+
+  it("every withdrawn release names a CHANGELOG version and a tracked issue", () => {
+    for (const r of WITHDRAWN_RELEASES) {
+      expect(changelogVersions, `withdrawn ${r.version} has no ## [x.y.z] heading`).toContain(
+        r.version,
+      );
+      expect(r.issue, `withdrawn ${r.version} must name its issue as #<n>`).toMatch(/^#\d+$/);
+      expect(r.reason.trim(), `withdrawn ${r.version} must give a reason`).not.toBe("");
+    }
+  });
+
+  it("marketplace.json never pins the plugin to a withdrawn release", () => {
+    // The runbook's "don't point the ref at vBAD", enforced.
+    const ref = marketplace.plugins.find((p) => p.name === plugin.name)?.source?.ref;
+    const withdrawn = WITHDRAWN_RELEASES.map((r) => `v${r.version}`);
+    expect(withdrawn).not.toContain(ref);
+  });
+
+  it("a withdrawn previous release lets the ref stay on the one before it (positive control)", () => {
+    const changelog = ["1.2.1", "1.2.0", "1.2.0-rc.1", "1.1.0"];
+    expect(allowedRefVersions(changelog, "1.2.1", new Set())).toEqual(["1.2.1", "1.2.0"]);
+    expect(allowedRefVersions(changelog, "1.2.1", new Set(["1.2.0"]))).toEqual(["1.2.1", "1.1.0"]);
+    expect(allowedRefVersions(changelog, "1.2.0", new Set(["1.2.0"]))).toEqual(["1.1.0"]);
   });
 });

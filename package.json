@@ -72,6 +72,7 @@
     "build:reaper": "node scripts/build-reaper.mjs",
     "dev:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri dev",
     "build:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri build",
+    "build:tauri:staging": "node scripts/staging-update/build-staging.mjs",
     "check:tokens": "tsx scripts/check-semantic-tokens.ts",
     "check:links": "node scripts/check-doc-links.mjs",
     "audit:dead-code": "knip",
