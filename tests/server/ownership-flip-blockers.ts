@@ -162,39 +162,28 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The pickup and stall clock still counts from the message's arrival, not its last change " +
-      "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
-      "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
-      "session started from that offer is not handed it while another session holds the " +
-      "document (the chat owners PR, R8.1, R8.3).",
-    closedBy: "PR 5 (the clock carried to the client).",
-  },
-  {
-    gap:
-      "The published state (#2358 PR 5a-3) leaves chat out, by Bryan's pick 'Defer to 5d " +
-      "(Recommended)' (2026-11-23): the CTRL_ROOM composer summary carries no 'chat waiting' " +
-      "or 'chat stale' for a message with no controlling badge (doc-less, on a closed " +
-      "document, or owned per message), and a document's waiting time (its stale flag, its " +
-      "hints and waitingSince) counts user comments and thread replies only, never chat that " +
-      "follows the document, so a badge can read as nothing waiting while a chat message on " +
-      "that document waits (design §10.2).",
-    closedBy:
-      "PR 5d (the pickup and stall clock from a message's last change of owner, design §6.5), " +
-      "publishing chat waiting and chat stale in the summary and counting a document's chat in " +
-      "its waiting time.",
+      "The editor's pickup row still counts from the message's arrival, not its last change " +
+      "of owner (design §6.5's sentence), so a re-owed message older than the stall threshold " +
+      "reads 'still waiting' at once and may show the Claude Code offer, though a session " +
+      "started from that offer is not handed it while another session holds the document (the " +
+      "chat owners PR, R8.1, R8.3). (Narrowed by PR 5d: the server counts the clock from the " +
+      "last change of owner and publishes it as each unanswered message's `since` under " +
+      "`Y_MAP_OWNERSHIP_CHAT`; the summary's chat stale and a document's chat waiting time use " +
+      "it. Nothing in the editor reads it yet.)",
+    closedBy: "PR 5e (the pickup row reads each message's published `since`).",
   },
   {
     gap:
       "The user's controls for a chat message exist only on the server (#2358 PR 5a-2: " +
       "POST /api/ownership with a messageId): nothing in the editor reaches them, so a live " +
       "acknowledger that never answers, or chat a tab close left with its closing holder, can be " +
-      "moved only by a local process calling the route. The editor cannot build them yet: the " +
-      "published state names no message's owner. (Narrowed by PR 5b, per Bryan's 'Publish facts " +
-      "first (Recommended)', 2026-11-24: the document controls landed there.)",
+      "moved only by a local process calling the route. (Narrowed by PR 5b, per Bryan's 'Publish " +
+      "facts first (Recommended)', 2026-11-24: the document controls landed there; and by PR 5d, " +
+      "which publishes each unanswered message's owner facts, its holder, how it is held and " +
+      "whether Release and Assign apply, under `Y_MAP_OWNERSHIP_CHAT`.)",
     closedBy:
-      "PR 5d (publishing each unanswered message's owner facts beside its pickup and stall clock) " +
-      "and its client follow-up, PR 5e (the pickup row's Assign of a message, and Release where " +
-      "it has a per-message owner).",
+      "PR 5e (the pickup row's Assign of a message, and Release where it has a per-message " +
+      "owner, reading PR 5d's facts).",
   },
   {
     gap:

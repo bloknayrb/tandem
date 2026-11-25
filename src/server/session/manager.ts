@@ -11,7 +11,10 @@ import {
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_STREAM,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_OWNERSHIP_CHAT,
+  Y_MAP_OWNERSHIP_SUMMARY,
   Y_MAP_READ_ONLY,
+  Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
@@ -958,6 +961,7 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
   // Defense in depth: durable metadata is restricted to basename-only names
   // for documents referenced by retained chat messages.
   withInternal(doc, () => pruneCtrlDocumentNames(doc));
+  dropPublishedOwnership(doc);
 
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
@@ -1084,6 +1088,27 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   Y.applyUpdate(doc, new Uint8Array(state));
   foldChatStream(doc);
   clearChatDelivered(doc);
+  dropPublishedOwnership(doc);
+}
+
+/**
+ * Keep the server's published ownership state out of durable CTRL state
+ * (#2358 PR 5d): the composer summary (`Y_MAP_OWNERSHIP_SUMMARY`, PR 5a-3)
+ * and the per-message facts (`Y_MAP_OWNERSHIP_CHAT`) describe this process's
+ * sessions and clocks, which a restart forgets. Saved, a later run would show
+ * them until its first publish, and a dark run (which never publishes) would
+ * show them for good: the editor reads no flag of its own. Run on the
+ * snapshot clone before encoding and on a restored doc (for a snapshot a
+ * lit build already wrote). Neither key is ever present on a dark build's
+ * own snapshot, so there it opens no transaction and changes no byte.
+ */
+function dropPublishedOwnership(doc: Y.Doc): void {
+  const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
+  if (!awareness.has(Y_MAP_OWNERSHIP_SUMMARY) && !awareness.has(Y_MAP_OWNERSHIP_CHAT)) return;
+  withInternal(doc, () => {
+    awareness.delete(Y_MAP_OWNERSHIP_SUMMARY);
+    awareness.delete(Y_MAP_OWNERSHIP_CHAT);
+  });
 }
 
 /**

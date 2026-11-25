@@ -73,6 +73,8 @@ const SUMMARY: OwnershipSummary = {
   tandemStartable: true,
   notPresentReason: null,
   otherAiAttached: true,
+  chatWaiting: false,
+  chatStale: false,
 };
 
 function stripProps(tabs: OpenTab[]) {

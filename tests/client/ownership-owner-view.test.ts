@@ -63,6 +63,8 @@ function summary(over: Partial<OwnershipSummary> = {}): OwnershipSummary {
     tandemStartable: true,
     notPresentReason: null,
     otherAiAttached: false,
+    chatWaiting: false,
+    chatStale: false,
     ...over,
   };
 }
@@ -168,6 +170,16 @@ describe("readOwnershipSummary", () => {
     expect(readOwnershipSummary({ ...summary(), notPresentReason: "asleep" })).toBeNull();
   });
 
+  it("requires #2358 PR 5d's chat waiting and chat stale as booleans", () => {
+    const { chatWaiting: _w, ...noWaiting } = summary();
+    const { chatStale: _s, ...noStale } = summary();
+    expect(readOwnershipSummary(noWaiting)).toBeNull();
+    expect(readOwnershipSummary(noStale)).toBeNull();
+    expect(readOwnershipSummary({ ...summary(), chatStale: "yes" })).toBeNull();
+    const s = summary({ chatWaiting: true, chatStale: true });
+    expect(readOwnershipSummary(s)).toEqual(s);
+  });
+
   it("reads a well-formed summary", () => {
     const s = summary({ tandemPresent: false, notPresentReason: "bind-failed" });
     expect(readOwnershipSummary(s)).toEqual(s);
@@ -185,6 +197,8 @@ describe("sameOwnerFields / sameSummary", () => {
     expect(sameOwnerFields(undefined, fields())).toBe(false);
     expect(sameSummary(summary(), summary())).toBe(true);
     expect(sameSummary(summary(), summary({ otherAiAttached: true }))).toBe(false);
+    expect(sameSummary(summary(), summary({ chatWaiting: true }))).toBe(false);
+    expect(sameSummary(summary(), summary({ chatStale: true }))).toBe(false);
     expect(sameSummary(null, null)).toBe(true);
   });
 });

@@ -88,7 +88,82 @@ export interface OwnershipSummary {
   readonly notPresentReason: NotPresentReason | null;
   /** Some session other than Tandem's Claude is attached and can take a document. */
   readonly otherAiAttached: boolean;
+  /**
+   * "Chat waiting" (ownership design §10.2; #2358 PR 5d): some unanswered user
+   * chat message with no controlling badge (doc-less, on a closed document,
+   * owned per message, or claimable on its own) was written in this server
+   * run. A message that follows an open document is that document's badge's.
+   */
+  readonly chatWaiting: boolean;
+  /**
+   * "Chat stale" (ownership design §10.2; #2358 PR 5d): one of those messages
+   * has had no final answer for more than {@link OWNERSHIP_STALE_AFTER_MS}
+   * since its last change of owner (its arrival, if it never had one).
+   */
+  readonly chatStale: boolean;
 }
+
+/**
+ * How an unanswered message is held (ownership design §7.1; #2358 PR 5d):
+ * - `message`: by its own per-message owner (ownership design §7.2), even on
+ *   an open document;
+ * - `document`: it follows its open document, held by the document's holder
+ *   or claimable with it (its controls are that document's badge's);
+ * - `presence`: doc-less or on a closed document, Tandem's Claude's while it
+ *   is present;
+ * - `none`: nobody holds it: claimable on its own, or carried over from
+ *   before a restart (handed to nobody until the user Assigns it).
+ */
+export type PublishedChatHeldBy = "message" | "document" | "presence" | "none";
+
+/** A message's holder, as the pickup row shows it: its label and display kind. */
+export interface PublishedChatOwner {
+  readonly label: string;
+  readonly displayKind: PublishedDisplayKind;
+}
+
+/**
+ * One unanswered user chat message's ownership facts (#2358 PR 5d; ownership
+ * design §6.5, §10.2), for the pickup row's Assign and Release (PR 5e).
+ */
+export interface PublishedChatMessageOwner {
+  /** Who holds it now (ownership design §7.1), or null when nobody does. */
+  readonly owner: PublishedChatOwner | null;
+  readonly heldBy: PublishedChatHeldBy;
+  /**
+   * Release applies (ownership design §10.2: "when it has a per-message
+   * owner"): exactly the messages `POST /api/ownership`'s Release would move,
+   * a per-message owner whose record is gone included (the Release drops it).
+   */
+  readonly release: boolean;
+  /**
+   * Assign applies: every message but one that follows its open document
+   * (that one answers `409 follows-document`; its document's Assign moves it).
+   */
+  readonly assign: boolean;
+  /**
+   * The pickup and stall clock's start, ms since the epoch (ownership design
+   * §6.5): the message's last change of owner, or its arrival if it never
+   * had one. A chat handover (a re-owe) restarts it too. An activity
+   * disclosure (`docs/security.md`, the ownership entry).
+   */
+  readonly since: number;
+  /**
+   * No final answer for more than {@link OWNERSHIP_STALE_AFTER_MS} since
+   * `since`. Never for a message written before this server run started
+   * (Bryan's "Same rule (Recommended)", the waiting rule's restart row).
+   */
+  readonly stale: boolean;
+}
+
+/**
+ * The per-message facts under `Y_MAP_OWNERSHIP_CHAT` in `CTRL_ROOM`'s
+ * `Y_MAP_USER_AWARENESS`, keyed by the message's chat key (its key in the
+ * chat map). Every unanswered user chat message that is not a local model's
+ * has an entry; nothing else does. Written by a flag-on server in both
+ * transports; absent while ownership is off.
+ */
+export type PublishedChatOwners = Readonly<Record<string, PublishedChatMessageOwner>>;
 
 /** How old a waiting item must be before the holder reads as not checking in. */
 export const OWNERSHIP_STALE_AFTER_MS = 5 * 60 * 1000;
