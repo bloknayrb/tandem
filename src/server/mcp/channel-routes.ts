@@ -15,7 +15,7 @@ import { sseHandler } from "../events/sse.js";
 import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
-import { greetingTransportBound } from "../sessions/ownership.js";
+import { channelReplyGate, greetingTransportBound, type ReplyGate } from "../sessions/ownership.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
 import {
@@ -24,6 +24,7 @@ import {
   notifyTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "./awareness.js";
+import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { isGreetingReply } from "./greeting-reply.js";
 
 /**
@@ -39,6 +40,22 @@ function refuseIfUnlicensed(res: Response): boolean {
   sendAiRefusal(res, refusal);
   return true;
 }
+
+/**
+ * The HTTP status of a refused channel reply (#2358 PR 4b; ownership design
+ * §9.2): an ownership refusal is 409 with the `NOT_DOC_OWNER` body, which the
+ * shim relays to the model with its status as the tool result; a contradicting
+ * `documentId` is the caller's mistake (400); the rest is Tandem's (500).
+ */
+const REFUSAL_STATUS: Record<Extract<ReplyGate, { kind: "refused" }>["code"], number> = {
+  NOT_DOC_OWNER: 409,
+  INVALID_ARGUMENT: 400,
+  INTERNAL_ERROR: 500,
+};
+
+/** The 500 answered when the permit itself throws: nothing was written. */
+export const CHANNEL_REPLY_GATE_FAILED =
+  "tandem_reply failed: Tandem could not check who may send this reply. Nothing was sent. This is a fault in Tandem, not something to retry with different arguments.";
 
 /** Register channel-related routes (/api/events, /api/channel-*, /api/chat) on the Express app. */
 export function registerChannelRoutes(app: Express, apiMiddleware: Handler): void {
@@ -137,6 +154,49 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // The shim forwards its session id (`withClaudeSessionHeader`). Read once:
     // the greeting classifier (#2227) and the notify below must agree on it.
     const sessionId = normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
+    // The permit (#2358 PR 4b; ownership design §9.2): after the body checks
+    // and before the greeting classifier and the append, the shim's session
+    // id is mapped to a record and judged by `tandem_reply`'s rule, writing
+    // nothing; a refusal returns here with no row, no notify, no round closed
+    // and nothing stamped read. Off, `legacy`, and master's path runs.
+    // A throw from ownership code (reachable only flag on: the gate answers
+    // `legacy` at its first line while dark) is answered as the structured
+    // 500 `tandem_reply`'s error boundary would give, never Express's default
+    // HTML page, which the shim could only relay as "Non-JSON response".
+    let gate: ReplyGate;
+    try {
+      gate = channelReplyGate(
+        sessionId,
+        {
+          ...(typeof replyTo === "string" ? { replyTo } : {}),
+          ...(inProgress === true ? { inProgress: true } : {}),
+          ...(typeof documentId === "string" ? { documentId } : {}),
+        },
+        {
+          isOpen: (id) => getOpenDocs().has(id),
+          activeDocumentId: () => getCurrentDoc(undefined)?.id ?? undefined,
+        },
+      );
+    } catch (err) {
+      console.error(
+        `[Channel] channel-reply ownership check failed: ${sanitizeForLog(
+          err instanceof Error ? err.message : String(err),
+        )}`,
+      );
+      res.status(REFUSAL_STATUS.INTERNAL_ERROR).json({
+        error: "INTERNAL_ERROR",
+        message: CHANNEL_REPLY_GATE_FAILED,
+      });
+      return;
+    }
+    if (gate.kind === "refused") {
+      res.status(REFUSAL_STATUS[gate.code]).json({
+        error: gate.code,
+        message: gate.message,
+        ...(gate.details !== undefined ? { details: gate.details } : {}),
+      });
+      return;
+    }
     // Ownership on, a channel reply is never the greeting (#2358 PR 3b-2c;
     // ownership design §7.3): the greeting is the bound transport's. Off,
     // absent, and the session id decides as before.
@@ -149,8 +209,17 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     });
     // Narrow the untrusted body fields, then route through the shared Claude-chat
     // write path that `tandem_reply` and the local-model collaborator also use.
+    // An accepted reply is stamped with its message's document, or none; an
+    // accepted post with what its gate decided (ownership design §7.3), as
+    // `tandem_reply` stamps them. Off, the body's `documentId`, as before.
+    const docId =
+      gate.kind === "accepted"
+        ? gate.documentId
+        : typeof documentId === "string"
+          ? documentId
+          : undefined;
     const appended = appendClaudeChatMessage(text, {
-      ...(typeof documentId === "string" ? { documentId } : {}),
+      ...(docId !== undefined ? { documentId: docId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       ...(inProgress === true ? { inProgress: true } : {}),
       ...(greeting ? { greeting: true } : {}),
@@ -164,9 +233,13 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     }
     // The message's delivery round closes once the reply's row is appended
     // (#2358, the delivery-rounds PR, R2.2): a shim Claude that just answers
-    // sends only a final. This route has no caller, so any session's reply
-    // closes it (until PR 4's permit). Nothing while rounds are not keyed.
+    // sends only a final. Since the permit (PR 4b) only an accepted reply
+    // reaches here, flag on. Nothing while rounds are not keyed.
     if (typeof replyTo === "string") closeMessageDeliveryRound(replyTo);
+    // The reply's claim, per-message owner, answerer and `settles` (ownership
+    // design §5.5, §7.1), once the append landed, with no `await` since the
+    // gate, before the notify and the read stamp, as `tandem_reply` runs it.
+    if (gate.kind === "accepted") gate.apply(appended.id);
     // The shim's `tandem_reply` is a Claude Code session's reply like the MCP
     // tool's, so it can be Tandem's own Claude saying hello (#2197).
     notifyTandemReply(sessionId, bound);

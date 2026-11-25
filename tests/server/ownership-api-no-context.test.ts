@@ -110,6 +110,8 @@ const EXCLUDED: Record<string, string> = {
   "post API_UPLOAD":
     "opens a second document from a multipart body; the open path is covered by API_OPEN",
   "post API_SCRATCHPAD": "opens a new document; the open path is covered by API_OPEN",
+  "post API_OWNERSHIP":
+    "the ownership control itself (#2358 PR 5a): it changes ownership on purpose, at the document's turn in its queue, and is driven in ownership-control-route.test.ts",
   "post API_CHANNEL_REPLY":
     "an AI reply path: ownership-checked on purpose, in PR 4 (ownership design §9.2)",
   "post API_LICENSE_ACTIVATE": "licence store; takes no document",

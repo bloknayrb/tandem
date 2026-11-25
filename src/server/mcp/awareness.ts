@@ -3388,11 +3388,16 @@ export function registerAwarenessTools(server: McpServer): void {
           // 3b-2b4b): named, because an earlier request no longer counts.
           const takenBack = scope.takenBack(docs.excluded);
           const takenBackNames = takenBack.map((id) => labels.get(id) ?? id);
+          // And those the user released from it (#2358 PR 5a), for the same
+          // reason: the released refusal asks for a request after the Release.
+          const released = scope.released(docs.excluded);
+          const releasedNames = released.map((id) => labels.get(id) ?? id);
           if (docs.readAnyDocument && docs.excluded.length > 0) {
             actions += inboxExcludedSomeNote(
               docs.excluded.map((id) => labels.get(id) ?? id),
               activityExcluded,
               takenBackNames,
+              releasedNames,
             );
           }
           const summary = docs.readAnyDocument
@@ -3401,8 +3406,8 @@ export function registerAwarenessTools(server: McpServer): void {
                 docs.excluded.length === 0
                   ? noDocumentInboxNote(requestedId)
                   : requestedId !== undefined
-                    ? inboxExcludedNamedNote(requestedId, takenBack.length > 0)
-                    : inboxExcludedAllNote(activityExcluded, takenBackNames)
+                    ? inboxExcludedNamedNote(requestedId, takenBack.length > 0, released.length > 0)
+                    : inboxExcludedAllNote(activityExcluded, takenBackNames, releasedNames)
               } ${actions}`;
           const ownership = ownershipActive
             ? {

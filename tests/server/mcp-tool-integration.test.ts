@@ -3559,3 +3559,118 @@ describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (
     expect(anns[0].anchor).toBe("degraded");
   });
 });
+
+describe("indeterminate-mode hold fails closed on a non-boolean reply marker (#2481)", () => {
+  // Replies are never sanitized on the way to the pull surfaces, so a marker
+  // stored as anything but literally `false` or absent must hold. Every
+  // first-party writer stamps a real `true`; these shapes arrive from a stale
+  // tab, a session restore or a hand-edited store. No `setMode` call anywhere
+  // here: `beforeEach` deletes the mode key, so the mode is indeterminate.
+  const HELD_MARKERS: Array<[string, unknown]> = [
+    ["r_held_true", true],
+    ["r_held_string", "true"],
+    ["r_held_one", 1],
+    ["r_held_null", null],
+    ["r_held_string_false", "false"],
+  ];
+  const VISIBLE: Array<[string, unknown]> = [
+    ["r_vis_false", false],
+    ["r_vis_absent", undefined],
+  ];
+  const heldIds = HELD_MARKERS.map(([id]) => id);
+  const visibleIds = VISIBLE.map(([id]) => id).sort();
+
+  function seedThread(docId: string) {
+    const ydoc = setupDoc(docId, "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set("c_parent", {
+        id: "c_parent",
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "Claude's comment",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+      const replies = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+      let t = 2;
+      for (const [rid, marker] of [...HELD_MARKERS, ...VISIBLE]) {
+        replies.set(rid, {
+          id: rid,
+          annotationId: "c_parent",
+          author: "user",
+          text: `text of ${rid}`,
+          timestamp: t++,
+          rev: 1,
+          ...(marker === undefined ? {} : { heldInSolo: marker }),
+        });
+      }
+    });
+  }
+
+  it("tandem_getAnnotations withholds every marked reply and surfaces the unmarked ones", async () => {
+    seedThread("ind-hold-get");
+    const result = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(result.error).toBe(false);
+    const parent = result.data.annotations.find((a: Annotation) => a.id === "c_parent");
+    const ids = (parent.replies as Array<{ id: string }>).map((r) => r.id).sort();
+    expect(ids).toEqual(visibleIds);
+  });
+
+  it("tandem_exportAnnotations withholds every marked reply", async () => {
+    seedThread("ind-hold-export");
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_exportAnnotations", arguments: { format: "json" } }),
+    );
+    expect(parsed.error).toBe(false);
+    const text = JSON.stringify(parsed.data);
+    for (const id of heldIds) expect(text).not.toContain(`text of ${id}`);
+    for (const id of visibleIds) expect(text).toContain(`text of ${id}`);
+  });
+
+  it("tandem_checkInbox withholds every marked reply", async () => {
+    seedThread("ind-hold-inbox");
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    const ids = (parsed.data.userReplies as Array<{ id: string }>).map((r) => r.id).sort();
+    expect(ids).toEqual(visibleIds);
+  });
+
+  it("tandem_getAnnotations withholds a user comment whose marker is non-boolean", async () => {
+    const ydoc = setupDoc("ind-hold-ann", "Hello world test content");
+    withInternal(ydoc, () => {
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      const rows: Array<[string, unknown]> = [
+        ["u_string", "true"],
+        ["u_one", 1],
+        ["u_null", null],
+        ["u_false", false],
+        ["u_absent", undefined],
+      ];
+      for (const [id, marker] of rows) {
+        map.set(id, {
+          id,
+          author: "user",
+          type: "comment",
+          audience: "outbound",
+          range: { from: 0, to: 5 },
+          content: `content ${id}`,
+          status: "pending",
+          timestamp: 1,
+          rev: 1,
+          ...(marker === undefined ? {} : { heldInSolo: marker }),
+        });
+      }
+    });
+    const result = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(result.error).toBe(false);
+    const ids = result.data.annotations.map((a: Annotation) => a.id).sort();
+    expect(ids).toEqual(["u_absent", "u_false"]);
+  });
+});
