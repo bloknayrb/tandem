@@ -24,13 +24,14 @@ import {
   TANDEM_PURCHASE_URL,
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
+import type { BoundTransport, BoundTransportKind } from "../../shared/launcher/contract.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
 import { type LocalModelState, MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
 import { OWNER_HANDLE_HEADER } from "../../shared/owner-handle.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
-import { getDeliveryState } from "../events/delivery-state.js";
+import { deliveryRoundsKeyed, getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
 import { attachWakeSocket } from "../events/wake-socket.js";
@@ -63,6 +64,7 @@ import {
 import {
   noteTransportChanged,
   noteTransportRegistered,
+  ownSpawnRoutingActive,
   resolveTransportRecord,
   setTransportView,
 } from "../sessions/ownership.js";
@@ -618,15 +620,20 @@ async function openSession(
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
       // The bind fact (#2358 PR 3a, R3.9) was judged BEFORE the record is
-      // resolved (in the POST handler), so 3b's rule 0 can use it without
-      // reopening this callback. Nothing here reads it to choose a record
-      // (Ruling A).
+      // resolved (in the POST handler). While rule 0 routes (#2358 PR
+      // 3b-2b3a: flag on and the own-spawn seam set, which `index.ts`'s
+      // supervisor setup does since 3b-2b4a), the record is chosen only after the bind is
+      // confirmed below, so a candidate revoked at confirm never lands on
+      // `tandem`. Otherwise the record is chosen here, as before.
       // Ownership (#2358, ADR-054): which record this transport belongs to.
       // Undefined while ownership is off, and then nothing below differs from
       // before. The record itself is created only once `add` has resolved
       // (`noteTransportRegistered`), because `add` may first await an LRU
       // eviction whose removal re-judges the same record.
-      const owner = resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId });
+      const routeAfterBind = ownSpawnRoutingActive();
+      const owner = routeAfterBind
+        ? undefined
+        : resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId });
       await registry.add({
         sessionId,
         server,
@@ -642,8 +649,23 @@ async function openSession(
           `${claudeSessionId ? ` (claude session ${sessionIdForLog(claudeSessionId)})` : ""}` +
           `${clientName ? ` (client ${clientName})` : ""} — ${registry.size} live`,
       );
-      if (ownerHandle !== undefined)
-        noteOwnerHandleBind(registry, sessionId, ownerHandle.candidate);
+      const bound =
+        ownerHandle !== undefined &&
+        noteOwnerHandleBind(
+          registry,
+          sessionId,
+          ownerHandle.candidate,
+          clientId !== undefined ? "bridge" : "direct-http",
+        );
+      // Synchronous from `add` to here, so the entry is never seen unrouted.
+      const entry = routeAfterBind ? registry.get(sessionId) : undefined;
+      const routed =
+        entry &&
+        resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId, bound });
+      if (entry && routed) {
+        entry.ownerId = routed.ownerId;
+        noteTransportRegistered(routed.ownerId, { recordKind: routed.recordKind, clientName });
+      }
     },
     // Fires on DELETE /mcp. Dropping the entry here (rather than only in the
     // DELETE route) also covers session closes the SDK initiates itself.
@@ -682,20 +704,23 @@ function noteOwnerHandleBind(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   sessionId: string,
   candidate: BindCandidate | null,
-): void {
+  bindKind: BoundTransportKind,
+): boolean {
   const entry = registry.get(sessionId);
   if (candidate !== null && entry !== undefined && confirmBind(candidate, sessionId)) {
     entry.boundSpawn = candidate.serial;
+    entry.bindKind = bindKind;
     console.error(
       `[Tandem] MCP session ${sessionIdForLog(sessionId)} bound to Tandem's Claude's current run`,
     );
-    return;
+    return true;
   }
   if (shouldLogUnboundHandle()) {
     console.error(
       `[Tandem] MCP session ${sessionIdForLog(sessionId)} presented an owner handle that does not bind (stale, unknown, malformed, or its session id does not match); it connects as usual`,
     );
   }
+  return false;
 }
 
 /**
@@ -709,6 +734,25 @@ export function mcpSessionBindsForTests(): Array<{ sessionId: string; boundSpawn
     boundSpawn:
       entry.boundSpawn !== undefined && isSpawnLive(entry.boundSpawn) ? entry.boundSpawn : null,
   }));
+}
+
+/**
+ * The Settings list of bound transports (#2358 PR 3b-2e1, ownership design
+ * §3.3's Ruling C): one row per live MCP session bound to a live spawn of
+ * Tandem's Claude (the `isSpawnLive` mask every reader of the bind fact
+ * applies), by kind alone — never its `Mcp-Session-Id`, owner record id or
+ * Claude session id, which the rows have no field for. `undefined` while
+ * ownership is off, so a dark server's status carries no field; the launcher
+ * status route copies each row's `kind` and nothing else.
+ */
+export function boundTransportKinds(): BoundTransport[] | undefined {
+  if (!ownershipEnabled()) return undefined;
+  const rows: BoundTransport[] = [];
+  for (const entry of sessions?.list() ?? []) {
+    if (entry.boundSpawn === undefined || !isSpawnLive(entry.boundSpawn)) continue;
+    rows.push({ kind: entry.bindKind ?? "direct-http" });
+  }
+  return rows;
 }
 
 /**
@@ -1275,11 +1319,15 @@ export async function startMcpServerHttp(
       sessionCount: getMcpClientCount,
       getSubscriberCount,
       getPushLiveness: getPushConsumerLiveness,
-      getDeliveryState: (externalConsumerCount) =>
-        getDeliveryState(Date.now(), externalConsumerCount),
+      getDeliveryState: (externalConsumerCount, now) =>
+        getDeliveryState(now ?? Date.now(), externalConsumerCount),
       // #1521: the one licence decision, read in a file that already imports it.
       aiRefused: () => aiRefusal() !== null,
       isShuttingDown,
+      // #2358 PR 3b-2e2: the stall banner's flag-on wording and hide. The
+      // seam answers false on every dark server, so nothing below is asked.
+      deliveryRoundsKeyed,
+      tandemClaudeWokenAt: () => launcher?.getSupervisor()?.wokenAt?.() ?? null,
     }),
   );
 
@@ -1427,6 +1475,7 @@ export async function startMcpServerHttp(
       settingsBase: resolveAppDataDir(),
       getSkillRefreshError,
       isClaudeSessionAttached,
+      boundTransports: boundTransportKinds,
       // Tandem's own auto-opened documents. `welcome.md` opens on first run and
       // `CHANGELOG.md` after every upgrade, both from inside the app bundle —
       // which on Windows sits under `%LOCALAPPDATA%`, i.e. INSIDE the user's

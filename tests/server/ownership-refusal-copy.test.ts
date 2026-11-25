@@ -57,6 +57,19 @@ describe("one sentence per reason, each with its remedy", () => {
     );
   });
 
+  it("lost, cause released (PR 5a): the design's text, with or without a holder, never that the user chose it", () => {
+    const released =
+      "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
+    expect(message({ reason: "lost", cause: "released", holder: null })).toBe(released);
+    expect(message({ reason: "lost", cause: "released", holder: tandem })).toBe(released);
+  });
+
+  it("lost, cause assigned (PR 5a): names the new holder, as taken does", () => {
+    const text = message({ reason: "lost", cause: "assigned" });
+    expect(text).toContain("The terminal session owner-k7qx has this document now.");
+    expect(text).toContain("Only the user can reassign it");
+  });
+
   it("lost, when the recipient is Tandem's Claude", () => {
     expect(message({ reason: "lost", cause: "taken", callerIsTandem: true })).toBe(
       "A session the user is working with has this document now; leave it.",
@@ -166,6 +179,7 @@ describe("what a refusal may say (R3.6)", () => {
       "claimed",
       "default",
       "not-present",
+      "unbound-child",
     ];
     for (const reason of reasons) {
       const text = message({ reason, documentId: "SECRET-NAME-9f3a", targetWasDefaulted: true });
@@ -236,6 +250,12 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
     );
   });
 
+  it("lost, released (PR 5a): true for a post", () => {
+    expect(postRefusal({ reason: "lost", holder: null, cause: "released" }).message).toBe(
+      `This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${OUTLET}`,
+    );
+  });
+
   it("lost, a caller that is Tandem's Claude (PR 5): with and without a holder", () => {
     const term = { label: "owner-trm1", displayKind: "terminal" } as const;
     expect(
@@ -245,6 +265,18 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
       postRefusal({ reason: "lost", holder: null, cause: "taken", callerIsTandem: true }).message,
     ).toBe(
       "This document was taken from Tandem's Claude, and nobody holds it now. Nothing was sent.",
+    );
+  });
+
+  it("lost, released, a caller that is Tandem's Claude (PR 5a): never says that a session has it", () => {
+    expect(
+      postRefusal({ reason: "lost", holder: null, cause: "released", callerIsTandem: true })
+        .message,
+    ).toBe(
+      "This document was released from Tandem's Claude, and nobody holds it now. Nothing was sent.",
+    );
+    expect(message({ reason: "lost", cause: "released", holder: null, callerIsTandem: true })).toBe(
+      "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.",
     );
   });
 
@@ -265,5 +297,35 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
       message: "Tandem's Claude already answered this. Do not answer it again.",
       details: { reason: "answered", holder: tandem },
     });
+  });
+});
+
+describe("unbound-child (#2358 PR 3b-2b3b; design §5.3)", () => {
+  const DOCUMENT =
+    "Tandem's Claude answers this document. This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so leave this document unless the user assigns it to you from its tab.";
+
+  it("a write or a take: the design's copy, whatever else the call carried", () => {
+    expect(message({ reason: "unbound-child", holder: tandem })).toBe(DOCUMENT);
+    const { details } = notDocOwnerRefusal({ ...base, reason: "unbound-child", holder: tandem });
+    expect(details).toEqual({ reason: "unbound-child", documentId: "doc-1", holder: tandem });
+    expect(
+      message({ reason: "unbound-child", holder: tandem, callerIsLegacyClaudeCode: true }),
+    ).toBe(DOCUMENT);
+  });
+
+  it("a reply to a message: the same copy for a message, and nothing was sent", () => {
+    expect(
+      chatReplyRefusal({ reason: "unbound-child", holder: tandem, why: "unbound-child" }),
+    ).toEqual({
+      message:
+        "Tandem's Claude answers this message. This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so do not reply to it. Nothing was sent.",
+      details: { reason: "unbound-child", holder: tandem },
+    });
+  });
+
+  it("a post on a document: the document copy, and nothing was sent", () => {
+    expect(postRefusal({ reason: "unbound-child", holder: tandem, documentId: "d" }).message).toBe(
+      `${DOCUMENT} Nothing was sent.`,
+    );
   });
 });

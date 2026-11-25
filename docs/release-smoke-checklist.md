@@ -52,6 +52,7 @@ matrix across OS versions, observer soak, accessibility) live in
 
   **Run this against a built install, not `cargo tauri dev`.** A dev build takes the "Server already healthy — skipping sidecar spawn" fast path against `dev:standalone`, so it owns no child and produces `verdict=Skipped, owned_child=false` by construction — the row passes nothing.
 - [ ] **Quit during a restart (#1756 respawn guard).** Settings → Network → **Restart server**, then Quit from the tray while the restart is in flight. No orphaned `node-sidecar` afterwards, and `tandem.log` shows either `start_sidecar: shutdown in progress — not spawning` or `start_sidecar: shutdown began while spawning — killing the fresh child`. **Both are `warn!`, so both clear the release log floor.** The first was `info!` until #1756's review — invisible on exactly the built install this row mandates, and it is the *likely* branch: a Quit mid-restart usually finds `spawn_allowed()` already false at the top of the spawn loop, leaving the store-site line to a sub-second race window. If neither string appears, the row failed; it is not "the other branch ran".
+- [ ] **Start at login is per-user and survives an elevated launch (#2160, first run owed: the registration moved from `tauri-plugin-autostart` to Tandem's own `autostart_win.rs`).** Settings → turn **Start at login** on. `reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem` shows the install path **in quotes** followed by `--tandem-autostart`. Sign out and back in: Tandem starts hidden in the tray. Then quit, start Tandem once with **Run as administrator**, quit again, and run `reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem` — it must report that the value does not exist; **any `Tandem` value under `HKLM` is a High finding: stop the release.** Turn the setting off: the `HKCU` value is gone and the toggle stays off. On a machine whose Start at login was turned on by 0.32.0 or earlier, the toggle reads on after the update, and the value has gained its quotes after the first launch.
 - [ ] **No Cowork surface (ADR-055).** Settings → AI Assistant shows no Cowork block, the integration wizard's "More integrations" has no Cowork row, and the first-run tutorial on `welcome.md` runs through to "You're ready!" with no Cowork step.
 - [ ] **Uninstall on a past-enabler machine (ADR-055).** On a machine that enabled Cowork on v0.28.0 or earlier, uninstall the desktop app. The Tandem entries are gone from every Cowork workspace, and `%LOCALAPPDATA%\tandem\Data\cowork-meta.json` is gone. The firewall rule may remain, because the scrub runs unelevated; record whether it did.
 - [ ] **The Default radio group in the built desktop app (owed from ADR-039 item 15, 0.32 and later).** Settings → **Models** with two local models saved: move **Default** from one to the other by mouse, then back by the arrow keys. The selected radio, its focus ring and the saved Default must follow each move. The flip merged with this owed (it passed in installed Edge and in E2E, not in the desktop window); close item 15 in ADR-039 when this passes.
@@ -71,7 +72,7 @@ matrix across OS versions, observer soak, accessibility) live in
   This is the one path in this feature the `windows-latest` CI leg only *compiles*, never *exercises* — it needs a human on real Windows.
 - [ ] **SUSPENDED (ADR-055); this is item 1 of the re-enable checklist (#2134).** **The Cowork VM reaches :3479 with only Tandem's own firewall rule (Decision E).** Do not set `TANDEM_BIND_HOST` by hand (and since ADR-056 a non-loopback value is refused at start, so a re-enable that needs it also needs that flag). With Cowork enabled (elevated, as above), open a Cowork session and ask Claude to list your documents. Pass: Tandem's tools answer, meaning the VM reached :3479 through `host.docker.internal`. If they do not, the Cowork setup instructions (out of the README while dark) are incomplete, because nothing sets `TANDEM_BIND_HOST` automatically. Record the result either way: [decision E](reviews/2026-09-02-v1-review/decisions.md) is still marked Unknown pending this run.
 - [ ] **Credentials survive a restart (#1761).** Store a token through the integration wizard's Advanced step, then quit and relaunch. **Credential Manager → Windows Credentials** must still list both the `tandem-integrations` entry and the `tandem` entry that holds the auth token. Check the store itself: a working Cowork connection proves nothing here, because the auth token also falls back to a file. #1761 added the round-trip test, and this row is its hardware half.
-- [ ] **Chat-reply notifications (#2168).** Installed app, not a dev build (which posts as PowerShell). With Tandem in the background, ask Claude something in chat: a toast appears, the taskbar button flashes until you switch back, and the chime plays. Click the toast while it is on screen: Tandem comes forward with chat open on the reply's document. With **Settings → Notifications → I keep Tandem visible beside other apps** on, close Tandem to the tray from the taskbar's right-click **Close window** without clicking into it first, then ask Claude something: a toast still appears within about 2 s of the reply. WebView2 is never told the window was hidden, so this is the native-visibility poll working.
+- [ ] **Chat-reply notifications (#2168).** Installed app, not a dev build (which posts as PowerShell). With Tandem in the background, ask Claude something in chat: a toast appears, the taskbar button flashes until you switch back, and the selected reply sound plays. Also preview two or three sounds in **Settings → Notifications** (the recordings are WAV files decoded by the webview; on Linux that goes through GStreamer's `wavparse`, so check the AppImage on a stock 22.04 too). Click the toast while it is on screen: Tandem comes forward with chat open on the reply's document. With **Settings → Notifications → I keep Tandem visible beside other apps** on, close Tandem to the tray from the taskbar's right-click **Close window** without clicking into it first, then ask Claude something: a toast still appears within about 2 s of the reply. WebView2 is never told the window was hidden, so this is the native-visibility poll working.
 - [ ] **Never-signed-in Claude Code (#1780).** On an account where `claude` has never signed in, launch Tandem. Within about 10 s the empty state shows the sign-in message and **Check again**. Click it without signing in: the message returns within about 10 s. Quit Tandem without signing in and launch it again: the message returns, because the owed re-check is saved with the session rather than held in memory. Sign in with `claude`, click Check again: the chip clears and stays clear, and a new comment gets an answer. The unit layer drives the supervisor's half against a recorded envelope; this row is the only check that the MCP stream actually closes after the kill, which was read from `server.ts` and never measured.
 
 ## 2. macOS (real hardware, Apple Silicon)
@@ -97,13 +98,13 @@ exactly this residual).
 - [ ] **A force-quit app's sidecar (#1988).** With a document open, `kill -9` the Tandem app process, not `node-sidecar`. After 30 s, record whether `node-sidecar` is still alive (`pgrep -fl node-sidecar`; `lsof -iTCP:3479 -sTCP:LISTEN`). **Survival is the ACCEPTED result on macOS** (#1988, decided 2026-10-28): macOS has no parent-death signal, so the gap is accepted with relaunch recovery as its bound, and a survivor is recorded, not treated as a release stop. (A survivor that logs anything after the app died now exits, because its broken log pipe triggers a normal shutdown — `src/server/sidecar-pipe-guard.ts` — but an idle one stays.) Then relaunch Tandem. **Pass:** it starts, Copy Diagnostics is healthy, and the old sidecar is gone. The new sidecar's startup `freePort` reclaims the ports, and that is the bound.
 - [ ] **The marketplace plugin arms on a fresh profile.** On a Claude Code profile with no Tandem skill installed, install the `tandem@tandem-editor` marketplace plugin. Start a session with Tandem running and type `/tandem`. Pass: the first annotation you add wakes the session. Arming has been measured on Windows only. A typed `/tandem` emits no `PreToolUse Skill` event, so judge by the wake, not by hook logs.
 - [ ] **Chat-reply notifications (#2168). Never run on a Mac.** CI compiles and unit-tests the macOS branch of `src-tauri/src/notifications.rs`; what macOS does at runtime has not been seen by anyone. Use the installed app, not `cargo tauri dev`, which posts as Terminal. Run it once with **System Settings → Notifications → Tandem** set to *Banners* and once with *Alerts*. With Tandem in the background, ask Claude something in chat:
-  - a notification appears, the dock icon bounces, and the chime plays;
+  - a notification appears, the dock icon bounces, and the reply sound plays (WKWebView decoding the recorded WAV clips);
   - clicking the notification body brings Tandem forward and opens chat on the document the reply was about. This is the first notification of the absence, the one that carries the "Open chat" action;
   - the **Open chat** button, if macOS shows one, does the same;
   - step away again and let two replies arrive more than 30 s apart. Both notify; clicking the second may only bring Tandem forward, which is expected;
   - coming back to Tandem clears its notifications from Notification Centre.
 
-  **Pass condition if clicks do nothing:** notifications, bounce and chime still work, and clicking the dock icon still works. That is a degraded pass, not a release stop. Record it, because the action-button design rests on reading the notify-rust 4.18 and mac-notification-sys 0.6 sources, not on a run. Also send **Settings → Notifications → Send a test notification** while Tandem is frontmost and record where it lands; it may go straight to Notification Centre.
+  **Pass condition if clicks do nothing:** notifications, bounce and the reply sound still work, and clicking the dock icon still works. That is a degraded pass, not a release stop. Record it, because the action-button design rests on reading the notify-rust 4.18 and mac-notification-sys 0.6 sources, not on a run. Also send **Settings → Notifications → Send a test notification** while Tandem is frontmost and record where it lands; it may go straight to Notification Centre.
 - [ ] **"I keep Tandem visible beside other apps" counts a minimised window as away (#2168).** Turn the setting on, minimise Tandem (⌘M) and ask Claude something: a notification appears. On macOS this still rests on WKWebView's own `visibilityState`, because minimising fires no resize event for the native read to catch, and no one has observed what WKWebView reports.
 
 ## 3. Linux (best effort, any box or VM)
@@ -132,26 +133,29 @@ previous one. The RC pass also has to prove this release can update **forward**
 — the seam users actually hit after launch — and exercise the [license gate](glossary.md#licensing-gate)
 before it meets a paying user.
 
-- [ ] **Forward-update — NOT RUNNABLE AS WRITTEN.** Goal: verify the
-      just-built RC updates to a *next* version. Mechanic: the updater's `.sig`
-      signs the artifact bytes and the `latest.json` `version` field is
-      independent of the signature — so re-serve the **current RC's own signed
-      artifact** under a bumped version number in a staged `latest.json`, point
-      the updater at it, and confirm: update dot appears → install → restart →
-      app healthy. **The pointing step has no mechanism today.** There is no
-      runtime updater-endpoint override: the endpoint list is fixed in
-      `src-tauri/tauri.conf.json` (the public GitHub `latest.json`), no
-      environment variable reaches the updater, and the only alternate route is
-      the compile-time `LICENSE_UPDATE_ENDPOINT` const in `src-tauri/src/lib.rs`,
-      which is empty while licensing ships dark. *Decided 2026-10-22 (Bryan):*
-      the route is a staging build compiled against a separate update manifest
-      that offers a fake newer version. A runtime endpoint override in shipped
-      builds was rejected, because it would add attack surface to the updater.
-      That staging channel is not built yet; #2280 tracks it. Until #2280 lands,
-      record this row as not run rather than ticking it.
-      (Added 2026-06-11; once the updater authenticates against the
-      license-checked endpoint — #1116 L3 — run this against the staging
-      endpoint so the entitlement check is in the loop.)
+- [ ] **Forward-update** (#2280; Windows + macOS). Goal: verify an installed
+      build updates itself to the RC through the RC's own signed manifest. On a
+      test machine or VM, from a checkout of the RC tag, build the staging
+      channel against the RC's per-tag manifest:
+      `npm run build:tauri:staging -- --manifest-url https://github.com/bloknayrb/tandem/releases/download/<RC tag>/latest.json`.
+      The staging build's shell version is `0.0.1` and it is otherwise the RC's
+      code, so the RC reads as newer with nothing re-signed. Install it, then
+      confirm: update dot appears → install → restart → the **installed app's**
+      version (Settings → Apps, or Get Info on `Tandem.app`) reads the RC's, not
+      `0.0.1`, and **no** "may not have finished updating" banner appears. About
+      proves nothing here: it shows the version compiled into the checkout, which
+      is the RC's before the update too. (Watch the window;
+      a successful update logs nothing at the release log level, see
+      [what the v0.25.0 run settled](#what-the-v0250-run-settled)). There is
+      still no runtime updater-endpoint override: *decided 2026-10-22 (Bryan)*,
+      a runtime override in shipped builds would add attack surface to the
+      updater, so the redirect is a build-time `--config` overlay the release
+      workflow never applies. What the staging build is and is not:
+      [bad-release-runbook.md](bad-release-runbook.md#the-staging-update-channel).
+      It exercises the **public** route only. Once `LICENSE_UPDATE_ENDPOINT` is
+      set (#1116 L3), run it on a trialing device, which still takes that route;
+      putting the entitlement check in the loop needs a staging Worker, which
+      does not exist yet. (Added 2026-06-11; made runnable by #2280.)
 - [ ] **v1.0 setup walkthrough** (#2198; Windows + macOS): `isV1Release`
       rejects an rc, so launch the RC with `TANDEM_FORCE_V1_WALKTHROUGH=1`
       on a profile that has a working 0.x setup. Expect: the wizard opens

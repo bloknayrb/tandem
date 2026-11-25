@@ -21,6 +21,8 @@
 
 import { CTRL_ROOM } from "../../shared/constants.js";
 import { isUploadPath } from "../../shared/paths.js";
+import { copyAliasLedger } from "../annotations/key-identity.js";
+import { copyArbiterHistory } from "../annotations/write-arbiter.js";
 import { setDirtyMirrorEligibility } from "../documents/dirty.js";
 import { getOpenDocs, isDirtyMirrorEligible } from "../documents/registry.js";
 import { detachObservers, reattachCtrlObservers, reattachObservers } from "../events/queue.js";
@@ -41,10 +43,17 @@ export function createHocuspocusLifecycle(): HocuspocusLifecycle {
       return getOpenDocs().has(name) || name === CTRL_ROOM;
     },
 
-    onDocSwapped(docName, newDoc) {
+    onDocSwapped(docName, newDoc, oldDoc) {
       if (docName === CTRL_ROOM) {
         reattachCtrlObservers();
         return;
+      }
+      // Copied, not moved: an in-flight `loadAndMerge` still holds the old doc.
+      // The write arbiter's per-key history likewise (#1920): item ids survive
+      // the merge, and without it every head reseeds as unattributed.
+      if (oldDoc) {
+        copyAliasLedger(oldDoc, newDoc);
+        copyArbiterHistory(oldDoc, newDoc);
       }
       const openDoc = getOpenDocs().get(docName);
       const uploadDoc = openDoc ? isUploadPath(openDoc.filePath) : false;

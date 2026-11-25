@@ -59,6 +59,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_NODE_VERSION } from "../node-sidecar-version.mjs";
 import {
   byCodeUnit,
+  chimeLicenceProblems,
   classifyLicence,
   findVendoredLicenceFiles,
   hasFullLicenceText,
@@ -116,15 +117,19 @@ const FIRST_PARTY_RESOURCES = new Map([
 /**
  * Non-script files the client build emits, and why none needs a trace:
  * first-party HTML and images, the fonts (their OFL texts ship beside them),
- * and the CSS Vite extracts. CSS can only carry third-party styles by import:
- * an import from JS shows up in the chunk trace, and the wiring test refuses an
- * `@import` from node_modules in client CSS, which the trace cannot see.
+ * the reply-sound recordings (CC0; their licence file ships beside them and
+ * must name each one, `chimeLicenceProblems`), and the CSS Vite extracts. CSS
+ * can only carry third-party styles by import: an import from JS shows up in
+ * the chunk trace, and the wiring test refuses an `@import` from node_modules
+ * in client CSS, which the trace cannot see.
  */
 const CLIENT_KNOWN_ASSETS = [
   /^index\.html$/,
   /^(favicon|logo)\.png$/,
   /^fonts\/[^/]+\.(woff2?|ttf|otf)$/,
   /^fonts\/OFL-[^/]+\.txt$/,
+  /^chimes\/[^/]+\.wav$/,
+  /^chimes\/LICENSE-VCSL\.txt$/,
   /^assets\/[^/]+\.css$/,
 ];
 
@@ -361,6 +366,10 @@ function collectClientModules(dir) {
   for (const f of onDisk.filter((x) => /^fonts\/[^/]+\.(woff2?|ttf|otf)$/.test(x))) {
     const name = family(f.slice("fonts/".length).replace(/-latin.*$|\.[^.]+$/, ""));
     if (!ofl.has(name)) fail(`dist/client/${f} has no OFL text for its family beside it`);
+  }
+  // Likewise the reply sounds' CC0 licence file, which must name every clip.
+  for (const problem of chimeLicenceProblems(onDisk, (f) => readFileSync(join(dir, f), "utf8"))) {
+    fail(`dist/client: ${problem}`);
   }
   for (const file of onDisk) {
     if (/\.[cm]?js$/.test(file)) {
@@ -871,7 +880,9 @@ function header(kind, extra = [], extraNotes = []) {
     "not Tandem's: each component is included under its own licence, whose text follows.",
     "",
     "Not repeated here: the bundled fonts' licences (SIL Open Font License 1.1), which ship",
-    "beside the font files in the client's fonts/ folder.",
+    "beside the font files in the client's fonts/ folder; and the reply-sound recordings,",
+    "excerpts of the Versilian Community Sample Library dedicated to the public domain under",
+    "CC0 1.0, credited in the client's chimes/LICENSE-VCSL.txt.",
     ...extraNotes,
     "",
     "",
@@ -1100,8 +1111,12 @@ function runVerifyPack() {
   const files = JSON.parse(res.stdout)[0].files.map((f) => f.path);
   if (!files.includes("dist/THIRD_PARTY_NOTICES.txt"))
     fail("the npm tarball does not include dist/THIRD_PARTY_NOTICES.txt");
+  // Sourcemaps are build inputs (the trace above reads them), not runtime ones:
+  // nothing starts Node with --enable-source-maps, and they were most of the
+  // tarball's size (#1825). package.json's `files` excludes them.
   const leaked = files.filter(
-    (f) => f.startsWith("dist/desktop/") || f.startsWith("dist/.third-party/"),
+    (f) =>
+      f.startsWith("dist/desktop/") || f.startsWith("dist/.third-party/") || f.endsWith(".map"),
   );
   if (leaked.length > 0) fail(`the npm tarball includes build-only files: ${leaked.join(", ")}`);
   const notices = readFileSync(NPM_NOTICES, "utf8");

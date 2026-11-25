@@ -72,16 +72,17 @@ use crate::sidecar_job;
 #[cfg(target_os = "linux")]
 use crate::sidecar_anchor;
 
-/// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479).
+/// Built by `sidecar_url!` (lib.rs) from the same host and port the spawn site
+/// exports, so it cannot drift from `MCP_PORT` / `SIDECAR_BIND_HOST` (#1825).
 /// Must use 127.0.0.1, not `localhost` — `isHostAllowed` (api-routes.ts) narrowed
 /// out the bare `localhost` hostname in #477 PR 2, so a `Host: localhost:3479`
 /// request returns 403 Forbidden and the supervisor's health-poll times out.
-pub(crate) const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
+pub(crate) const HEALTH_URL: &str = sidecar_url!("/health");
 
 /// Graceful-shutdown endpoint on the sidecar (#1088). POSTing here triggers
 /// the Node shutdown sequence (dirty-doc flush + session save) before exit.
 /// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
-const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
+const SHUTDOWN_URL: &str = sidecar_url!("/api/shutdown");
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// How long each `start_sidecar` attempt waits for `/health` before declaring
@@ -313,20 +314,21 @@ pub(crate) fn recover_deferred_crash(app: &tauri::AppHandle) {
 }
 
 /// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
-/// the exhausted-restarts path; keep in sync with the URL constants above and
-/// with DEFAULT_WS_PORT / DEFAULT_MCP_PORT in src/shared/constants.ts. Pinned
-/// against the URL constants by `port_constants_match_urls`.
+/// the exhausted-restarts path; keep in sync with DEFAULT_WS_PORT /
+/// DEFAULT_MCP_PORT in src/shared/constants.ts. `MCP_PORT` and the URL
+/// constants expand from one macro (`sidecar_mcp_port!`, lib.rs), so they agree
+/// by construction (#1825); `port_constants_match_urls` still pins the result.
 pub(crate) const WS_PORT: u16 = 3478;
-pub(crate) const MCP_PORT: u16 = 3479;
+pub(crate) const MCP_PORT: u16 = sidecar_mcp_port!();
 /// The interface the sidecar is told to bind. Keep in sync with
-/// DEFAULT_BIND_HOST in src/shared/constants.ts, and with the loopback literal
-/// in the URL constants above — pinned by `port_constants_match_urls`.
+/// DEFAULT_BIND_HOST in src/shared/constants.ts. The URL constants above take
+/// their host from the same macro (`sidecar_bind_host!`, lib.rs), #1825.
 ///
 /// Passed explicitly at the spawn site because the child inherits this process's
 /// environment (see the spawn-site comment), so an ambient `TANDEM_BIND_HOST`
 /// would otherwise move the sidecar off loopback under a shell that still polls
 /// 127.0.0.1.
-pub(crate) const SIDECAR_BIND_HOST: &str = "127.0.0.1";
+pub(crate) const SIDECAR_BIND_HOST: &str = sidecar_bind_host!();
 
 /// The sidecar binary's name as it exists on disk at RUNTIME.
 ///
@@ -351,8 +353,7 @@ pub(crate) const SIDECAR_BIN_NAME: &str = "node-sidecar";
 /// own deadline only at the top of the loop, and the `check_health` inside the
 /// last iteration can itself block for the full `HTTP_CLIENT_TIMEOUT`; the POST
 /// to `/api/shutdown` that precedes it can also take the full client timeout
-/// (that is exactly what happens when `TANDEM_MCP_PORT` is non-default and the
-/// hardcoded `SHUTDOWN_URL` misses — #1825). So the true worst case of
+/// (a listener on the port that accepts and never answers). So the true worst case of
 /// `stop_sidecar_gracefully` is `deadline + 2 x HTTP_CLIENT_TIMEOUT`, and the
 /// outer timeout has to sit above that or it becomes the binding constraint and
 /// truncates a flush that was still making progress. The `+ 1` is slack.
@@ -912,9 +913,9 @@ async fn foreign_health_pid(
 /// The two sidecar URLs a graceful stop touches, kept together so a test can
 /// swap both at once and neither can be forgotten.
 ///
-/// **Not #1825's fix.** `PRODUCTION` still holds the hardcoded :3479 constants;
-/// this only makes them injectable, which is what lets a unit test observe a
-/// real POST and a real port-release wait.
+/// `PRODUCTION` holds the `sidecar_url!`-derived constants (#1825); this only
+/// makes them injectable, which is what lets a unit test observe a real POST
+/// and a real port-release wait.
 #[derive(Clone, Copy)]
 struct Endpoints<'a> {
     shutdown: &'a str,
@@ -953,8 +954,7 @@ impl Endpoints<'static> {
 /// are two unsynchronised reads with no lock across the gap, so a Quit that
 /// calls `try_acquire()` inside that window does make it true. Not "always
 /// false": that was the previous absolute, replaced rather than fixed.
-/// Narrowing that line properly is #1825 territory (deriving the URL) plus the
-/// half of #1812 that stays open — the identity check below is positive-only,
+/// Narrowing that line properly is the half of #1812 that stays open — the identity check below is positive-only,
 /// so it cannot tell "nothing was ever there" from "something unidentified is".
 /// Neither is this parameter's job.
 async fn graceful_stop_request(
@@ -975,7 +975,7 @@ async fn graceful_stop_request(
     // sidecar reads as "not owned" rather than as a live handle.
     //
     // NB: `SHUTDOWN_URL` (and `HEALTH_URL`, which `wait_for_port_release` polls)
-    // hardcode :3479 and **the shell never verifies it owns what answers there**.
+    // name a fixed :3479 and **the shell never verifies it owns what answers there**.
     // Two consequences, and #1756 widened the second from two explicit user
     // actions (Restart server, Install update) to every Quit:
     //   - with a non-default `TANDEM_MCP_PORT` the POST misses. Nothing is
@@ -1003,9 +1003,10 @@ async fn graceful_stop_request(
     // note below) is of a safe arm keyed one error class too wide.
     // `wait_for_port_release` polls `/health` with no identity check at all,
     // which is correct there — it asks "is anything still on the port".
-    // #1825 (derive the URL) is still open. The spawn site pins
-    // `TANDEM_MCP_PORT` / `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which
-    // removes the ambient-env half of the first case but nothing of the second.
+    // The spawn site pins `TANDEM_MCP_PORT` / `TANDEM_PORT` / `TANDEM_BIND_HOST`
+    // explicitly, and the URLs expand from the same macros as those values
+    // (#1825), which removes the first case for our own child but nothing of the
+    // second.
     if owns_child {
         log::info!("Graceful stop: we own the sidecar child — POSTing {shutdown_url}");
         // Three POST outcomes, and `Refused` is the NARROW one — an allowlist of
@@ -1354,7 +1355,7 @@ fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) -> bool 
 /// Nothing else does this: before #1756 the drain task's `Terminated` arm set a
 /// local flag only, so after a sidecar crash the slot kept a dead handle and
 /// `owns_child` stayed true. That mattered once Quit started POSTing:
-/// `SHUTDOWN_URL` is hardcoded :3479, so we would have shut down whatever now
+/// `SHUTDOWN_URL` names a fixed :3479, so we would have shut down whatever now
 /// listens there (a `tandem start`, a second app-data instance).
 ///
 /// Deliberately does NOT kill anything — the child is already gone, and a kill
@@ -1836,7 +1837,7 @@ pub(crate) enum SpawnOutcome {
 /// on every health poll and — after #1756 — POSTed `/api/shutdown` at whatever
 /// else answered :3479 on **every Quit**. Setting these explicitly makes the
 /// child's addresses the ones `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` /
-/// `MCP_PORT` name. It does not fix #1825 (those are still hardcoded). The
+/// `MCP_PORT` name, and since #1825 those expand from one macro pair. The
 /// POST's identity check now exists (#1812) but is positive-only: a pid-less
 /// body or an unreachable `/health` still POSTs.
 ///
@@ -2467,8 +2468,8 @@ pub(crate) async fn wait_for_port_release(client: &reqwest::Client, deadline_sec
 ///
 /// The parameter exists so `graceful_stop_request` can be pointed at a test
 /// listener; `wait_for_port_release` keeps the no-URL signature its four other
-/// callers use. Taking the URL rather than deriving it is deliberately NOT a fix
-/// for #1825 — the constants are still hardcoded at every production call site.
+/// callers use. Production callers pass `HEALTH_URL`, which `sidecar_url!` derives
+/// from the spawn site's host and port (#1825).
 async fn wait_for_server_gone(
     client: &reqwest::Client,
     deadline_secs: u64,

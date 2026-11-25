@@ -4,6 +4,32 @@ import type { Annotation } from "./types.js";
 export type RawAnnotation = Omit<Annotation, "type"> & { type: string };
 
 /**
+ * Does a stored `heldInSolo` value mark the record as held? (#2481)
+ *
+ * Fails CLOSED on anything that is not literally `false` or absent, mirroring
+ * `replyPrivacyAllows` (#2460). `=== true` would be the natural spelling and it
+ * fails OPEN: a marker stored as the string `"true"`, as `1` or as `null` is
+ * not `=== true`, so in the indeterminate mode the record would reach Claude.
+ * Every first-party writer stamps a real `true` or leaves the key absent, so a
+ * non-boolean marker comes only from a stale tab, a session restore or a
+ * hand-edited store. A reply is never sanitized on its way to the pull
+ * surfaces, so this predicate, not `sanitizeAnnotation`, is what reads it.
+ *
+ * Every reader that decides whether a record is held goes through it:
+ * `mode.ts#hideFromAI`, the release sweep that clears the marker
+ * (`routes/mode-release.ts`), the reply seam's answered-item scan and
+ * `sanitizeAnnotation` below, and the reply record's envelope schema
+ * (`annotations/schema.ts`), so the hold and the release cannot disagree
+ * about which records are held. The one deliberate `=== true` reader is the
+ * server-side stamp's candidate filter (`annotations/held-in-solo.ts`): it
+ * decides whether to WRITE a real `true`, so re-stamping a non-boolean marker
+ * normalises it and never releases anything.
+ */
+export function isHeldInSoloMarker(value: unknown): boolean {
+  return value !== false && value !== undefined;
+}
+
+/**
  * Discriminated union describing a lossy rewrite performed by
  * `sanitizeAnnotation`. Reported via the required `onLossy` callback so
  * callers can route the event to their own observability sink (server:
@@ -135,7 +161,16 @@ export function sanitizeAnnotation(
     // fail-closed-restart tiebreaker (which read `heldInSolo` on the sanitized
     // record) would see it as always-undefined. The marker gates the badge +
     // restart hold, NOT live hiding (that is server-authoritative mode-based).
-    ...(typeof ann.heldInSolo === "boolean" ? { heldInSolo: ann.heldInSolo } : {}),
+    //
+    // #2481: a non-boolean marker reads as HELD (`isHeldInSoloMarker`), never
+    // as absent: dropping it would surface the record in the indeterminate
+    // mode. It is normalised to a real `true`, so junk still never passes
+    // through; the release sweep clears the raw value by the same predicate.
+    ...(ann.heldInSolo === false
+      ? { heldInSolo: false }
+      : isHeldInSoloMarker(ann.heldInSolo)
+        ? { heldInSolo: true }
+        : {}),
     // #1770: same reason as `heldInSolo` and `rev` above — this is a STRICT
     // allowlist, so without this line every Claude-facing read strips
     // `resolvedBy` and the `userResponses` exclusion it exists for silently
@@ -229,4 +264,22 @@ export function sanitizeAnnotation(
   // Truly unknown type — coerce to comment
   emit({ kind: "unknown-type", id: ann.id, rawType: ann.type });
   return { ...base, type: "comment" } as Annotation;
+}
+
+/**
+ * An annotation's identity is its Y.Map key, never its stored `id`.
+ *
+ * Every minting path stores a record under its own id, but a browser CRDT
+ * update, a session blob or the `.docx` drift path can leave a record under
+ * key K whose stored `id` is X. A reader that took `value.id` as identity then
+ * misdirected every write keyed by it onto the record really stored at X.
+ *
+ * Returns `rec` itself when the ids agree: well-formed data keeps its exact
+ * reference, which object-keyed callers rely on. Always stamp AFTER
+ * `sanitizeAnnotation` (`atMapKey(key, sanitizeAnnotation(value, …))`), never
+ * sanitize a stamped copy: sanitize may return the raw value, and its
+ * `onLossy` events deliberately still name the stored id.
+ */
+export function atMapKey<T extends { id: string }>(key: string, rec: T): T {
+  return rec.id === key ? rec : { ...rec, id: key };
 }

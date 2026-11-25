@@ -19,6 +19,7 @@ import type {
   ChatNoticeKind,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import type { ReconciledDoc } from "../annotations/key-identity.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
@@ -561,6 +562,19 @@ export function handOverDocumentInbox(documentId: string): void {
   }
 }
 
+/**
+ * This server run's start, as the waiting rule's `writtenSince` (#2358, the
+ * restart row; Bryan's pick "Written since boot"): set when this module loads,
+ * which is at boot. Read only by the two waiting reads below, which only the
+ * ownership module's seams ask (flag on).
+ */
+let waitingWrittenSince = Date.now();
+
+/** Tests only: move the waiting rule's boot time (`undefined` turns it off). */
+export function setWaitingWrittenSinceForTests(at: number | undefined): void {
+  waitingWrittenSince = at ?? Number.NEGATIVE_INFINITY;
+}
+
 /** Fixed text: nothing from the error, no record and no document. */
 const DOCUMENT_WAITING_FAILED =
   "[Tandem] waiting could not be computed for a document; it is read as holding nothing waiting.";
@@ -604,17 +618,18 @@ export function documentWaiting(documentId: string): boolean {
     const ydoc = getDocument(documentId);
     if (!doc || !ydoc) return false;
     const store = new YDocStore(ydoc, doc.filePath, doc.id);
+    const reconciled = store.reconciled();
     return isDocumentWaiting({
       documentId,
       annotations: structuredClone(store.listAnnotations()),
-      repliesOf: (annotation) =>
-        structuredClone(channelVisibleReplies(annotation, (id) => store.listReplies(id))),
+      repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
       mode: readModeState(),
       handedAtOrAbove: (kind, id, editedAt) =>
         deliveryRegistry
           .versionsOf(kind, ledgerKey(documentId, id))
           .some((entry) => entry.acked && entry.editedAt >= editedAt),
       isLocalModelRecord,
+      writtenSince: waitingWrittenSince,
     });
   } catch {
     console.error(DOCUMENT_WAITING_FAILED);
@@ -638,17 +653,24 @@ export type ClaudeChatAppend = { ok: true; id: string } | { ok: false; refusal: 
  * supervisor must not reach the MCP layer; `index.ts` wires the two. A
  * throwing listener is logged and never fails the reply.
  */
-const tandemReplyListeners = new Set<(sessionId: string | undefined) => void>();
+type TandemReplyListener = (sessionId: string | undefined, bound?: boolean) => void;
+const tandemReplyListeners = new Set<TandemReplyListener>();
 
-export function onTandemReply(cb: (sessionId: string | undefined) => void): () => void {
+export function onTandemReply(cb: TandemReplyListener): () => void {
   tandemReplyListeners.add(cb);
   return () => tandemReplyListeners.delete(cb);
 }
 
-export function notifyTandemReply(sessionId: string | undefined): void {
+/**
+ * `bound` is the greeting's transport fact (#2358 PR 3b-2c;
+ * `greetingTransportBound`): passed only while ownership is on, so a dark
+ * listener is called exactly as before, with the session id alone.
+ */
+export function notifyTandemReply(sessionId: string | undefined, bound?: boolean): void {
   for (const cb of tandemReplyListeners) {
     try {
-      cb(sessionId);
+      if (bound === undefined) cb(sessionId);
+      else cb(sessionId, bound);
     } catch (err) {
       console.error("[Tandem] A chat listener failed:", err);
     }
@@ -1531,7 +1553,7 @@ function collectDocumentInbox(
   const userReplies = collectInboxUserReplies(
     allAnnotations,
     fullText,
-    (id) => store.listReplies(id),
+    store.reconciled(),
     ledgers.replySurfaced,
     pollCtx,
   );
@@ -1623,8 +1645,10 @@ function carryHeld(
     } else if (entry.kind === "r") {
       if (!replies) {
         replies = new Map();
+        // One token for the whole pass: reconciling is a full scan of the map.
+        const reconciled = store.reconciled();
         for (const ann of allAnnotations) {
-          for (const reply of channelVisibleReplies(ann, (id) => store.listReplies(id))) {
+          for (const reply of channelVisibleReplies(reconciled, ann)) {
             replies.set(ledgerKey(documentId, reply.id), reply);
           }
         }
@@ -2474,17 +2498,11 @@ export const ownershipChatSide = Object.freeze({
   },
   /** The unhandled, non-local-period user messages that name `documentId`. */
   messagesOn(documentId: string): string[] {
-    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-    const handled = settledChatIds(chatMap);
-    const keys: string[] = [];
-    chatMap.forEach((value, key) => {
-      if (typeof value !== "object" || value === null) return;
-      const msg = value as Partial<ChatMessage>;
-      if (msg.author !== "user" || chatDocumentOf(msg) !== documentId) return;
-      if (handled.has(key) || isLocalPeriodChat(key)) return;
-      keys.push(key);
-    });
-    return keys;
+    return unhandledUserChat((msg) => chatDocumentOf(msg) === documentId);
+  },
+  /** Every unhandled, non-local-period user message (#2358 PR 3b-2b4b, the self re-owe). */
+  unhandledKeys(): string[] {
+    return unhandledUserChat(() => true);
   },
   /**
    * The keys of the user chat rows a fresh cursor reader would be handed if
@@ -2510,6 +2528,7 @@ export const ownershipChatSide = Object.freeze({
       rows,
       handled: settledChatIds(chatMap),
       isLocalPeriodChat,
+      writtenSince: waitingWrittenSince,
     });
   },
   /** The facts of the user row under `key`, or undefined. */
@@ -2653,6 +2672,21 @@ function settleHandOutRows(
     if (earlier.length > 0) candidates.set(rowKey, earlier);
   }
   return candidates.size === 0 ? [] : addSettles(chatMap, candidates, owns);
+}
+
+/** The unhandled, non-local-period user messages `keep` accepts, by key. */
+function unhandledUserChat(keep: (msg: Partial<ChatMessage>) => boolean): string[] {
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const handled = settledChatIds(chatMap);
+  const keys: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user" || !keep(msg)) return;
+    if (handled.has(key) || isLocalPeriodChat(key)) return;
+    keys.push(key);
+  });
+  return keys;
 }
 
 /** {@link ownershipChatSide}'s re-owe (R6.1; the posts PR, R3.3). */
@@ -3350,10 +3384,20 @@ export function registerAwarenessTools(server: McpServer): void {
           // The texts carry the refusals' take guard (`ownership-refusal.ts`).
           const activityExcluded =
             activityDocumentId !== null && docs.excluded.includes(activityDocumentId);
+          // Those Tandem's Claude took back from this caller (#2358 PR
+          // 3b-2b4b): named, because an earlier request no longer counts.
+          const takenBack = scope.takenBack(docs.excluded);
+          const takenBackNames = takenBack.map((id) => labels.get(id) ?? id);
+          // And those the user released from it (#2358 PR 5a), for the same
+          // reason: the released refusal asks for a request after the Release.
+          const released = scope.released(docs.excluded);
+          const releasedNames = released.map((id) => labels.get(id) ?? id);
           if (docs.readAnyDocument && docs.excluded.length > 0) {
             actions += inboxExcludedSomeNote(
               docs.excluded.map((id) => labels.get(id) ?? id),
               activityExcluded,
+              takenBackNames,
+              releasedNames,
             );
           }
           const summary = docs.readAnyDocument
@@ -3362,8 +3406,8 @@ export function registerAwarenessTools(server: McpServer): void {
                 docs.excluded.length === 0
                   ? noDocumentInboxNote(requestedId)
                   : requestedId !== undefined
-                    ? inboxExcludedNamedNote(requestedId)
-                    : inboxExcludedAllNote(activityExcluded)
+                    ? inboxExcludedNamedNote(requestedId, takenBack.length > 0, released.length > 0)
+                    : inboxExcludedAllNote(activityExcluded, takenBackNames, releasedNames)
               } ${actions}`;
           const ownership = ownershipActive
             ? {
@@ -3640,6 +3684,12 @@ export function registerAwarenessTools(server: McpServer): void {
       // `withTypingPresence` runs this callback before its first `await`, so
       // nothing interleaves between the gate above and the writes below
       // (R5.1; pinned in tests/server/ownership-chat.test.ts).
+      // The greeting's transport fact (#2358 PR 3b-2c): with ownership on,
+      // whether the caller is on the transport bound to the current spawn,
+      // which decides the greeting instead of the session id. Off, absent, so
+      // the classifier is asked master's query. Pure, so read here.
+      const bound = inboxOwnership.greetingTransportBound(caller);
+      const boundFact = bound !== undefined ? { bound } : {};
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         // An accepted reply to a message is stamped with that message's
         // document, or none (R5.3); an accepted post with what its gate
@@ -3654,7 +3704,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // `withErrorBoundary` resolved it at entry (#2358): no handler reads
         // the request context itself.
         const sessionId = caller.claudeSessionId;
-        const greeting = isGreetingReply({ sessionId, replyTo, inProgress });
+        const greeting = isGreetingReply({ sessionId, replyTo, inProgress, ...boundFact });
         const appended = appendClaudeChatMessage(text, {
           documentId: docId,
           replyTo,
@@ -3677,7 +3727,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // landed, with no `await` since the gate: a reply the licence refused
         // above claims nothing and sets no owner.
         if (gate.kind === "accepted") gate.apply(appended.id);
-        notifyTandemReply(sessionId);
+        notifyTandemReply(sessionId, bound);
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,
@@ -4050,7 +4100,7 @@ export type InboxUserResponse = Annotation & { textSnippet: string; documentId: 
 export function collectInboxUserReplies(
   allAnnotations: Annotation[],
   fullText: string,
-  loadReplies: (annotationId: string) => AnnotationReply[],
+  reconciled: ReconciledDoc,
   replySurfaced: ReplyLedger,
   ctx: InboxPollContext,
 ): InboxUserReply[] {
@@ -4060,7 +4110,7 @@ export function collectInboxUserReplies(
     // never handed to Claude (#1123 A2, decision 7); a user reply on Claude's
     // own annotation always is, even where the local model also replied.
     if (isLocalModelRecord(ann)) continue;
-    const visible = channelVisibleReplies(ann, loadReplies);
+    const visible = channelVisibleReplies(reconciled, ann);
     if (visible.length === 0) continue;
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     for (const reply of visible) {

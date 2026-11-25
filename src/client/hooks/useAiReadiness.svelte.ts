@@ -110,7 +110,15 @@ interface HealthResponse {
   sessionCount?: number;
   push?: { subscribers?: number };
   /** The push↔pull join — see `server/events/delivery-state.ts`. */
-  delivery?: { state?: string; waitingMs?: number | null };
+  delivery?: {
+    state?: string;
+    waitingMs?: number | null;
+    /** Multi-session ownership only (#2358 PR 3b-2e2): rounds are keyed. */
+    keyed?: boolean;
+    /** Multi-session ownership only (#2358 PR 3b-2e2): Tandem's Claude was
+     *  woken after the oldest waiting round opened and is still on it. */
+    tandemClaudeWoken?: boolean;
+  };
 }
 
 /**
@@ -145,6 +153,10 @@ type HealthRead =
        *  claim", never as a claim it happens to resemble. */
       deliveryState: string | null;
       deliveryWaitingMs: number | null;
+      /** `delivery.keyed === true` (#2358 PR 3b-2e2); false when absent. */
+      deliveryKeyed: boolean;
+      /** `delivery.tandemClaudeWoken === true` (#2358 PR 3b-2e2). */
+      deliveryWoken: boolean;
     }
   | { answered: false; why: string };
 
@@ -630,6 +642,13 @@ export interface AiReadiness {
    */
   readonly deliveryStalledMs: number | null;
   /**
+   * The server keys delivery rounds (`/health`'s `delivery.keyed`, #2358 PR
+   * 3b-2e2): multi-session ownership is on. The stall banner then says the
+   * message is waiting without promising when Claude will look, because
+   * another session's poll no longer closes it. False on every dark server.
+   */
+  readonly deliveryKeyed: boolean;
+  /**
    * The licence refusal, or null (#1521): the one derived read of
    * `deps.aiNotice()` that also ranks `chip` first, so it is non-null exactly
    * when `chip === "ai-off"`. Views
@@ -722,6 +741,11 @@ export function createAiReadiness(deps: {
   // expression nothing can drive.
   let deliveryState = $state<string | null>(null);
   let deliveryWaitingMs = $state<number | null>(null);
+  // Multi-session ownership only (#2358 PR 3b-2e2), held on the join's terms:
+  // assigned on every answered read, so an absent field reads false at once.
+  // A dark server never sends either, so both stay false and nothing changes.
+  let deliveryKeyed = $state(false);
+  let deliveryWoken = $state(false);
   // Have we ever read launcher status successfully? Distinguishes "still
   // booting" from a genuine `available: false`, so the chip never flashes
   // during cold start. `/health` is not gated on this: readiness derives
@@ -914,6 +938,8 @@ export function createAiReadiness(deps: {
       deliveryState: typeof body.delivery?.state === "string" ? body.delivery.state : null,
       deliveryWaitingMs:
         typeof body.delivery?.waitingMs === "number" ? body.delivery.waitingMs : null,
+      deliveryKeyed: body.delivery?.keyed === true,
+      deliveryWoken: body.delivery?.tandemClaudeWoken === true,
     };
   }
 
@@ -986,6 +1012,8 @@ export function createAiReadiness(deps: {
       // outliving its evidence" failure this whole surface exists to remove.
       deliveryState = fresh.deliveryState;
       deliveryWaitingMs = fresh.deliveryWaitingMs;
+      deliveryKeyed = fresh.deliveryKeyed;
+      deliveryWoken = fresh.deliveryWoken;
       // Unconditional for the same reason: a count the server no longer
       // vouches for must not stay on the pill.
       sessionCount = fresh.sessionCount;
@@ -1373,7 +1401,13 @@ export function createAiReadiness(deps: {
         soloMode: deps.soloMode(),
         aiOff: notice !== null,
         serverUnreachable,
+        // #2358 PR 3b-2e2: hidden while Tandem's Claude is started or woken
+        // for what waits. Keyed rounds only, so a dark build shows as before.
+        checkInUnderway: deliveryKeyed && (deliveryWoken || launcherRestarting),
       });
+    },
+    get deliveryKeyed() {
+      return deliveryKeyed;
     },
     get aiNotice() {
       return notice;

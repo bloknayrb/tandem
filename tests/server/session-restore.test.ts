@@ -51,7 +51,7 @@ vi.mock(import("../../src/server/documents/populate.js"), async (importOriginal)
 });
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
+import { type AnnotationDocV1, KEY_IDENTITY_FORMAT } from "../../src/server/annotations/schema.js";
 import {
   closeStore,
   createStore,
@@ -404,13 +404,14 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     filePath: string,
     annotations: AnnotationDocV1["annotations"],
     tombstones: AnnotationDocV1["tombstones"] = [],
+    meta: Partial<AnnotationDocV1["meta"]> = {},
   ): Promise<void> {
     const hash = docHash(filePath);
     const store = createStore(hash, { filePath });
     store.queueWrite(() => ({
       schemaVersion: 1,
       docHash: hash,
-      meta: { filePath, lastUpdated: Date.now() },
+      meta: { filePath, lastUpdated: Date.now(), ...meta },
       annotations,
       tombstones,
       replies: [],
@@ -1469,10 +1470,11 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   /** The session's ann-W over "beta" at {6,10}. The snapshot is set
    *  explicitly: `seedHighlight`'s default `""` is a real claim that the
    *  range held no text, and would fail the overlay's gate. */
-  function seedSessionAnnW(older: Y.Doc, id = "ann-W"): void {
+  function seedSessionAnnW(older: Y.Doc, id = "ann-W", extra: Record<string, unknown> = {}): void {
     seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), id, 6, 10, {
       textSnapshot: "beta",
       relRange: liveRelRange(older, 6, 10),
+      ...extra,
     });
   }
 
@@ -1551,23 +1553,40 @@ describe("corrupt ydocState quarantine (#1800)", () => {
 
   it("a suggestion whose snapshot differs is not overlaid (#1863)", async () => {
     const { resolved } = await writeDocFile("overlay-suggestion.md", DISK_TEXT);
-    await writeFallbackSessions(resolved, (older) => seedSessionAnnW(older));
+    // The session's copy of ann-W is the same record as the envelope's, so it
+    // carries the record's own type: one record is never a highlight in one
+    // copy and a comment in the other, and the envelope merge tells records
+    // apart by type (`legacy-envelope.ts`).
+    await writeFallbackSessions(resolved, (older) =>
+      seedSessionAnnW(older, "ann-W", { type: "comment", content: "Capitalize" }),
+    );
     // Accept replaces the stored span verbatim, so a suggestion written for
     // "BETA" must not be moved onto the session's "beta".
-    await seedEnvelope(resolved, [
-      {
-        id: "ann-W",
-        author: "claude",
-        type: "comment",
-        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
-        content: "Capitalize",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "BETA",
-        suggestedText: "BETA!",
-        rev: 2,
-      },
-    ]);
+    //
+    // The envelope is in the CURRENT format (`keyIdentity`), the one every
+    // envelope carries once written by this build: rows merge by id, which is
+    // what #1863 is about. An old-format envelope whose copy's snapshot
+    // contradicts the session's is duplicated rather than merged on its first
+    // load (`legacy-envelope.ts`), covered by `legacy-envelope.test.ts`.
+    await seedEnvelope(
+      resolved,
+      [
+        {
+          id: "ann-W",
+          author: "claude",
+          type: "comment",
+          range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+          content: "Capitalize",
+          status: "pending",
+          timestamp: 1700000000000,
+          textSnapshot: "BETA",
+          suggestedText: "BETA!",
+          rev: 2,
+        },
+      ],
+      [],
+      { keyIdentity: KEY_IDENTITY_FORMAT },
+    );
 
     const res = await openFromDisk(resolved);
     expect(res.kind).toBe("restored");

@@ -36,7 +36,8 @@
  *    version 0. No status gate: the collector ignores the parent's status.
  *  - **Solo:** both count only while the mode reads `"tandem"`; the push rule
  *    (`shouldForwardExternally`). Indeterminate never counts (the reviewing
- *    session's ruling; flip-blocker "the restart question").
+ *    session's ruling; "the restart question", whose re-ask is the
+ *    mode-unknown observer, `noteModeObserved` in `sessions/ownership.ts`).
  *  - **Schema:** each item is built as a poll would build it, with an empty
  *    `textSnippet` (the text is not read), and must pass its bucket's schema,
  *    the poll's last gate (`admit`).
@@ -90,6 +91,27 @@ export interface DocumentWaitingInput {
   readonly handedAtOrAbove: (kind: "a" | "r", id: string, editedAt: number) => boolean;
   /** `models/local-period.ts`'s predicate. */
   readonly isLocalModelRecord: (record: unknown) => boolean;
+  /**
+   * When set, an item last written (created or edited) before this time never
+   * waits (#2358, the restart row; Bryan's pick "Written since boot"): after a
+   * restart the registry is empty and a still-open session is not yet seen,
+   * so only what was written in this server run may start Tandem's Claude.
+   * Older items still reach Claude at its next poll or start.
+   */
+  readonly writtenSince?: number;
+}
+
+/** When an item was last written: created, or edited after. */
+function writtenAt(item: { timestamp?: number; editedAt?: number }): number {
+  return Math.max(item.timestamp ?? 0, item.editedAt ?? 0);
+}
+
+/** Whether `item` predates the input's `writtenSince` (never, when unset). */
+function writtenBefore(
+  writtenSince: number | undefined,
+  item: { timestamp?: number; editedAt?: number },
+): boolean {
+  return writtenSince !== undefined && writtenAt(item) < writtenSince;
 }
 
 /** The two settled end states, enumerated as the collector enumerates them. */
@@ -100,6 +122,7 @@ function isSettled(status: string): boolean {
 /** Whether the user comment `ann` would be handed to a fresh reader now. */
 function commentWaits(input: DocumentWaitingInput, ann: Annotation): boolean {
   if (ann.author !== "user" || ann.type !== "comment" || !isClaudeFacing(ann)) return false;
+  if (writtenBefore(input.writtenSince, ann)) return false;
   const version = ann.editedAt ?? 0;
   if (input.handedAtOrAbove("a", ann.id, version)) return false;
   // Settled: only an edit no acknowledged version accounts for reopens it.
@@ -131,6 +154,7 @@ function replyWaits(
     return false;
   }
   if (reply.author !== "user") return false;
+  if (writtenBefore(input.writtenSince, reply)) return false;
   if (input.handedAtOrAbove("r", reply.id, 0)) return false;
   return inboxUserReplySchema.safeParse({
     id: reply.id,
@@ -173,6 +197,8 @@ export interface ChatRowsInput {
   readonly handled: ReadonlySet<string>;
   /** `models/local-period.ts`'s local-period chat predicate, by map key. */
   readonly isLocalPeriodChat: (key: string) => boolean;
+  /** As {@link DocumentWaitingInput.writtenSince}, on a row's `timestamp`. */
+  readonly writtenSince?: number;
 }
 
 /** Whether the chat row `msg` passes the item schema, built as `admitChatItem` builds it. Logs nothing. */
@@ -202,6 +228,7 @@ export function chatRowsOwedToFreshReader(input: ChatRowsInput): string[] {
     if (msg.author !== "user" || input.handled.has(key)) continue;
     if (input.isLocalPeriodChat(key)) continue;
     if (msg.read) continue;
+    if (writtenBefore(input.writtenSince, msg)) continue;
     if (!chatItemAdmitted(msg)) continue;
     keys.push(key);
   }

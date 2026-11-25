@@ -94,9 +94,11 @@ describe("tauri.conf.json assumptions the hook depends on", () => {
   });
 
   it("keeps productName aligned with the autostart registration name", () => {
-    // `tauri-plugin-autostart` files the registration under
-    // `package_info().name`, i.e. productName. `uninstall_scrub.rs` pins the
-    // same string; this is the JS-side half of that agreement.
+    // `tauri-plugin-autostart` (macOS, Linux) files the registration under
+    // `package_info().name`, i.e. productName, and Tandem's own Windows backend
+    // (`autostart_win.rs`, #2160) files it under `AUTOSTART_APP_NAME`.
+    // `uninstall_scrub.rs` pins the same string; this is the JS-side half of
+    // that agreement.
     expect(conf.productName).toBe("Tandem");
   });
 });

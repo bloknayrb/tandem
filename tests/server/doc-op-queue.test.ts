@@ -183,9 +183,9 @@ describe("the wait bound (Bryan, 2026-11-11)", () => {
   });
 
   it("the limit sits well below the stdio bridge's own request timeout", () => {
-    // The bridge gives up at its timeout without telling the server. A call
-    // still waiting then must already have been refused here, with room for
-    // the refusal to travel back.
+    // The bridge gives up at its timeout and cancels the request upstream,
+    // but a cancellation can be lost. A call still waiting then must already
+    // have been refused here, with room for the refusal to travel back.
     // Read from the shared constant, never from the bridge module: loading
     // that installs process-level handlers in this worker.
     expect(DOC_OP_WAIT_MS).toBeLessThanOrEqual((STDIO_BRIDGE_REQUEST_TIMEOUT_MS * 2) / 3);

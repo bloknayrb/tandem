@@ -30,9 +30,17 @@ interface Props {
    * unreachable in practice, and the clamp below keeps it sane regardless.
    */
   stalledMs: number | null;
+  /**
+   * The server keys delivery rounds (multi-session ownership, #2358 PR
+   * 3b-2e2; the owner's 2026-11-17 answer 3). The message is then said to be
+   * waiting, with no promise of when Claude will look: with two sessions the
+   * next check-in may be a session that is never handed it. Absent or false,
+   * the wording is exactly as before.
+   */
+  keyed?: boolean;
 }
 
-const { stalledMs }: Props = $props();
+const { stalledMs, keyed = false }: Props = $props();
 
 /**
  * Rounded DOWN to whole minutes, deliberately. The banner appears at the
@@ -48,6 +56,20 @@ const waited = $derived.by(() => {
   const minutes = Math.max(1, Math.floor(stalledMs / 60_000));
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 });
+
+/**
+ * The second sentence. With keyed rounds (#2358 PR 3b-2e2) it only says the
+ * message is waiting: no promise of when Claude will look, and no dismiss (the
+ * owner, 2026-11-23, "As decided, no dismiss"). Flag off it is the old promise
+ * byte for byte, including the line break and indent the template it replaced
+ * carried into the DOM (a browser collapses them; the flag-off DOM is pinned
+ * identical in `tests/client/wake-stall-banner.test.ts`).
+ */
+const after = $derived(
+  keyed
+    ? "Your message is still waiting."
+    : "Your message is queued — it'll be seen the next\n        time Claude checks in.",
+);
 </script>
 
 <!-- #1431: the host outlives the banner. `stalledMs` is null at mount and only
@@ -61,8 +83,7 @@ const waited = $derived.by(() => {
       data-testid="wake-stall-banner"
     >
       <span class="tandem-banner__message">
-        Claude hasn't picked this up for {waited}. Your message is queued — it'll be seen the next
-        time Claude checks in.
+        Claude hasn't picked this up for {waited}. {after}
       </span>
     </div>
   {/if}

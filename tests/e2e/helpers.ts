@@ -99,11 +99,21 @@ export class McpTestClient {
     const content = result.content as Array<{ type: string; text?: string }>;
     const textItem = content?.find((c) => c.type === "text");
     if (textItem?.text) {
+      let parsed: unknown;
       try {
-        return JSON.parse(textItem.text);
+        parsed = JSON.parse(textItem.text);
       } catch {
         return textItem.text;
       }
+      // A tool with no outputSchema returns its `mcpError` envelope with
+      // `isError` unset, as JSON text `{ error: true, code, message }`. Throw
+      // on it as on `isError`, so a refused setup write (a flag-on
+      // NOT_DOC_OWNER, say) fails the spec instead of letting it carry on
+      // (#2358 flip-blocker row, the plan's gate (b)).
+      if (isErrorEnvelopeText(parsed)) {
+        throw new Error(`MCP tool "${name}" failed: ${parsed.code}: ${parsed.message}`);
+      }
+      return parsed;
     }
     return result;
   }
@@ -114,6 +124,18 @@ export class McpTestClient {
       this.connected = false;
     }
   }
+}
+
+/** Tandem's `mcpError` JSON envelope: `{ error: true, code, message, ... }`. */
+function isErrorEnvelopeText(
+  value: unknown,
+): value is { error: true; code: string; message: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { error?: unknown }).error === true &&
+    typeof (value as { code?: unknown }).code === "string"
+  );
 }
 
 /** Create a temp directory and copy fixture files into it. */
@@ -478,9 +500,9 @@ type StatusData = {
  */
 export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void> {
   try {
-    // McpTestClient.callTool throws on SDK-level errors but returns the parsed
-    // envelope on success. Server errors still come through as `{ error: true, ... }`
-    // in the envelope — the `error === false` narrow picks the success arm.
+    // McpTestClient.callTool throws on SDK-level errors and on Tandem's
+    // `{ error: true, ... }` envelope, and returns the parsed envelope on
+    // success; the `error === false` narrow is kept for the type.
     const status = (await mcp.callTool("tandem_status")) as ToolResponse<StatusData>;
     const docs = status.error === false ? (status.data.openDocuments ?? []) : [];
     await Promise.all(docs.map((d) => mcp.callTool("tandem_close", { documentId: d.documentId })));
@@ -535,6 +557,14 @@ export const ALLOWANCE_NOTICE_PREFIXES: readonly string[] = [
 ];
 
 /**
+ * The warning and error toast cards: what `[role='alert']` on a card used to
+ * match, before the cards stopped carrying a live role (#2489).
+ */
+export const ALERT_TOAST_CARDS =
+  "[data-testid='toast-container'] > [data-toast-severity='warning'], " +
+  "[data-testid='toast-container'] > [data-toast-severity='error']";
+
+/**
  * Every warning toast on the page is one of the allowance's notices — the
  * Models specs EXPECT those (their writes are not own-window writes) and
  * nothing else. A cloud-model write raises none; a local-model write raises
@@ -546,9 +576,7 @@ export async function expectOnlyAllowanceNotices(
   page: Page,
   extra: readonly string[] = [],
 ): Promise<void> {
-  const texts = await page
-    .locator("[data-testid='toast-container'] [role='alert']")
-    .allInnerTexts();
+  const texts = await page.locator(ALERT_TOAST_CARDS).allInnerTexts();
   for (const text of texts) {
     expect(
       [...ALLOWANCE_NOTICE_PREFIXES, ...extra].some((p) => text.includes(p)),

@@ -2,7 +2,7 @@
 
 [Home](README.md) › [Using Tandem](maps/using-tandem.md)
 
-The `tandem` command is the entry point for the npm-installed Tandem package. It dispatches to a small set of subcommands. All commands log to stderr; stdout is reserved for the MCP wire protocol in stdio mode.
+The `tandem` command is the entry point for the npm-installed Tandem package. It dispatches to a small set of subcommands. The server and `tandem setup` log to stderr. `tandem doctor`, `tandem license`, `tandem activate`, `tandem deactivate`, `--help` and `--version` print their results on stdout. Only the stdio subcommands (`tandem mcp-stdio`, `tandem channel`, `tandem monitor`) reserve stdout for the MCP wire protocol.
 
 ## Subcommands
 
@@ -34,9 +34,13 @@ tandem setup --apply    # write config non-interactively
 | `--with-channel-shim` | Also register the `tandem-channel` stdio entry, which powers Claude Code's `--dangerously-load-development-channels` real-time push. On a target with no push transport (Claude Desktop) it neither creates nor removes an entry. |
 | `--without-channel-shim` | Remove the `tandem-channel` entry. This is the only `tandem setup` flag that removes it — absent both flags, an existing registration is preserved, on every target kind. (`tandem --uninstall-scrub` also removes it, along with every other Tandem entry, and the in-app wizard removes it when you confirm a diff that lists it.) Mutually exclusive with `--with-channel-shim`. |
 
+If the Tandem plugin is installed and `--apply` writes a Claude Code entry, it warns that the plugin already provides the `tandem_*` tools, so they would appear twice, and suggests `claude plugin uninstall <plugin>`. It still writes the entry.
+
 ### `tandem doctor`
 
-Diagnoses setup issues: Node version and toolchain, MCP registration in `.mcp.json` / `~/.claude.json` / the Claude Desktop config, the Claude CLI and the Tandem plugin, a stale global install, ports, `/health`, the SSE event stream, and annotation-store health. Exits `1` when any check fails. `--json` emits a single machine-readable report on stdout instead of the human-readable list.
+Diagnoses setup issues: Node version (and whether it has the latest Node security fix) and toolchain, macOS App Translocation, MCP registration in `.mcp.json` / `~/.claude.json` / the Claude Desktop config, the Claude CLI and the Tandem plugin, a stale global install, ports, the licence state (silent on a build that ships licensing dark), `/health`, the SSE event stream, and annotation-store and `integrations.json` health. Exits `1` when any check fails. `--json` emits a single machine-readable report on stdout instead of the human-readable list.
+
+The Node security check (`node-security`) only warns. It names the latest Node security release and the first fixed version on each line (22.23.4, 24.22.1, 26.12.1), so a Node that meets the 22.12.0 floor can still get a warning. The desktop app ships its own Node, so this matters for the npm install.
 
 ```bash
 tandem doctor
@@ -77,7 +81,7 @@ tandem mcp-stdio
 
 Not intended for direct user invocation — the plugin manifest wires it up. Reads `TANDEM_URL` to find the local server.
 
-Since v0.22.1 the generated `tandem` MCP entry prefers the bundled `dist/stdio-bridge/index.js` with an absolute Node path (`src/server/integrations/apply.ts`), because a bare `npx` resolves against the PATH a GUI-launched client inherits, which on macOS often contains no Node. `tandem mcp-stdio` remains the runtime behind both that path and the `npx` fallback.
+Tandem's generated `tandem` entries prefer the bundled `dist/stdio-bridge/index.js` with an absolute Node path (`src/server/integrations/apply.ts`), because a bare `npx` resolves against the PATH a GUI-launched client inherits, which on macOS often contains no Node. Claude Desktop's entry has done this since v0.22.1; its fallback is `npx … mcp-stdio`. Claude Code's entry in `~/.claude.json` has used the bridge since v0.31.0, with `TANDEM_URL` and `TANDEM_AUTH_TOKEN` in its `env`; where the bridge can't be set up durably, Claude Code gets the direct HTTP entry instead, never `npx`. `tandem mcp-stdio` is the runtime behind the bridge and the `npx` fallback.
 
 ### `tandem channel`
 
@@ -87,7 +91,7 @@ Runs the Tandem channel shim as a stdio MCP server. Subscribes to `/api/events` 
 tandem channel
 ```
 
-Not intended for direct user invocation — the `tandem-channel` MCP entry (written by `tandem setup --with-channel-shim`) wires it up.
+Not intended for direct user invocation — a `tandem-channel` MCP entry wires it up: the one `tandem setup --apply --with-channel-shim` writes, or the one the Tandem plugin carries in its manifest. Either stays inert unless the session is started with the channel flag.
 
 ### `tandem monitor`
 
@@ -161,7 +165,7 @@ Prints usage and exits.
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Fatal error. Stack trace logged to stderr. Also: an unknown subcommand, and `tandem doctor` when any check failed. |
+| `1` | Fatal error. Stack trace logged to stderr. Also: an unknown subcommand; `tandem doctor` when any check failed; `tandem setup --apply` when every target's write failed, when no `--target` value was recognised, when both `--with-channel-shim` and `--without-channel-shim` were given, or when `--with-channel-shim` is given and `dist/channel/index.js` is missing; `tandem activate` when no key was given or the key could not be read or verified; and `tandem activate` / `tandem deactivate` when the running Tandem refused or the local write or removal failed. |
 | `2` | `tandem doctor` only — the diagnostic itself crashed, so no verdict was reached. Distinct from `1` on purpose: `1` means "checks ran and something is wrong", `2` means "nothing was established". |
 
 **`tandem rotate-token` on a refusal.** If the running server rejects the rotation — most often a 403, because `/api` is loopback-only for non-GET methods — the CLI restores the *previous* token to disk, leaves every MCP config untouched, and exits `0`: nothing changed, so nothing needs recovering. It exits `1` only in the narrower case where that rollback itself failed; the token file then holds a value the server will not accept, and the stderr message prints the old token's fingerprint so you can put it back by hand.
@@ -178,16 +182,16 @@ Prints usage and exits.
 | `npm run dev:server` | Backend only: Hocuspocus + MCP HTTP. |
 | `npm run dev:client` | Frontend only: Vite dev server on `:5173`. |
 | `npm run dev` | Alias for `vite` (frontend only). |
-| `npm run dev:tauri` | Builds the Node sidecar and starts Tauri in dev mode (Vite hot-reload + Rust rebuild). |
+| `npm run dev:tauri` | Downloads the bundled Node sidecar, builds `tandem-reaper`, then runs `cargo tauri dev` (Vite hot-reload + Rust rebuild). |
 
 ### Build
 
 | Script | What it runs |
 |---|---|
-| `npm run build` | Production build: typecheck, Vite client build, font-asset check, then tsup's five bundles — `dist/server`, `dist/cli`, `dist/channel`, `dist/monitor`, `dist/stdio-bridge`. |
+| `npm run build` | Production build: typecheck, Vite client build, font-asset check, then tsup's five bundles — `dist/server`, `dist/cli`, `dist/channel`, `dist/monitor`, `dist/stdio-bridge` — then writes `dist/THIRD_PARTY_NOTICES.txt`. The client step is `scripts/build-client.mjs`, not a bare `vite build`. |
 | `npm run build:server` | tsup only — bundles server, CLI, channel shim, monitor and the stdio bridge into `dist/`. A missing `dist/stdio-bridge/` is not a build error: the generated `tandem` MCP entry silently falls back to bare `npx` behind a `log::warn!`. |
 | `npm run build:reaper` | Builds the `tandem-reaper` sidecar. Both declared `externalBin`s must exist or `cargo tauri dev/build` fails its existence check. |
-| `npm run build:tauri` | Tauri production build — produces installers. |
+| `npm run build:tauri` | Downloads the Node sidecar, builds `tandem-reaper`, then runs the Tauri production build — produces installers. |
 | `npm run check:fonts` | Validates that all referenced font assets are present. Requires a prior `npm run build`: it inspects the built `dist/client/index.html` and errors if that file is absent. |
 
 ### Testing

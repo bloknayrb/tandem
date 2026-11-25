@@ -2044,3 +2044,116 @@ describe("GET /api/launcher/nonce — a same-origin browser read (#2195)", () =>
     expect(await nonceWith(app, { Origin: "https://evil.example", ...sameOriginFetch })).toBe(403);
   });
 });
+
+describe("GET /api/launcher/status — the failed bind and the bound transports (#2358 PR 3b-2e1)", () => {
+  /** A supervisor whose `status()` answers exactly `raw`. */
+  function supWith(raw: ReturnType<Supervisor["status"]>): Supervisor {
+    return { ...makeFakeSupervisor(), status: () => raw };
+  }
+  const RUNNING = {
+    running: true as const,
+    reaperPid: 12345,
+    cwd: "/home/test",
+    sessionId: FAKE_SESSION_ID,
+    resuming: false,
+    busy: false,
+    spawnedAt: FAKE_SPAWNED_AT,
+  };
+
+  it("passes `bindFailed` to loopback on the running, stopped and restarting arms", async () => {
+    for (const raw of [
+      { ...RUNNING, bindFailed: true as const },
+      { running: false as const, standby: "off" as const, bindFailed: true as const },
+      { running: false as const, lastError: "circuit-open" as const, bindFailed: true as const },
+      { running: false as const, restartPending: true as const, bindFailed: true as const },
+    ]) {
+      const { app } = makeApp(baseDeps(supWith(raw)));
+      const res = await request(app, "GET", "/api/launcher/status");
+      expect(res.body).toMatchObject({ available: true, bindFailed: true });
+    }
+  });
+
+  it("never sends `bindFailed` off-loopback, nor when the supervisor does not report it", async () => {
+    const failed = supWith({ ...RUNNING, bindFailed: true });
+    const { app: lan } = makeApp(baseDeps(failed), { remoteAddress: "192.168.1.50" });
+    expect((await request(lan, "GET", "/api/launcher/status")).body).toEqual({
+      available: true,
+      running: true,
+    });
+    const { app } = makeApp(baseDeps(supWith(RUNNING)));
+    expect((await request(app, "GET", "/api/launcher/status")).body).not.toHaveProperty(
+      "bindFailed",
+    );
+  });
+
+  it("sends the bound transports to loopback by kind alone, dropping anything else a row carries", async () => {
+    const sup = supWith(RUNNING);
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      boundTransports: () =>
+        [
+          { kind: "bridge", mcpSessionId: "0f0e0d0c-aaaa-4bbb-8ccc-123456789abc" },
+          { kind: "direct-http", ownerId: "claude:abc", handle: `th_${"A".repeat(32)}` },
+          { kind: "mystery" },
+        ] as unknown as ReturnType<NonNullable<LauncherRoutesDeps["boundTransports"]>>,
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    const body = res.body as Extract<LauncherStatus, { running: true }>;
+    expect(body.boundTransports).toEqual([{ kind: "bridge" }, { kind: "direct-http" }]);
+    const wire = JSON.stringify(res.body);
+    expect(wire).not.toMatch(/th_/);
+    expect(wire).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
+    expect(wire).not.toMatch(/claude:|http:/);
+    expect(wire).not.toContain("mystery");
+  });
+
+  it("sends no `boundTransports` when the list is empty, undefined (dark), throws, or the caller is off-loopback", async () => {
+    const sup = supWith(RUNNING);
+    for (const boundTransports of [
+      () => [],
+      () => undefined,
+      () => {
+        throw new Error("boom");
+      },
+    ]) {
+      const { app } = makeApp({ ...baseDeps(sup), boundTransports });
+      const res = await request(app, "GET", "/api/launcher/status");
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("boundTransports");
+    }
+    const { app: lan } = makeApp(
+      { ...baseDeps(sup), boundTransports: () => [{ kind: "bridge" }] },
+      { remoteAddress: "192.168.1.50" },
+    );
+    expect((await request(lan, "GET", "/api/launcher/status")).body).toEqual({
+      available: true,
+      running: true,
+    });
+  });
+
+  it("a null or non-object row is dropped, never a 500 (the status survives a malformed dep)", async () => {
+    const sup = supWith(RUNNING);
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      boundTransports: () =>
+        [null, 7, "bridge", { kind: "bridge" }] as unknown as ReturnType<
+          NonNullable<LauncherRoutesDeps["boundTransports"]>
+        >,
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect((res.body as { boundTransports?: unknown }).boundTransports).toEqual([
+      { kind: "bridge" },
+    ]);
+  });
+
+  it("sends no `boundTransports` on a stopped arm, even when the dep answers rows", async () => {
+    const { app } = makeApp({
+      ...baseDeps(supWith({ running: false })),
+      boundTransports: () => [{ kind: "bridge" }],
+    });
+    expect((await request(app, "GET", "/api/launcher/status")).body).not.toHaveProperty(
+      "boundTransports",
+    );
+  });
+});

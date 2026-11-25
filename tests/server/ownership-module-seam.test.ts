@@ -60,7 +60,12 @@ describe("ownership flag module seam", () => {
       // boot sweep) rather than taking an injected boolean, so a forgotten
       // wiring cannot make tests and production disagree.
       "src/server/launcher/supervisor.ts",
+      // PR 5a: the ownership routes are registered only while the flag is on
+      // (a registered path answers OPTIONS even when its handlers skip), and
+      // their gate skips them per request for a flag read after registration.
+      "src/server/mcp/api-routes.ts",
       "src/server/mcp/owned-op.ts",
+      "src/server/mcp/routes/ownership.ts",
       "src/server/mcp/server.ts",
       "src/server/sessions/caller.ts",
       "src/server/sessions/log-id.ts",
@@ -152,39 +157,60 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    // PR 4b: master's channel route pinned dark, with one flag-on case.
+    "tests/server/chat-reply-ack.test.ts",
     "tests/server/inbox-cursor.test.ts",
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
     "tests/server/launcher/ownership-forward.test.ts",
     "tests/server/launcher/supervisor-presence.test.ts",
+    "tests/server/launcher/supervisor-turn-delivery.test.ts",
     "tests/server/launcher/supervisor.test.ts",
     "tests/server/license-armed-restricted.test.ts",
     "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
+    // PR 3b-2e1: the Settings list of bound transports through the real
+    // server, booted flag on and (its dark row) flag off, through `boot(flag)`.
+    "tests/server/ownership-bound-transports.test.ts",
     "tests/server/ownership-change-notices-http.test.ts",
     "tests/server/ownership-change-notices.test.ts",
+    // PR 4b: the /api/channel-reply permit, flag on with a dark row.
+    "tests/server/ownership-channel-reply.test.ts",
     "tests/server/ownership-chat-client-undo.test.ts",
     "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
+    // PR 5a: the ownership routes, flag on, with a dark row that boots flag off.
+    "tests/server/ownership-control-route.test.ts",
     "tests/server/ownership-dark-enforcement.test.ts",
     "tests/server/ownership-default-rule.test.ts",
     "tests/server/ownership-delivery-rounds.test.ts",
     "tests/server/ownership-enforcement.test.ts",
     "tests/server/ownership-flag.test.ts",
+    "tests/server/ownership-greeting.test.ts",
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
+    // PR 5a-2: the message control, flag on, with a dark row.
+    "tests/server/ownership-message-control.test.ts",
+    "tests/server/ownership-mode-known.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-posts.test.ts",
+    "tests/server/ownership-presence.test.ts",
+    // PR 4a: the push stream's narrowing and the ownership-changed nudge.
+    "tests/server/ownership-push-narrowing.test.ts",
     "tests/server/ownership-records.test.ts",
+    "tests/server/ownership-reowe-rounds.test.ts",
+    "tests/server/ownership-take-back.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
     "tests/server/ownership-waiting-chat.test.ts",
+    "tests/server/ownership-waiting-cost.test.ts",
     "tests/server/ownership-waiting.test.ts",
+    "tests/server/ownership-wake-frame.test.ts",
   ];
 
   it("the files that stub the variable at all are a reviewed set", () => {
@@ -210,43 +236,81 @@ describe("tests and the flag", () => {
     // dark tests build their server flag-off (no `changed`, no sentence).
     // PR 3b-1's one (`launcher/supervisor-presence.test.ts`): the supervisor's
     // run state flag on, with a dark case that builds its supervisor flag-off.
+    // PR 3b-2b4a's one (`ownership-presence.test.ts`): presence's consumer
+    // and the queued user-open default, with dark cases run with the seams
+    // wired. PR 3b-2b4b's one (`ownership-take-back.test.ts`): take-back and
+    // the Solo-release check, with a dark case run with every seam wired.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
+      // PR 4b: master's /api/channel-reply pinned dark (its describe), with
+      // one flag-on case showing the permit is reached.
+      "tests/server/chat-reply-ack.test.ts",
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/launcher/ownership-forward.test.ts",
       "tests/server/launcher/supervisor-presence.test.ts",
+      // PR 3b-2c: the greeting by bound transport, flag on, with its two
+      // dark (master's session-id) greeting blocks.
+      "tests/server/launcher/supervisor-turn-delivery.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      // PR 4b: the /api/channel-reply permit, flag on, with a dark row.
+      "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
+      // PR 5a: the routes booted flag off, compared with an unknown path.
+      "tests/server/ownership-control-route.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-flag.test.ts",
+      // PR 3b-2c: what the reply paths hand the greeting classifier, flag on
+      // with dark rows.
+      "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // PR 5a-2: the message control flag on, with a dark row that turns it off.
+      "tests/server/ownership-message-control.test.ts",
+      // The mode-unknown observer: flag on, with a dark row that writes the
+      // mode and swaps CTRL_ROOM flag off.
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
+      "tests/server/ownership-presence.test.ts",
+      // PR 4a's one: the push stream's narrowing and the ownership-changed
+      // nudge flag on, with dark rows (every stream gets every event byte for
+      // byte; a lapse nudges nothing).
+      "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",
+      // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
+      // dark row run with every seam wired.
+      "tests/server/ownership-reowe-rounds.test.ts",
+      "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
       "tests/server/ownership-waiting.test.ts",
+      // PR 3b-2d's one (`ownership-wake-frame.test.ts`): the ownership frame
+      // flag on, with a dark row run with every seam wired.
+      "tests/server/ownership-wake-frame.test.ts",
     ]);
   });
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
+      // PR 4b: the permit's one flag-on case beside master's route.
+      "tests/server/chat-reply-ack.test.ts",
       // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/launcher/ownership-forward.test.ts",
       "tests/server/launcher/supervisor-presence.test.ts",
+      // PR 3b-2c: the greeting by bound transport, flag on.
+      "tests/server/launcher/supervisor-turn-delivery.test.ts",
       // The keyed-rounds suites PR: its live check of the delivery-round
       // wiring, flag on in `check` too (the rest of the file is unstubbed).
       "tests/server/license-armed-restricted.test.ts",
@@ -256,24 +320,44 @@ describe("tests and the flag", () => {
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices-http.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      // PR 4b: the /api/channel-reply permit.
+      "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
+      "tests/server/ownership-control-route.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-delivery-rounds.test.ts",
       "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
+      // PR 3b-2c: what the reply paths hand the greeting classifier, flag on
+      // with dark rows.
+      "tests/server/ownership-greeting.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      // PR 5a-2: the message control.
+      "tests/server/ownership-message-control.test.ts",
+      "tests/server/ownership-mode-known.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-posts.test.ts",
+      "tests/server/ownership-presence.test.ts",
+      // PR 4a: the push stream's narrowing and the ownership-changed nudge.
+      "tests/server/ownership-push-narrowing.test.ts",
       "tests/server/ownership-records.test.ts",
+      // PR 3b-2b5: the re-owe's round and the reopen round, flag on with a
+      // dark row run with every seam wired.
+      "tests/server/ownership-reowe-rounds.test.ts",
+      "tests/server/ownership-take-back.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
+      // PR 3b-2b4c's measurement of the waiting cost: flag on throughout.
+      "tests/server/ownership-waiting-cost.test.ts",
       "tests/server/ownership-waiting.test.ts",
+      // PR 3b-2d: the ownership frame on /api/wake, flag on with a dark row.
+      "tests/server/ownership-wake-frame.test.ts",
     ]);
   });
 

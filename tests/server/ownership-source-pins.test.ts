@@ -374,26 +374,32 @@ describe("the handover is wired in a running server, and reachable only through 
     expect(cursor.match(/\bretireWhere\(/g)).toHaveLength(1);
   });
 
-  it("the ownership side runs it from exactly two places, each behind its function's first-line flag return, with no await", () => {
-    // The definition plus two calls.
-    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(2);
-    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(3);
+  it("the ownership side runs it from exactly three places, each behind its function's first-line flag return, with no await", () => {
+    // The definition plus three calls: the two ownership changes, and the
+    // run start's self re-owe (#2358 PR 3b-2b4b), which moves no entry.
+    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(3);
+    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(4);
     expect(ownership.match(/\binboxHandover\(/g)).toHaveLength(1);
     expect(ownership.match(/\binboxHandover\(documentId\)/g)).toHaveLength(1);
     // Private: not exported, and no other file names it.
     expect(ownership).not.toMatch(/export\s+(?:async\s+)?function\s+handOver\b/);
     expect(filesNaming(/\bhandOver\(/)).toEqual(["src/server/sessions/ownership.ts"]);
-    for (const declaration of [
-      "export function setDocOwner(",
-      "export function onDocumentClosed(",
-    ]) {
+    // `setDocOwner` returns the chat keys its handover re-owed (#2358 PR
+    // 3b-2b5, for the run start's delivery rounds), so its flag return
+    // returns none.
+    for (const [declaration, head] of [
+      [
+        "export function setDocOwner(",
+        "): readonly string[] {\n  if (!ownershipEnabled()) return [];\n",
+      ],
+      ["export function onDocumentClosed(", "): void {\n  if (!ownershipEnabled()) return;\n"],
+      ["export function noteTandemRunStart(", "): void {\n  if (!ownershipEnabled()) return;\n"],
+    ] as const) {
       const body = functionBody(declaration);
-      const open = body.indexOf("): void {\n");
+      const open = body.indexOf(head.slice(0, head.indexOf("\n") + 1));
       expect(open, declaration).toBeGreaterThan(-1);
       // The first statement of the function is the flag return.
-      expect(body.slice(open).startsWith("): void {\n  if (!ownershipEnabled()) return;\n")).toBe(
-        true,
-      );
+      expect(body.slice(open).startsWith(head), declaration).toBe(true);
       expect(body.match(/\bhandOver\(documentId\)/g), declaration).toHaveLength(1);
       // One synchronous step with the ownership change (R1.6).
       expect(body).not.toMatch(/\bawait\b|\basync\b|\.then\(/);
@@ -797,7 +803,7 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
     expect(queue).toContain("a claim made by an accepted chat post");
     expect(queue).toContain("cause\n * `post-claim`");
-    expect(queue).toContain("Seven run where they are");
+    expect(queue).toContain("Six run where they are");
   });
 });
 
@@ -990,22 +996,33 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
   });
 });
 
-describe("the supervisor's start-or-wake is wired from ownership, requestWake is called by nothing yet (#2358 PR 3b-2a, R2.8; 3b-2b1c-a)", () => {
-  // 3b-2b deletes this describe once requestWake is wired too. Token-level, not a
+describe("the supervisor's start-or-wake and requestWake are wired from ownership, each through one sink (#2358 PR 3b-2a, R2.8; 3b-2b1c-a; 3b-2b4b)", () => {
+  // Token-level, not a
   // call regex: a `.startOrWake(` regex misses an optional call (`?.`), a
   // reference passed on without being called, bracket access and a
   // destructuring (including in a parameter), all of which name the token.
   const SUPERVISOR = "src/server/launcher/supervisor.ts";
   const OWNERSHIP = "src/server/sessions/ownership.ts";
 
-  it("no src file but the supervisor names requestWake; only index.ts names the waiting decision", () => {
-    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual([]);
+  it("outside the supervisor only index.ts names requestWake, once, in ownership's wake sink; only index.ts names the waiting decision", () => {
+    // 3b-2b4b: the run start's wake. The supervisor's writer asks the licence
+    // (`requestWakeOnSpawn`, pinned in ai-surface-inventory-claims.test.ts),
+    // so a caller outside it needs none of its own (Critical Rule 9).
+    expect(filesMentioning("requestWake", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
+    const index = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(index.match(/\brequestWake\b/g)).toHaveLength(1);
+    expect(index).toContain("  setRequestWakeSink(() => launcherSupervisor?.requestWake?.());");
+    expect(filesMentioning("setRequestWakeSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    const own = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // The declaration, the setter's and the reset's assignments, one call.
+    expect(own.match(/\brequestWakeSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(own.match(/\brequestWakeSink\(\)/g)).toHaveLength(1);
     // Covers `index.ts`'s `createSupervisor` options however they are built
     // (a literal, an object built first, a spread).
     expect(filesMentioning("workWaiting", [SUPERVISOR])).toEqual(["src/server/index.ts"]);
   });
 
-  it("startOrWake outside the supervisor is index.ts's one sink call and ownership.ts's own function: its definition and two bare calls", () => {
+  it("startOrWake outside the supervisor is index.ts's one sink call and ownership.ts's own function: its definition and three bare calls", () => {
     expect(filesMentioning("startOrWake", [SUPERVISOR])).toEqual([
       "src/server/index.ts",
       OWNERSHIP,
@@ -1024,19 +1041,22 @@ describe("the supervisor's start-or-wake is wired from ownership, requestWake is
     // Every site is a bare call or the definition: followed by `(` (so never
     // a destructured name or a reference passed on) and not preceded by `.`
     // or `[` (so never a member or bracket access, `?.` included).
-    expect(sites).toHaveLength(3);
+    // 3b-2b2 added the lapse's re-ask, the third bare call.
+    expect(sites).toHaveLength(4);
     for (const site of sites) {
       expect(site.next).toBe("(");
       expect([".", "["]).not.toContain(site.prev);
     }
     expect(text).toMatch(
-      /export function startOrWake\(cause: WakeCause, admit\?: \(\) => boolean\): void \{/,
+      // 3b-2b5: it answers whether the sink was called.
+      /export function startOrWake\(cause: WakeCause, admit\?: \(\) => boolean\): boolean \{/,
     );
     // R5's one call (3b-2b1c-b): no admit without a change.
     expect(text).toContain(
       'startOrWake("message-owner", change === undefined ? undefined : admit);',
     );
-    expect(text).toMatch(/\bstartOrWake\(cause\);/);
+    expect(text).toMatch(/\bif \(startOrWake\(cause\) && leavesRecord\)/);
+    expect(text).toContain('startOrWake("departure");');
   });
 });
 
@@ -1083,7 +1103,7 @@ describe("the document forward (#2358 PR 3b-2b1c-a)", () => {
   it("inside ownership.ts: the sink's declaration, and exactly two assignments (the setter and the reset)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     expect(text).toContain(
-      'let startOrWakeSink: (cause: "document" | "message") => void = () => {};',
+      'let startOrWakeSink: (\n  cause: "document" | "message" | "departure" | "solo-release" | "mode-known",\n) => void =',
     );
     expect(text.match(/\bstartOrWakeSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bsetStartOrWakeSink\b/g)).toHaveLength(1);
@@ -1099,10 +1119,13 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     return text.slice(start, text.indexOf("\n}\n", start));
   };
 
-  it("the admit: not Tandem's Claude as caller, the departure gate only with no caller, then the changed key alone", () => {
+  it("the admit: not Tandem's Claude as caller, the departure gate only with no caller and not the user, then the changed key alone", () => {
     const body = fnBody("messageOwnerChanged");
     expect(body).toContain("change.caller !== TANDEM_OWNER_ID");
-    expect(body).toContain("(change.caller !== undefined || !anotherSessionConnected())");
+    // #2358 PR 5a-2: the user's Release or Assign (`byUser`) is not gated.
+    expect(body).toContain(
+      "(change.byUser === true || change.caller !== undefined || !anotherSessionConnected())",
+    );
     expect(body).toContain("tandemChatWaiting((k) => k === change.key)");
     // In the brief's order: the caller, the gate, then the scan.
     expect(body.indexOf("change.caller !== TANDEM_OWNER_ID")).toBeLessThan(
@@ -1124,15 +1147,59 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     }
   });
 
-  it("R6's three sites: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing", () => {
+  it("R6's three sites and the user's: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing, the controls the key and byUser", () => {
     const calls = [...text.matchAll(/\bmessageOwnerChanged\(([^)]*)\)/g)].map((m) => m[1]);
-    // The definition's parameter list, then the three sites.
-    expect(calls).toHaveLength(4);
-    expect(fnBody("releaseMessageOwners")).toContain("messageOwnerChanged({ key });");
+    // The definition's parameter list, then the three sites, then the
+    // user's controls (#2358 PR 5a-2, `wakeForMovedMessages`).
+    expect(calls).toHaveLength(5);
+    expect(fnBody("wakeForMovedMessages")).toContain(
+      "if (messageOwnerChanged({ key, byUser: true })) forwarded = true;",
+    );
+    expect(text.match(/byUser: true/g)).toHaveLength(1);
+    // 3b-2b5: the release notes whether any key was forwarded, for its rounds.
+    expect(fnBody("releaseMessageOwners")).toContain(
+      "if (messageOwnerChanged({ key })) forwarded = true;",
+    );
     expect(text).toMatch(
       /dropChatOwners: \(out\) => \{[\s\S]*?messageOwnerChanged\(\{ key, caller: callerId \}\);/,
     );
     expect(fnBody("setMessageOwner")).toContain("messageOwnerChanged();");
+  });
+
+  it("R3.3 and its one exception (#2358 PR 5a-2): a per-message owner is written only by the check-and-set and by the user's Assign", () => {
+    const writes = [...text.matchAll(/\bownerByMessage\.set\(/g)].map((m) => m.index as number);
+    expect(writes).toHaveLength(2);
+    const check = fnBody("setMessageOwner");
+    expect(check).toContain("ownerByMessage.has(key)");
+    expect(check).toContain("ownerByMessage.set(key, {");
+    // The overwrite: only in the message control's write, origin "assign".
+    expect(fnBody("applyMessageControl")).toContain(
+      'ownerByMessage.set(key, { ownerId: next, origin: "assign" });',
+    );
+  });
+
+  it("carried-over messages (Bryan's 'Let Assign own them', 2026-11-23): the check-and-set refuses one, and only the user's Assign ends the status before giving an owner", () => {
+    // The check-and-set refuses a carried-over message (the posts PR, R0.1).
+    expect(fnBody("setMessageOwner")).toContain(
+      "if (!ownershipEnabled() || ownerByMessage.has(key) || carriedOver.has(key)) return false;",
+    );
+    // Joined only at the boot's capture.
+    expect(text.match(/\bcarriedOver\.add\(/g)).toHaveLength(1);
+    expect(fnBody("captureCarriedOverChat")).toContain("carriedOver.add(key)");
+    // Left only with the row, or by the user's Assign, before its owner is written.
+    const deletes = [...text.matchAll(/\bcarriedOver\.delete\(/g)];
+    expect(deletes).toHaveLength(2);
+    expect(fnBody("forgetChatMessageOwners")).toContain("carriedOver.delete(key);");
+    const apply = fnBody("applyMessageControl");
+    const ends = apply.indexOf(
+      "if (endsCarriedOver && next !== undefined) carriedOver.delete(key);",
+    );
+    expect(ends).toBeGreaterThan(apply.indexOf("reOweChat([key])"));
+    expect(ends).toBeLessThan(apply.indexOf("ownerByMessage.set("));
+    // Only the carried-over control passes it.
+    expect(text.match(/applyMessageControl\([^)]*\btrue\)/g)).toEqual([
+      "applyMessageControl(key, target.ownerId, undefined, true)",
+    ]);
   });
 });
 
@@ -1216,8 +1283,11 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     // The per-file pin above cannot see a caller inside ownership.ts, where
     // step 5 and startOrWake live. 3b-2b1c-b added the message forward's call.
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(1);
+    // 3b-2b4b: and asked once by the run start's wake (`noteTandemRunStart`).
+    expect(text.match(/\btandemWorkWaiting\b/g)).toHaveLength(2);
     expect(text).toContain("export function tandemWorkWaiting(): boolean {");
+    // 3b-2b5: the wake opens the delivery rounds of what the run start re-owed.
+    expect(text).toMatch(/if \(tandemWorkWaiting\(\)\) \{\s*wakeTandem\(\);\s*openOwedRounds\(/);
     expect(text.match(/\btandemChatWaiting\b/g)).toHaveLength(4);
     expect(text).toContain("function tandemChatWaiting(");
     expect(text).toContain("tandemChatWaiting(() => true)");
@@ -1227,16 +1297,23 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
 
   it("step 5 asks the composite, once, in its condition; the composite asks the probe first and the chat that follows the document (3b-2b1b-chat-step5)", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
-    // Defined once and called once.
-    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(2);
+    // Defined once and called twice: step 5, and a deferred take-back's wake
+    // (3b-2b4b), which step 5 does not forward.
+    expect(text.match(/\bwaitingAtDocumentChange\b/g)).toHaveLength(3);
+    expect(text).toMatch(
+      /\} else if \(waitingAtDocumentChange\(documentId, TANDEM_OWNER_ID\)\) \{\s*wakeTandem\(\);/,
+    );
     const setDocOwner = text.slice(
       text.indexOf("export function setDocOwner("),
       text.indexOf("function reOweDocumentChat("),
     );
     expect(text.indexOf("export function setDocOwner(")).toBeGreaterThanOrEqual(0);
     expect(setDocOwner).toMatch(
-      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*startOrWake\(cause\);/,
+      /cause !== "take-back" &&\s*!\(cause === "release" && previousId === next\.ownerId\) &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
     );
+    // A Release that leaves Tandem's Claude the holder forwards nothing
+    // (#2358 PR 5a, Bryan's "Skip the wake (Recommended)"); scoped to
+    // `release`, so no other cause's forward changes.
     expect(setDocOwner).not.toContain("waitingProbe(");
     // The re-owe precedes step 5.
     expect(setDocOwner.indexOf("reOweDocumentChat(documentId)")).toBeGreaterThanOrEqual(0);
@@ -1355,5 +1432,158 @@ describe("claimable work (#2358 PR 3b-2b1b-claimable)", () => {
       expect(ownership, helper).not.toMatch(new RegExp(`export\\s+function\\s+${helper}\\b`));
       expect(filesMentioning(helper), helper).toEqual([OWNERSHIP]);
     }
+  });
+});
+
+describe("the switch-on: index.ts wires the own-spawn seam and presence's consumer once, inside the supervisor setup (#2358 PR 3b-2b4a; Bryan, 2026-11-23: build dark, switch on with 3b-2b4)", () => {
+  const INDEX = "src/server/index.ts";
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const SUPERVISOR = "src/server/launcher/supervisor.ts";
+  const index = stripComments(SRC_FILES.get(INDEX) as string);
+  const uses = (name: string) => index.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
+  // `startLauncherSupervisor`'s body between `createSupervisor({` and the
+  // `start()` call: suites that build a supervisor directly never reach it.
+  const setup = (() => {
+    const fn = index.slice(index.indexOf("async function startLauncherSupervisor("));
+    const from = fn.indexOf("launcherSupervisor = createSupervisor({");
+    const to = fn.indexOf("await launcherSupervisor.start();");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return fn.slice(from, to);
+  })();
+
+  it.each([
+    ["setOwnSpawnSource", OWNERSHIP, 2],
+    ["setTandemPresenceSource", OWNERSHIP, 2],
+    ["noteOwnSpawnStarted", OWNERSHIP, 2],
+    ["noteTandemPresence", OWNERSHIP, 2],
+    ["onSpawnStarted", SUPERVISOR, 1],
+    // The failed-bind wake (#2358 PR 3b-2b5; ownership design §8.7).
+    ["noteFailedBind", OWNERSHIP, 2],
+    ["onFailedBind", SUPERVISOR, 1],
+  ] as const)(
+    "%s is named only by its module and index.ts, whose one use sits in the setup",
+    (name, owner, inIndex) => {
+      expect(filesMentioning(name)).toEqual([INDEX, owner].sort());
+      // The import (for the ownership names), then exactly one use.
+      expect(uses(name)).toBe(inIndex);
+      expect(setup).toMatch(new RegExp(`\\b${name}\\b`));
+    },
+  );
+
+  it("the failed-bind subscriber is ownership's own, which defers its work out of the supervisor's emit (#2358 PR 3b-2b5)", () => {
+    expect(setup).toContain("sup.tandemPresence?.().onFailedBind(noteFailedBind);");
+    const own = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    const from = own.indexOf("export function noteFailedBind(): void {");
+    expect(from).toBeGreaterThan(-1);
+    const body = own.slice(from, own.indexOf("\n}\n", from));
+    expect(
+      body.startsWith(
+        "export function noteFailedBind(): void {\n  if (!ownershipEnabled()) return;\n",
+      ),
+    ).toBe(true);
+    // Nothing but the deferral runs in the emit; the wake is inside it.
+    const deferred = body.indexOf("setImmediate(");
+    expect(deferred).toBeGreaterThan(-1);
+    expect(body.indexOf("wakeTandem(")).toBeGreaterThan(deferred);
+    expect(body.indexOf("strandedWorkWaiting()")).toBeGreaterThan(deferred);
+  });
+
+  it("the round opener is index.ts's one wiring of queue.ts's openRoundsForOwedWork, before either transport branch (#2358 PR 3b-2b5)", () => {
+    expect(filesMentioning("setDeliveryRoundOpener")).toEqual([INDEX, OWNERSHIP]);
+    expect(filesMentioning("openRoundsForOwedWork")).toEqual(["src/server/events/queue.ts", INDEX]);
+    expect(filesMentioning("openOwedDeliveryRounds")).toEqual([
+      "src/server/events/delivery-state.ts",
+      "src/server/events/queue.ts",
+    ]);
+    expect(index).toContain("  setDeliveryRoundOpener(openRoundsForOwedWork);");
+    expect(index.indexOf("  setDeliveryRoundOpener(openRoundsForOwedWork);")).toBeLessThan(
+      index.indexOf('setOwnershipTransportMode("http");'),
+    );
+  });
+
+  it("only ownership listens for a spawn's end", () => {
+    expect(filesMentioning("setSpawnEndedListener")).toEqual([
+      "src/server/sessions/owner-handle-bind.ts",
+      OWNERSHIP,
+    ]);
+  });
+
+  it("the supervisor's two seam reads are named only by the supervisor and the setup", () => {
+    for (const name of ["ownSpawn", "isOwnChildSession"]) {
+      expect(filesMentioning(name), name).toEqual([INDEX, SUPERVISOR]);
+      expect(uses(name), name).toBe(1);
+      expect(setup, name).toMatch(new RegExp(`\\b${name}\\b`));
+    }
+  });
+
+  it("server.ts resolves the routed record after the bind is confirmed, from the bind outcome", () => {
+    const server = stripComments(SRC_FILES.get("src/server/mcp/server.ts") as string);
+    const start = server.indexOf("onsessioninitialized:");
+    const body = server.slice(start, server.indexOf("onsessionclosed:", start));
+    const bind = body.indexOf("noteOwnerHandleBind(");
+    const routed = body.search(/resolveTransportRecord\(\{[^}]*\bbound\b[^}]*\}\)/);
+    expect(bind).toBeGreaterThan(-1);
+    expect(routed).toBeGreaterThan(bind);
+    // The unrouted resolve keeps its place before `registry.add`.
+    const unrouted = body.indexOf(
+      "resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId })",
+    );
+    expect(unrouted).toBeGreaterThan(-1);
+    expect(unrouted).toBeLessThan(body.indexOf("await registry.add("));
+  });
+});
+
+describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
+  // Unwired, the sink does nothing, so every unit test passes without the
+  // wiring; `main()` cannot run in a unit test, so it is pinned from source.
+  // `ownership-wake-frame.test.ts` wires the same expression against a real
+  // wake socket, and `ownership-push-narrowing.test.ts` against a real
+  // `/api/events` stream (PR 4a).
+  const OWNERSHIP = "src/server/sessions/ownership.ts";
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("only index.ts sets it, once, to the wake socket's frame and the SSE nudge, before either branch", () => {
+    expect(filesMentioning("setOwnershipFrameSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
+    const line =
+      "  setOwnershipFrameSink(() => {\n" +
+      "    requestOwnershipFrame();\n" +
+      "    requestOwnershipChangedEvent();\n" +
+      "  });\n";
+    expect(index.split(line)).toHaveLength(2);
+    expect(stripComments(index).match(/\bsetOwnershipFrameSink\b/g)).toHaveLength(2);
+    expect(stripComments(index).match(/\brequestOwnershipChangedEvent\b/g)).toHaveLength(2);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  });
+
+  it("ownership.ts calls the sink in one place, outside any MCP request context, from four callers", () => {
+    const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
+    // The setter's and the reset's assignments (the declaration is typed).
+    expect(text.match(/\bownershipFrameSink\s*=(?!=)/g)).toHaveLength(2);
+    expect(text.match(/\bownershipFrameSink\(\)/g)).toHaveLength(1);
+    expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
+    // Step 5, a release of per-message owners, the end of presence, and the
+    // messages the user's control moved (#2358 PR 5a-2, `wakeForMovedMessages`).
+    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(4);
+  });
+});
+
+describe("the mode observer's ask is replayed after the supervisor starts (#2358, the restart question)", () => {
+  it("startLauncherSupervisor calls the replay once, right after `start()` resolves, inside its try", () => {
+    const src = stripComments(SRC_FILES.get("src/server/index.ts") as string);
+    expect(src.match(/replayModeKnownAfterSupervisorStart\(\);/g)).toHaveLength(1);
+    expect(src).toMatch(
+      /await launcherSupervisor\.start\(\);\s*replayModeKnownAfterSupervisorStart\(\);\s*\} catch/,
+    );
+    expect(filesMentioning("replayModeKnownAfterSupervisorStart").sort()).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
   });
 });

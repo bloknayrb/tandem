@@ -57,6 +57,7 @@ import {
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
+  setWaitingWrittenSinceForTests,
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -373,6 +374,9 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
 }
 
 beforeEach(async () => {
+  // These suites judge the waiting rules on fake clocks; the restart
+  // cutoff ("written since boot", #2358) has its own cases.
+  setWaitingWrittenSinceForTests(undefined);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-waiting-chat-"));
   await buildWorld();
 });
@@ -1205,6 +1209,12 @@ describe("chatRowsOwedToFreshReader, the module alone", () => {
     );
   });
 
+  it("writtenSince (#2358, the restart row): a row written before it is not owed; at or after it, owed; unset, owed", () => {
+    expect(owed(msg("k", { timestamp: 99 }), { writtenSince: 100 })).toEqual([]);
+    expect(owed(msg("k", { timestamp: 100 }), { writtenSince: 100 })).toEqual(["k"]);
+    expect(owed(msg("k", { timestamp: 99 }))).toEqual(["k"]);
+  });
+
   it("refuses each exclusion once", () => {
     expect(owed(null)).toEqual([]);
     expect(owed("a string")).toEqual([]);
@@ -1611,7 +1621,8 @@ async function stepWorld(presence = true): Promise<StepWorld> {
   const all: string[] = [];
   setWakeObserverForTests((cause) => {
     all.push(cause);
-    if (cause !== "message-owner") wakes.push(cause);
+    // "departure" is the lapse's re-ask (3b-2b2), not step 5's.
+    if (cause !== "message-owner" && cause !== "departure") wakes.push(cause);
   });
   return { id, file, ydoc: getDocument(id) as Y.Doc, probe, wakes, all };
 }
@@ -1956,7 +1967,8 @@ describe("step 5 asks the chat that follows the document (3b-2b1b-chat-step5)", 
     expect(getDocOwner(w.id)?.ownerId).toBe(TANDEM);
     probeAskedOnceFalse(w);
     expect(w.wakes).toEqual([]);
-    expect(w.all).toEqual(["message-owner"]);
+    // Then the lapse's re-ask (3b-2b2), after the release.
+    expect(w.all).toEqual(["message-owner", "departure"]);
     expect(handed(await reader(TANDEM).poll())).toEqual([m]);
   });
 

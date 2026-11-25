@@ -12,7 +12,7 @@ this file in the same PR, or say what replaced it. Every status below carries th
 last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
 state recorded here.
 
-_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the open-work lists and exit criteria dropped every issue named here that had closed (#2187, #2188, #2192, #2219, #2180, #2201, #1696 and #1734) and gained #2269, #2294 and #2286. On 2026-10-29, after #2324–#2330 merged, they dropped the issues those PRs closed (#2001, #2064, #2069, #2070, #2269, #2294, #1662, #1683, #1725, #1943, #1949 and #2231); #1949's dated gate is now #2323. On 2026-11-10 (v0.30.0 is the latest release; every flag still off) the ownership programme and the release shape were added to "Where v1.0 stands", and two exit-criteria rows gained the 2026-11 hardware observations; the other statuses were not re-checked._
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the open-work lists and exit criteria dropped every issue named here that had closed (#2187, #2188, #2192, #2219, #2180, #2201, #1696 and #1734) and gained #2269, #2294 and #2286. On 2026-10-29, after #2324–#2330 merged, they dropped the issues those PRs closed (#2001, #2064, #2069, #2070, #2269, #2294, #1662, #1683, #1725, #1943, #1949 and #2231); #1949's dated gate is now #2323. On 2026-11-10 (v0.30.0 is the latest release; every flag still off) the ownership programme and the release shape were added to "Where v1.0 stands", and two exit-criteria rows gained the 2026-11 hardware observations; the other statuses were not re-checked. On 2026-11-23 (v0.32.0, released 2026-11-20, is the latest; local models on, every other flag still off) "Where v1.0 stands" was brought up to master (ownership through PR 3b-2d, and the flip-blocker count), "In flight" was added, #1823 left the v1-review remainder and the anchor-bug criterion, the dated checkpoints gained their overdue marks, and the open-work list gained the v1.0-relevant issues filed since 2026-11-10 (#2453, #2479, #2481, #2484, #2489, #2501, #2515). Every issue named in the open-work list and the checkpoints table was re-checked open that day except #1943, already recorded as closed; the exit-criteria statuses were not re-run._
 
 ## Active — Toward v1.0
 
@@ -34,13 +34,29 @@ Bryan, not changed by him), Claude's replies inside a user's comment thread (#23
 status (#2167) travel with the ownership series. Commercial readiness and the hardware matrix
 below still stand before v1.0 either way.
 
-0. **Document ownership (#2358): one Claude answers each comment.** Design v5 and the plan
-   are merged, and so are PR 1a (identity, dark) and PR 1b (the #1952 wake-address fix, live).
-   PR 2b (#2370, the setup entry) is merged too and ships live in v0.31.0. Still to build, all dark until the flip: PR 1c
-   (enforcement), 2 (inbox and replies), 3a and 3b (Tandem's own Claude binding, presence,
-   starts and wakes), 4 (push and shim identity), 5 (controls) and 6 (the flip). #2360's
-   switch merges right before the flip and ships in the same release. The plan's manual
-   check runs after both flips, before that release.
+0. **Document ownership (#2358): one Claude answers each comment.** Status 2026-11-23, from
+   the Shipping table of [the plan](plans/2358-ownership.md#shipping) and master. Merged
+   and dark: design v5, PR 1a (identity), 1c (enforcement), every PR 2 row (inbox and
+   replies) and 3a. In 3b (Tandem's own Claude binding, presence, starts and wakes), 3b-1
+   to 3b-2d are merged, with 3b-2c (the greeting) and 3b-2d (the `/api/wake` frame)
+   landing 2026-11-23. Merged and live: 1b (#1952) and 2b (#2370, v0.31.0). **Still to
+   build:**
+   - **3b-2e**: 3b-2e1 (the failed-bind reason in `status()` and the Settings list of
+     bound transports) merged as #2534 and 3b-2e2 (the stall banner) as #2536, both on
+     2026-11-23. Left: #2167's attribution.
+   - **PR 4**: push scope and the shim's permit, plus 4a's `ownership-changed` push event.
+   - **PR 5**: controls (routes, badge, popover, native menu, Assign and Release), the
+     labels on `tandem_getAnnotations` and `tandem_listDocuments`, the pickup and stall
+     clock, and the owners entry in `docs/security.md`.
+   - **#2360's switch** (Claude replying inside a user's comment thread) with the handled
+     filter. Its "later reply" rule needs rework first. It merges right before the flip
+     and ships in the same release.
+   - **PR 6, the flip.** It waits on every row of `tests/server/ownership-flip-blockers.ts`
+     being closed or accepted by Bryan. At the end of 2026-11-23 that file held 34 rows: 8
+     accepted, **26 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check
+     on a real Claude Code or Claude Desktop session, a smoke run, or a decision of
+     Bryan's (#2439 among them). The plan's manual check runs after both flips, before
+     that release.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key.
@@ -54,8 +70,24 @@ below still stand before v1.0 either way.
    - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
      (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
      on a half-flip.
-5. **The pre-v1.0 review's remainder.** 6 of 93 `v1-review` issues are open: #1792, #1822,
-   #1823, #1825, #1920, and #1754 (moot while `.docx` is dark).
+5. **The pre-v1.0 review's remainder.** 5 of 93 `v1-review` issues are open (2026-11-23):
+   #1792, #1822, #1825, #1920, and #1754 (moot while `.docx` is dark). #1823 closed on
+   2026-11-23.
+
+### In flight (2026-11-23)
+
+A snapshot for whoever picks up next. It goes stale within days, so re-check open PRs
+before relying on it.
+
+- **Ownership** is being built in its own session. 3b-2e1 (#2534), 3b-2e2 (#2536, the
+  stall banner) and #2535 (the mode-unknown observer re-asks at the first Tandem
+  mode after a restart) merged the same day, as did #2532 (the stdio bridge cancels
+  upstream every request it answers itself).
+- **#2517** (`tandem_edit`'s new text takes ProseMirror's marks; raw runs are
+  non-inclusive), a #1823 follow-up, merged the same day.
+- **#2510** (document headings follow the user's editor font) is open.
+- **Dependabot:** #2506 (npm group), #2511, #2512 and #2513 (libloading 0.9, a major).
+- **Not v1.0 work:** reply sounds for chat notifications (#2168) merged as #2537.
 
 ### Decisions still owed
 
@@ -77,8 +109,8 @@ outcome is keep, replace or retire.
 
 | Date | Issue | Checkpoint |
 |---|---|---|
-| monthly — next 2026-10-29 | #1506 | Has Claude Code gone modern-only? Last pass 2026-09-29: no |
-| 2026-11-09 | #1363 | Native theme push on Linux |
+| monthly — next 2026-10-29 (**overdue**) | #1506 | Has Claude Code gone modern-only? Last full pass 2026-09-29: no. An interim, Claude Code-only check on 2026-10-22 also said no |
+| 2026-11-09 (**overdue**) | #1363 | Native theme push on Linux. No keep, replace or retire recorded |
 | 2026-11-30 | #1687 | Converge the lifecycle result families |
 | 2026-12-01 | #1728 | Make `coverage` a required check, or record that its floors stay advisory |
 | 2026-12-01 | #1712 | Verify the app.css citations in the design-spec docs |
@@ -89,18 +121,20 @@ outcome is keep, replace or retire.
 
 ### Open work that bears on v1.0
 
-This is a selection, not the full open list: issues judged on 2026-09-28 (and, for those filed since, on 2026-10-20 or 2026-10-28) to affect
+This is a selection, not the full open list: issues judged on 2026-09-28 (and, for those filed since, on 2026-10-20, 2026-10-28 or 2026-11-23) to affect
 correctness, security, install or a named gate. Not all of them block. Triage each group
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
-- **Security findings:** #2323 (the dated gate for #1949's accepted signing-job isolation bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
+- **Security findings:** #2323 (the dated gate for #1949's accepted signing-job isolation bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing; accepted 2026-11-24 in [security.md](security.md#accepted-bounded--decided-not-fixed), a real-crash check on a desktop build still owed), #2501 (the notify stream's local-model notices reach any allowed local origin; owed: limit it, or record it under #2410), #2479 (the launcher passes its whole environment, third-party API keys included, to the Claude it starts), #2481 (the indeterminate-mode hold fails open on a non-boolean reply marker). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit: the Linux fix landed in #2326 and waits on a desktop smoke run; macOS is accepted), #1994, #1869, #2041.
 - **Correctness:** #1982, #1980, #2009 (#2324 landed its tombstone half; whole-envelope cleanup still open), #1920.
-- **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2186 (a beta report's diagnosis tracker), #2286 (an auto-launched Claude can't call Tandem tools when `claude -p` starts in `default` permission mode; #2326 landed the fix, a real desktop run still needs human evidence).
+- **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2186 (a beta report's diagnosis tracker), #2286 (an auto-launched Claude can't call Tandem tools when `claude -p` starts in `default` permission mode; #2326 landed the fix, a real desktop run still needs human evidence), #2515 (Claude Code 2.1.326–2.1.330 changed what `/mcp` shows; update the troubleshooting copy).
+- **Local models (on since v0.32.0):** #2453 (revisit the first-run local-model window at the v1.0 walkthrough, a promise made when #1123 shipped), #2484 (a chat message Claude acknowledges and never answers stays stranded; a known limit in 0.32, accepted as an ownership flip-blocker row pending its design).
+- **Accessibility:** #2489 (focus is lost when a focused toast closes, and new toasts may not be announced).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run; its pre-live Worker fixes merged in #2344, and the remaining U-checks re-run on master's Worker before the live deploy; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
+- **CI and tests:** #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 
@@ -190,17 +224,17 @@ rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET. #1632 closed; still open are #1823's range items (`tandem_getContext` accepting inverted or negative ranges, a zero-length MCP range inverting its anchors, a hardBreak offset drift, the outline ignoring `relRange`) and, on the `.docx` path that ships dark, #1754 and #1693.
+- **Zero open position- or anchor-related bugs.** Met on the live build (2026-11-23): #1632 closed, and #1823, the server Lows batch that held the remaining range items, closed on 2026-11-23. Its follow-up #2517 (mark inheritance in `tandem_edit`) merged the same day. Still open are #1754 and #1693, both on the `.docx` path that ships dark, so they block re-enabling `.docx`, not v1.0.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
 - CHANGELOG `[1.0.0]` section finalized.
 - Every redesign artboard is either shipped or deferred with a reason.
 - Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
-- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.
-  - **Rehearsal build.** Rehearsing needs a way to point a build at a staged manifest. The smoke checklist assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is a compiled const.
+- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. **Written; not rehearsed** (#2280): [bad-release-runbook.md](bad-release-runbook.md).
+  - **Rehearsal build.** Exists: `npm run build:tauri:staging` makes a staging build whose updater reads a manifest you name, baked in at build time through a Tauri `--config` overlay. Shipped builds still have no runtime override, as decided 2026-10-22. It covers the public route only; the licensed route needs a staging Worker that does not exist yet.
+  - **Rehearsal.** Needs Bryan with a test machine and the npm login; the steps are in the runbook. It uses a separate staging repository, so the real pointer never moves.
   - **Desktop.** The license update Worker is meant to proxy the same `releases/latest/download/latest.json` (its `wrangler.toml` holds a placeholder until it is deployed), and it adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
-  - **npm.** `npm dist-tag` and/or `npm deprecate`.
   - **ADR-043.** This doesn't conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback.
 
 ## After v1.0

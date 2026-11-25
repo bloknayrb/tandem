@@ -111,12 +111,13 @@ export function createThreadAnswers(options: {
       });
       replies.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
       const parents = new Map<string, ParentInfo>();
-      annotationsMap.forEach((value) => {
-        if (!value || typeof value !== "object") return;
+      annotationsMap.forEach((value, key) => {
+        if (!value || typeof value !== "object" || key === "") return;
         // Silent: `yjsSync` already logs lossy records for the active tab,
-        // and this runs for every tab on every change.
+        // and this runs for every tab on every change. Keyed by MAP KEY, the
+        // id replies are filed under.
         const ann = sanitizeAnnotation(value as Annotation, () => {});
-        parents.set(ann.id, {
+        parents.set(key, {
           author: ann.author,
           type: ann.type,
           audience: ann.audience,

@@ -1,0 +1,70 @@
+/**
+ * What `npm install -g tandem-editor` downloads (#1825).
+ *
+ * Every bundle but one inlines its whole import graph (`noExternal: [/.*\/]`
+ * in tsup.config.ts) and the client is a Vite build, so a package those
+ * bundles use is a BUILD input, not something the installed package resolves
+ * at run time. Listing such packages under `dependencies` made every global
+ * install download them anyway: 437 production packages in the lockfile where
+ * 169 are needed.
+ *
+ * `dependencies` is therefore exactly what something resolves from a sibling
+ * `node_modules` at run time:
+ *
+ * - the five bare imports of `dist/cli/index.js`, the one bundle that is
+ *   deliberately NOT self-contained (see its tsup block): the MCP SDK,
+ *   `env-paths`, `undici`, `zod` and (lazily) `update-notifier`;
+ * - `@napi-rs/keyring`, kept external in every bundle because it dispatches to
+ *   a platform `.node` binary at run time (`nativeExternals`).
+ *
+ * Adding a package used by a self-contained entry needs no `dependencies`
+ * entry: tsup bundles anything not listed there, so `devDependencies` is
+ * correct. The cli is the exception, because tsup now INLINES every
+ * devDependency its import graph reaches, and that bundle carries only the
+ * shebang banner, not `selfContained`'s `createRequire` one: a CommonJS
+ * package inlined there that calls `require("fs")` (express, ws, ...) builds
+ * cleanly and fails at run time with "Dynamic require of ... is not
+ * supported". A new bare import reachable from `src/cli/index.ts` therefore
+ * belongs here (kept external) unless it is ESM-only. Adding a NEW run-time
+ * external — such a cli import, or a native module — is the only reason to
+ * change this list, and the change belongs here with its reason.
+ *
+ * The cost, stated so it is not discovered later: GitHub and `npm audit` now
+ * file the inlined packages (express, ws, yjs, @hocuspocus/server, ...) as
+ * development-scoped, although their code runs in every shipped bundle. An
+ * advisory against one of them must still be read as a production advisory —
+ * in particular, GitHub's auto-triage preset that dismisses low-impact alerts
+ * on development-scoped dependencies would hide exactly those, and
+ * `npm audit --omit=dev` skips them. How alerts on bundled packages are seen
+ * is a repository-settings decision, recorded in the PR that made this split.
+ */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+const RUNTIME_RESOLVED = [
+  "@modelcontextprotocol/sdk",
+  "@napi-rs/keyring",
+  "env-paths",
+  "undici",
+  "update-notifier",
+  "zod",
+];
+
+describe("npm production dependencies (#1825)", () => {
+  const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+
+  it("lists only packages something resolves from node_modules at run time", () => {
+    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(RUNTIME_RESOLVED);
+  });
+
+  it("keeps the native module external in tsup, which is why it must stay a dependency", () => {
+    const tsup = readFileSync(path.join(ROOT, "tsup.config.ts"), "utf8");
+    expect(tsup).toMatch(/nativeExternals\s*=\s*\[\/\^@napi-rs\\\/keyring\/\]/);
+  });
+});

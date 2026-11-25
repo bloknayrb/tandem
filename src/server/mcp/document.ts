@@ -60,7 +60,7 @@ import {
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
-  mergeInlineTail,
+  replaceFlatRangeAcrossBlocks,
   replaceFlatRangeInElement,
 } from "./document-model.js";
 // Document service (state management)
@@ -864,7 +864,7 @@ export function registerDocumentTools(server: McpServer): void {
       "INVALID_RANGE naming the two ranges to edit separately. A range whose start, end or " +
       'interior overlaps heading markup such as "## " returns INVALID_RANGE; split the edit at the ' +
       "heading. A to at the first character of that markup counts as overlapping, so end the range " +
-      "before the newline that precedes a heading. newText is inserted literally, never parsed as Markdown (use tandem_appendContent or " +
+      "before the newline that precedes a heading. newText is inserted literally, never parsed as Markdown, except inside raw markdown source such as [^1], which it joins (use tandem_appendContent or " +
       "tandem_editList for new block structure); a newline in it is refused with INVALID_ARGUMENT in a " +
       "plain-text (.txt) document and otherwise stays a literal line break inside the same " +
       "block (a heading saves it as a space). Returns " +
@@ -1128,40 +1128,14 @@ export function registerDocumentTools(server: McpServer): void {
                 }
 
                 withMcp(r.doc, () => {
-                  // Cross-element edit, both ends top-level. Each textblock may hold
-                  // multiple Y.XmlText children split by sibling hardBreaks, so
-                  // trims/merges go through the multi-XmlText helpers — the old
-                  // first-XmlText-only path dropped the tail's breaks and later runs.
-                  // 1. Trim the start element's tail: delete [startOffset, end).
-                  replaceFlatRangeInElement(
-                    startNode,
+                  replaceFlatRangeAcrossBlocks(
+                    fragment,
+                    startIndex,
                     startPos.textOffset,
-                    getElementTextLength(startNode),
-                    "",
+                    endIndex,
+                    endPos.textOffset,
+                    newText,
                   );
-
-                  // 2. Delete the whole in-between elements.
-                  // One call, not a loop: Y.XmlFragment.delete takes a length.
-                  const deleteCount = endIndex - startIndex - 1;
-                  if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
-
-                  // 3. Trim the end element's head: delete [0, endOffset).
-                  const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
-                  replaceFlatRangeInElement(tailNode, 0, endPos.textOffset, "");
-
-                  // 4. Insert newText at the join (end of start), then fold the end
-                  //    element's surviving children onto start → [start][newText][end].
-                  //    Step 1 trimmed start down to [0, startOffset), and steps 2-3 don't
-                  //    touch it, so its flat length is exactly startPos.textOffset — no
-                  //    need to re-walk it.
-                  if (newText.length > 0) {
-                    const joinAt = startPos.textOffset;
-                    replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
-                  }
-                  mergeInlineTail(startNode, tailNode);
-
-                  // 5. Remove the now-emptied end element.
-                  fragment.delete(startIndex + 1, 1);
                 });
 
                 // #1765, second half. The population is exactly the captured

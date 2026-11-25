@@ -15,7 +15,8 @@ workflows, settings, the command line.
 
 **I'm connecting an AI.** The [Connecting an AI map](maps/connecting-ai.md) covers the setup
 routes, how Claude hears about your comments and chat in real time, Solo and Tandem modes, and the
-MCP tool reference.
+MCP tool reference. To have a model on your own computer answer chat instead, see
+[Local models](user-guide.md#local-models).
 
 **Something's wrong.** Start with [troubleshooting](troubleshooting.md). The
 [Troubleshooting and your data map](maps/troubleshooting-and-data.md) adds where Tandem keeps
@@ -39,7 +40,7 @@ The [History map](maps/history.md) indexes the dated plans, reviews, spikes and 
 | Map | For |
 |---|---|
 | [Using Tandem](maps/using-tandem.md) | People writing and reviewing documents |
-| [Connecting an AI](maps/connecting-ai.md) | Setting up Claude Code, Claude Desktop or another MCP client, and real-time updates |
+| [Connecting an AI](maps/connecting-ai.md) | Setting up Claude Code, Claude Desktop or another MCP client, a local model, and real-time updates |
 | [Troubleshooting and your data](maps/troubleshooting-and-data.md) | Fixing problems, finding and removing Tandem's files, privacy |
 | [Contributing](maps/contributing.md) | Working on the code: setup, rules, design system, review agents |
 | [Internals](maps/internals.md) | Architecture, data flows, coordinate systems, decisions by topic |

@@ -28,6 +28,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DELIVERY_STALL_MS } from "../../shared/constants.js";
 
 import type { TandemEvent } from "../../shared/events/types.js";
 import { isStartWorthy, isWakeWorthy } from "../../shared/events/wake-scope.js";
@@ -269,9 +270,13 @@ interface SupervisorOpts {
    * its transport sends none (`onTandemReply` in `mcp/awareness.ts`, wired in
    * `index.ts`; this module must not import the MCP layer). That is how the
    * supervisor learns the greeting arrived; a reply from a session it did not
-   * spawn is not the greeting. Default: never.
+   * spawn is not the greeting. With ownership on, `bound` is the reply's
+   * transport fact (#2358 PR 3b-2c), and only a bound reply counts. Default:
+   * never.
    */
-  subscribeTandemReply?: (cb: (sessionId: string | undefined) => void) => () => void;
+  subscribeTandemReply?: (
+    cb: (sessionId: string | undefined, bound?: boolean) => void,
+  ) => () => void;
   /**
    * Seam onto `mcp/greeting-reply.ts` (#2227): the supervisor registers the
    * classifier that tells `tandem_reply` whether a reply is the one-time hello,
@@ -284,6 +289,7 @@ interface SupervisorOpts {
       sessionId: string | undefined;
       replyTo: string | undefined;
       inProgress: boolean | undefined;
+      bound?: boolean;
     }) => boolean,
   ) => () => void;
   /**
@@ -390,14 +396,41 @@ interface SupervisorOpts {
  * import each other, so ownership maps its `WakeCause` onto it (3b-2b1c-a). Goes into
  * a log line only; it carries no session or document id.
  */
-export type StartOrWakeCause = "document" | "message" | "solo-release";
+export type StartOrWakeCause =
+  | "document"
+  | "message"
+  | "solo-release"
+  | "mode-known"
+  | "user-annotation"
+  | "departure";
 /** The causes a log line may name; anything else is logged as `other`, so a
  *  caller that forwards an arbitrary string cannot put it in the log. */
 const START_OR_WAKE_CAUSES: ReadonlySet<string> = new Set<StartOrWakeCause>([
   "document",
   "message",
   "solo-release",
+  "mode-known",
+  "user-annotation",
+  "departure",
 ]);
+
+/**
+ * The events ownership adds to the standby watch (#2358 PR 3b-2b2; Bryan,
+ * 2026-11-17: "Yes, a comment starts it" and "Yes, any thread reply"): a new
+ * user comment, with or without a suggestion, and any user thread reply.
+ * Never a highlight, and never a synthetic wake (the Solo release and the
+ * switch back carry no document). The caller has already applied the Solo
+ * gate, `hideFromAI`, the licence and the local period
+ * (`wasForwardedExternally`), and notes never reach a forwarded event. This
+ * answers only "might the user be asking Claude for something"; whether it is
+ * Tandem's Claude's work is the waiting decision's, asked by the pass.
+ */
+function isOwnershipStartEvent(event: TandemEvent): boolean {
+  if (event.type === "annotation:created") {
+    return event.payload.annotationType === "comment" && Boolean(event.documentId);
+  }
+  return event.type === "annotation:reply" && event.payload.replyAuthor === "user";
+}
 
 /** An error's constructor name only, for the 3b-2a log lines: a decision
  *  supplied by another module may throw a message carrying a document or
@@ -451,8 +484,10 @@ interface SpawnRecord {
 
 /**
  * The supervisor's presence seam for Tandem's Claude (#2358 PR 3b-1, R2.7),
- * so 3b-2 does not reopen this code. Nothing subscribes outside tests until
- * 3b-2. Flag off every read is false and nothing is ever announced.
+ * so 3b-2 does not reopen this code. `src/server/index.ts` subscribes
+ * presence and the spawn-started event inside its supervisor setup (#2358 PR
+ * 3b-2b4a), the run start (3b-2b4b) and the failed-bind event (3b-2b5).
+ * Flag off every read is false and nothing is ever announced.
  */
 export interface TandemPresenceSeam {
   /** The value last announced. */
@@ -462,6 +497,13 @@ export interface TandemPresenceSeam {
   /** Each run start (the latest spawn's first bind), after presence. */
   onRunStart(cb: () => void): () => void;
   /**
+   * Each spawn's start (#2358 PR 3b-2b4a): its number and session id, right
+   * after the spawn's session id is recorded, only for a spawn with a record
+   * (flag on). A resumed spawn has the same id and a new number. Called
+   * synchronously inside the spawn; each subscriber in its own catch.
+   */
+  onSpawnStarted(cb: (spawn: { n: number; sessionId: string }) => void): () => void;
+  /**
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
    * **Called synchronously from the judging site**: inside the child's exit
@@ -470,9 +512,9 @@ export interface TandemPresenceSeam {
    * torn down, or from the bind window's timer when it expires (site c). At
    * site (c) the spawn is not torn down — teardown cancels that timer — so
    * `activeTurnDelivery` is that live, unbound spawn. A subscriber that writes
-   * a turn, starts or wakes anything (3b-2's failed-bind wake, design §8.7)
-   * must defer that work (a microtask or later), or it writes into a spawn
-   * the judging site is still acting on. Kept synchronous so the failed-bind
+   * a turn, starts or wakes anything (ownership's `noteFailedBind`, 3b-2b5;
+   * design §8.7) must defer that work (a microtask or later), or it writes
+   * into a spawn the judging site is still acting on. Kept synchronous so the failed-bind
    * event precedes the presence announcement it causes.
    */
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
@@ -505,8 +547,14 @@ function mintOwnerHandle(): string {
   return `th_${randomBytes(24).toString("base64url")}`;
 }
 
-/** A start the local period held (#1123 A2, R4.1). */
-type HeldStart = "boot" | "crash" | "licence" | "message";
+/** A start the local period held (#1123 A2, R4.1). `work` is a start
+ * start-or-wake owed for Tandem's Claude's own work (#2358 piece 36), kept
+ * apart from a chat's `message` start because the switch back decides it by
+ * its own rule (`onLocalPeriodChange`). */
+type HeldStart = "boot" | "crash" | "licence" | "message" | "work";
+
+/** Which held kind a start for a message or for waiting work records. */
+type HeldAs = Extract<HeldStart, "message" | "work">;
 
 /** Exported for test only — the `"external"` argument below is the single line
  * standing between Solo mode and a leak, so it needs a test that exercises the
@@ -829,8 +877,8 @@ export interface Supervisor {
   /** The settings this supervisor last read or saved successfully, or null
    * before any. What it is acting on while the file cannot be read. */
   appliedSettings(): LauncherSettings | null;
-  /** Tandem's Claude's presence, computed and consumed by nothing yet (#2358
-   * PR 3b-1, R2.7). Ownership on only; flag off every read is false.
+  /** Tandem's Claude's presence (#2358 PR 3b-1, R2.7), consumed by ownership
+   * through `index.ts` (3b-2b4a). Ownership on only; flag off every read is false.
    * Optional so the test fakes of this interface need not implement it; the
    * real supervisor always has it. */
   tandemPresence?(): TandemPresenceSeam;
@@ -838,8 +886,9 @@ export interface Supervisor {
    * Wake a running Tandem's Claude for work that is its own (#2358 PR 3b-2a;
    * design §8.6). Ownership on only. Licence-refused, during a local-model
    * period, or with no live child, it writes and owes nothing. Never throws.
-   * Called by nothing in production yet (3b-2b wires it; a source pin holds
-   * that). Optional for the same reason as `tandemPresence`.
+   * Called from outside only by ownership's run-start wake, through the sink
+   * `index.ts` sets (#2358 PR 3b-2b4b; a source pin holds that). Optional for
+   * the same reason as `tandemPresence`.
    */
   requestWake?(): void;
   /**
@@ -853,6 +902,27 @@ export interface Supervisor {
    * production path reaches until presence or the `tandem` record is wired.
    */
   startOrWake?(cause: StartOrWakeCause): void;
+  /**
+   * The own-spawn seam's two reads (#2358 PR 3b-2b3a), for ownership's
+   * `setOwnSpawnSource`, which `index.ts` calls inside its supervisor setup
+   * (3b-2b4a; a source pin holds that). `ownSpawn`: the live child's spawn number and
+   * session id, null with no live child, flag off, or once its spawn is torn
+   * down. `isOwnChildSession`: whether any child of this supervisor ever used
+   * `sessionId`, case-folded. Optional for the same reason as `tandemPresence`.
+   */
+  ownSpawn?(): { n: number; sessionId: string } | null;
+  isOwnChildSession?(sessionId: string): boolean;
+  /**
+   * When the live Tandem's Claude was last woken, for the stall banner's
+   * hide (#2358 PR 3b-2e2, the owner's 2026-11-17 answer 3): the time the
+   * latest turn still in flight was written, or now when a wake is queued
+   * behind that turn (it is written when the turn ends). `null` with no turn
+   * in flight, once the turn in flight has run for `DELIVERY_STALL_MS`, with
+   * no live child, while a local model answers chat, and whenever ownership
+   * is off. Says nothing about WHICH item the turn serves.
+   * Never throws. Optional for the same reason as `tandemPresence`.
+   */
+  wokenAt?(): number | null;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -913,9 +983,15 @@ export type SupervisorStatus =
       /** The LAST spawn rejected the saved `workingDirectory` (#1822 item 4a)
        * — see `LauncherStatus`. */
       workingDirectoryIgnored?: WorkingDirectoryIgnored;
+      /** Tandem's Claude's latest run failed to bind (#2358 PR 3b-2e1,
+       * ownership design §3.3, §8.7) — see `LauncherStatus`. Flag on only. */
+      bindFailed?: true;
     }
   | {
       running: true;
+      /** Tandem's Claude's latest run failed to bind (#2358 PR 3b-2e1,
+       * ownership design §3.3, §8.7) — see `LauncherStatus`. Flag on only. */
+      bindFailed?: true;
       /** The LAST spawn rejected the saved `workingDirectory` and ran in home
        * (#1822 item 4a). Present only when it did. Deliberately not cleared on
        * exit or stop: it describes the last launch, and the next spawn
@@ -1240,8 +1316,33 @@ export const TANDEM_SECRET_ENV_KEYS = [
 ] as const;
 
 /**
+ * One-shot start-up signals the desktop shell hands THIS server, which mean
+ * nothing to the launched Claude Code (#2479).
+ *
+ * - `TANDEM_OPEN_FILE` — the document the user double-clicked to cold-start
+ *   the app (`sidecar.rs`, first spawn only; an npm `tandem` honours a
+ *   hand-exported one the same way, `.env.example`, and the strip covers
+ *   that too). Inherited, a `tandem` started from the launched session's
+ *   shell would open that document again, and every command the session runs
+ *   could read a path the user never gave it.
+ * - `TANDEM_DEFER_LAUNCHER` — the start-at-login deferral (#1236). It is
+ *   honoured only beside `TANDEM_TAURI_SIDECAR=1`, which is deliberately
+ *   still inherited (see {@link DESKTOP_ONLY_ENV_KEYS}), so a `tandem` started
+ *   from the launched session's shell would read both and hold its own
+ *   launcher for a Start its user has no reason to press.
+ *
+ * Both are read only by `src/server/index.ts` and
+ * `launcher/initial-reason.ts`, at this server's own start. This is not the
+ * fix for third-party variables in the user's environment: whether those
+ * reach the launched session is #2479's open decision, and
+ * `docs/spikes/launcher-child-env.md` holds its facts.
+ */
+export const SIDECAR_SIGNAL_ENV_KEYS = ["TANDEM_OPEN_FILE", "TANDEM_DEFER_LAUNCHER"] as const;
+
+/**
  * The environment the launched Claude Code is spawned with: ours, minus
- * {@link DESKTOP_ONLY_ENV_KEYS} and {@link TANDEM_SECRET_ENV_KEYS} — and, for
+ * {@link DESKTOP_ONLY_ENV_KEYS}, {@link TANDEM_SECRET_ENV_KEYS} and
+ * {@link SIDECAR_SIGNAL_ENV_KEYS} — and, for
  * the Tauri sidecar only, minus `NODE_ENV`.
  *
  * `NODE_ENV` is set to `production` on the packaged sidecar by `sidecar.rs`
@@ -1253,15 +1354,30 @@ export const TANDEM_SECRET_ENV_KEYS = [
  *
  * A copy, never a mutation of `process.env` — this server still needs the
  * data-dir variables for its own `resolveAppDataDir()`, and the token.
+ *
+ * On Windows the match ignores case. Win32 looks a variable up without regard
+ * to case, so a `tandem_auth_token` set in the user's own environment is read
+ * as `TANDEM_AUTH_TOKEN` (and a later set of that name may keep the existing
+ * spelling), while `{ ...process.env }` copies each name as it was spelled. An
+ * exact-case delete would leave that copy in the launched Claude's environment.
+ * Elsewhere names are case-sensitive, so only the exact names are removed.
  */
 export function childEnv(
   base: NodeJS.ProcessEnv = process.env,
   argv: readonly string[] = process.argv,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
-  for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
-  if (isTauriSidecar(argv)) delete env.NODE_ENV;
+  const strip = new Set<string>([
+    ...DESKTOP_ONLY_ENV_KEYS,
+    ...TANDEM_SECRET_ENV_KEYS,
+    ...SIDECAR_SIGNAL_ENV_KEYS,
+  ]);
+  if (isTauriSidecar(argv)) strip.add("NODE_ENV");
+  const ignoreCase = platform === "win32";
+  for (const key of Object.keys(env)) {
+    if (strip.has(ignoreCase ? key.toUpperCase() : key)) delete env[key];
+  }
   return env;
 }
 
@@ -1461,6 +1577,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     /** Wake this spawn as an event's wake does, minus the event filter
      *  (#2358 PR 3b-2a, R1.1). Only `requestWake` calls it, flag on. */
     requestWake: () => void;
+    /** See `Supervisor.wokenAt` (#2358 PR 3b-2e2): this spawn's half. */
+    wokenAt: () => number | null;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -1576,16 +1694,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Could not record that the greeting was sent:", err);
     });
   }
-  // A reply carrying another session's id is that session's, not the
-  // greeting. One with no id is counted: the header is optional, and a child
-  // that never sends it must not owe its greeting on every spawn.
-  const unsubscribeTandemReply = (opts.subscribeTandemReply ?? (() => () => {}))((sessionId) => {
-    if (greeting === null || greeting.phase === "answered") return;
-    if (sessionId !== undefined && !isOwnChildSession(sessionId)) return;
-    greeting.phase = "answered";
-    unsubscribeTandemReply();
-    spendGreeting();
-  });
+  /**
+   * Whether a reply came from this supervisor's own child, for both greeting
+   * checks below. Ownership off: a reply carrying another session's id is that
+   * session's, not the greeting; one with no id is counted (the header is
+   * optional, and a child that never sends it must not owe its greeting on
+   * every spawn). Ownership on (#2358 PR 3b-2c; ownership design §7.3): only a
+   * reply on the transport bound to the current spawn counts — `bound`, which
+   * `tandem_reply` passes and a `/api/channel-reply` reply passes false — and
+   * the session id never does. A missing `bound` is not bound.
+   */
+  function isOwnChildReply(sessionId: string | undefined, bound: boolean | undefined): boolean {
+    if (ownershipEnabled()) return bound === true;
+    return sessionId === undefined || isOwnChildSession(sessionId);
+  }
+  const unsubscribeTandemReply = (opts.subscribeTandemReply ?? (() => () => {}))(
+    (sessionId, bound) => {
+      if (greeting === null || greeting.phase === "answered") return;
+      if (!isOwnChildReply(sessionId, bound)) return;
+      greeting.phase = "answered";
+      unsubscribeTandemReply();
+      spendGreeting();
+    },
+  );
 
   /** `opts.userChatSnapshot`, with a throw or an absent seam read as null. */
   function readUserChat(): { ids: ReadonlySet<string>; unread: boolean } | null {
@@ -1605,7 +1736,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *   flips it to `answered` (through `subscribeTandemReply`, in the same
    *   synchronous stretch as the append), and the turn's `result` to
    *   `unanswered`, so at most the FIRST reply is ever tagged.
-   * - The reply is the supervisor's own child's. One with no session id counts,
+   * - The reply is the supervisor's own child's (`isOwnChildReply`; with
+   *   ownership on, the bound transport's, #2358 PR 3b-2c — the rest of this
+   *   item is the dark rule). One with no session id counts,
    *   as it does for `answered` above: the direct-HTTP entry `tandem setup`
    *   wrote before #2358 PR 2b sends no `X-Claude-Session-Id`, and an entry
    *   the boot sweep has not switched yet still is one, so requiring an id
@@ -1623,9 +1756,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     sessionId: string | undefined;
     replyTo: string | undefined;
     inProgress: boolean | undefined;
+    bound?: boolean;
   }): boolean {
     if (greeting === null || greeting.phase !== "pending") return false;
-    if (query.sessionId !== undefined && !isOwnChildSession(query.sessionId)) return false;
+    if (!isOwnChildReply(query.sessionId, query.bound)) return false;
     if (query.replyTo !== undefined || query.inProgress === true) return false;
     const atStart = greeting.userChatAtStart;
     if (atStart === null || atStart.unread) return false;
@@ -1652,6 +1786,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const key = sessionId.toLowerCase();
     for (const id of ownChildSessionIds) if (id.toLowerCase() === key) return true;
     return false;
+  }
+
+  /** The own-spawn seam's spawn read (#2358 PR 3b-2b3a; see `Supervisor`). */
+  function ownSpawn(): { n: number; sessionId: string } | null {
+    const rec = latestRecord;
+    if (child === null || rec === null || rec.tornDown || currentSessionId === undefined) {
+      return null;
+    }
+    return { n: rec.n, sessionId: currentSessionId };
   }
 
   /** Read the marker; any failure reads as not owed (see `greeting.ts`). In
@@ -1764,7 +1907,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Claude that kept crashing, and a message start must not leave the
       // breaker tripped under a running child either (a later crash would then
       // get no restart and no diagnosis). Start, which resets it, is the way.
-      if (standby === undefined || breakerTripped || !isStartWorthy(event) || anotherAiOn()) {
+      if (standby === undefined || breakerTripped) return;
+      if (!isStartWorthy(event) || anotherAiOn()) {
+        // The widened arm (#2358 PR 3b-2b2), flag on only: what today's rule
+        // declines is handed to start-or-wake, which drops it at Off or a
+        // licence refusal and starts or wakes only for work waiting for
+        // Tandem's Claude, whether or not another AI is on (design §8.3,
+        // §8.4). Flag off this returns exactly as master did.
+        if (ownershipEnabled() && isOwnershipStartEvent(event)) startOrWake("user-annotation");
         return;
       }
       wakeOwedAcrossSpawns = true;
@@ -1902,9 +2052,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // `respawn` keeps it, and licence activation writes it (R2.6).
     wakeOwedAcrossSpawns = true;
     try {
+      // Held by a local period as `work`, not `message` (#2358 piece 36): the
+      // switch back decides it by its own rule.
       const result = await respawn(undefined, undefined, {
         clearSession: false,
         byMessage: true,
+        heldAs: "work",
       });
       if (!result.spawned) {
         console.error(`[Launcher] Could not start Claude for waiting work: ${result.why}`);
@@ -1947,7 +2100,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *
    * It does NOT ask the waiting decision and is not Solo-gated: every caller
    * owes that screen first (design §8.5, where Solo protection lives). The
-   * start pass asks it before calling here; 3b-2b's take-back must too.
+   * start pass asks it before calling here; ownership's take-back asks
+   * `tandemWorkWaiting` (#2358 PR 3b-2b4b).
    */
   function requestWake(): void {
     try {
@@ -2049,6 +2203,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *  judged failed to bind since (R1.5). False at boot. Nothing else moves it:
    *  Off, idle-stop, a crash-resume and a relaunch keep it (decision 7). */
   let lastRunBound = false;
+  /** The latest run was judged failed to bind and no run has started since
+   *  (#2358 PR 3b-2e1): what `status()` reports as `bindFailed`. Set only by
+   *  `failBind` (so flag on only), cleared only by a run start. Unlike
+   *  `lastRunBound`, false at boot, so a run not yet judged reports nothing. */
+  let bindFailedLatch = false;
   /** Every spawn that reached `child = spawned` (flag on), numbered in order. */
   let spawnRecordSeq = 0;
   /** The spawn record with the highest number: the latest spawn (Terms). */
@@ -2075,6 +2234,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let presenceRecomputes = 0;
   const presenceListeners = new Set<(present: boolean) => void>();
   const runStartListeners = new Set<() => void>();
+  const spawnStartedListeners = new Set<(spawn: { n: number; sessionId: string }) => void>();
   const failedBindListeners = new Set<(reason: FailedBindReason) => void>();
 
   /** A field presence reads was written: recompute once per synchronous run
@@ -2171,6 +2331,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     try {
       if (rec !== latestRecord || rec.tornDown || rec.cause !== undefined) return;
       setLastRunBound(true);
+      bindFailedLatch = false;
       presenceErrorLatch = false;
       console.error("[Launcher] Tandem's Claude's run started: its spawn bound (ownership)");
       recomputePresence(true);
@@ -2200,6 +2361,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function failBind(rec: SpawnRecord, reason: FailedBindReason): void {
     rec.judged = true;
     try {
+      bindFailedLatch = true;
       setLastRunBound(false);
       console.error(`[Launcher] Tandem's Claude's spawn did not bind: ${reason} (ownership)`);
       if (!presenceSuppressed) notifyEach(failedBindListeners, "failed-bind", reason);
@@ -2661,15 +2823,41 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
         return;
       }
-      if (held.has("message") && standby !== undefined && !anotherAiOn()) {
+      // A start held for Tandem's Claude's own work (#2358 piece 36; Bryan,
+      // 2026-11-17: "Yes, unless Claude is Off", refined by "Yes, only if
+      // still waiting"): asked again here whether anything is still waiting,
+      // and started whether or not another AI is attached. Off, a user stop
+      // and a crash breaker were refused above; flag off nothing holds it.
+      // Asked only when it decides: a chat's own start below runs first when
+      // it may, and covers whatever is waiting.
+      const forMessage = held.has("message") && standby !== undefined && !anotherAiOn();
+      const askWork = !forMessage && held.has("work") && ownershipEnabled();
+      const workStillWaiting = askWork && workIsWaiting();
+      const forWork = workStillWaiting && standby !== undefined;
+      if (forMessage || forWork) {
         console.error(
-          "[Launcher] Tandem chat is answered by Claude again — starting Claude for the message",
+          forMessage
+            ? "[Launcher] Tandem chat is answered by Claude again — starting Claude for the message"
+            : "[Launcher] Tandem chat is answered by Claude again — starting Claude for waiting work",
         );
         try {
-          await respawn(undefined, undefined, { clearSession: false, byMessage: true });
+          await respawn(undefined, undefined, {
+            clearSession: false,
+            byMessage: true,
+            heldAs: forMessage ? "message" : "work",
+          });
         } catch (err) {
-          recordStartThrow(err, "Could not start Claude for the message");
+          recordStartThrow(
+            err,
+            forMessage
+              ? "Could not start Claude for the message"
+              : "Could not start Claude for waiting work",
+          );
         }
+      } else if (askWork && !workStillWaiting) {
+        console.error(
+          "[Launcher] Tandem chat is answered by Claude again — nothing is waiting for Claude, not starting it",
+        );
       }
     }).catch((err: unknown) => {
       console.error("[Launcher] Starting Claude at the switch back failed:", err);
@@ -2977,6 +3165,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentSpawnedAt = spawnedAt;
     currentResuming = plan.resuming;
     lastSpawnIgnoredWorkingDirectory = plan.workingDirectoryIgnored;
+    // The spawn-started event (#2358 PR 3b-2b4a): flag on only (a record).
+    if (record !== null) {
+      notifyEach(spawnStartedListeners, "spawn-started", {
+        n: record.n,
+        sessionId: plan.sessionId,
+      });
+    }
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
@@ -3023,6 +3218,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
     /** True between writing a turn and seeing that turn's `result` envelope. */
     let turnInFlight = false;
+    /** When the latest turn was written (#2358 PR 3b-2e2): read only by
+     *  `wokenAt`, and only while `turnInFlight`. */
+    let lastTurnWrittenAt = 0;
     /** An event arrived mid-turn; wake once the current turn finishes. */
     let pendingWake = false;
     let latchTimer: NodeJS.Timeout | null = null;
@@ -3195,6 +3393,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const receiptCheckable = unresolvedTurns === 0;
       unresolvedTurns += 1;
       turnInFlight = true;
+      lastTurnWrittenAt = Date.now();
       clearIdle();
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
@@ -3377,6 +3576,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       },
       record,
       requestWake: requestWakeOnSpawn,
+      // A wake queued behind the turn in flight is written when that turn
+      // ends (`flushPendingWake`), so it reads as woken now. Not while a local
+      // model answers chat: the flush writes nothing then. And not once the
+      // turn in flight has run as long as the stall threshold: a stuck turn
+      // would otherwise hide the banner until the wake latch fired, and again
+      // for each message sent meanwhile, so the hide is capped at one
+      // threshold per written turn.
+      wokenAt: () => {
+        if (!turnInFlight || tornDown || localHeld()) return null;
+        const now = Date.now();
+        if (now - lastTurnWrittenAt >= DELIVERY_STALL_MS) return null;
+        return pendingWake ? now : lastTurnWrittenAt;
+      },
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -3940,7 +4152,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function startInternal(
     epoch = stopEpoch,
     known?: LauncherSettings,
-    kind: Exclude<HeldStart, "message"> = "crash",
+    kind: Exclude<HeldStart, HeldAs> = "crash",
   ): Promise<void> {
     // Counted for `restartPending` (#2180). The restart timer nulls itself and
     // calls this synchronously, so no status poll lands between the two.
@@ -3957,7 +4169,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function planAndSpawn(
     epoch: number,
     known: LauncherSettings | undefined,
-    kind: Exclude<HeldStart, "message">,
+    kind: Exclude<HeldStart, HeldAs>,
   ): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
@@ -3992,6 +4204,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Pinned by a `start()` whose read is held while such a loop trips.
     if (breakerTripped) {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
+      return;
+    }
+    // And `child` (#2358 flip-blocker row, 3b-2b1b-R0): a spawn that did not
+    // move the stop epoch (a licence resume, under the lock) can land during
+    // the reads above. Checked here, before the Off and local-period holds,
+    // so neither runs beside a live child: the local hold would set an
+    // `awaiting-start` standby and arm the standby watch beside it, and the
+    // Off hold would clear the wake owed across spawns and disarm the gap
+    // watch.
+    if (child !== null) {
+      console.error("[Launcher] A Claude started while building the spawn plan — not spawning");
       return;
     }
     // Off holds every non-user start (#2195) — boot, a crash restart, a
@@ -4214,7 +4437,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function respawn(
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
-    { clearSession, byMessage = false }: { clearSession: boolean; byMessage?: boolean },
+    {
+      clearSession,
+      byMessage = false,
+      heldAs = "message",
+    }: { clearSession: boolean; byMessage?: boolean; heldAs?: HeldAs },
   ): Promise<RespawnResult> {
     // Licence admission (#1521), at the very top — BEFORE `stopInternal`,
     // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
@@ -4242,7 +4469,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // that is exactly the window that used to offer a Restart button.
     setLaunching(launching + 1);
     try {
-      return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage);
+      return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage, heldAs);
     } finally {
       setLaunching(launching - 1);
     }
@@ -4262,8 +4489,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     opts: RelocateOpts | undefined,
     clearSession: boolean,
     byMessage: boolean,
+    heldAs: HeldAs,
   ): Promise<RespawnResult> {
-    const steps = stopAndSpawnSteps(cwdOverride, opts, clearSession, byMessage);
+    const steps = stopAndSpawnSteps(cwdOverride, opts, clearSession, byMessage, heldAs);
     if (!ownershipEnabled()) return steps;
     return steps.catch((err: unknown) => {
       if (child === null && lastError === undefined && restartTimer === null) {
@@ -4278,6 +4506,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     opts: RelocateOpts | undefined,
     clearSession: boolean,
     byMessage: boolean,
+    heldAs: HeldAs,
   ): Promise<RespawnResult> {
     // What a held message start must leave as it found (review item 15).
     const userStoppedBefore = userStopped;
@@ -4292,7 +4521,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // no watch across the awaits below. The user's own Start, Relaunch and
     // Start fresh, and a setup Apply, are honoured (R4.4).
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       return { spawned: false, why: "held-by-local-model" };
     }
     // A shutdown that begins anywhere in this relaunch (the stop's exit wait,
@@ -4356,7 +4585,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // cleared `wakeOwedAcrossSpawns`, and the gap watch armed above acts only
     // on events forwarded externally, which no event of the period is.
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       // Off stays Off: the stop flag and the gap watch go back to how this
       // start found them, so a held message start changes no state.
       userStopped = userStoppedBefore;
@@ -4381,7 +4610,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // And after that await (review N2), before the run files (#2358 PR 3a):
     // a held message start writes none and mints no owner handle.
     if (byMessage && localHeld()) {
-      holdForLocalPeriod("message");
+      holdForLocalPeriod(heldAs);
       // Off stays Off: the stop flag and the gap watch go back to how this
       // start found them, so a held message start changes no state.
       if (!wroteOnClick) {
@@ -4414,7 +4643,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // write made is discarded first, so a held start leaves nothing behind.
       if (byMessage && localHeld()) {
         run?.discard();
-        holdForLocalPeriod("message");
+        holdForLocalPeriod(heldAs);
         if (!wroteOnClick) {
           userStopped = userStoppedBefore;
           if (!gapWatchBefore) disarmGapWatch();
@@ -4663,6 +4892,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
+  /** See `Supervisor.wokenAt` (#2358 PR 3b-2e2). Flag off: null, read first. */
+  function wokenAt(): number | null {
+    try {
+      if (!ownershipEnabled()) return null;
+      const delivery = activeTurnDelivery;
+      if (delivery === null || child !== delivery.spawned || delivery.spawned.killed) return null;
+      return delivery.wokenAt();
+    } catch {
+      return null;
+    }
+  }
+
   function status(): SupervisorStatus {
     if (
       child &&
@@ -4690,6 +4931,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         ...(lastSpawnIgnoredWorkingDirectory
           ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
           : {}),
+        ...(bindFailed() ? { bindFailed: true as const } : {}),
       };
     }
     // A `cli-unusable` with no crash behind it (#2199) is a reading of the
@@ -4714,6 +4956,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // from standby (`respawn` runs while `standby` is still set, until the
     // spawn clears it), which the client shows as "Starting Claude…".
     if (greetingLate()) stopped.greetingLate = true;
+    // A `lastError` outranks it, as it outranks `standby`: a crash loop's
+    // breaker, a sign-in or licence refusal is the more specific diagnosis.
+    if (bindFailed() && lastError === undefined) stopped.bindFailed = true;
     if (lastSpawnIgnoredWorkingDirectory) {
       stopped.workingDirectoryIgnored = lastSpawnIgnoredWorkingDirectory;
     }
@@ -4748,6 +4993,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       stopped.heldForLocalModel = true;
     }
     return stopped;
+  }
+
+  /** `status()`'s failed-bind reason (#2358 PR 3b-2e1, ownership design
+   *  §8.7). The flag is read here too, so a dark server reports nothing even
+   *  if the latch were ever set. A diagnosis, not a choice: it rides beside
+   *  `standby` and `restartPending` and changes neither; a `lastError`
+   *  outranks it (the stopped arm leaves it off), as it outranks `standby`. */
+  function bindFailed(): boolean {
+    return ownershipEnabled() && bindFailedLatch;
   }
 
   /** Tandem is already bringing Claude back, so a Restart button would race it
@@ -4931,6 +5185,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       runStartListeners.add(cb);
       return () => runStartListeners.delete(cb);
     },
+    onSpawnStarted: (cb) => {
+      spawnStartedListeners.add(cb);
+      return () => spawnStartedListeners.delete(cb);
+    },
     onFailedBind: (cb) => {
       failedBindListeners.add(cb);
       return () => failedBindListeners.delete(cb);
@@ -4960,6 +5218,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     tandemPresence: () => presenceSeam,
     requestWake,
     startOrWake,
+    ownSpawn,
+    isOwnChildSession,
+    wokenAt,
   };
 }
 

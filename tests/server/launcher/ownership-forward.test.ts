@@ -69,6 +69,7 @@ import {
   ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
+  setWaitingWrittenSinceForTests,
 } from "../../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../../src/server/mcp/document-service.js";
@@ -85,8 +86,11 @@ import { getMcpContext, runWithMcpContext } from "../../../src/server/sessions/c
 import { resetOwnerHandleBindForTests } from "../../../src/server/sessions/owner-handle-bind.js";
 import {
   applyUserOpenDefault,
+  controlDocumentOwner,
+  controlMessageOwner,
   forgetChatMessageOwners,
   getDocOwner,
+  getOwnerRecord,
   inboxScopeOf,
   noteTransportChanged,
   noteTransportRegistered,
@@ -101,6 +105,7 @@ import {
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
+  setOwnershipTransportMode,
   setStartOrWakeSink,
   setTandemPresenceSource,
   setTransportView,
@@ -258,6 +263,9 @@ async function writeIntegration(present = true): Promise<void> {
 }
 
 beforeEach(async () => {
+  // These suites judge the waiting rules on fake clocks; the restart
+  // cutoff ("written since boot", #2358) has its own cases.
+  setWaitingWrittenSinceForTests(undefined);
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
   vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   vi.stubEnv("NODE_ENV", "test");
@@ -475,9 +483,17 @@ let run = 0;
 let prefix = "";
 /** The `let` the sink reads at call time, as `index.ts`'s `launcherSupervisor`. */
 let supRef: Supervisor | null = null;
-const sink = vi.fn((cause: "document" | "message") => supRef?.startOrWake?.(cause));
+const sink = vi.fn((cause: "document" | "message" | "solo-release" | "mode-known") =>
+  supRef?.startOrWake?.(cause),
+);
+const departureSink = vi.fn((cause: "departure") => supRef?.startOrWake?.(cause));
+/** The passes the lapse's re-ask may own (3b-2b2): at most one, and only when
+ *  it was forwarded (no other session connected). It finds what the row
+ *  finds; a row that wakes nothing still writes nothing. */
+const departurePasses = () => (departureSink.mock.calls.length > 0 ? 1 : 0);
 /** Every cause the observer was told. */
 let causes: WakeCause[] = [];
+let departures = 0;
 
 function register(ownerId: string): void {
   view.push({ ownerId, openStreams: 0 });
@@ -639,7 +655,9 @@ beforeEach(() => {
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
   setWaitingProbe(documentWaiting);
-  setStartOrWakeSink(sink);
+  // The lapse's re-ask (3b-2b2) forwards as "departure", counted apart so
+  // these rows keep counting the forward they were written for.
+  setStartOrWakeSink((cause) => (cause === "departure" ? departureSink(cause) : sink(cause)));
   setOpenDocumentIdsSource(() => getOpenDocs().keys());
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
@@ -650,8 +668,12 @@ beforeEach(() => {
   setGraceMsForTests(GRACE);
   supRef = null;
   sink.mockClear();
+  departureSink.mockClear();
   causes = [];
-  setWakeObserverForTests((cause) => causes.push(cause));
+  // "departure" (the lapse's re-ask, 3b-2b2) is recorded apart, so these
+  // rows keep counting the forward they were written for.
+  departures = 0;
+  setWakeObserverForTests((cause) => (cause === "departure" ? departures++ : causes.push(cause)));
   stepFive = [];
   setCompositeObserverForTests((step, documentId) => {
     if (step === "wake") stepFive.push(documentId);
@@ -683,10 +705,15 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink.mock.calls).toEqual([["document"]]);
   });
 
-  it("R1.4: every cause, with no other session registered and no admit: 'document' for each but user-open and message-owner", () => {
+  it("R1.4: every cause, with no other session registered and no admit: 'document' for each but user-open, message-owner and departure (its own name)", () => {
     // A Record over WakeCause: a new member of the union fails to compile here.
-    const expected: Record<WakeCause, "document" | null> = {
+    const expected: Record<WakeCause, "document" | "departure" | null> = {
       "user-open": null,
+      // Presence's consumer (3b-2b4a): forwarded, never dropped.
+      presence: "document",
+      // The user's Release and Assign (PR 5a): forwarded, ungated.
+      release: "document",
+      assign: "document",
       lapse: "document",
       "take-back": "document",
       claim: "document",
@@ -696,19 +723,32 @@ describe("R1: ownership's startOrWake, called directly", () => {
       "reply-claim": "document",
       "post-claim": "document",
       "message-owner": null,
+      departure: "departure",
     };
-    for (const [cause, forward] of Object.entries(expected) as [WakeCause, "document" | null][]) {
+    for (const [cause, forward] of Object.entries(expected) as [
+      WakeCause,
+      "document" | "departure" | null,
+    ][]) {
       sink.mockClear();
+      departureSink.mockClear();
       causes = [];
+      departures = 0;
       startOrWake(cause);
+      if (forward === "departure") {
+        // Counted apart (3b-2b2): its own observer counter and sink spy.
+        expect(departures, cause).toBe(1);
+        expect(departureSink.mock.calls, cause).toEqual([["departure"]]);
+        expect(sink, cause).not.toHaveBeenCalled();
+        continue;
+      }
       expect(causes, cause).toEqual([cause]);
       expect(sink.mock.calls, cause).toEqual(forward === null ? [] : [[forward]]);
     }
     // Every OwnershipChangeCause is a key above (the type check is the proof).
     const _all: OwnershipChangeCause[] = Object.keys(expected).filter(
-      (k) => k !== "message-owner",
+      (k) => k !== "message-owner" && k !== "departure",
     ) as OwnershipChangeCause[];
-    expect(_all).toHaveLength(9);
+    expect(_all).toHaveLength(12);
   });
 
   it("R1.7 directly: a lapse with another session connected tells the observer and not the sink; every other cause still forwards", () => {
@@ -718,6 +758,9 @@ describe("R1: ownership's startOrWake, called directly", () => {
     expect(sink).not.toHaveBeenCalled();
     startOrWake("take");
     expect(sink.mock.calls).toEqual([["document"]]);
+    // Presence is not gated (Bryan, 2026-11-23: "Yes, start anyway").
+    startOrWake("presence");
+    expect(sink.mock.calls).toEqual([["document"], ["document"]]);
   });
 
   it("R1.5: a forward made inside a request context reaches the sink, and the pass, with no caller identity readable", async () => {
@@ -839,7 +882,10 @@ describe("the decision table: A lapses", () => {
     });
   }
 
-  it("A5 (regression row; A9 is the reachability witness): presence false at the lapse: D goes unowned, nothing; tandemWorkWaiting() is true afterwards (claimable)", async () => {
+  // Since 3b-2b2's departure re-ask: the lapse's own forward still does
+  // nothing (the document went to nobody), but A was the last other session,
+  // so the re-ask finds D's comment claimable and wakes Tandem's Claude once.
+  it("A5 (presence false at the lapse; since 3b-2b2 the re-ask wakes for the claimable comment): D goes unowned, the lapse forwards nothing, the departure wakes once", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d } = worldA();
@@ -850,9 +896,10 @@ describe("the decision table: A lapses", () => {
     reachedStepFive(d.id);
     expect(causes).toEqual([]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
     expect(tandemWorkWaiting()).toBe(true);
   });
 
@@ -898,7 +945,7 @@ describe("the decision table: A lapses", () => {
       expect(sink).not.toHaveBeenCalled();
       await lockBarrier(h);
       expect(c1.stdin.writes).toHaveLength(writes);
-      expect(passes(h)).toBe(0);
+      expect(passes(h)).toBe(departurePasses());
     });
   }
 
@@ -916,7 +963,7 @@ describe("the decision table: A lapses", () => {
       expect(sink).not.toHaveBeenCalled();
       await lockBarrier(h);
       expect(c1.stdin.writes).toHaveLength(writes);
-      expect(passes(h)).toBe(0);
+      expect(passes(h)).toBe(departurePasses());
     });
   }
 
@@ -1007,6 +1054,80 @@ describe("the decision table: A lapses", () => {
     await settle();
     expect(children).toHaveLength(1);
     expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a, an unlicensed Assign (ownership design §10.1): the user's Assign to Tandem's Claude lands keyless, the forward goes out, and the supervisor refuses it: no spawn", async () => {
+    const lic = licenceDouble();
+    const { h } = await idleStopped({ aiRefusal: lic.fn });
+    const { d } = worldA();
+    lic.refusing = true;
+    // An HTTP-mode boot has Tandem's Claude's record from the start.
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(await controlDocumentOwner(d.id, "assign", label, () => true)).toBe("changed");
+    expect(getDocOwner(d.id)).toMatchObject({ ownerId: TANDEM, kind: "assigned" });
+    expect(causes).toEqual(["assign"]);
+    expect(sink.mock.calls).toEqual([["document"]]);
+    await lockBarrier(h);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a, an Assign (positive twin): admitted, idle-stopped: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    const { d } = worldA();
+    // An HTTP-mode boot has Tandem's Claude's record from the start.
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(await controlDocumentOwner(d.id, "assign", label, () => true)).toBe("changed");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  /** A owns a closed F's message per message (origin close): the message Assign's starting point. */
+  async function messageOwnedByA(): Promise<string> {
+    register(A);
+    const f = mkDoc("f");
+    setDocOwner(f.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), f.id);
+    await closeByRoute(f.id);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    causes = [];
+    return m;
+  }
+
+  it("PR 5a-2, an unlicensed Assign of a chat message (ownership design §10.1): it lands keyless, the message forward goes out, and the supervisor refuses it: no spawn", async () => {
+    const lic = licenceDouble();
+    const { h } = await idleStopped({ aiRefusal: lic.fn });
+    const m = await messageOwnedByA();
+    lic.refusing = true;
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
+    expect(messageOwner(m)).toEqual({ ownerId: TANDEM, origin: "assign" });
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a-2, an Assign of a chat message (positive twin): admitted, idle-stopped: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    const m = await messageOwnedByA();
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
   });
 
   it("A15 (positive): A holds D and E, each with a waiting comment; one lapse: exactly one pass, one wake", async () => {
@@ -1156,6 +1277,9 @@ describe("the decision table: A lapses", () => {
 
 const FORWARD_FAILED =
   "[ownership] a change of owner could not be passed on to Tandem's Claude; it may not have been started or woken.";
+/** The `ownership` frame's waiting read (#2358 PR 3b-2d). */
+const FRAME_WAITING_FAILED =
+  "[ownership] whether work is waiting after a change of owner could not be read; no session was told.";
 
 describe("other cases (PR a)", () => {
   it("R1.5: a throwing sink inside a lapse of two documents: both move, one fixed line, and no setDocOwner-failed line", () => {
@@ -1440,7 +1564,7 @@ describe("the message forward (PR b)", () => {
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(passes(h)).toBe(departurePasses());
   });
 
   it("M3 (anchor M1): the message classed local-period after the close: nothing; the observer told message-owner", async () => {
@@ -1457,10 +1581,10 @@ describe("the message forward (PR b)", () => {
     expect(sink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(passes(h)).toBe(departurePasses());
   });
 
-  it("M10 (anchor M1): D re-added open and unowned before the lapse, so the message follows D and nobody holds D: nothing; tandemWorkWaiting() is true (claimable)", async () => {
+  it("M10 (anchor M1): D re-added open and unowned before the lapse, so the message follows D and nobody holds D: the message forward refuses it; since 3b-2b2 the departure re-ask wakes once (claimable)", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { d, m } = await worldB();
@@ -1472,13 +1596,14 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(causes).toEqual(["message-owner"]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
     expect(tandemWorkWaiting()).toBe(true);
   });
 
-  it("M11 (anchor M1): M10 plus a doc-less unread user message Tandem's Claude owns by presence: nothing (the admit asks only the changed message)", async () => {
+  it("M11 (anchor M1): M10 plus a doc-less unread user message Tandem's Claude owns by presence: the message forward still refuses (its admit asks only the changed message); the departure re-ask wakes once", async () => {
     const h = makeSupervisor();
     const c1 = await runningIdle(h);
     const { m } = await worldB();
@@ -1489,9 +1614,10 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(causes).toEqual(["message-owner"]);
     expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
     await lockBarrier(h);
-    expect(c1.stdin.writes).toHaveLength(writes);
-    expect(passes(h)).toBe(0);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
   });
 
   describe("M4 to M6: a close forwards nothing (pick 1)", () => {
@@ -1625,8 +1751,170 @@ describe("the message forward (PR b)", () => {
     expect(messageOwner(m1)).toBeUndefined();
     expect(messageOwner(m2)).toBeUndefined();
     expect(reOwe.mock.calls.flat(2).sort()).toEqual([m1, m2].sort());
-    expect(ownershipLines()).toEqual([FORWARD_FAILED]);
+    // And, since #2358 PR 3b-2d, the release's frame check reads the same
+    // throwing member: its own fixed line, and no frame.
+    expect(ownershipLines()).toEqual([FORWARD_FAILED, FRAME_WAITING_FAILED]);
     expect(sink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+  });
+});
+
+// --- #2358 PR 3b-2b2: the departure re-ask (the claimable row) --------------
+
+describe("3b-2b2: the re-ask when a session stops counting", () => {
+  it("D1 (positive): a claimable comment on E while B is connected; B lapses: the re-ask wakes once", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    expect(getDocOwner(e.id)).toBeUndefined();
+    expect(tandemWorkWaiting()).toBe(false); // B counts: claimable work is not Tandem's Claude's
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
+  });
+
+  it("D1's anchor: C still connected when B lapses: nothing forwarded, nothing written", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    register(C);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink).not.toHaveBeenCalled();
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("D2, two sessions going away together: A holds D with a waiting comment, B connected; both lapse in one grace: one wake, at the second", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    const { d } = worldA();
+    register(B);
+    const writes = c1.stdin.writes.length;
+    dropStream(A);
+    dropStream(B);
+    advance(GRACE + 1);
+    expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+    // A's own forward and A's re-ask were dropped while B still counted.
+    expect(sink).not.toHaveBeenCalled();
+    expect(departureSink.mock.calls).toEqual([["departure"]]);
+    await lockBarrier(h);
+    expect(c1.stdin.writes).toHaveLength(writes + 1);
+    expect(passes(h)).toBe(1);
+  });
+
+  it("D3, idle-stopped: B lapses with a claimable comment waiting: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    lapse(B);
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  for (const withB of [false, true]) {
+    it(`D5, the widened arm through the real decision: idle-stopped, a claimable user comment on E${withB ? ", B connected: no spawn" : ", no other session: one spawn"}`, async () => {
+      const { h } = await idleStopped();
+      if (withB) register(B);
+      const e = mkDoc("e");
+      const c = comment(e.ydoc, key("ce"));
+      h.emit({
+        id: `evt_${c}`,
+        type: "annotation:created",
+        timestamp: Date.now(),
+        documentId: e.id,
+        payload: { annotationId: c, annotationType: "comment", content: "look", textSnippet: "x" },
+      } as TandemEvent);
+      await lockBarrier(h);
+      await settle();
+      if (withB) {
+        expect(children).toHaveLength(1);
+      } else {
+        await childN(2);
+        await settle();
+        expect(children).toHaveLength(2);
+      }
+    });
+  }
+
+  describe("written since boot (#2358, the restart row; Bryan's pick)", () => {
+    function commentEvent(e: Doc, c: string): TandemEvent {
+      return {
+        id: `evt_${c}`,
+        type: "annotation:created",
+        timestamp: Date.now(),
+        documentId: e.id,
+        payload: { annotationId: c, annotationType: "comment", content: "look", textSnippet: "x" },
+      } as TandemEvent;
+    }
+
+    it("WB1: a claimable comment written before boot does not start a stopped Tandem's Claude; one written after does", async () => {
+      const { h } = await idleStopped();
+      const e = mkDoc("e");
+      const old = comment(e.ydoc, key("old"));
+      setWaitingWrittenSinceForTests(clock + 1_000); // boot after the old comment
+      expect(tandemWorkWaiting()).toBe(false);
+      h.emit(commentEvent(e, old));
+      await lockBarrier(h);
+      await settle();
+      expect(children).toHaveLength(1);
+      clock += 2_000;
+      const fresh = comment(e.ydoc, key("new"));
+      expect(tandemWorkWaiting()).toBe(true);
+      h.emit(commentEvent(e, fresh));
+      await lockBarrier(h);
+      await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+    });
+
+    it("WB2: a comment written before boot and edited after it waits", () => {
+      const e = mkDoc("e");
+      comment(e.ydoc, key("old"), { editedAt: clock + 5_000 });
+      setWaitingWrittenSinceForTests(clock + 1_000);
+      expect(tandemWorkWaiting()).toBe(true);
+    });
+
+    it("WB3: a lapse in the window: B lapses after a restart with only pre-boot claimable work: the re-ask is forwarded and starts nothing", async () => {
+      const h = makeSupervisor();
+      const c1 = await runningIdle(h);
+      register(B);
+      const e = mkDoc("e");
+      comment(e.ydoc, key("old"));
+      userChat(key("oldchat"), e.id);
+      setWaitingWrittenSinceForTests(clock + 1_000);
+      const writes = c1.stdin.writes.length;
+      lapse(B);
+      expect(departureSink.mock.calls).toEqual([["departure"]]);
+      await lockBarrier(h);
+      expect(c1.stdin.writes).toHaveLength(writes);
+      expect(tandemWorkWaiting()).toBe(false);
+    });
+  });
+
+  it("D4, flag off: B lapses with a claimable comment waiting: nothing forwarded, nothing written", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    register(B);
+    const e = mkDoc("e");
+    comment(e.ydoc, key("ce"));
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const writes = c1.stdin.writes.length;
+    lapse(B);
+    expect(departureSink).not.toHaveBeenCalled();
     await lockBarrier(h);
     expect(c1.stdin.writes).toHaveLength(writes);
   });

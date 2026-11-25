@@ -14,8 +14,9 @@ After UI changes that affect any of these areas: editor layout, the right rail
 (annotations/chat), toolbar/tab bar, the status pill, toast notifications, the
 margin view, the outline rail, the Settings modal, the integration wizard, the
 onboarding tutorial card, themes, the file-changed conflict banner, the command
-palette, the help/shortcuts modal, the Activity tray, replies and notes, or
-Settings → Notifications.
+palette, the help/shortcuts modal, the Activity tray, replies and notes,
+Settings → Notifications, Settings → Models, or the title-bar chip shown while a
+local model answers chat.
 
 ## One pipeline
 

@@ -66,6 +66,18 @@ export type LauncherStatus =
        * because the commonest reason the hello never comes — Claude Code not
        * signed in — stops the child. */
       greetingLate?: true;
+      /** Loopback-only, and only while multi-session ownership is on (#2358
+       * PR 3b-2e1, ownership design §3.3, §8.7): Tandem's Claude's latest run
+       * was judged failed to bind — its spawn's window ran out, or it ended
+       * for a reason other than a deliberate stop or the sign-in trip, before
+       * any of its MCP connections presented its handle — and no run has
+       * started since. Settings says Tandem's Claude "couldn't connect its
+       * Tandem tools". Start is not offered for it: a restart reproduces it.
+       * Beside `standby` and `restartPending`, and changes neither; never
+       * beside a `lastError`, the more specific diagnosis, which outranks it
+       * as it outranks `standby`. Absent from an older server and while
+       * dark. */
+      bindFailed?: true;
       /** Loopback-only (#1822 item 4a): see the running arm. */
       workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** Loopback-only. `null` when last refresh succeeded. */
@@ -100,6 +112,15 @@ export type LauncherStatus =
        * model, so this Claude is woken for nothing until it is answered by
        * Claude again. Absent from an older server and while dark. */
       heldForLocalModel?: true;
+      /** Loopback-only, flag on only (#2358 PR 3b-2e1): see the stopped arm. */
+      bindFailed?: true;
+      /** Loopback-only, and only while multi-session ownership is on (#2358
+       * PR 3b-2e1, ownership design §3.3's Ruling C): the MCP connections
+       * bound to this run of Tandem's Claude, one row each, by kind alone.
+       * Never an `Mcp-Session-Id`, an owner record id or a Claude session id.
+       * Sent only when at least one is bound; absent while dark and from an
+       * older server. */
+      boundTransports?: BoundTransport[];
       /** Loopback-only (#1822 item 4a). The LAST spawn did not use the saved
        * `workingDirectory` and ran in home instead. Absent when it did, when
        * none is saved, and from an older server. See
@@ -108,6 +129,26 @@ export type LauncherStatus =
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };
+
+/**
+ * How an MCP connection bound to Tandem's Claude's run reached Tandem (#2358
+ * PR 3b-2e1, ownership design §3.3's Ruling C). Every bound connection carried
+ * the run's owner handle and its Claude session id (the bind requires both),
+ * so the one header that tells them apart is the stdio bridge's
+ * `X-Tandem-Client-Id`:
+ *   - `bridge` — it carried it: Tandem's own stdio bridge (the setup entry or
+ *     the plugin).
+ *   - `direct-http` — it did not: a direct HTTP `.mcp.json` entry.
+ */
+export type BoundTransportKind = "bridge" | "direct-http";
+
+export const BOUND_TRANSPORT_KINDS: readonly BoundTransportKind[] = ["bridge", "direct-http"];
+
+/** One row of the Settings list of bound transports. Kind only, by design:
+ * a label a local page may read (ownership design §11.3), never an id. */
+export interface BoundTransport {
+  kind: BoundTransportKind;
+}
 
 /**
  * The saved `workingDirectory` the last spawn refused, and why (#1822 item

@@ -14,6 +14,7 @@
  */
 
 import { z } from "zod";
+import { isHeldInSoloMarker } from "../../shared/sanitize.js";
 import {
   AgentIdentitySchema,
   AnnotationStatusSchema,
@@ -25,6 +26,9 @@ import {
 } from "../../shared/types.js";
 import { logLegacyMigration, MIGRATE_TO_V1_DOC_HASH } from "./migration-log.js";
 import { migrateUp } from "./migrations/index.js";
+
+/** `meta.keyIdentity` value of an envelope whose every row id is its map key. */
+export const KEY_IDENTITY_FORMAT = 1 as const;
 
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
 export const SCHEMA_VERSION = 1 as const;
@@ -180,7 +184,13 @@ export const AnnotationReplyRecordSchemaV1 = z
     // WS-A2: Solo-hold marker (badge + fail-closed-restart tiebreaker). Already
     // preserved by `.passthrough()`; listed explicitly for parity with the
     // annotation record and type-safety at the write site.
-    heldInSolo: z.boolean().optional(),
+    //
+    // #2481: a non-boolean marker is normalised to `true` by the predicate the
+    // hold reads (`isHeldInSoloMarker`), never rejected. A bare `z.boolean()`
+    // failed the whole row, so `normalizeReply` dropped the reply from every
+    // snapshot and the load filter dropped it from the file: a reply the hold
+    // was withholding was instead lost on the next restart.
+    heldInSolo: z.preprocess((v) => isHeldInSoloMarker(v), z.boolean()).optional(),
     // #1123 M3: authoring agent identity (local-model collaborator replies only).
     agentIdentity: AgentIdentitySchema.optional(),
     // #1626: a Claude-authored reply's replacement proposal, over the PARENT's
@@ -219,6 +229,11 @@ const MetaSchema = z
     // a renamed-but-byte-identical document. Optional so pre-#313 envelopes
     // (which lack it) still parse; recovery simply skips them.
     contentHash: z.string().optional(),
+    // Additive. `1` marks an envelope written by a `snapshot()` that persists
+    // each record under its Y.Map key, so every row id IS its key. Absent on
+    // older envelopes, whose rows may carry another record's id: `loadAndMerge`
+    // routes those through the old-format assignment pass instead.
+    keyIdentity: z.literal(KEY_IDENTITY_FORMAT).optional(),
   })
   .passthrough();
 

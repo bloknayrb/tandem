@@ -4,6 +4,13 @@
     "lib": ["ES2022"],
     "rootDir": "src"
   },
-  "include": ["src/server", "src/shared", "src/channel", "src/monitor"],
+  "include": [
+    "src/server",
+    "src/shared",
+    "src/channel",
+    "src/monitor",
+    "src/cli",
+    "src/stdio-bridge"
+  ],
   "exclude": ["node_modules"]
 }

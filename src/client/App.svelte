@@ -4,6 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
+import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
   type Annotation,
   type ChatMessage,
@@ -141,7 +142,7 @@ import { createLayoutModel } from "./layout/model.svelte";
 import { createRailContentModel } from "./layout/rail-content.svelte";
 import { createNotifierBackend } from "./notifications/backend";
 import { createChatAttention } from "./notifications/chat-attention";
-import { armChimes, playChime } from "./notifications/chimes";
+import { armChimes, playChime, preloadChimes } from "./notifications/chimes";
 import {
   buildCommentNotificationText,
   type CommentAnswerItem,
@@ -1393,8 +1394,9 @@ const actionExecutor = mountActionExecutor({
   // `opts` lets a non-launcher caller (the executor's failure funnel) classify
   // its toast correctly instead of inheriting `type: "launcher"`, and supply a
   // deterministic id. The default id is millisecond-keyed and ToastContainer
-  // keys its `{#each}` on it, so two toasts pushed in the same millisecond are
-  // an `each_key_duplicate` throw.
+  // keys its `{#each}` on it when the toast has no `dedupKey` (`toastKey`), so
+  // two such toasts pushed in the same millisecond are an `each_key_duplicate`
+  // throw.
   notify: (severity, message, opts) => {
     notifications.push({
       id: opts?.id ?? `launcher-${Date.now()}`,
@@ -2524,6 +2526,9 @@ const commentAttention = createChatAttention<CommentAnswerItem>({
 onDestroy(() => chatAttention.destroy());
 onDestroy(() => commentAttention.destroy());
 armChimes();
+// Fetch (not decode: no AudioContext before a gesture) the chosen sound's
+// recordings now, so the first reply sound doesn't wait on loading.
+preloadChimes(settingsState.settings.chatSound);
 $effect(() => {
   if (!windowAttention.active) return;
   untrack(() => {
@@ -2813,10 +2818,10 @@ const marginReplies = createAnnotationReplies({
 const heldCount = $derived.by(() => {
   let n = 0;
   for (const a of visibleAnnotations) {
-    if (a.heldInSolo === true) n++;
+    if (isHeldInSoloMarker(a.heldInSolo)) n++;
     if (a.type === "comment") {
       const replies = marginReplies.byId.get(a.id);
-      if (replies) for (const r of replies) if (r.heldInSolo === true) n++;
+      if (replies) for (const r of replies) if (isHeldInSoloMarker(r.heldInSolo)) n++;
     }
   }
   return n;
@@ -3394,7 +3399,11 @@ function dismissModelPicker() {
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
     />
 
-    <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+    <ToastContainer
+      toasts={notifications.toasts}
+      announced={notifications.announced}
+      onDismiss={notifications.dismiss}
+    />
 
     <ActivityTray
       items={notifications.activity}
@@ -3614,7 +3623,10 @@ function dismissModelPicker() {
          reports one aggregate: flag off one process-global round, flag on the
          oldest of the rounds keyed by document and by message), so it sits
          outside the per-tab guards above. -->
-    <WakeStallBanner stalledMs={aiReadiness.deliveryStalledMs} />
+    <WakeStallBanner
+      stalledMs={aiReadiness.deliveryStalledMs}
+      keyed={aiReadiness.deliveryKeyed}
+    />
     {#if activeTab && activeTab.format === "docx"}
       <FidelityReportBanner
         ydoc={activeTab.ydoc}

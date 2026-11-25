@@ -311,6 +311,19 @@ function logText(): string {
   return errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
 }
 
+/**
+ * `status()` without `bindFailed` (#2358 PR 3b-2e1), for the crash cases that
+ * pin a stopped shape exactly. Their stub children crash after a turn was
+ * written without ever binding, so in the ownership-flag-on job the supervisor
+ * rightly reports the failed bind beside the state each case pins; the field
+ * has its own tests in `supervisor-presence.test.ts`. Flag off it is never
+ * set, so this is the identity there.
+ */
+function stoppedStatusOf(sup: Supervisor): Omit<ReturnType<Supervisor["status"]>, "bindFailed"> {
+  const { bindFailed: _bindFailed, ...rest } = sup.status();
+  return rest;
+}
+
 /** Child 1 is fresh, its bootstrap turn answered, and an event wrote W1 (held). */
 async function freshChildWithHeldWake(sup: Supervisor, emit: (e: TandemEvent) => void) {
   await sup.startFresh(cwdDir);
@@ -1313,7 +1326,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(reads.count()).toBe(1);
     expect(occurrences("Restarting Claude in")).toBe(1);
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false });
   });
 
   it("a relaunch during a failing read leaves no stale error behind", async () => {
@@ -1335,7 +1348,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(sup.status().running).toBe(true);
     expect(children).toHaveLength(2);
     await sup.stop();
-    expect(sup.status()).toEqual({ running: false });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false });
   });
 
   it("a read that fails while a relaunch's own read is in flight schedules nothing", async () => {
@@ -1949,7 +1962,11 @@ describe("#2195 — the start mode holds boot back", () => {
     // Resumed with nothing owed, so it writes no turn and its idle clock starts
     // at spawn — and only an idle lifetime ends it.
     await waitFor(() => child2.killed, "the restarted child's idle stop");
-    expect(sup.status()).toEqual({ running: false, standby: "idle", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({
+      running: false,
+      standby: "idle",
+      startsOnMessage: true,
+    });
   });
 
   it("on-click holds only boot: a crash restart of a Claude the user started brings it back", async () => {
@@ -2051,16 +2068,21 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
   });
 
   it("cancels a crash restart that is only scheduled", async () => {
-    const { sup } = makeSupervisor({ restartBackoffsMs: [150] });
+    // A backoff far longer than the settings write: with 150 ms, a loaded
+    // Windows runner let the restart fire before `updateSettings` landed, and
+    // the case read a second child (vitest-windows on #2520). The restart must
+    // still be pending when Off arrives; the sleep then outlasts the backoff.
+    const { sup } = makeSupervisor({ restartBackoffsMs: [2_000] });
     await sup.start();
     exitChild(await nthChild(1), 1);
     await settle();
     expect(sup.status()).toMatchObject({ running: false, restartPending: true });
     await sup.updateSettings({ startMode: "off" });
-    await sleep(300);
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+    await sleep(2_300);
     await settle();
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("cancels a crash restart suspended in its plan read", async () => {
@@ -2079,7 +2101,7 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
       reads.restore();
     }
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("a crash restart while off never starts Claude, even if the off came first in the file only", async () => {
@@ -2092,7 +2114,7 @@ describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
     await sleep(50);
     await settle();
     expect(children).toHaveLength(1);
-    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off", startsOnMessage: true });
   });
 
   it("licence activation does not bring back a Claude the user turned off", async () => {
@@ -2762,7 +2784,7 @@ describe("#2196 — a message starts a Claude that is stopped by choice", () => 
     expect(sup.status()).toMatchObject({ running: false, lastError: "circuit-open" });
     // The user turns it off. Nothing promises that a chat starts it…
     await sup.updateSettings({ startMode: "off" });
-    expect(sup.status()).toEqual({ running: false, standby: "off" });
+    expect(stoppedStatusOf(sup)).toEqual({ running: false, standby: "off" });
     // …and a chat does not.
     const before = children.length;
     emit(chatEvent());
@@ -3081,6 +3103,16 @@ describe("#2198 — the v1.0 walkthrough holds the boot start", () => {
 });
 
 describe("#2197 — the one-time greeting", () => {
+  // The dark rule (#2358 PR 3b-2c): these pin master's session-id keyed
+  // greeting, so they run flag-off in the ownership-flag-on job too. The
+  // bound-transport rule is the "#2358 PR 3b-2c" block below.
+  beforeEach(() => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function greetingSeam(owed = true) {
     const state = { owed, throws: false };
     const markDone = vi.fn(async () => {
@@ -3404,6 +3436,14 @@ describe("#2197 — the one-time greeting", () => {
 // --- #2227 ----------------------------------------------------------------------
 
 describe("#2227 — which reply is the hello: the greeting classifier", () => {
+  // The dark rule, as in the #2197 block above (#2358 PR 3b-2c).
+  beforeEach(() => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   type Query = {
     sessionId: string | undefined;
     replyTo: string | undefined;
@@ -3545,6 +3585,136 @@ describe("#2227 — which reply is the hello: the greeting classifier", () => {
     await sup.startFresh(cwdDir);
     expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
     expect(h.classify()).toBe(false);
+  });
+});
+
+describe("#2358 PR 3b-2c — the greeting by bound transport (ownership design §7.3)", () => {
+  type Query = {
+    sessionId: string | undefined;
+    replyTo: string | undefined;
+    inProgress: boolean | undefined;
+    bound?: boolean;
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /**
+   * The supervisor's two greeting seams, driven as `tandem_reply` and
+   * `/api/channel-reply` drive them: classify, then (after the append)
+   * notify, each with the same transport fact.
+   */
+  function harness() {
+    const state = { owed: true };
+    const markDone = vi.fn(async () => {
+      state.owed = false;
+    });
+    const replyCbs = new Set<(sessionId: string | undefined, bound?: boolean) => void>();
+    let classifier: ((q: Query) => boolean) | null = null;
+    const extra: ExtraOpts = {
+      greeting: { isOwed: () => state.owed, markDone },
+      subscribeTandemReply: (cb) => {
+        replyCbs.add(cb);
+        return () => replyCbs.delete(cb);
+      },
+      registerGreetingReplyClassifier: (fn) => {
+        classifier = fn;
+        return () => {
+          classifier = null;
+        };
+      },
+      userChatSnapshot: () => ({ ids: new Set<string>(), unread: false }),
+    };
+    const reply = (q: { sessionId?: string; bound?: boolean }): boolean => {
+      const query: Query = {
+        sessionId: q.sessionId,
+        replyTo: undefined,
+        inProgress: undefined,
+        ...(q.bound !== undefined ? { bound: q.bound } : {}),
+      };
+      const tagged = classifier?.(query) ?? false;
+      for (const cb of [...replyCbs]) {
+        if (q.bound === undefined) cb(q.sessionId);
+        else cb(q.sessionId, q.bound);
+      }
+      return tagged;
+    };
+    return { extra, markDone, reply };
+  }
+
+  const ownSessionId = (): string =>
+    (
+      JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8")) as {
+        sessionId: string;
+      }
+    ).sessionId;
+
+  async function greetingSpawn(h: ReturnType<typeof harness>) {
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
+    return sup;
+  }
+
+  it("flag on: a reply on the bound transport is the greeting, and answers it", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: true })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("flag on: a bound reply with no session id is the greeting too (the bind decides, not the header)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ bound: true })).toBe(true);
+  });
+
+  it("flag on: an unbound transport carrying the child's own session id is not the greeting, and does not answer it", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(false);
+    expect(h.markDone).not.toHaveBeenCalled();
+    // Still pending: the bound transport's reply that follows is the greeting.
+    expect(h.reply({ sessionId: ownSessionId(), bound: true })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("flag on: an unbound reply alone leaves the greeting unanswered at the turn's end", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    const sup = await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(false);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).toMatchObject({ greetingLate: true });
+  });
+
+  it("flag on: a reply with no transport fact at all is not the greeting (fails closed)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ sessionId: ownSessionId() })).toBe(false);
+    expect(h.reply({})).toBe(false);
+    expect(h.markDone).not.toHaveBeenCalled();
+  });
+
+  it("dark: the session id decides and the transport fact is not read (master's rule)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = harness();
+    await greetingSpawn(h);
+    expect(h.reply({ sessionId: "someone-else", bound: true })).toBe(false);
+    expect(h.reply({ sessionId: ownSessionId(), bound: false })).toBe(true);
+    expect(h.markDone).toHaveBeenCalledTimes(1);
   });
 });
 

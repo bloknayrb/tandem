@@ -88,6 +88,7 @@ const DE_NUMBERED = [
   "docs/roadmap.md",
   "docs/user-guide.md",
   "docs/workflows.md",
+  "docs/integrations.md",
 ];
 
 /**

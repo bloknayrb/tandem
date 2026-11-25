@@ -15,19 +15,24 @@ import {
   MODE_RELEASE_WAKE_ID_PREFIX,
 } from "../../shared/constants.js";
 import { makeHeldInSoloStampObserver } from "../annotations/held-in-solo.js";
+import { attachKeyIdentityObserver, reconcileAnnotationKeys } from "../annotations/key-identity.js";
+import { makeAnnotationWriteArbiter } from "../annotations/write-arbiter.js";
 import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
 } from "../documents/dirty.js";
 import { aiRefusal } from "../license/ai-refusal.js";
-import { installModeProvenanceObserver, readModeState } from "../mode.js";
+import { installModeKnownObserver, installModeProvenanceObserver, readModeState } from "../mode.js";
 import { inLocalPeriod, withheldForLocalPeriod } from "../models/local-period.js";
+import { noteModeObserved } from "../sessions/ownership.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   deliveryRoundKeyOf,
   isUnansweredAsk,
   noteExternalConsumerAttached,
   noteExternalConsumersGone,
+  type OwedDeliveryRounds,
+  openOwedDeliveryRounds,
   type PendingDeliveryItem,
   recordWakeForward,
   resetDeliveryStateForTests,
@@ -528,6 +533,19 @@ export function getSubscriberCount(): number {
 }
 
 /**
+ * Open the delivery rounds of work ownership owed again and woke someone for,
+ * or of a reopened document with items owed (#2358 PR 3b-2b5; handover gap
+ * (d), the reopen round). Here rather than in `delivery-state.ts` because the
+ * round is marked abandoned when no external consumer is attached, and this
+ * module holds that count. Reached only through ownership's
+ * `setDeliveryRoundOpener` seam (`index.ts`), which a flag-on ownership change
+ * calls; `openOwedDeliveryRounds` does nothing while rounds are not keyed.
+ */
+export function openRoundsForOwedWork(owed: OwedDeliveryRounds): void {
+  openOwedDeliveryRounds(owed, externalSubscribers.size === 0);
+}
+
+/**
  * `kind` is REQUIRED — deliberately not defaulted. It now decides two different
  * things that want OPPOSITE defaults:
  *
@@ -733,7 +751,11 @@ export function getBufferedSelection(docName: string): BufferedSelection | undef
  * (selection buffering) — annotation and reply events are suppressed so
  * ephemeral scratch notes don't flood Claude's channel.
  */
-export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?: boolean }): void {
+export function attachObservers(
+  docName: string,
+  doc: Y.Doc,
+  opts?: { uploadDoc?: boolean; deferKeyScan?: boolean },
+): void {
   detachObservers(docName);
 
   const cleanups: Array<() => void> = [];
@@ -745,11 +767,23 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
     );
   }
 
+  // An annotation's identity is its map key: repair a record that arrives
+  // under a key differing from its stored id, and quarantine the replies filed
+  // under the stale id. Every origin but `internal`, including `null` (a
+  // session restore). The attach-time scan is deferred on a swap so it runs
+  // after the file-sync context is rebound and can persist (`reattachObservers`).
+  cleanups.push(attachKeyIdentityObserver(doc, { scan: !opts?.deferKeyScan }));
+
   // #1769: stamp `heldInSolo` server-side on user comments created/edited while
   // the room does not read Tandem. Attached for every doc (upload/scratchpad
   // included — the marker is a privacy substrate, not a channel event), and
   // re-run by `reattachObservers` after the Hocuspocus doc swap.
   cleanups.push(makeHeldInSoloStampObserver({ docName, doc }));
+
+  // #1920: the server arbitrates two writes to one annotation made without
+  // seeing each other, which Yjs alone resolves by clientID. Every doc, and
+  // re-run after the Hocuspocus doc swap like the observers above.
+  cleanups.push(makeAnnotationWriteArbiter({ docName, doc }));
 
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).
@@ -780,8 +814,10 @@ export function reattachObservers(
   newDoc: Y.Doc,
   opts?: { uploadDoc?: boolean },
 ): void {
-  attachObservers(docName, newDoc, opts);
+  attachObservers(docName, newDoc, { ...opts, deferKeyScan: true });
   reattachFileSyncObserver(docName, newDoc);
+  // After the rebind, so a repair finds the new file-sync context and persists.
+  reconcileAnnotationKeys(newDoc);
 }
 
 // --- CTRL_ROOM observers (chat + document meta) ---
@@ -799,6 +835,10 @@ export function attachCtrlObservers(): void {
     // #1733: record which connection last wrote the mode key. Pushed here so the
     // Hocuspocus doc swap re-installs it.
     installModeProvenanceObserver(ctrlDoc),
+    // #2358, the restart question: the first Tandem mode after an unknown one
+    // asks the waiting decision again (ownership's; nothing flag off). Pushed
+    // here so the Hocuspocus doc swap re-installs it.
+    installModeKnownObserver(ctrlDoc, noteModeObserved),
   ];
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");

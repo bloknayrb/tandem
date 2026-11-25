@@ -581,6 +581,45 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
   });
 });
 
+describe("AnnotationReplyRecordSchemaV1 — heldInSolo marker (#2481)", () => {
+  const heldReply = {
+    id: "rep_held",
+    annotationId: "ann_1_abc",
+    author: "user" as const,
+    text: "a reply written in Solo",
+    timestamp: 1_700_000_000_100,
+    rev: 0,
+  };
+
+  // A non-boolean marker used to fail the row, so the reply was dropped from
+  // every snapshot and from the file on load. It now keeps the row and reads as
+  // held, by the same predicate the indeterminate-mode hold uses.
+  it.each([
+    ['the string "true"', "true"],
+    ['the string "false"', "false"],
+    ["1", 1],
+    ["0", 0],
+    ["null", null],
+  ])("keeps a reply whose marker is %s and normalises it to true", (_l, marker) => {
+    const row = { ...heldReply, heldInSolo: marker };
+    const parsed = AnnotationReplyRecordSchemaV1.safeParse(row);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as Record<string, unknown>).heldInSolo).toBe(true);
+    const doc = parseAnnotationDoc({ ...validDoc, replies: [row] });
+    if (!doc.ok) throw new Error(`expected ok, got ${doc.error}`);
+    expect(doc.doc.replies).toHaveLength(1);
+    expect(doc.skipped.replies ?? 0).toBe(0);
+  });
+
+  it("keeps `false` and leaves an absent marker absent", () => {
+    const kept = AnnotationReplyRecordSchemaV1.safeParse({ ...heldReply, heldInSolo: false });
+    expect(kept.success && kept.data.heldInSolo).toBe(false);
+    const absent = AnnotationReplyRecordSchemaV1.safeParse(heldReply);
+    expect(absent.success).toBe(true);
+    expect(absent.data).not.toHaveProperty("heldInSolo");
+  });
+});
+
 describe("AnnotationReplyRecordSchemaV1 — agentIdentity (#1123 M3)", () => {
   const baseReply = {
     id: "rep_ai",

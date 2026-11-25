@@ -1,7 +1,8 @@
 /**
  * Tandem's Claude's run state in the supervisor (#2358 PR 3b-1, ships dark):
  * the spawn record, the bind window and the failed-bind judgement (R1), and
- * presence with its announcements (R2). Computed, consumed by nothing yet.
+ * presence with its announcements (R2). Consumed by ownership through
+ * `index.ts` since #2358 PR 3b-2b4a; the last describe wires it the same way.
  *
  * `spawn` is mocked for the whole file (a `FakeChild` whose exit the test can
  * hold), as `supervisor-turn-delivery.test.ts` does; the run files are real,
@@ -32,6 +33,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { DELIVERY_STALL_MS } from "../../../src/shared/constants.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -59,6 +61,32 @@ import {
   judgeBind,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
+import {
+  checkWrite,
+  getDocOwner,
+  noteFailedBind,
+  noteModeObserved,
+  noteOwnSpawnStarted,
+  noteSoloReleased,
+  noteTandemPresence,
+  noteTandemRunStart,
+  noteTransportChanged,
+  noteTransportRegistered,
+  ownershipSnapshotForTests,
+  resetOwnershipForTests,
+  setDocOwner,
+  setGraceMsForTests,
+  setOpenDocumentIdsSource,
+  setOwnSpawnSource,
+  setRequestWakeSink,
+  setStartOrWakeSink,
+  setTandemPresenceSource,
+  setTransportView,
+  setWaitingProbe,
+  TANDEM_OWNER_ID,
+  type TransportViewEntry,
+  tandemWorkWaiting,
+} from "../../../src/server/sessions/ownership.js";
 import {
   REAPER_NOT_FOUND_MARKER,
   SUPERVISOR_WAKE_PROMPT,
@@ -2279,7 +2307,9 @@ describe("3b-2a R2: startOrWake", () => {
       h.sup.startOrWake?.("document");
       await lockBarrier(h);
       expect(children).toHaveLength(1);
-      expect(logText()).toMatch(/not starting Claude \(message\)/);
+      // Held as Tandem's Claude's own work, not as a chat's start (piece 36).
+      expect(logText()).toMatch(/not starting Claude \(work\)/);
+      expect(logText()).not.toMatch(/not starting Claude \(message\)/);
     });
 
     it("positive twin: no local period, something waiting, no child: one spawn", async () => {
@@ -2289,7 +2319,7 @@ describe("3b-2a R2: startOrWake", () => {
       h.sup.startOrWake?.("document");
       await lockBarrier(h);
       await childN(2);
-      expect(logText()).not.toMatch(/not starting Claude \(message\)/);
+      expect(logText()).not.toMatch(/not starting Claude \((message|work)\)/);
     });
 
     it("a live child: nothing written", async () => {
@@ -2303,6 +2333,159 @@ describe("3b-2a R2: startOrWake", () => {
       await lockBarrier(h);
       expect(waiting.calls).toBe(1);
       expect(c.stdin.writes).toHaveLength(1);
+    });
+  });
+
+  // #2358 piece 36: the user's switch back runs a start held for Tandem's
+  // Claude's own work only if something is still waiting (Bryan, 2026-11-17:
+  // "Yes, only if still waiting"), whether or not another AI is attached
+  // ("Yes, unless Claude is Off"), and never when Off.
+  describe("piece 36: the switch back and a start held for waiting work", () => {
+    /** Idle-stopped, the local period on, one start-or-wake held as work. */
+    async function heldForWork(extra: ExtraOpts & { waiting: () => boolean }) {
+      const lp = localDouble();
+      const waiting = waitingDouble(extra.waiting);
+      const { h } = await idleStopped({ ...extra, workWaiting: waiting.fn, localPeriod: lp.opts });
+      lp.held = true;
+      lp.switchTo({ to: "local" });
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/not starting Claude \(work\)/);
+      const asked = waiting.calls;
+      return { h, lp, waiting, asked };
+    }
+
+    async function switchBack(
+      h: ReturnType<typeof makeSupervisor>,
+      lp: ReturnType<typeof localDouble>,
+      asked = true,
+    ) {
+      lp.held = false;
+      lp.switchTo({ to: "claude", asked });
+      await lockBarrier(h);
+      await settle();
+    }
+
+    it("still waiting, another AI attached: one resumed spawn whose first turn is the wake", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({
+        waiting: () => true,
+        otherAiAttached: () => true,
+      });
+      await switchBack(h, lp);
+      const c2 = await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+      expect(waiting.calls).toBe(asked + 1);
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(logText()).toMatch(/answered by Claude again — starting Claude for waiting work/);
+    });
+
+    it("twin, no other AI: one spawn", async () => {
+      const { h, lp } = await heldForWork({ waiting: () => true });
+      await switchBack(h, lp);
+      await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+    });
+
+    it("the work is gone by the switch back: asked again, no spawn, the not-starting line", async () => {
+      let still = true;
+      const { h, lp, waiting, asked } = await heldForWork({
+        waiting: () => still,
+        otherAiAttached: () => true,
+      });
+      still = false;
+      await switchBack(h, lp);
+      expect(waiting.calls).toBe(asked + 1);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/nothing is waiting for Claude, not starting it/);
+      // Still startable by the user's next chat, as any idle standby.
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "idle" });
+    });
+
+    it("the waiting decision throws at the switch back: read as nothing waiting, no spawn", async () => {
+      let boom = false;
+      const { h, lp } = await heldForWork({
+        waiting: () => {
+          if (boom) throw new Error("waiting boom doc_secret");
+          return true;
+        },
+      });
+      boom = true;
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/The waiting decision threw \(read as nothing waiting\)/);
+      expect(logText()).toMatch(/nothing is waiting for Claude, not starting it/);
+      expect(logText()).not.toMatch(/doc_secret/);
+    });
+
+    it("Off during the period: no spawn, and waiting is not asked again", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await h.sup.updateSettings({ startMode: "off" });
+      await settle();
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+      expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
+    });
+
+    it("source pin: every local-period hold in the respawn path records the kind it was given", async () => {
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync(
+        new URL("../../../src/server/launcher/supervisor.ts", import.meta.url),
+        "utf8",
+      );
+      // A hold recorded as a literal "message" would send a held work start
+      // through the chat rule at the switch back (piece 36).
+      expect(src).not.toMatch(/holdForLocalPeriod\("message"\)/);
+      expect(src.match(/holdForLocalPeriod\(heldAs\)/g)).toHaveLength(4);
+    });
+
+    it("Off written to the settings file during the period (not through Turn off): the switch back's own read refuses", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await updateLauncherSettings(baseDir, { startMode: "off" }, null);
+      await switchBack(h, lp);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+    });
+
+    it("an unasked switch back: no spawn, and waiting is not asked again", async () => {
+      const { h, lp, waiting, asked } = await heldForWork({ waiting: () => true });
+      await switchBack(h, lp, false);
+      expect(children).toHaveLength(1);
+      expect(waiting.calls).toBe(asked);
+    });
+
+    it("a chat's held start, another AI attached by the switch back: nothing (today's rule); with work also held: one spawn", async () => {
+      for (const alsoWork of [false, true]) {
+        const lp = localDouble();
+        const waiting = waitingDouble(true);
+        let otherAi = false;
+        const { h } = await idleStopped({
+          workWaiting: waiting.fn,
+          localPeriod: lp.opts,
+          otherAiAttached: () => otherAi,
+        });
+        const before = children.length;
+        lp.held = true;
+        lp.switchTo({ to: "local" });
+        h.emit(chatEvent());
+        await lockBarrier(h);
+        if (alsoWork) h.sup.startOrWake?.("document");
+        await lockBarrier(h);
+        expect(children).toHaveLength(before);
+        expect(logText()).toMatch(/not starting Claude \(message\)/);
+        otherAi = true;
+        await switchBack(h, lp);
+        if (alsoWork) {
+          await childN(before + 1);
+          await settle();
+        }
+        expect(children).toHaveLength(alsoWork ? before + 1 : before);
+        await h.sup.stop();
+      }
     });
   });
 
@@ -2498,8 +2681,9 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
 
   // The two "queued between" cases cannot fail on a single guard term's
   // removal (#2458's table): the chat's pass declines on `standby ===
-  // undefined`. The case for the pass's `isAlive()` term is "3b-2b1b-R0,
-  // R0.5" in the enclosing "3b-2b1a R3" describe.
+  // undefined`. The pass's `isAlive()` term has no case of its own since
+  // the child re-check in `planAndSpawn` removed the one known state it alone
+  // decided ("3b-2b1b-R0, R0.5, closed"); it stays as a defensive re-check.
   describe("between the start-or-wake pass and the chat's (waiting false)", () => {
     it("a relaunch queued between: the chat's pass runs after it and finds the standby cleared: one spawn", async () => {
       const waiting = waitingDouble(false);
@@ -2568,8 +2752,8 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
   it("a chat inside the start-or-wake pass's respawn: one spawn, and the chat's pass finds the standby cleared", async () => {
     // Q stops at `standby === undefined` (P's spawn cleared it), before
     // `isAlive()` is read: removing `isAlive()` alone fails nothing here;
-    // removing the guard does. The case that `isAlive()` alone decides is
-    // "3b-2b1b-R0, R0.5" below.
+    // removing the guard does. No known state is decided by `isAlive()` alone
+    // since "3b-2b1b-R0, R0.5, closed" below.
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     onSpawn = () => {
@@ -2590,16 +2774,19 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     expect(wakes(c2)).toBe(1);
   });
 
-  it("3b-2b1b-R0, R0.5: a standby set beside a live child; the chat's pass declines on isAlive() alone", async () => {
-    // The state the start pass's `isAlive()` re-check alone decides: a standby
-    // set while a child is live (the brief argued none exists; the plan review
-    // found this one, so R0.5 is this case rather than a source pin). A crash
+  it("3b-2b1b-R0, R0.5, closed: the crash restart no longer holds itself beside a live child (planAndSpawn re-checks `child`)", async () => {
+    // Since the flip-blocker row "A crash restart can hold itself beside a
+    // live child" closed: the sequence below used to leave an
+    // `awaiting-start` standby and an armed standby watch beside B. Now the
+    // restart sees B after its reads and does not spawn or hold.
+    // It was the state the start pass's `isAlive()` re-check alone decided: a
+    // standby set while a child is live. A crash
     // restart (unlocked) waits on its settings read; the user's Start is
     // refused by the licence (`respawn` throws before `stopInternal`, so the
     // stop epoch does not move); licence activation spawns B under the lock; a
     // local period begins; the restart resumes past `planAndSpawn`'s epoch and
-    // stop re-checks, which do not look at `child`, and holds itself, setting
-    // `awaiting-start` beside B. The switch back finds B alive and leaves the
+    // stop re-checks, and (before the fix, which looked at no `child`) held
+    // itself, setting `awaiting-start` beside B. The switch back finds B alive and leaves the
     // standby. A chat is then accepted by the standby watch and its pass must
     // decline: without `isAlive()` it stops B and starts a third child.
     //
@@ -2648,14 +2835,14 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     lp.held = true;
     lp.switchTo({ to: "local" });
     releaseRead();
-    // The restart held itself beside B (its log line), which is the state.
     await until(
-      () => /not starting Claude \(crash\) until it is answered by Claude again/.test(logText()),
-      "the restart's local hold",
+      () => /A Claude started while building the spawn plan — not spawning/.test(logText()),
+      "the restart's child re-check",
+    );
+    expect(logText()).not.toMatch(
+      /not starting Claude \(crash\) until it is answered by Claude again/,
     );
     expect(children).toHaveLength(2);
-    // B is alive, so the switch back clears the held start and leaves the
-    // standby (`status()` does not show a standby while a child runs).
     lp.held = false;
     lp.switchTo({ to: "claude", asked: true });
     await settle();
@@ -2663,8 +2850,8 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     h.emit(chatEvent());
     await lockBarrier(h);
     await settle();
-    // The positive anchor: the standby watch accepted the chat and its pass ran.
-    expect(passes(h)).toBe(before + 1);
+    // No standby was set beside B, so the watch is not armed: no pass at all.
+    expect(passes(h)).toBe(before);
     expect(messageStartLines()).toBe(0);
     expect(children).toHaveLength(2);
     expect(b.killed).toBe(false);
@@ -2745,5 +2932,757 @@ describe("3b-2b1a R3: a chat's start is decided by its own pass", () => {
     await settle();
     expect(passes(h)).toBe(2); // P and one Q
     expect(children).toHaveLength(2);
+  });
+});
+
+// --- #2358 PR 3b-2b2: the widened arm ---------------------------------------
+
+describe("3b-2b2: a new user comment or any user thread reply asks start-or-wake", () => {
+  function commentEvent(annotationType = "comment", documentId: string | null = "d1") {
+    eventSeq++;
+    return {
+      id: `evt_${eventSeq}`,
+      type: "annotation:created",
+      timestamp: Date.now(),
+      ...(documentId === null ? {} : { documentId }),
+      payload: {
+        annotationId: `ann_${eventSeq}`,
+        annotationType,
+        content: "look",
+        textSnippet: "x",
+      },
+    } as TandemEvent;
+  }
+  function replyEvt(parentAuthor: "user" | "claude", replyAuthor: "user" | "claude" = "user") {
+    eventSeq++;
+    return {
+      id: `evt_${eventSeq}`,
+      type: "annotation:reply",
+      timestamp: Date.now(),
+      documentId: "d1",
+      payload: {
+        annotationId: `ann_${eventSeq}`,
+        replyId: `rep_${eventSeq}`,
+        replyText: "and this?",
+        replyAuthor,
+        textSnippet: "x",
+        parentAuthor,
+      },
+    } as TandemEvent;
+  }
+  const queuedLines = () =>
+    (logText().match(/Start-or-wake queued \(user-annotation\)/g) ?? []).length;
+
+  it("W1: idle-stopped, work waiting, a user comment: one resumed spawn whose first turn is the wake", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(queuedLines()).toBe(1);
+  });
+
+  it("W2: another AI attached: still one spawn (whether or not another AI is on)", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W3: nothing waiting for Tandem's Claude (e.g. the comment is on a document another session holds): asked, no spawn", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(1);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W4: a user reply on the user's own comment (not Claude's thread): one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W5: a user reply on Claude's thread with another AI on (today's arm declines): one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.emit(replyEvt("claude"));
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("W6: not asked for a highlight, a synthetic wake (no document), a Claude reply or a chat beside another AI", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    const seen: number[] = [];
+    for (const e of [
+      commentEvent("highlight"),
+      commentEvent("comment", null),
+      replyEvt("user", "claude"),
+      chatEvent(),
+    ]) {
+      h.emit(e);
+      await lockBarrier(h);
+      seen.push(waiting.calls);
+    }
+    expect(seen).toEqual([0, 0, 0, 0]);
+    expect(waiting.calls).toBe(0);
+    expect(queuedLines()).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W7: Off: nothing asked, no spawn, the mode stays off", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    h.emit(commentEvent());
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    expect(await savedStartMode()).toBe("off");
+  });
+
+  it("W8: the licence refuses: nothing asked, no spawn", async () => {
+    const lic = licenceDouble();
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, aiRefusal: lic.fn });
+    lic.refusing = true;
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it("W9: flag off: a user comment does exactly what master does (nothing)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    const logged = errSpy.mock.calls.length;
+    h.emit(commentEvent());
+    h.emit(replyEvt("user"));
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    expect(errSpy.mock.calls.length).toBe(logged);
+  });
+
+  it("W10, the presence gate decided: before the first Start (on-click, never started, not present) a waiting comment starts Tandem's Claude ('Yes, even before my first Start')", async () => {
+    await updateLauncherSettings(baseDir, { startMode: "on-click" }, null);
+    const waiting = waitingDouble(true);
+    const h = makeSupervisor({ workWaiting: waiting.fn });
+    await h.sup.start();
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+    h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(1);
+    await settle();
+    expect(children).toHaveLength(1);
+  });
+
+  it("W11: a burst of comments is one pass and one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    for (let i = 0; i < 5; i++) h.emit(commentEvent());
+    await lockBarrier(h);
+    await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+  });
+});
+
+describe("the own-spawn seam's reads (#2358 PR 3b-2b3a; wired by index.ts since 3b-2b4a)", () => {
+  it("ownSpawn names the live child's spawn and id; a resumed spawn has the same id and a new number; isOwnChildSession folds case", async () => {
+    const h = makeSupervisor();
+    expect(h.sup.ownSpawn?.()).toBeNull();
+    const c1 = await boundFreshRun(h);
+    const id = argAfter(c1, "--session-id") as string;
+    expect(h.sup.ownSpawn?.()).toEqual({ n: 1, sessionId: id });
+    expect(h.sup.isOwnChildSession?.(id.toUpperCase())).toBe(true);
+    expect(h.sup.isOwnChildSession?.("someone-else")).toBe(false);
+    await crashToResumed(c1);
+    expect(h.sup.ownSpawn?.()).toEqual({ n: 2, sessionId: id });
+    await h.sup.stop();
+    expect(h.sup.ownSpawn?.()).toBeNull();
+    expect(h.sup.isOwnChildSession?.(id)).toBe(true);
+  });
+
+  it("flag off: no spawn is named", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    expect(h.sup.ownSpawn?.()).toBeNull();
+  });
+});
+
+describe("the spawn-started event and the switch-on as index.ts wires it (#2358 PR 3b-2b4a)", () => {
+  let view: TransportViewEntry[];
+  beforeEach(() => {
+    view = [];
+    setTransportView(() => view);
+  });
+  afterEach(() => {
+    resetOwnershipForTests();
+    setOpenDocumentIdsSource(() => []);
+  });
+
+  /** `index.ts`'s wiring, against this supervisor (3b-2b4b: the run start and both sinks too; 3b-2b5: the failed bind). */
+  function wire(h: ReturnType<typeof makeSupervisor>): void {
+    setTandemPresenceSource(() => h.sup.tandemPresence?.().isPresent() === true);
+    h.seam.subscribe(noteTandemPresence);
+    h.seam.onSpawnStarted(noteOwnSpawnStarted);
+    h.seam.onRunStart(noteTandemRunStart);
+    h.seam.onFailedBind(noteFailedBind);
+    setOwnSpawnSource(
+      () => h.sup.ownSpawn?.() ?? null,
+      (id) => h.sup.isOwnChildSession?.(id) === true,
+    );
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    setRequestWakeSink(() => h.sup.requestWake?.());
+  }
+
+  it("3b-2b4b: a run start with work waiting on a held document wakes the child once, after its first turn", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(wakes(c1)).toBe(0); // the bootstrap turn is in flight
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(1);
+  });
+
+  it("3b-2b4b: the same run start with the licence refusing writes no wake", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    setWaitingProbe((documentId) => documentId === "doc");
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    lic.refusing = true;
+    expect(await bind(c1)).toBe(true);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: nothing waiting at the run start, no wake", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(wakes(c1)).toBe(0);
+  });
+
+  it("3b-2b4b: the Solo-release check starts a stopped Tandem's Claude for waiting work", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(waiting.calls).toBe(1);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(logText()).toContain("Work is waiting for Tandem's Claude (solo-release)");
+  });
+
+  it("3b-2b4b: the Solo-release check while Off, or with nothing waiting, starts nothing", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    const idle = waitingDouble(false);
+    const { h: h2 } = await idleStopped({ workWaiting: idle.fn });
+    setStartOrWakeSink((cause) => h2.sup.startOrWake?.(cause));
+    noteSoloReleased();
+    await lockBarrier(h2);
+    expect(idle.calls).toBe(1);
+    expect(children).toHaveLength(2);
+  });
+
+  describe("the mode-unknown observer (#2358, the restart question; Bryan: 'Build an observer')", () => {
+    // What the CTRL_ROOM observer reports, called as it calls it: the mode
+    // read unknown at install (a restart), then a client's first `tandem`.
+    // The observer itself is in tests/server/ownership-mode-known.test.ts.
+    it("the first Tandem mode after an unknown one starts a stopped Tandem's Claude for waiting work", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h);
+      const c2 = await childN(2);
+      await settle();
+      expect(waiting.calls).toBe(1);
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(logText()).toContain("Work is waiting for Tandem's Claude (mode-known)");
+    });
+
+    it("Off drops it, the licence refusing drops it, and nothing waiting starts nothing", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await offStopped({ workWaiting: waiting.fn });
+      setStartOrWakeSink((cause) => h.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(0);
+      expect(children).toHaveLength(1);
+
+      resetOwnershipForTests();
+      const lic = licenceDouble();
+      const refused = waitingDouble(true);
+      const { h: h2 } = await idleStopped({ workWaiting: refused.fn, aiRefusal: lic.fn });
+      lic.refusing = true;
+      setStartOrWakeSink((cause) => h2.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h2);
+      expect(refused.calls).toBe(0);
+      expect(children).toHaveLength(2);
+
+      resetOwnershipForTests();
+      const idle = waitingDouble(false);
+      const { h: h3 } = await idleStopped({ workWaiting: idle.fn });
+      setStartOrWakeSink((cause) => h3.sup.startOrWake?.(cause));
+      noteModeObserved("indeterminate");
+      noteModeObserved("tandem");
+      await lockBarrier(h3);
+      expect(idle.calls).toBe(1);
+      expect(children).toHaveLength(3);
+    });
+  });
+
+  describe("3b-2b5: the failed-bind wake (ownership design §8.7, R2.5)", () => {
+    /**
+     * A bound run holds `doc`; it crashes and its resumed spawn (child 2), a
+     * stub that never presents its handle, gets a user comment's wake, which
+     * starts its bind window. Child 2's stray transport sits on its
+     * `unbound-child` record, `spawn:2`, refused on Tandem's Claude's
+     * document until the bind fails.
+     */
+    async function strandedByFailedBind(
+      h: ReturnType<typeof makeSupervisor>,
+      waitingAtFailure = true,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      pushJson(c1, RESULT_OK);
+      await settle();
+      const c2 = await crashToResumed(c1);
+      view.push({ ownerId: "spawn:2", sessionId: "m-c2", openStreams: 1 });
+      noteTransportRegistered("spawn:2", { recordKind: "unbound-child" });
+      expect(checkWrite("doc", "spawn:2")).toMatchObject({ ok: false, reason: "unbound-child" });
+      h.emit(annotationEvent()); // its first turn: the window starts
+      await settle();
+      expect(wakes(c2)).toBe(1);
+      pushJson(c2, RESULT_OK); // idle again
+      await settle();
+      waiting = waitingAtFailure;
+      return c2;
+    }
+
+    it("the window expires: presence ends, the document goes unowned, and the live unbound child is woken once and may then claim the stranded item", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      advance(WINDOW);
+      await settle();
+      expect(h.log.slice(-2)).toEqual(["failed:window-expired", "not-present"]);
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(2);
+      // The woken child, as its unbound-child record, is no longer blocked.
+      expect(checkWrite("doc", "spawn:2")).toEqual({ ok: true, claim: "claimed" });
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the wake is deferred out of the supervisor's emit: nothing is written in the judging site's own turn", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h);
+      let inEmit = -1;
+      h.seam.onFailedBind(() => {
+        inEmit = wakes(c2);
+      });
+      advance(WINDOW);
+      expect(inEmit).toBe(1);
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("the licence refusing: no wake is written", async () => {
+      const lic = licenceDouble();
+      const h = makeSupervisor({ aiRefusal: lic.fn });
+      const c2 = await strandedByFailedBind(h);
+      lic.refusing = true;
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("negative (anchor: the first row): nothing stranded, no wake", async () => {
+      const h = makeSupervisor();
+      const c2 = await strandedByFailedBind(h, false);
+      advance(WINDOW);
+      await settle();
+      expect(h.log).toContain("failed:window-expired");
+      expect(getDocOwner("doc")).toBeUndefined();
+      expect(wakes(c2)).toBe(1);
+    });
+
+    it("flag off: noteFailedBind wakes nothing, even with work waiting and the sink wired", async () => {
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      let sunk = 0;
+      setRequestWakeSink(() => {
+        sunk += 1;
+      });
+      setOpenDocumentIdsSource(() => ["doc"]);
+      setWaitingProbe(() => true);
+      noteFailedBind();
+      await settle();
+      expect(sunk).toBe(0);
+      expect(logText()).not.toMatch(/ownership/);
+    });
+  });
+
+  describe("3b-2b5: a holder's lapse beside a running Tandem's Claude (the own-Claude 'another session' row's first test)", () => {
+    async function heldByTerminalBesideIdleTandem(
+      h: ReturnType<typeof makeSupervisor>,
+    ): Promise<FakeChild> {
+      wire(h);
+      setOpenDocumentIdsSource(() => ["doc"]);
+      let waiting = false;
+      setWaitingProbe((documentId) => waiting && documentId === "doc");
+      const c1 = await boundFreshRun(h);
+      pushJson(c1, RESULT_OK);
+      await settle();
+      // Its bound transport, where rule 0 routes it (3b-2b4a): the built-in
+      // `tandem` record, which never counts as another session.
+      view.push({ ownerId: TANDEM_OWNER_ID, sessionId: "m-c1", openStreams: 1 });
+      view.push({ ownerId: "claude:term-a", openStreams: 1 });
+      noteTransportRegistered("claude:term-a", { recordKind: "claude" });
+      setDocOwner("doc", { ownerId: "claude:term-a", kind: "opened" }, "take", "claude:term-a");
+      waiting = true;
+      return c1;
+    }
+
+    function lapseTerminal(): void {
+      setGraceMsForTests(10);
+      view.splice(
+        view.findIndex((e) => e.ownerId === "claude:term-a"),
+        1,
+      );
+      noteTransportChanged("claude:term-a");
+      advance(10);
+    }
+
+    it("with no other session: the document goes to Tandem's Claude and the idle child is woken once", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      expect(wakes(c1)).toBe(0);
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(1);
+    });
+
+    it("negative (anchor: the row above): another terminal attached, so the lapse forwards nothing and the child is not woken", async () => {
+      const h = makeSupervisor({ workWaiting: tandemWorkWaiting });
+      const c1 = await heldByTerminalBesideIdleTandem(h);
+      view.push({ ownerId: "claude:term-b", openStreams: 1 });
+      noteTransportRegistered("claude:term-b", { recordKind: "claude" });
+      lapseTerminal();
+      await lockBarrier(h);
+      expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      expect(wakes(c1)).toBe(0);
+    });
+  });
+
+  it("spawn 1, then a resumed spawn 2 with the same id and a new number", async () => {
+    const h = makeSupervisor();
+    const seen: Array<{ n: number; sessionId: string }> = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    const c1 = await boundFreshRun(h);
+    const id = argAfter(c1, "--session-id") as string;
+    expect(seen).toEqual([{ n: 1, sessionId: id }]);
+    await crashToResumed(c1);
+    expect(seen).toEqual([
+      { n: 1, sessionId: id },
+      { n: 2, sessionId: id },
+    ]);
+  });
+
+  it("wired: presence gives an open document nobody holds to Tandem's Claude, and spawn 2 retires spawn 1's record", async () => {
+    const h = makeSupervisor();
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    const c1 = await boundFreshRun(h);
+    expect(getDocOwner("doc")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    const stray: TransportViewEntry = { ownerId: "spawn:1", sessionId: "m-stray", openStreams: 0 };
+    view.push(stray);
+    noteTransportRegistered("spawn:1", { recordKind: "unbound-child" });
+    await crashToResumed(c1);
+    expect(stray.ownerId).toBe("private:m-stray");
+    expect(getDocOwner("doc")?.ownerId).toBe(TANDEM_OWNER_ID);
+  });
+
+  it("a throwing spawn-started subscriber is contained: the next one still hears it", async () => {
+    const h = makeSupervisor();
+    const seen: number[] = [];
+    h.seam.onSpawnStarted(() => {
+      throw new Error("boom");
+    });
+    h.seam.onSpawnStarted((s) => seen.push(s.n));
+    await boundFreshRun(h);
+    expect(seen).toEqual([1]);
+    expect(logText()).toMatch(/A spawn-started subscriber threw \(ignored\): Error: boom/);
+  });
+
+  it("flag off, wired as index.ts wires it: no event, no presence, nothing created", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    const seen: unknown[] = [];
+    h.seam.onSpawnStarted((s) => seen.push(s));
+    wire(h);
+    setOpenDocumentIdsSource(() => ["doc"]);
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    await settle();
+    expect(seen).toEqual([]);
+    expect(h.log).toEqual([]);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    expect(ownershipSnapshotForTests().records).toEqual([]);
+    expect(ownershipSnapshotForTests().ownerByDoc).toEqual([]);
+    expect(logText()).not.toMatch(/ownership|spawn-started/);
+  });
+});
+
+// --- #2358 PR 3b-2e1: the failed-bind reason in status() -----------------------
+
+describe("3b-2e1: status() reports a failed bind (ownership design §8.7)", () => {
+  const bindFailedOf = (sup: Supervisor) => (sup.status() as { bindFailed?: unknown }).bindFailed;
+
+  it("a stub that never binds: absent inside its window, `bindFailed` once judged, on the running arm", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    advance(WINDOW - 1);
+    await settle();
+    expect(h.sup.status().running).toBe(true);
+    expect(bindFailedOf(h.sup)).toBeUndefined();
+    advance(1);
+    await settle();
+    expect(h.log).toEqual(["failed:window-expired"]);
+    expect(h.sup.status()).toMatchObject({ running: true, bindFailed: true });
+  });
+
+  it("a bound run reports nothing, before or after a crash-resume", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    const c2 = await crashToResumed(c1);
+    expect(await bind(c2)).toBe(true);
+    expect("bindFailed" in h.sup.status()).toBe(false);
+  });
+
+  it("a late bind after the judgement is a run start, and clears it", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    const creds = credentialsOf(c1);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    expect(await bind(c1, creds)).toBe(true);
+    expect(bindFailedOf(h.sup)).toBeUndefined();
+  });
+
+  it("a crash of an unbound spawn (site a) reports it, and it outlasts Off on the stopped arm, beside `standby`", async () => {
+    const h = makeSupervisor({ resumeConfirmMs: WINDOW / 10 });
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    advance(WINDOW / 10);
+    h.emit(annotationEvent());
+    advance(WINDOW / 10);
+    c2.exitWith(1, null);
+    await settle();
+    expect(h.log).toContain("failed:torn-down-unbound");
+    await h.sup.updateSettings({ startMode: "off" });
+    await until(() => !h.sup.status().running, "Off's stop");
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "off", bindFailed: true });
+  });
+
+  it("a `lastError` outranks it on the stopped arm, as it outranks `standby`", async () => {
+    let command: string | null = process.execPath;
+    const h = makeSupervisor({ resolveClaudeCommand: () => command });
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    command = null; // the crash restart finds no Claude Code to start
+    c1.exitWith(1, null);
+    await settle();
+    advance(1);
+    await until(() => h.sup.status().lastError === "cli-unusable", "cli-unusable");
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    command = process.execPath; // the lapse: the error clears, the reason shows again
+    expect(h.sup.status()).toMatchObject({ running: false, bindFailed: true });
+  });
+
+  it("flag off: a stub that never binds reports nothing, and a judgement made flag on is not reported once it is off", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const dark = makeSupervisor();
+    await dark.sup.startFresh(cwdDir);
+    await childN(1);
+    advance(WINDOW * 2);
+    await settle();
+    expect("bindFailed" in dark.sup.status()).toBe(false);
+    await dark.sup.stop();
+
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(2);
+    advance(WINDOW);
+    await settle();
+    expect(bindFailedOf(h.sup)).toBe(true);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect("bindFailed" in h.sup.status()).toBe(false);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  });
+});
+
+describe("3b-2e2: wokenAt, for the stall banner's hide (the owner's 2026-11-17 answer 3)", () => {
+  /** Spin on real `Date.now()` until it has moved past `t`, so two reads of
+   * the clock taken either side of this cannot be equal. No timer: the file
+   * fakes `setTimeout`, and `Date` stays real. */
+  function pastMs(t: number): number {
+    while (Date.now() <= t + 1) {
+      // busy wait, a couple of milliseconds at most
+    }
+    return Date.now();
+  }
+
+  it("reads the bootstrap turn's write time while it runs, and null once its result lands", async () => {
+    const h = makeSupervisor();
+    const before = Date.now();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    const after = Date.now();
+    const at = h.sup.wokenAt?.();
+    expect(typeof at).toBe("number");
+    expect(at as number).toBeGreaterThanOrEqual(before);
+    expect(at as number).toBeLessThanOrEqual(after);
+    // The same value on a later read: the write time, not the read time.
+    pastMs(after);
+    expect(h.sup.wokenAt?.()).toBe(at);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    const status = h.sup.status();
+    expect(status.running && status.busy).toBe(false);
+    expect(h.sup.wokenAt?.()).toBeNull();
+  });
+
+  it("a wake written to an idle child reads its own write time", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    const c1 = await childN(1);
+    pushJson(c1, RESULT_OK);
+    await settle();
+    expect(h.sup.wokenAt?.()).toBeNull();
+    const before = pastMs(Date.now());
+    h.emit(annotationEvent());
+    expect(c1.stdin.writes.at(-1)).toContain(SUPERVISOR_WAKE_PROMPT);
+    const at = h.sup.wokenAt?.() as number;
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a wake queued behind the turn in flight reads as woken now, not at that turn's write", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const bootstrapAt = h.sup.wokenAt?.() as number;
+    const before = pastMs(bootstrapAt);
+    // Mid-bootstrap: the event can only queue its wake behind the turn.
+    h.emit(annotationEvent());
+    const at = h.sup.wokenAt?.() as number;
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeGreaterThan(bootstrapAt);
+  });
+
+  it("null once the turn in flight has run as long as the stall threshold, even with a wake queued behind it", async () => {
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const bootstrapAt = h.sup.wokenAt?.() as number;
+    h.emit(annotationEvent());
+    expect(h.sup.wokenAt?.()).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(bootstrapAt + DELIVERY_STALL_MS - 1);
+      expect(h.sup.wokenAt?.()).toBe(bootstrapAt + DELIVERY_STALL_MS - 1);
+      nowSpy.mockReturnValue(bootstrapAt + DELIVERY_STALL_MS);
+      expect(h.sup.wokenAt?.()).toBeNull();
+      // Another message meanwhile does not bring the hide back.
+      h.emit(annotationEvent());
+      expect(h.sup.wokenAt?.()).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("null with no child, and null once the child is gone", async () => {
+    const h = makeSupervisor();
+    expect(h.sup.wokenAt?.()).toBeNull();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    expect(h.sup.wokenAt?.()).not.toBeNull();
+    await h.sup.stop();
+    await settle();
+    expect(h.sup.wokenAt?.()).toBeNull();
+  });
+
+  it("flag off: null, even while a turn is in flight", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    const status = h.sup.status();
+    expect(status.running && status.busy).toBe(true);
+    expect(h.sup.wokenAt?.()).toBeNull();
   });
 });

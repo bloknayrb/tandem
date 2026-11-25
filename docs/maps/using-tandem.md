@@ -40,6 +40,9 @@ Back to the [docs hub](../README.md).
   reviewing a report, cross-referencing documents, drafting, keyboard review, session handoff and
   scratchpads. Read it once you are connected.
 - [Connecting an AI](connecting-ai.md) is the map for setup and real-time updates.
+- [User guide → Local models](../user-guide.md#local-models) answers "can a model on my own
+  computer answer instead of Claude?" It covers Settings → Models and the
+  **Who answers your chat** switch (from v0.32.0).
 
 ## Settings, the command line and configuration
 

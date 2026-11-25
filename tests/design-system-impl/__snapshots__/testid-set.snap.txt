@@ -407,6 +407,8 @@ notifications-enable-toggle
 notifications-flash-toggle
 notifications-harness
 notifications-permission-status
+notifications-sound-error
+notifications-sound-hint
 notifications-sound-preview
 notifications-sound-select
 notifications-test-button
@@ -517,6 +519,9 @@ settings-modal-solo-rail-hidden-toggle
 settings-modal-tab-{*}
 settings-modal-tandem-claude
 settings-modal-tandem-claude-absent
+settings-modal-tandem-claude-bind-failed
+settings-modal-tandem-claude-bound-transport
+settings-modal-tandem-claude-bound-transports
 settings-modal-tandem-claude-disclosure
 settings-modal-tandem-claude-idle-error
 settings-modal-tandem-claude-idle-minutes
@@ -577,6 +582,8 @@ titlebar-brand-menu-popover
 titlebar-default-model
 titlebar-update-available-dot
 toast-action-{*}
+toast-announcer-assertive
+toast-announcer-polite
 toast-container
 toast-count-{*}
 toast-dismiss-{*}

@@ -260,8 +260,8 @@ Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow. Since #
 The editor's side panel shows all pending annotations with filter controls:
 
 - Filter by type (highlights, comments, notes) — comments with replacement text show as "With replacement"
-- Filter by author (the AI, You)
-- Filter by status (pending, accepted, dismissed/resolved)
+- Filter by author (Anyone, AI, You, Imported) — **AI** covers Claude's annotations and a local model's
+- Filter by status (Any status, Pending, Accepted, Dismissed/resolved)
 
 There is no separate review mode to enter — the shortcuts work wherever you are:
 
@@ -300,7 +300,7 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 3. A **comment** with replacement text — introduces accept/reject workflow
 4. A **note** on a paragraph — a private reminder the AI never sees
 
-A **Getting started** checklist strip appears in the top-of-shell banner stack, above the document (#1711 — it replaced a four-step card with a Next button that users clicked through without reading). Its three items tick independently, in any order, and only on the real action:
+A **Getting started** checklist strip appears in the top-of-shell banner stack, above the document (#1711 — it replaced a step-by-step card with a Next button that users clicked through without reading). Its three items tick independently, in any order, and only on the real action:
 
 **Accept or dismiss a comment from Claude.** Ticks when the user accepts or dismisses an annotation — one of the two tutorial comments or a real one — from its card, in bulk, or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The signal is `useAnnotationReview`'s `recentlyResolved` set, which only the user's own resolves write, so Claude resolving one over MCP does not tick it, and neither does the user resolving their own comment in the active document (#2360; one resolved earlier on another tab is not recognised and still ticks). It also starts ticked when there is nothing left to review — every Claude tutorial seed is resolved, at least one by the user (Claude's resolves carry `resolvedBy`, #1770) — because a replay keeps resolved seeds (#2269) and would otherwise leave an item no action can tick. The tutorial highlight and note are the user's, so they have no Accept or Dismiss.
 
@@ -381,6 +381,13 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 3. Call `tandem_open({ filePath: "...", force: true })` to force a reload regardless
 4. Force-reload discards unsaved edits and the session; annotations are kept and re-anchored, but one whose text changed may come back `degraded` — don't use it mid-review
 
+**If chat is set to a local model** (Settings → Models → Who answers your chat; see [User Guide → Local models](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md#local-models)):
+
+1. `tandem_checkInbox` hands Claude nothing: its answer carries only a status line saying chat is answered by a local model and that Claude should finish the step it is on and take no new work from Tandem
+2. Nothing wakes Claude, and Tandem does not start its own Claude
+3. Claude can still read the document and its annotations with its tools, including the local model's comments and replies
+4. Chat sent while the local model answered is not handed to Claude afterwards. Once chat is switched back to Claude, the inbox delivers new items as before
+
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 
 ## Opening Files from the Editor
@@ -400,17 +407,17 @@ Users can open files without Claude Code using the editor UI:
 ### Browse or Upload
 1. Click **+** → **Browse files…**
 2. On desktop this opens a native file picker for real (write-capable) editing
-3. In the browser build it opens an upload dialog instead: click **Browse…** or drop a file anywhere in the window, and the file content is sent to the server and loaded
+3. In the browser build it opens an **Open File** dialog instead. Its path field opens the real file on disk: type or paste the full path and press Enter. Its **Browse…** button (or a file dropped anywhere in the window) uploads a read-only copy instead. The dialog also lists your **Recent** files and **Saved sessions**. See [User Guide → Opening Files](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md#opening-files).
 
-**Note:** Uploaded files have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
+**Note:** Uploaded copies have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
 
 ## Using Scratchpads for Drafting
 
 Scratchpads are ephemeral documents with no file on disk — useful for brainstorming, drafting outlines, or working on throwaway content without touching the filesystem.
 
 **Opening a scratchpad:**
-- Press `Ctrl+N` from anywhere in the editor
-- Click the `+` button in the tab bar and select "New Scratchpad"
+- Press `Ctrl+N` in the desktop app (a browser keeps that key for itself)
+- Click the `+` button in the tab bar and select "New scratchpad"
 - Use the command palette (`Ctrl+Shift+P`) → "New Scratchpad"
 - Claude can create one via `tandem_scratchpad`
 

@@ -5,6 +5,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants.js";
+import { isHeldInSoloMarker } from "../shared/sanitize.js";
 import { TandemModeSchema } from "../shared/types.js";
 import { getOrCreateDocument } from "./yjs/provider.js";
 
@@ -80,14 +81,17 @@ export function readLiveMode(): "solo" | "tandem" {
  * - indeterminate (restart, mode lost): fail CLOSED — hide exactly the records
  *   that carry the persisted `heldInSolo` marker, so previously-held items stay
  *   held until an explicit release, while everything else surfaces normally.
+ *   "Carry" means any value but literally `false` or absent
+ *   (`isHeldInSoloMarker`, #2481): replies reach here unsanitized, so a marker
+ *   stored as `"true"`, `1` or `null` must hold, not fall through to visible.
  * - tandem: hide nothing.
  */
 export function hideFromAI(
-  record: { author: string; heldInSolo?: boolean },
+  record: { author: string; heldInSolo?: unknown },
   modeState: ModeState,
 ): boolean {
   if (modeState === "solo") return record.author === "user";
-  if (modeState === "indeterminate") return record.heldInSolo === true;
+  if (modeState === "indeterminate") return isHeldInSoloMarker(record.heldInSolo);
   return false;
 }
 
@@ -207,6 +211,30 @@ export function installModeProvenanceObserver(ctrlDoc: Y.Doc): () => void {
     }
   };
 
+  awareness.observe(onChange);
+  return () => awareness.unobserve(onChange);
+}
+
+/**
+ * Report the mode to `note` at install and at every change of the mode key
+ * (#2358, the restart question; ADR-054's mode-unknown observer amendment).
+ * Only reads; what to do with it is `note`'s (`noteModeObserved` in
+ * `sessions/ownership.ts`, which does nothing while ownership is off, so this
+ * module stays free of the ownership flag). `events/queue.ts`'s
+ * `attachCtrlObservers` installs it beside the provenance observer, so the
+ * Hocuspocus doc swap re-installs it; the report at install is what arms it at
+ * boot and what carries a mode the swap copied in. Returns the unobserve
+ * cleanup.
+ */
+export function installModeKnownObserver(
+  ctrlDoc: Y.Doc,
+  note: (state: ModeState) => void,
+): () => void {
+  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+  note(readModeState());
+  const onChange = (event: Y.YMapEvent<unknown>): void => {
+    if (event.keysChanged.has(Y_MAP_MODE)) note(readModeState());
+  };
   awareness.observe(onChange);
   return () => awareness.unobserve(onChange);
 }

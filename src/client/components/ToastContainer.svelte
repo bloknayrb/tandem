@@ -1,21 +1,86 @@
 <script lang="ts">
-import type { Toast } from "../hooks/useNotifications.svelte";
+import type { Toast, ToastAnnouncement } from "../hooks/useNotifications.svelte";
 import { formatActivityMessage, SEVERITY_GLYPHS } from "./activityCenter.js";
+import { SR_ONLY_STYLE } from "./live-region";
+import { toastAnnouncementText, toastFocusTarget, toastKey } from "./toast-focus";
 
 interface Props {
   toasts: Toast[];
+  /** Which toast each announcer speaks (#2489); see `ToastAnnouncement`. */
+  announced: ToastAnnouncement;
   onDismiss: (id: string) => void;
 }
 
-let { toasts, onDismiss }: Props = $props();
+let { toasts, announced, onDismiss }: Props = $props();
+
+const uid = $props.id();
+
+/**
+ * #2489, announcements. The cards are inserted together with their text, the
+ * shape `LiveRegion.svelte` documents as commonly announced by nothing, so the
+ * cards carry no live role and these two permanently-mounted announcers speak
+ * instead. Politeness is fixed per region (info polite, warning and error
+ * assertive), never computed. A coalescing re-push carries its count, so the
+ * sentence changes and is spoken again, as the badge visibly changes.
+ */
+const politeText = $derived(toastAnnouncementText(toasts, announced.polite));
+const assertiveText = $derived(toastAnnouncementText(toasts, announced.assertive));
+
+/**
+ * #2489, focus. Where focus was before it entered the stack: set on every
+ * focusin that comes from outside it. Plain `let`, not `$state` — nothing
+ * renders it, and only the pre-effect below reads it.
+ */
+let returnTarget: Element | null = null;
+
+function onStackFocusIn(event: FocusEvent): void {
+  const stack = event.currentTarget as HTMLElement;
+  const from = event.relatedTarget;
+  // A null `relatedTarget` is also what the window's own refocus delivers
+  // (switching back to the app re-fires focusin on the element that held
+  // focus), so it is not evidence of where focus came from: keep the target
+  // rather than wipe it. It is cleared when the stack empties instead.
+  if (!(from instanceof Element) || stack.contains(from)) return;
+  returnTarget = from;
+}
+
+// Runs BEFORE this update reaches the DOM, while a card about to go is still
+// attached and still holds focus. Moving focus here, rather than after the
+// removal (a `tick()`), is what keeps a press whose action opens a dialog
+// working: the dialog mounts and takes focus later in the same flush, after
+// this, so this never pulls focus back out of it. Reads only `toasts`; writes
+// no state.
+$effect.pre(() => {
+  const target = toastFocusTarget(
+    typeof document === "undefined" ? null : document.activeElement,
+    new Set(toasts.map(toastKey)),
+    returnTarget,
+    new Set(toasts.filter((t) => t.action).map(toastKey)),
+  );
+  target?.focus({ preventScroll: true });
+  // The stack is gone, so where focus came from before it is no longer news.
+  if (toasts.length === 0) returnTarget = null;
+});
 </script>
 
+<!-- Mounted always and outside the `{#if}`, so each sentence arrives as a
+     mutation of a region already in the tree (#1431, #2489). The assertive one
+     is written out because `LiveRegion` is deliberately polite-only. The
+     `{#key}` on the announced id replaces the text node for every new toast:
+     a second toast with the same sentence would otherwise leave the text
+     unchanged, write nothing to the region, and be spoken by nothing. -->
+<div role="status" aria-live="polite" style={SR_ONLY_STYLE} data-testid="toast-announcer-polite">{#key announced.polite}{politeText}{/key}</div>
+<div role="alert" aria-live="assertive" style={SR_ONLY_STYLE} data-testid="toast-announcer-assertive">{#key announced.assertive}{assertiveText}{/key}</div>
+
 {#if toasts.length > 0}
-  <div data-testid="toast-container" class="toast-stack">
-    {#each toasts as toast (toast.id)}
+  <div data-testid="toast-container" class="toast-stack" onfocusin={onStackFocusIn}>
+    <!-- Keyed on `toastKey`, which a coalescing re-push keeps although it
+         changes the id: the card, and any focus inside it, survives the bump. -->
+    {#each toasts as toast, i (toastKey(toast))}
       <div
-        role={toast.severity === "info" ? "status" : "alert"}
         data-testid={`toast-${toast.id}`}
+        data-toast-key={toastKey(toast)}
+        data-toast-severity={toast.severity}
         class="toast-card {toast.severity}"
       >
         <span class="glyph">
@@ -36,7 +101,7 @@ let { toasts, onDismiss }: Props = $props();
           </svg>
         </span>
         <div class="body">
-          <span class="msg">{formatActivityMessage(toast)}</span>
+          <span class="msg" id={`${uid}-msg-${i}`}>{formatActivityMessage(toast)}</span>
           {#if toast.count > 1}
             <span class="badge" data-testid={`toast-count-${toast.id}`}>×{toast.count}</span>
           {/if}
@@ -44,6 +109,7 @@ let { toasts, onDismiss }: Props = $props();
             <button
               type="button"
               class="action"
+              aria-describedby={`${uid}-msg-${i}`}
               data-testid={`toast-action-${toast.id}`}
               onclick={() => {
                 toast.action?.onClick();
@@ -60,6 +126,7 @@ let { toasts, onDismiss }: Props = $props();
           data-testid={`toast-dismiss-${toast.id}`}
           onclick={() => onDismiss(toast.id)}
           aria-label="Dismiss notification"
+          aria-describedby={`${uid}-msg-${i}`}
         >
           <svg
             width="12"

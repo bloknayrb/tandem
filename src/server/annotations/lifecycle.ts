@@ -96,7 +96,13 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
-import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { isAnchorVerdict } from "../../shared/positions/index.js";
+import {
+  atMapKey,
+  type OnLossy,
+  type RawAnnotation,
+  sanitizeAnnotation,
+} from "../../shared/sanitize.js";
 import type {
   AgentIdentity,
   Annotation,
@@ -1075,7 +1081,11 @@ function transitionPending(
 
   withMcp(ydoc, () => map.set(id, updated));
 
-  return { kind: "ok", data: updated };
+  // Claude addressed the record by its map key, so the echo carries that key,
+  // never a stale stored `id`. Only the RETURN is stamped: the write keeps the
+  // stored id, so it cannot repair an alias before `reconcileAnnotationKeys`
+  // has quarantined the replies filed under the stale id.
+  return { kind: "ok", data: atMapKey(id, updated) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,7 +1217,8 @@ function editPendingAnnotation(
   // either one leaves the channel correct and silently stops the edit reaching
   // the durable store. No test in this suite would notice.
   withMcp(ydoc, () => map.set(id, updated));
-  return { kind: "ok", annotation: updated };
+  // Echo under the map key; the write keeps the stored id (see `transitionPending`).
+  return { kind: "ok", annotation: atMapKey(id, updated) };
 }
 
 /**
@@ -1562,10 +1573,7 @@ export function addUserReply(
  */
 function screenSuggestionSpan(ann: Annotation, ydoc: Y.Doc): SuggestionRangeCause | null {
   const refreshed = refreshRange(ann, ydoc);
-  const live =
-    refreshed.kind === "degraded" || refreshed.kind === "failed"
-      ? ann.range
-      : refreshed.annotation.range;
+  const live = isAnchorVerdict(refreshed.kind) ? ann.range : refreshed.annotation.range;
   const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
     rejectHeadingOverlap: true,
     rejectHeadingInterior: true,

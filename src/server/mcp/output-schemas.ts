@@ -21,6 +21,7 @@
  */
 
 import { z } from "zod";
+import { ANCHOR_VERDICTS } from "../../shared/positions/index.js";
 import {
   AnnotationStatusSchema,
   AuthorSchema,
@@ -284,15 +285,13 @@ function annotationWithRepliesSchemaFor(localModelMark: boolean) {
     ...(localModelMark ? byLocalModelShape : {}),
     // #1764. Declared on THIS schema only — `annotationBaseShape` is shared with
     // `tandem_checkInbox`, which surfaces a different population and must not
-    // grow the field. The enum is the two DEGRADATION verdicts, not all five
-    // `RefreshResult` kinds: `updated` fires for every annotation past any edit
-    // and `repaired` for the whole collection after any reload, so emitting them
-    // would bury the one signal this exists to carry.
+    // grow the field. The enum is `ANCHOR_VERDICTS`, the two DEGRADATION
+    // verdicts (see there for why the other kinds stay out).
     anchor: z
-      .enum(["degraded", "failed"])
+      .enum(ANCHOR_VERDICTS)
       .optional()
       .describe(
-        'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+        'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. "failed": the anchor resolved inverted, so its position cannot be trusted; the range shown is the last one stored and may be wrong. Absent on every healthy refresh.',
       ),
     replies: z.array(
       localModelMark

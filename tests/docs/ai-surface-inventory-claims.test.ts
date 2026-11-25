@@ -420,7 +420,8 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     // member) are their declarations, the pass's own wake of a live child,
     // and the public seam. Since 3b-2b1c-a, `startOrWake` is called from
     // outside the supervisor (ownership's forward, through the sink
-    // `index.ts` sets), never inside it, so this list is unchanged.
+    // `index.ts` sets). Since 3b-2b2 it is also called inside it, once, by
+    // the standby watch's widened arm.
     const sites = sitesIn(SUPERVISOR, (node) => {
       if (ts.isIdentifier(node) && (node.text === "startOrWake" || node.text === "requestWake")) {
         const p = node.parent;
@@ -446,6 +447,9 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
         "requestWake:.requestWake", // activeTurnDelivery?.requestWake()
         "spawnOnce:requestWake<member>", // requestWake: requestWakeOnSpawn
         "startOrWake:startOrWake<decl>",
+        // 3b-2b2: the standby watch's widened arm hands a user comment or
+        // thread reply to startOrWake, which consults decideRefusal() first.
+        "setStandby:startOrWake",
         "startOrWakeStep:requestWake", // the pass wakes a live child
       ].sort(),
     );
@@ -528,5 +532,156 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
         "startOrWake:queueStartPass",
       ].sort(),
     );
+  });
+});
+
+describe("the wake socket's frame writers (#2358 PR 3b-2d)", () => {
+  // Every frame written on `/api/wake` is an AI surface (Critical Rule 9). The
+  // event frames ride `pushEvent`'s licence verdict and its revocation; the
+  // `ownership` frame does not enter `pushEvent`, so its writer asks
+  // `aiRefusal()` itself (ownership design §8.6, §11.5). A file-level "calls
+  // aiRefusal() somewhere" check cannot see a new send; these multisets can.
+  const WAKE = read("src", "server", "events", "wake-socket.ts");
+  const OBLIGATION = [
+    "A new frame writer on /api/wake (or a moved one). A frame that does not come",
+    "from pushEvent's subscription must consult the licence decision (aiRefusal(),",
+    "Critical Rule 9) before it writes, and end the socket 4403 on a refusal as",
+    "onRevoke does; list it in docs/licensing-explained.md's WS /api/wake row.",
+    "Then update this list.",
+  ].join(" ");
+
+  /** `fn:member` for every call of `.member(…)` in `src`. */
+  const memberCalls = (src: string, members: readonly string[]) =>
+    sitesIn(src, (node) =>
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      members.includes(node.expression.name.text)
+        ? node.expression.name.text
+        : null,
+    );
+
+  it("every send on a socket: the event subscription's and the ownership frame's writer", () => {
+    expect(memberCalls(WAKE, ["send"]), OBLIGATION).toEqual(
+      ["onEvent:send", "writeOwnershipFrame:send"].sort(),
+    );
+  });
+
+  it("every close of a socket is the licence close, and every caller of it is known", () => {
+    expect(memberCalls(WAKE, ["close"]), OBLIGATION).toEqual(
+      [
+        "attachWakeSocket:close", // `wss.close()` in its detach, an unnamed arrow
+        "closeLicenseRequired:close",
+      ].sort(),
+    );
+    const refs = sitesIn(WAKE, (node) =>
+      isReferenceTo(node, ["closeLicenseRequired"]) ? node.text : null,
+    );
+    expect(refs, OBLIGATION).toEqual(
+      ["onRevoke:closeLicenseRequired", "writeOwnershipFrame:closeLicenseRequired"].sort(),
+    );
+  });
+
+  it("the ownership frame's writer asks the licence before its send", () => {
+    const text = stripComments(WAKE);
+    const start = text.indexOf("function writeOwnershipFrame(");
+    expect(start).toBeGreaterThan(-1);
+    const body = text.slice(start, text.indexOf("\n}\n", start));
+    const asks = body.indexOf("aiRefusal()");
+    expect(asks, OBLIGATION).toBeGreaterThan(-1);
+    expect(asks, OBLIGATION).toBeLessThan(body.indexOf(".send("));
+  });
+
+  it("the ownership frame is requested only through ownership's sink", () => {
+    const files = sourcesUnder("src")
+      .filter(({ src }) =>
+        /\b(requestOwnershipFrame|writeOwnershipFrame)\b/.test(stripComments(src)),
+      )
+      .map(({ path }) => path)
+      .sort();
+    expect(files, OBLIGATION).toEqual(["src/server/events/wake-socket.ts", "src/server/index.ts"]);
+    const refs = sitesIn(WAKE, (node) =>
+      isReferenceTo(node, ["requestOwnershipFrame", "writeOwnershipFrame"]) ? node.text : null,
+    );
+    // The timer's callback is an unnamed arrow inside requestOwnershipFrame.
+    expect(refs, OBLIGATION).toEqual(["requestOwnershipFrame:writeOwnershipFrame"]);
+  });
+});
+
+describe("the SSE stream's writers (#2358 PR 4a)", () => {
+  // Every frame written on `/api/events` is an AI surface (Critical Rule 9).
+  // The event frames ride `pushEvent`'s licence verdict and its revocation
+  // (and the replay is behind the handler's admission); the
+  // `ownership-changed` frame does not enter `pushEvent`, so its writer asks
+  // `aiRefusal()` itself (ownership design §8.6). These multisets see a new
+  // write that a file-level "calls aiRefusal() somewhere" check cannot.
+  const SSE = read("src", "server", "events", "sse.ts");
+  const OBLIGATION = [
+    "A new writer on /api/events (or a moved one). A frame that does not come from",
+    "pushEvent's subscription or the admitted replay must consult the licence",
+    "decision (aiRefusal(), Critical Rule 9) before it writes, and end the stream",
+    "as onRevoke does on a refusal; list it in docs/licensing-explained.md's SSE",
+    "/api/events row. Then update this list.",
+  ].join(" ");
+
+  const memberCalls = (src: string, members: readonly string[]) =>
+    sitesIn(src, (node) =>
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      members.includes(node.expression.name.text)
+        ? node.expression.name.text
+        : null,
+    );
+
+  it("every write and end on a stream is known", () => {
+    expect(memberCalls(SSE, ["write", "end"]), OBLIGATION).toEqual(
+      [
+        "revoke:end", // the licence end, shared by onRevoke and the nudge's writer
+        "sseHandler:write", // ": connected"
+        "sseHandler:write", // the keepalive, an unnamed arrow inside the handler
+        "writeEvent:write", // an event's `id:` line
+        "writeEvent:write", // an event's `data:` line
+        "writeOwnershipChangedEvent:write",
+      ].sort(),
+    );
+  });
+
+  it("the licence end is reached only from onRevoke and the nudge's writer", () => {
+    // `LiveStream`'s own `revoke(): void` declares the member; it is no reference.
+    const refs = sitesIn(SSE, (node) =>
+      isReferenceTo(node, ["revoke"]) && !ts.isMethodSignature(node.parent) ? node.text : null,
+    );
+    expect(refs, OBLIGATION).toEqual(
+      [
+        "sseHandler:revoke", // `{ onRevoke: revoke }` and the stream's record
+        "sseHandler:revoke",
+        "writeOwnershipChangedEvent:revoke",
+      ].sort(),
+    );
+  });
+
+  it("the nudge's writer asks the licence before its write", () => {
+    const text = stripComments(SSE);
+    const start = text.indexOf("function writeOwnershipChangedEvent(");
+    expect(start).toBeGreaterThan(-1);
+    const body = text.slice(start, text.indexOf("\n}\n", start));
+    const asks = body.indexOf("aiRefusal()");
+    expect(asks, OBLIGATION).toBeGreaterThan(-1);
+    expect(asks, OBLIGATION).toBeLessThan(body.indexOf(".write("));
+  });
+
+  it("the nudge is requested only through ownership's sink", () => {
+    const files = sourcesUnder("src")
+      .filter(({ src }) =>
+        /\b(requestOwnershipChangedEvent|writeOwnershipChangedEvent)\b/.test(stripComments(src)),
+      )
+      .map(({ path }) => path)
+      .sort();
+    expect(files, OBLIGATION).toEqual(["src/server/events/sse.ts", "src/server/index.ts"]);
+    const refs = sitesIn(SSE, (node) =>
+      isReferenceTo(node, ["requestOwnershipChangedEvent", "writeOwnershipChangedEvent"])
+        ? node.text
+        : null,
+    );
+    expect(refs, OBLIGATION).toEqual(["requestOwnershipChangedEvent:writeOwnershipChangedEvent"]);
   });
 });

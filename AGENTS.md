@@ -4,7 +4,7 @@ The project's documentation is indexed from the [docs hub](docs/README.md).
 
 ## Project Structure & Module Organization
 
-Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, and optional Tauri desktop shell. Main code lives in `src/`: `src/client` for the Svelte 5 UI (`.svelte` components + `.svelte.ts` rune-based modules), `src/server` for MCP/API and document services, `src/cli` for the `tandem` command, `src/channel` for event streaming, `src/monitor` for monitoring, and `src/shared` for common types and helpers. Desktop integration lives in `src-tauri`. Tests mirror product areas under `tests/client`, `tests/server`, `tests/cli`, `tests/monitor`, `tests/shared`, and `tests/e2e`. Docs are in `docs`, samples in `sample`, and generated output in `dist`.
+Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, and optional Tauri desktop shell. Main code lives in `src/`: `src/client` for the Svelte 5 UI (`.svelte` components + `.svelte.ts` rune-based modules), `src/server` for MCP/API and document services, `src/cli` for the `tandem` command, `src/channel` for event streaming, `src/monitor` for monitoring, `src/stdio-bridge` for the stdio bridge Claude Code and Claude Desktop run to reach the server, and `src/shared` for common types and helpers. Desktop integration lives in `src-tauri`. Tests mirror product areas under `tests/client`, `tests/server`, `tests/cli`, `tests/monitor`, `tests/shared`, and `tests/e2e`. Docs are in `docs`, samples in `sample`, and generated output in `dist`.
 
 ## Build, Test, and Development Commands
 

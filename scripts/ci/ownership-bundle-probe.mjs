@@ -411,7 +411,7 @@ async function callTool(baseUrl, sessionId, name, args) {
 }
 
 /** The second verdict: a second session's write to a document the first opened. */
-async function probeRefusal(baseUrl, firstSessionId, expect) {
+export async function probeRefusal(baseUrl, firstSessionId, expect) {
   await rpc(baseUrl, firstSessionId, { method: "notifications/initialized" });
   const scratch = await callTool(baseUrl, firstSessionId, "tandem_scratchpad", {
     content: "ownership probe",

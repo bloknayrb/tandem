@@ -78,6 +78,7 @@ import type {
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
+import { type ReconciledDoc, reconcileAnnotationKeys } from "../annotations/key-identity.js";
 import {
   type AnnotationLifecycle,
   type ClaudeReplyResult,
@@ -241,6 +242,16 @@ export class YDocStore {
 
   listAnnotations(): Annotation[] {
     return collectAnnotations(this.#map, this.docHash);
+  }
+
+  /**
+   * Reconcile this document's annotation keys now and return the token every
+   * Claude-facing reply read requires (`channelVisibleReplies`). The token
+   * carries the document, never a `Y.Doc` getter on this store: it is accepted
+   * only by the reply gate.
+   */
+  reconciled(): ReconciledDoc {
+    return reconcileAnnotationKeys(this.#ydoc);
   }
 
   /**

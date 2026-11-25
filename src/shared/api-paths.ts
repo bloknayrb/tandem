@@ -25,6 +25,12 @@ export const API_MODE = "/api/mode";
  * wakes the push monitor. Mutating → origin-allowlist + loopback gated. */
 export const API_MODE_RELEASE = "/api/mode/release";
 export const API_INFO = "/api/info";
+// Multi-session document ownership (#2358 PR 5a, ADR-054; ownership design
+// §10.1). Registered only while ownership is on; flag off both answer as an
+// unknown route does. POST: Release or Assign a document (origin allowlist +
+// loopback, in the handler). GET: the owners list, loopback-only in the handler.
+export const API_OWNERSHIP = "/api/ownership";
+export const API_OWNERSHIP_OWNERS = "/api/ownership/owners";
 // Embedded `tandem doctor` report for the client's "Copy diagnostics" button.
 // Loopback-only (the report embeds absolute paths / PIDs).
 export const API_DIAGNOSTICS = "/api/diagnostics";

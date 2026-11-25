@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { API_MODE_RELEASE } from "../../../shared/api-paths.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
 import { withModeRelease } from "../../../shared/origins.js";
+import { isHeldInSoloMarker } from "../../../shared/sanitize.js";
 import { nextRev } from "../../annotations/schema.js";
 import { getOpenDocs } from "../../documents/registry.js";
 import { emitModeReleaseWake } from "../../events/queue.js";
@@ -11,6 +12,7 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { readModeState } from "../../mode.js";
+import { noteSoloReleased } from "../../sessions/ownership.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 
 /**
@@ -31,7 +33,10 @@ function clearHeldMarkersForDoc(doc: Y.Doc): number {
   const collect = (map: Y.Map<unknown>) => {
     map.forEach((value, key) => {
       const rec = value as Record<string, unknown> | undefined;
-      if (rec && rec.heldInSolo === true) hits.push([map, key, rec]);
+      // #2481: the predicate the hold reads, so a non-boolean marker the hold
+      // honours is one the release clears. Otherwise it would be held again on
+      // every indeterminate start, with no way to release it.
+      if (rec && isHeldInSoloMarker(rec.heldInSolo)) hits.push([map, key, rec]);
     });
   };
   collect(annMap);
@@ -115,6 +120,10 @@ export function handleModeRelease(req: Request, res: Response): void {
   }
 
   if (released > 0) emitModeReleaseWake();
+  // The Solo-release check (#2358 PR 3b-2b4b; ownership design §8.3 "Leaving
+  // Solo"): whatever was released, waiting work may now start or wake
+  // Tandem's Claude (Off still drops it). Ownership off: nothing.
+  noteSoloReleased();
 
   res.json({ data: { released } });
 }

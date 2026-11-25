@@ -23,6 +23,8 @@ import {
   getOwnerRecord,
   heldDocumentIds,
   resetOwnershipForTests,
+  setOwnSpawnSource,
+  setTandemPresenceSource,
   TANDEM_OWNER_ID,
 } from "../../src/server/sessions/ownership.js";
 import { allocPort } from "../helpers/alloc-port.js";
@@ -342,5 +344,188 @@ describe("flag off: the server ignores the header", () => {
     expect(boundLines()).toHaveLength(0);
     expect(unboundLines()).toHaveLength(0);
     expect(ownerHandleBindSnapshotForTests().spawns[0].bound).toEqual([]);
+  });
+});
+
+describe("rule 0 with the own-spawn seam set: the record is chosen after the bind (#2358 PR 3b-2b3a)", () => {
+  // Nothing in `src` sets the seam in 3b-2b3a; these set it to prove the
+  // routing that 3b-2b4 switches on.
+  const seam = () =>
+    setOwnSpawnSource(
+      () => ({ n: 7, sessionId: SID }),
+      (id) => id === SID,
+    );
+  const normalized = () => logs.map((l) => l.replace(/#[0-9a-f]{8}/g, "#<id>"));
+
+  it("a bound transport lands on tandem; an unbound one with the spawn's id on spawn:<n>", async () => {
+    await boot("1");
+    seam();
+    startedSpawn();
+    const bound = await initialize(withHandle(LIVE, SID));
+    const forger = await initialize({ "X-Claude-Session-Id": SID.toUpperCase() });
+    const owners = new Map(
+      mcpSessionBindsForTests().map((b, i) => [b.sessionId, mcpSessionOwnerIdsForTests()[i]]),
+    );
+    expect(owners.get(bound)).toBe(TANDEM_OWNER_ID);
+    expect(owners.get(forger)).toBe("spawn:7");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
+    expect(getOwnerRecord("spawn:7")?.recordKind).toBe("unbound-child");
+  });
+
+  it("a candidate revoked at confirm (teardown during registry.add's await) never lands on tandem", async () => {
+    await boot("1");
+    seam();
+    const spawn = startedSpawn();
+    for (let i = 0; i < 16; i++) await initialize({});
+    vi.mocked(console.error).mockImplementation((...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      if (line.includes("evicting least-recently-used")) endSpawn(spawn);
+      logs.push(line);
+    });
+    const id = await initialize(withHandle(LIVE, SID));
+    expect(bindOf(id)).toBeNull();
+    const owners = mcpSessionOwnerIdsForTests();
+    expect(owners).not.toContain(TANDEM_OWNER_ID);
+    expect(owners).toContain("spawn:7");
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+  });
+
+  it("the routed path logs exactly what the unrouted one does", async () => {
+    await boot("1");
+    logs.length = 0;
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize(withHandle(handle("R"), SID));
+    const unrouted = normalized();
+    await closeMcpSession();
+    resetOwnerHandleBindForTests();
+    logs.length = 0;
+    seam();
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize(withHandle(handle("R"), SID));
+    expect(normalized()).toEqual(unrouted);
+    expect(mcpSessionOwnerIdsForTests()).toEqual([TANDEM_OWNER_ID, "spawn:7"]);
+  });
+
+  it("flag off with the seam set: no owner ids, no records, the same logs as without it", async () => {
+    await boot("");
+    logs.length = 0;
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize({ "X-Claude-Session-Id": SID });
+    const unset = [...logs];
+    await closeMcpSession();
+    resetOwnerHandleBindForTests();
+    logs.length = 0;
+    seam();
+    startedSpawn();
+    await initialize(withHandle(LIVE, SID));
+    await initialize({ "X-Claude-Session-Id": SID });
+    // Flag off, `sessionIdForLog` passes raw ids through: compare by shape.
+    const shape = (ls: string[]) => ls.map((l) => l.replace(/[0-9a-f-]{36}/g, "<id>"));
+    expect(shape(logs)).toEqual(shape(unset));
+    expect(mcpSessionOwnerIdsForTests().every((o) => o === undefined)).toBe(true);
+    expect(getOwnerRecord(TANDEM_OWNER_ID)).toBeUndefined();
+    expect(getOwnerRecord("spawn:7")).toBeUndefined();
+  });
+});
+
+describe("the unbound-child refusal and teardown re-pointing through the real server (#2358 PR 3b-2b3b)", () => {
+  // As above: nothing in `src` sets the seam until 3b-2b4.
+  const seam = () =>
+    setOwnSpawnSource(
+      () => ({ n: 7, sessionId: SID }),
+      (id) => id === SID,
+    );
+  function file(name: string): string {
+    docDir ??= mkdtempSync(join(tmpdir(), "owner-handle-bind-"));
+    const path = join(docDir, name);
+    writeFileSync(path, "Hello world\n");
+    return path;
+  }
+  const docIdOf = (path: string) =>
+    [...getOpenDocs().values()].find((d) => d.filePath === path)?.id as string;
+
+  it("a write and a tandem_open take by the spawn's unbound-child record are refused on Tandem's Claude's document, and not elsewhere", async () => {
+    await boot("1");
+    seam();
+    setTandemPresenceSource(() => true);
+    startedSpawn();
+    const bound = await initialize(withHandle(LIVE, SID));
+    const forger = await initialize({ "X-Claude-Session-Id": SID });
+    const terminal = await initialize({ "X-Claude-Session-Id": OTHER_SID });
+    const tandems = file("tandems.md");
+    expect((await callTool(bound, "tandem_open", { filePath: tandems })).status).toBe(200);
+    const tandemsId = docIdOf(tandems);
+    expect(heldDocumentIds(TANDEM_OWNER_ID)).toEqual([tandemsId]);
+
+    const write = await callTool(forger, "tandem_comment", {
+      documentId: tandemsId,
+      from: 0,
+      to: 5,
+      text: "c",
+    });
+    expect(write.body).toContain("NOT_DOC_OWNER");
+    expect(write.body).toContain('\\"reason\\":\\"unbound-child\\"');
+    expect(write.body).toContain("Tandem's Claude answers this document.");
+    const take = await callTool(forger, "tandem_open", { filePath: tandems });
+    expect(take.body).toContain('\\"reason\\":\\"unbound-child\\"');
+    expect(heldDocumentIds(TANDEM_OWNER_ID)).toEqual([tandemsId]);
+
+    // An ordinary terminal still takes it by tandem_open, as before.
+    const terminals = file("terminals.md");
+    await callTool(terminal, "tandem_open", { filePath: terminals });
+    const held = await callTool(forger, "tandem_comment", {
+      documentId: docIdOf(terminals),
+      from: 0,
+      to: 5,
+      text: "c",
+    });
+    expect(held.body).toContain('\\"reason\\":\\"held\\"');
+
+    // A document nobody holds: the child record opens and writes like a terminal.
+    const nobodys = file("nobodys.md");
+    const opened = await callTool(forger, "tandem_open", { filePath: nobodys });
+    expect(opened.body).not.toContain("NOT_DOC_OWNER");
+    expect(heldDocumentIds("spawn:7")).toEqual([docIdOf(nobodys)]);
+  });
+
+  it("a spawn's teardown re-points its bound transports to private records, and tandem keeps its documents", async () => {
+    await boot("1");
+    seam();
+    setTandemPresenceSource(() => true);
+    const spawn = startedSpawn();
+    const bound = await initialize(withHandle(LIVE, SID));
+    const forger = await initialize({ "X-Claude-Session-Id": SID });
+    const tandems = file("tandems.md");
+    await callTool(bound, "tandem_open", { filePath: tandems });
+    endSpawn(spawn);
+    const owners = new Map(
+      mcpSessionBindsForTests().map((b, i) => [b.sessionId, mcpSessionOwnerIdsForTests()[i]]),
+    );
+    expect(owners.get(bound)).toBe(`private:${bound}`);
+    expect(getOwnerRecord(`private:${bound}`)?.recordKind).toBe("child-private");
+    expect(owners.get(forger)).toBe("spawn:7");
+    expect(heldDocumentIds(TANDEM_OWNER_ID)).toEqual([docIdOf(tandems)]);
+    // The re-pointed transport now meets the unbound-child refusal there.
+    const write = await callTool(bound, "tandem_comment", {
+      documentId: docIdOf(tandems),
+      from: 0,
+      to: 5,
+      text: "c",
+    });
+    expect(write.body).toContain('\\"reason\\":\\"unbound-child\\"');
+  });
+
+  it("seam unset: a spawn's teardown moves no transport", async () => {
+    await boot("1");
+    const spawn = startedSpawn();
+    const bound = await initialize(withHandle(LIVE, SID));
+    const before = mcpSessionOwnerIdsForTests();
+    endSpawn(spawn);
+    expect(mcpSessionOwnerIdsForTests()).toEqual(before);
+    expect(before).toEqual([`claude:${SID}`]);
+    expect(getOwnerRecord(`private:${bound}`)).toBeUndefined();
   });
 });

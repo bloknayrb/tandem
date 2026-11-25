@@ -334,6 +334,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-tandem-claude{,-disclosure,-load-error,-readonly,-unreadable,-absent,-save-error,-idle-minutes,-idle-error}`,
   `settings-modal-tandem-claude-start-{*}`, `settings-modal-tandem-claude-lifetime-{*}` (#2195),
   `settings-modal-app-info-footer`
+- Multi-session ownership only (#2358 PR 3b-2e1, ships dark; never rendered while
+  `OWNERSHIP_ENABLED` is off): `settings-modal-tandem-claude-bind-failed` — "Tandem's Claude
+  couldn't connect its Tandem tools", with no Start; `settings-modal-tandem-claude-bound-transports`
+  — the list of connections bound to the running Claude's run, one
+  `settings-modal-tandem-claude-bound-transport` row each (`data-kind` is `bridge` or
+  `direct-http`)
 - `settings-modal-solo-rail-hidden-toggle`,
   `settings-modal-dwell-time-slider`,
   `settings-modal-selection-toolbar-toggle`,
@@ -365,7 +371,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — Notifications tab (#2168)
 - `notifications-enable-toggle`, `notifications-content-select`,
   `notifications-flash-toggle`, `notifications-sound-select`,
-  `notifications-sound-preview`, `notifications-volume-slider`,
+  `notifications-sound-preview`, `notifications-sound-error`, `notifications-sound-hint`, `notifications-volume-slider`,
   `notifications-test-button`
 - `notifications-permission-status` — the platform line (desktop: managed by
   the OS; browser: granted / denied / unsupported / ask), and
@@ -570,7 +576,9 @@ site.
 
 ### Toasts & notifications
 - `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`,
-  `toast-action-{*}` (a toast's action button; clicking it also dismisses)
+  `toast-action-{*}` (a toast's action button; clicking it also dismisses),
+  `toast-announcer-polite`, `toast-announcer-assertive` (the stack's two
+  always-mounted screen-reader announcers, #2489)
 
 ### Activity center (1.10)
 - `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`

@@ -92,6 +92,7 @@ import {
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
+  setPollClaimAppliedForTests,
   setTandemPresenceSource,
   setTransportView,
   setWakeObserverForTests,
@@ -584,6 +585,35 @@ describe("R3/R4: who is handed a message", () => {
       setInboxClaimCheckForTests(undefined);
       expect(chatIds(await reader(B).poll())).toEqual([m]);
       expect(ownerOf(d3.id)).toBe(B);
+    });
+  }
+
+  // #2358 flip-blocker row: the chat claim's "changed" outcome (setDocOwner
+  // ran, but the caller does not hold the document after it). In production
+  // only a re-entrant lapse through the detached cap reaches it; the seam does
+  // what that lapse does at that point: the document leaves the claimant.
+  for (const how of ["cursor", "cursor-less"] as const) {
+    it(`R4.4: a chat claim whose change leaves the document with someone else (${how}): the message stays unread, undelivered and unregistered, and its new holder is handed it`, async () => {
+      const d3 = mkDoc("d3");
+      const m = userChat(key("m3"), d3.id);
+      let fired = 0;
+      setPollClaimAppliedForTests((id) => {
+        if (id !== d3.id || fired++ > 0) return;
+        expect(ownerOf(d3.id)).toBe(A); // the claim's change ran
+        setDocOwner(d3.id, { ownerId: B, kind: "opened" }, "take", B);
+      });
+      const inbox = how === "cursor" ? await reader(A).poll() : await pollAs(A);
+      setPollClaimAppliedForTests(undefined);
+      expect(fired).toBe(1);
+      // The response carried it (as for a refused claim), but nothing stuck.
+      expect(chatIds(inbox)).toEqual([m]);
+      expect(ownerOf(d3.id)).toBe(B);
+      expect(row(m)?.read).toBe(false);
+      expect(row(m)?.delivered).toBeUndefined();
+      expect(deliveryRegistry.lookup("c", m, 0)).toBeUndefined();
+      expect(messageOwner(m)?.ownerId).not.toBe(A);
+      // Reachable by its new owner.
+      expect(chatIds(await reader(B).poll())).toEqual([m]);
     });
   }
 
@@ -1833,6 +1863,7 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       handledKeys: () => (counts.handledKeys++, ownershipChatSide.handledKeys()),
       message: (k) => (counts.message++, ownershipChatSide.message(k)),
       messagesOn: (id) => (counts.messagesOn++, ownershipChatSide.messagesOn(id)),
+      unhandledKeys: () => ownershipChatSide.unhandledKeys(),
       reOwe: (keys) => (counts.reOwe++, ownershipChatSide.reOwe(keys)),
       settleCandidates: (row) => ownershipChatSide.settleCandidates(row),
       addSettles: (row, keys) => ownershipChatSide.addSettles(row, keys),

@@ -20,9 +20,12 @@
  * this caller's to answer now) and the posts PR's `post` with every other form a
  * chat post can get ({@link postRefusal}: a post names no message and may be
  * about an unowned document or about none, so it has forms of its own where
- * the document forms would be false for it); `unlinked` arrives with the shim's identity (PR 4),
- * `unbound-child` with the records around the handle (PR 3b-2), and the `released` and `assigned`
- * causes of `lost` with the controls (PR 5). `default` and `not-present` need
+ * the document forms would be false for it); `unlinked` ({@link unlinkedReplyRefusal}) is
+ * `/api/channel-reply`'s, since the shim's permit (PR 4b),
+ * `unbound-child` is here since PR 3b-2b3b (reached only while rule 0 routes: flag on, since 3b-2b4a's switch-on), the `released` and `assigned`
+ * causes of `lost` with the controls (PR 5a), and the `chat` copy for a
+ * message the user released or reassigned away from the caller (PR 5a-2,
+ * {@link MESSAGE_RELEASED}). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b-2; their copy is here
  * because the decision that produces them is.
  */
@@ -85,6 +88,14 @@ export function holderPhrase(holder: HolderView | null): string {
   }
 }
 
+/**
+ * `lost` with cause `released` (#2358 PR 5a; ownership design §5.3): the
+ * design's text. It says only that the document was released, never that the
+ * user chose it (ownership design §11.3).
+ */
+const RELEASED =
+  "This document was released from you. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
+
 const ONLY_THE_USER =
   "Only the user can reassign it, from the owner badge on its tab. You can still read it. Do not retry on this document.";
 const IF_ASKED = "only if the user asked you, in your own conversation, to work on it";
@@ -95,8 +106,9 @@ const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a requ
  * after a tab close gave it the document's unanswered chat and the document
  * was reopened and claimed by another session; after it acknowledged a
  * message about the document; or after it answered one while the document
- * could not be claimed (Ruling 4's reply arm). Push paths stay unscoped until
- * PR 4. So a chat message this session answers, or a push, can still be about
+ * could not be claimed (Ruling 4's reply arm). Since PR 4a a mapped push
+ * stream is narrowed, but an unmapped one, `/api/wake` and the supervisor's
+ * wake are not. So a chat message this session answers, or a push, can still be about
  * a document the poll left out: the exclusion texts say what was not returned
  * and never that nothing about the document was (the notice-rule PR, R2.1).
  * No new instruction (Ruling 14): the write refusals say what to do if the
@@ -131,16 +143,57 @@ const NOT_YOURS_WHY = "another session may be answering it, or a write on it is 
 const EMPTY_ACTIVITY =
   "its `activity` is empty because it is not yours to answer now, not because it could not be read";
 
+/**
+ * After a take-back (#2358 PR 3b-2b4b; Bryan, 2026-11-23: "Yes; tell it it
+ * was taken back (Recommended)"): the exclusion texts name each left-out
+ * document Tandem's Claude took back from this caller (a standing `taken
+ * back` loss), because {@link IF_ASKED} alone is still met by the request
+ * the caller acted on before. Re-taking stays allowed (`decideTake`); the
+ * sentence asks for a new request, as the `lost` refusal does. Empty: nothing.
+ */
+function takenBackNote(names: readonly string[], named = false): string {
+  if (names.length === 0) return "";
+  if (named) {
+    return " Tandem's Claude took this document back from you, so an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.";
+  }
+  const one = names.length === 1;
+  return ` Tandem's Claude took ${names.join(", ")} back from you, so an earlier request from the user does not count for ${one ? "it" : "them"}: call tandem_open on ${one ? "it" : "one of them"} only if the user asks you again after that.`;
+}
+
+/**
+ * After a Release (#2358 PR 5a; ownership design §5.3): the exclusion texts
+ * name each left-out document the user released from this caller (a standing
+ * `released` loss), for the same reason as {@link takenBackNote}: the
+ * `released` refusal asks for a request made after the Release, and
+ * {@link IF_ASKED} alone would still be met by the earlier one. Empty: nothing.
+ */
+function releasedNote(names: readonly string[], named = false): string {
+  if (names.length === 0) return "";
+  if (named) {
+    return " This document was released from you, so an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.";
+  }
+  const one = names.length === 1;
+  return ` ${names.join(", ")} ${one ? "was" : "were"} released from you, so an earlier request from the user does not count for ${one ? "it" : "them"}: call tandem_open on ${one ? "it" : "one of them"} only if the user asks you again after that.`;
+}
+
 /** A named poll of a document left out (a named poll's `activity` always describes that document). */
-export function inboxExcludedNamedNote(documentId: string): string {
-  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so no comments, thread replies or accept/dismiss responses on it were returned (${CHAT_SCOPED_ONE}); ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+export function inboxExcludedNamedNote(
+  documentId: string,
+  takenBack = false,
+  released = false,
+): string {
+  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so no comments, thread replies or accept/dismiss responses on it were returned (${CHAT_SCOPED_ONE}); ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}${takenBackNote(takenBack ? [documentId] : [], true)}${releasedNote(released ? [documentId] : [], true)}`;
 }
 
 /** A default poll that read no document because every open one was left out. */
-export function inboxExcludedAllNote(activityExcluded: boolean): string {
+export function inboxExcludedAllNote(
+  activityExcluded: boolean,
+  takenBack: readonly string[] = [],
+  released: readonly string[] = [],
+): string {
   return (
     `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; ${CHAT_SCOPED_ANY}` +
-    `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+    `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}${takenBackNote(takenBack)}${releasedNote(released)}`
   );
 }
 
@@ -151,7 +204,12 @@ export const INBOX_EXCLUDED_NAMES_SHOWN = 5;
  * A default poll that read some documents and left others out: one sentence,
  * naming up to {@link INBOX_EXCLUDED_NAMES_SHOWN} of them and counting the rest.
  */
-export function inboxExcludedSomeNote(names: readonly string[], activityExcluded: boolean): string {
+export function inboxExcludedSomeNote(
+  names: readonly string[],
+  activityExcluded: boolean,
+  takenBack: readonly string[] = [],
+  released: readonly string[] = [],
+): string {
   const shown = names.slice(0, INBOX_EXCLUDED_NAMES_SHOWN);
   const more = names.length - shown.length;
   const list = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
@@ -159,12 +217,12 @@ export function inboxExcludedSomeNote(names: readonly string[], activityExcluded
   return (
     ` ${one ? "One open document is" : `${names.length} open documents are`} not yours to answer right now (another session may be answering ${one ? "it" : "them"}, or a write on ${one ? "it" : "one"} is still running), so no comments, thread replies or accept/dismiss responses on ${one ? "it" : "them"} were returned: ${list}. A chat message you answer can still be about ${one ? "it" : "one of them"}, and so can anything Tandem pushed to you.` +
     `${activityExcluded ? " The active document is one of them: its `activity` is empty because it is not yours to answer now, not because it could not be read." : ""}` +
-    ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+    ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}${takenBackNote(takenBack)}${releasedNote(released)}`
   );
 }
 
 /** The flag-on `ownership.notYours` field's description. */
-export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_SCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
+export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_SCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST} If Tandem's Claude took one back from you, or the user released it from you (the summary says so), an earlier request from the user does not count: call tandem_open on it only if the user asks you again after that.`;
 
 /**
  * What each cause word of `ownership.changed` states (the change-notice PR,
@@ -188,6 +246,11 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
   "its tab was closed": "its tab was closed",
   "Tandem stopped counting this session as attached":
     "Tandem stopped counting this session as attached, and this session stopped holding it",
+  "Tandem's Claude took it back":
+    "Tandem's Claude took it from this session, when a run of it started or when it opened the document",
+  "it was released": "it was released from this session",
+  "it was assigned to another session": "it was assigned to another session",
+  "it was assigned to this session": "it was assigned to this session",
 });
 
 /** The flag-on `ownership.changed` field's description (Requirement 1.3, Ruling 10). */
@@ -225,6 +288,17 @@ const DEFAULTED =
   " This call named no documentId, so it targeted the active document. If you meant a document you hold, pass its documentId; offsets read from this document do not apply to another.";
 const LEAVE = "Leave this document.";
 
+/**
+ * `unbound-child` (ownership design §5.3, #2358 PR 3b-2b3b): a rule-0 child
+ * record on a document or message Tandem's Claude holds. It replaces every
+ * other row's copy for such a record. The document form is the design's
+ * text; the message form names the message and says not to reply.
+ */
+const UNBOUND_CHILD_WHY =
+  "This connection shares Tandem's Claude's conversation but is not its own Tandem connection: either it is your second Tandem toolset, so use the other one, or this conversation was resumed outside Tandem, so";
+export const UNBOUND_CHILD_DOCUMENT = `Tandem's Claude answers this document. ${UNBOUND_CHILD_WHY} leave this document unless the user assigns it to you from its tab.`;
+const UNBOUND_CHILD_MESSAGE = `Tandem's Claude answers this message. ${UNBOUND_CHILD_WHY} do not reply to it. Nothing was sent.`;
+
 function body(input: NotDocOwnerInput): string {
   const holder = holderPhrase(input.holder);
   // A Tandem's Claude that is not present holds nothing and takes nothing, so
@@ -238,12 +312,16 @@ function body(input: NotDocOwnerInput): string {
     case "answered":
       return `${holder} already answered this. Do not answer it again.`;
     case "lost":
+      // A Release records a loss on Tandem's Claude only when it moves the
+      // document to unowned (it is not present), so nobody holds it then.
+      if (input.callerIsTandem && input.cause === "released") return RELEASED;
       if (input.callerIsTandem) {
         return `A session the user is working with has this document now; leave it.`;
       }
       if (input.cause === "taken back") {
         return "Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point.";
       }
+      if (input.cause === "released") return RELEASED;
       return `${holder} has this document now. ${ONLY_THE_USER}`;
     case "held":
       return `${holder} is working on this document. ${ONLY_THE_USER}`;
@@ -261,11 +339,27 @@ function body(input: NotDocOwnerInput): string {
       return chatRefusalText("holder", input.holder);
     case "post":
       return postRefusalText({ reason: "post", holder: input.holder });
+    case "unbound-child":
+      return UNBOUND_CHILD_DOCUMENT;
   }
 }
 
-/** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6; `answered`, the posts PR, R2.2). */
-export type ChatRefusalWhy = "holder" | "busy" | "lost" | "local" | "not-present" | "answered";
+/**
+ * Why a reply to a chat message was refused, for its copy (the chat owners PR,
+ * R5.6; `answered`, the posts PR, R2.2; `released` and `reassigned`, #2358 PR
+ * 5a-2: the record a message loss names, replying while the message is
+ * claimable, ownership design §10.2).
+ */
+export type ChatRefusalWhy =
+  | "holder"
+  | "busy"
+  | "lost"
+  | "local"
+  | "not-present"
+  | "answered"
+  | "unbound-child"
+  | "released"
+  | "reassigned";
 
 /**
  * The `chat` refusal's text (Ruling 15; ownership design §5.3): it refuses
@@ -291,8 +385,34 @@ function chatRefusalText(why: ChatRefusalWhy, holder: HolderView | null): string
       return CHAT_NOT_PRESENT;
     case "answered":
       return `${holderPhrase(holder)} already answered this. Do not answer it again.`;
+    case "unbound-child":
+      return UNBOUND_CHILD_MESSAGE;
+    case "released":
+      return MESSAGE_RELEASED;
+    case "reassigned":
+      return MESSAGE_REASSIGNED;
   }
 }
+
+/**
+ * A message the user released from this session (#2358 PR 5a-2; ownership
+ * design §10.2): the `chat` copy for a message loss, with no holder to name.
+ * Like the document's `released` copy it says only that the message was
+ * released, never that the user chose it (ownership design §11.3), and it
+ * gives no remedy that would take the message back: Release always moves a
+ * message away from the session it was released from.
+ */
+export const MESSAGE_RELEASED =
+  "This message was released from you, so it is not yours to answer. Nothing was sent. Do not reply to it.";
+
+/**
+ * The same for a message assigned to another session. While that session owns
+ * it the `holder` form refuses first, naming it, and a dropped owner ends the
+ * loss, so no production path reaches this today; it is here so every loss
+ * cause a message can carry has a true copy.
+ */
+export const MESSAGE_REASSIGNED =
+  "This message was assigned to another session, so it is not yours to answer. Nothing was sent. Do not reply to it.";
 
 const CHAT_NOT_PRESENT =
   "Tandem's Claude is turned off or stopped, so it answers no chat now. Nothing was sent.";
@@ -303,7 +423,7 @@ const CHAT_BUSY =
 export interface ChatReplyRefusal {
   message: string;
   details: {
-    reason: "chat" | "not-present" | "answered";
+    reason: "chat" | "not-present" | "answered" | "unbound-child" | "unlinked";
     holder: HolderView | null;
     documentId?: string;
   };
@@ -315,7 +435,7 @@ export interface ChatReplyRefusal {
  * message; never an owner id and never the message's text.
  */
 export function chatReplyRefusal(input: {
-  reason: "chat" | "not-present" | "answered";
+  reason: ChatReplyRefusal["details"]["reason"];
   holder: HolderView | null;
   why: ChatRefusalWhy;
   documentId?: string;
@@ -332,8 +452,41 @@ export function chatReplyRefusal(input: {
   };
 }
 
+/**
+ * The `unlinked` copy (ownership design §5.3, §9.2, §9.3): a `/api/channel-reply`
+ * from a shim the server cannot match to a record, or one carrying Tandem's
+ * Claude's own session id, which never acts as Tandem's Claude (R3.3). The
+ * remedy is the `tandem` server's `tandem_reply`, where the caller is judged
+ * as its own record.
+ */
+export const UNLINKED_REPLY =
+  "This reply could not be matched to your Tandem session. Nothing was sent. Send it with the `tandem` server's `tandem_reply` tool instead.";
+
+/**
+ * Build the `unlinked` refusal (#2358 PR 4b): no holder, since the caller has
+ * no record to judge; `documentId` is the named message's document, when it
+ * has one.
+ */
+export function unlinkedReplyRefusal(documentId?: string): ChatReplyRefusal {
+  return {
+    message: UNLINKED_REPLY,
+    details: {
+      reason: "unlinked",
+      holder: null,
+      ...(documentId !== undefined ? { documentId } : {}),
+    },
+  };
+}
+
 /** The reasons a chat post can be refused for (the posts PR, R1.7). */
-export type PostRefusalReason = "post" | "not-present" | "lost" | "held" | "claimed" | "default";
+export type PostRefusalReason =
+  | "post"
+  | "not-present"
+  | "lost"
+  | "held"
+  | "claimed"
+  | "default"
+  | "unbound-child";
 
 /**
  * The text of a refused chat post (the posts PR, R1.7; Ruling 15; design
@@ -370,6 +523,8 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
     }
     case "not-present":
       return "Tandem's Claude is turned off or stopped, so it cannot post to chat now. Nothing was sent. Do not retry.";
+    case "unbound-child":
+      return `${UNBOUND_CHILD_DOCUMENT} Nothing was sent.`;
     case "held":
       return `${holder} is working on this document. ${ONLY_THE_USER} ${POST_OUTLET}`;
     case "claimed":
@@ -377,6 +532,9 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
     case "default":
       return `Tandem's Claude answers this document's comments and chat. Do not take the document in order to post about it. ${POST_OUTLET}`;
     case "lost":
+      if (input.callerIsTandem && input.cause === "released") {
+        return "This document was released from Tandem's Claude, and nobody holds it now. Nothing was sent.";
+      }
       if (input.callerIsTandem) {
         return input.holder
           ? "A session the user is working with has this document now; leave it. Nothing was sent."
@@ -385,6 +543,7 @@ function postRefusalBody(input: PostRefusalInput, holder: string): string {
       if (input.cause === "taken back") {
         return `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;
       }
+      if (input.cause === "released") return `${RELEASED} ${POST_OUTLET}`;
       return input.holder
         ? `${holder} has this document now. ${ONLY_THE_USER} ${POST_OUTLET}`
         : `You lost this document, and nobody holds it now. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;

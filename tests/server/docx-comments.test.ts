@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { reconcileAnnotationKeys } from "../../src/server/annotations/key-identity.js";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
 import { prepareExportComments } from "../../src/server/file-io/docx-comment-export.js";
 import { reusableWordId } from "../../src/server/file-io/docx-comment-id.js";
@@ -1821,11 +1822,7 @@ describe("injectCommentsAsAnnotations — repairs a stranded reply parent", () =
       expect(after.private).toBe(true);
 
       const parent = map.get(key) as Annotation;
-      const visible = channelVisibleReplies(parent, (id) =>
-        Array.from(repliesMap.values() as Iterable<AnnotationReply>).filter(
-          (r) => r.annotationId === id,
-        ),
-      );
+      const visible = channelVisibleReplies(reconcileAnnotationKeys(doc), parent);
       expect(visible).toEqual([]);
     }
   });

@@ -17,7 +17,7 @@ import {
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants";
-import { sanitizeAnnotation } from "../../shared/sanitize";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { ReplyBaseline } from "../notifications/thread-answer-detector";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
@@ -269,11 +269,20 @@ export function createYjsSync(opts?: {
     const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annotationObserver = () => {
       const anns: Annotation[] = [];
-      annotationsMap.forEach((value) => {
+      // Each card's id is its MAP KEY (`atMapKey`), so every action the user
+      // takes on it (reply, edit, promote, resolve) is posted against the
+      // record the card shows. A record stored under K with a stale `id: X`
+      // used to post X, and a reply typed in a note card was then stamped
+      // against the comment at X and written non-private (ADR-027).
+      annotationsMap.forEach((value, key) => {
+        if (key === "") return;
         anns.push(
-          sanitizeAnnotation(value as Annotation, (event) => {
-            console.warn("[sanitize]", event);
-          }),
+          atMapKey(
+            key,
+            sanitizeAnnotation(value as Annotation, (event) => {
+              console.warn("[sanitize]", event);
+            }),
+          ),
         );
       });
       annotationsState = anns;
