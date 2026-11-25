@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectAndStream } from "../../src/monitor/index.js";
+import { OWNERSHIP_CHANGED_SSE_FRAME } from "../../src/shared/events/wake-scope.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -329,5 +330,62 @@ describe("SSE resume behavior", () => {
     expect(headersSeen).toHaveLength(2);
     expect(headersSeen[0]["last-event-id"]).toBeUndefined();
     expect(headersSeen[1]["last-event-id"]).toBe("e7");
+  });
+});
+
+describe("the ownership-changed nudge (#2358 PR 4a)", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let stream: ControllableStream;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    installMonitorFakeTimers();
+    stub = createFetchStub();
+    stub.install();
+    stream = new ControllableStream();
+    stub.on("/api/events", () => sseResponse(stream));
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    stub.on("/api/channel-awareness", () => new Response("", { status: 200 }));
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.useRealTimers();
+    stdoutSpy.mockRestore();
+  });
+
+  it("prints one payload-free wake line, advances no event id and logs no validation failure", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId);
+    stream.push(OWNERSHIP_CHANGED_SSE_FRAME);
+    stream.end();
+    await promise.catch(() => {});
+
+    const lines = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(lines).toEqual(["Tandem: ownership-changed — call tandem_checkInbox for details\n"]);
+    expect(onEventId).not.toHaveBeenCalled();
+    const logged = errSpy.mock.calls.map((c) => c.join(" "));
+    expect(logged.some((m) => m.includes("failed validation"))).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  it("an older consumer, blind to the event line, logs one validation failure and advances nothing", async () => {
+    // What a monitor or shim older than PR 4a sees: it reads only `id:` and
+    // `data:`, so the frame is `data: {}` with no id (ownership design §9.1).
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId);
+    stream.push(OWNERSHIP_CHANGED_SSE_FRAME.replace(/^event: .*\n/, ""));
+    stream.end();
+    await promise.catch(() => {});
+
+    expect(stdoutSpy).not.toHaveBeenCalled();
+    expect(onEventId).not.toHaveBeenCalled();
+    const logged = errSpy.mock.calls.map((c) => c.join(" "));
+    expect(logged.filter((m) => m.includes("failed validation"))).toHaveLength(1);
+    errSpy.mockRestore();
   });
 });

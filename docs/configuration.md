@@ -58,7 +58,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_SENTRY_DSN` | unset | The **only** switch that turns crash reporting on. Set it to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN you control and Tandem reports crashes to *your* endpoint. The report text is scrubbed of home-directory paths, secrets, and document payloads; a desktop native-crash report also carries an unscrubbed minidump, which on Linux includes the process environment and open document paths. Unset (the default), no crash-reporting code path is initialized at all. See [security.md](security.md#telemetry-none-by-default-crash-reporting-strictly-opt-in). |
+| `TANDEM_SENTRY_DSN` | unset | The **only** switch that turns crash reporting on. Set it to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN you control and Tandem reports crashes to *your* endpoint. The report text is scrubbed of home-directory paths, secrets, and document payloads; a desktop native-crash report also carries a minidump, scrubbed only in part: its environment, command line and open-file paths are removed, but raw thread stack memory and full module paths (which can name your user account) are not. Unset (the default), no crash-reporting code path is initialized at all. See [security.md](security.md#telemetry-none-by-default-crash-reporting-strictly-opt-in). |
 | `TANDEM_LICENSE_GATE` | unset | Set to `1` to force the licensing gate on in `tsx`/`vitest` runs, where the `__LICENSE_GATE_ENABLED__` build define is absent. Development and testing only — in shipped builds the gate is fixed at build time by `LICENSE_GATE_ENABLED` in `tsup.config.ts`, which stays off until v1.0. |
 
 ### Development and tests only
@@ -138,7 +138,7 @@ Where the registration lives:
 
 | OS | Location |
 |---|---|
-| Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
+| Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value). Always the per-user key, never the machine-wide `HKLM` one, even when Tandem runs as administrator (#2160) |
 | macOS | `~/Library/LaunchAgents/Tandem.plist` |
 | Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 

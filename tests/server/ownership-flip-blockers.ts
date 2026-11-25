@@ -49,6 +49,17 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
+      "The shipped skill (skills/tandem/SKILL.md) says wake frames on /api/events carry an id, " +
+      "a type and a timestamp. With ownership on, the stream also sends PR 4a's id-less " +
+      "`event: ownership-changed` / `data: {}` nudge, which the skill does not mention, so a " +
+      "session watching ?filter=wake as the skill describes is not told what it means.",
+    closedBy:
+      'A SKILL.md line saying an ownership-changed frame also means "call tandem_checkInbox", ' +
+      "with its frontmatter version bumped, landed with or before the flip (it reaches users, so " +
+      "not while dark).",
+  },
+  {
+    gap:
       "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
       "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
@@ -125,21 +136,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document is " +
-      "not its to answer (the named one, or on a default poll every open document it left out) (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
-      "decision 4). Since the change-notice PR, `ownership.changed` and the summary's loss " +
-      "sentence also tell it that another session's open took a document it held, without " +
-      "identifying that session: where `notYours` says only that another session 'may' be " +
-      "answering, `changed` says it definitely, and to within one poll interval. A " +
-      "'its tab was closed' entry tells it that some local actor (the user, or any process " +
-      "through POST /api/close) closed a tab it held. And anything presenting the same identity " +
-      "shares one queue, so any local process presenting a session's identity can drain the " +
-      "explanations meant for that session (a destructive read; `holding` is unaffected; within " +
-      "D4, coordination not security). It is not yet in docs/security.md's register.",
-    closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
-  },
-  {
-    gap:
       "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
       "stays open, so the stall banner reports it: until a restart for a user row a client " +
       "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
@@ -166,45 +162,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "A lapse to unowned wakes no session that is reached only by a push stream (the channel " +
-      "shim, the plugin monitor): since 3b-2d the `ownership` frame on /api/wake wakes an armed " +
-      "watch, and 3b-2b2's start rules Tandem's Claude, but nothing nudges /api/events, so " +
-      "such a session waits for its next poll for a document that went unowned with work on it.",
-    closedBy:
-      "PR 4a (the payload-free `ownership-changed` event on every push stream, ownership " +
-      "design §8.6, §9.1). Presence, the /api/wake frame (3b-2d) and the start rules of 3b-2b2 " +
-      "have landed.",
-  },
-  {
-    gap:
-      "Push paths (/api/events, /api/wake, the channel shim, the plugin monitor) still deliver " +
-      "every user chat:message to every consumer, so a session can be pushed chat it may not " +
-      "answer (the chat owners PR scoped the inbox and the reply, not pushes).",
-    closedBy: "PR 4 (push scope, design §9.1).",
-  },
-  {
-    gap:
-      "A live acknowledger that never answers: since the posts PR an acknowledgement counts for " +
-      "nothing, so an acknowledged message is re-owed at any change of its owner, but while the " +
-      "acknowledger's record lives and owns the message (a doc-less or closed-document message, " +
-      "or Ruling 4's arm) nobody else is handed it, and the pickup row reads 'working'.",
-    closedBy: "PR 5's control on the message (Release from its pickup row).",
-  },
-  {
-    gap:
-      "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
-      "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead. " +
-      "A channel-reply final reply handles its message (an unmapped shim session can answer a " +
-      "message another session owns), and settles only its target. A channel-reply " +
-      "acknowledgement handles nothing and sets no owner, but it still stamps `read`, so on a " +
-      "message a re-owe made unread it hides the message from its owner's polls (cursor and " +
-      "cursor-less) until the next re-owe (the posts PR, R0.5). A message is handled only by a " +
-      "final reply or `settles` (Ruling 11). With no re-owe after it, such an acknowledgement " +
-      "takes the message out of waiting for good.",
-    closedBy: "PR 4 (the shim's permit, design §9.2).",
-  },
-  {
-    gap:
       "The pickup and stall clock still counts from the message's arrival, not its last change " +
       "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
       "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
@@ -214,11 +171,13 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "After a tab close, chat stays with the closing holder even when the document is reopened " +
-      "and claimed by another session (R6.3); and a message whose per-message owner never " +
-      "answers reads 'still waiting' with the Claude Code offer, and a session started from " +
-      "that offer is not handed it (R8.2).",
-    closedBy: "PR 5's controls (Assign and Release of a document and of a message).",
+      "The user's controls exist only on the server (#2358 PR 5a, 5a-2: POST /api/ownership for " +
+      "a document and for a chat message): nothing in the editor reaches them yet, so a stuck " +
+      "claim, a live acknowledger that never answers, or chat a tab close left with its closing " +
+      "holder can be moved only by a local process calling the route.",
+    closedBy:
+      "PR 5b (the badge's Release and Assign, the Assign popover, the pickup row's Assign and " +
+      "Release of a message, the native menu's leaves).",
   },
   {
     gap:
@@ -248,14 +207,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
       "the bridge's replay, or a documented restart), decided there.",
-  },
-  {
-    gap:
-      "Change-notice causes PR 5 owes (R7.2): lost by Release and by Assign, gained by Assign, " +
-      "each a past-tense fact with no instruction (Ruling 10); a released session is told only " +
-      "that the document was released, never that the user chose it (design §11.3). Until then " +
-      "such a change is told only through `holding`.",
-    closedBy: "PR 5: the causes, with tests through their production paths.",
   },
   {
     gap:
@@ -410,7 +361,7 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
       "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
       "carried over and never re-owed. The user notices and sends the message again. (The same " +
-      "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
+      "route's acknowledgement from a non-owner was the channel-reply row, closed by PR 4b's permit.)",
     closedBy:
       "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
     acceptedFor:

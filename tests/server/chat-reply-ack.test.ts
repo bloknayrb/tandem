@@ -9,7 +9,7 @@
  * Claude's inbox now that `BYO_MODELS_ENABLED` is on (since 0.32). The "append alone does not
  * stamp" case below is that caller's exact call shape.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendClaudeChatMessage,
   markUserChatRead,
@@ -158,6 +158,34 @@ describe("markUserChatRead", () => {
 
 describe("POST /api/channel-reply", () => {
   type ReplyBody = { messageId?: string; warning?: string; error?: string };
+
+  // Master's route, pinned dark: with ownership on, a shim's reply is first
+  // judged by the permit (#2358 PR 4b), which `ownership-channel-reply.test.ts`
+  // covers; the one flag-on case at the end shows the permit is reached here.
+  beforeEach(() => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("flag on, a header-less shim is refused before anything is written, stamped or told", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    const seen = vi.fn();
+    const off = onTandemReply(seen);
+    try {
+      seedUser("u1");
+      const before = chatMap().size;
+      const res = postRaw({ text: "answer", replyTo: "u1" });
+      expect(res._status).toBe(409);
+      expect((res._body as ReplyBody).error).toBe("NOT_DOC_OWNER");
+      expect(chatMap().size).toBe(before);
+      expect(row("u1")?.read).toBe(false);
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
 
   function postRaw(body: unknown) {
     const { app, routes } = makeRecorderApp();

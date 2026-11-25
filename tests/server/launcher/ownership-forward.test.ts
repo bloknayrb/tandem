@@ -86,8 +86,11 @@ import { getMcpContext, runWithMcpContext } from "../../../src/server/sessions/c
 import { resetOwnerHandleBindForTests } from "../../../src/server/sessions/owner-handle-bind.js";
 import {
   applyUserOpenDefault,
+  controlDocumentOwner,
+  controlMessageOwner,
   forgetChatMessageOwners,
   getDocOwner,
+  getOwnerRecord,
   inboxScopeOf,
   noteTransportChanged,
   noteTransportRegistered,
@@ -102,6 +105,7 @@ import {
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
+  setOwnershipTransportMode,
   setStartOrWakeSink,
   setTandemPresenceSource,
   setTransportView,
@@ -707,6 +711,9 @@ describe("R1: ownership's startOrWake, called directly", () => {
       "user-open": null,
       // Presence's consumer (3b-2b4a): forwarded, never dropped.
       presence: "document",
+      // The user's Release and Assign (PR 5a): forwarded, ungated.
+      release: "document",
+      assign: "document",
       lapse: "document",
       "take-back": "document",
       claim: "document",
@@ -741,7 +748,7 @@ describe("R1: ownership's startOrWake, called directly", () => {
     const _all: OwnershipChangeCause[] = Object.keys(expected).filter(
       (k) => k !== "message-owner" && k !== "departure",
     ) as OwnershipChangeCause[];
-    expect(_all).toHaveLength(10);
+    expect(_all).toHaveLength(12);
   });
 
   it("R1.7 directly: a lapse with another session connected tells the observer and not the sink; every other cause still forwards", () => {
@@ -1047,6 +1054,80 @@ describe("the decision table: A lapses", () => {
     await settle();
     expect(children).toHaveLength(1);
     expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a, an unlicensed Assign (ownership design §10.1): the user's Assign to Tandem's Claude lands keyless, the forward goes out, and the supervisor refuses it: no spawn", async () => {
+    const lic = licenceDouble();
+    const { h } = await idleStopped({ aiRefusal: lic.fn });
+    const { d } = worldA();
+    lic.refusing = true;
+    // An HTTP-mode boot has Tandem's Claude's record from the start.
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(await controlDocumentOwner(d.id, "assign", label, () => true)).toBe("changed");
+    expect(getDocOwner(d.id)).toMatchObject({ ownerId: TANDEM, kind: "assigned" });
+    expect(causes).toEqual(["assign"]);
+    expect(sink.mock.calls).toEqual([["document"]]);
+    await lockBarrier(h);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a, an Assign (positive twin): admitted, idle-stopped: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    const { d } = worldA();
+    // An HTTP-mode boot has Tandem's Claude's record from the start.
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(await controlDocumentOwner(d.id, "assign", label, () => true)).toBe("changed");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  /** A owns a closed F's message per message (origin close): the message Assign's starting point. */
+  async function messageOwnedByA(): Promise<string> {
+    register(A);
+    const f = mkDoc("f");
+    setDocOwner(f.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), f.id);
+    await closeByRoute(f.id);
+    expect(messageOwner(m)?.ownerId).toBe(A);
+    causes = [];
+    return m;
+  }
+
+  it("PR 5a-2, an unlicensed Assign of a chat message (ownership design §10.1): it lands keyless, the message forward goes out, and the supervisor refuses it: no spawn", async () => {
+    const lic = licenceDouble();
+    const { h } = await idleStopped({ aiRefusal: lic.fn });
+    const m = await messageOwnedByA();
+    lic.refusing = true;
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
+    expect(messageOwner(m)).toEqual({ ownerId: TANDEM, origin: "assign" });
+    expect(causes).toEqual(["message-owner"]);
+    expect(sink.mock.calls).toEqual([["message"]]);
+    await lockBarrier(h);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(passes(h)).toBe(0);
+  });
+
+  it("PR 5a-2, an Assign of a chat message (positive twin): admitted, idle-stopped: one spawn whose first turn is the wake", async () => {
+    const { h } = await idleStopped();
+    const m = await messageOwnedByA();
+    setOwnershipTransportMode("http");
+    const label = getOwnerRecord(TANDEM)?.label;
+    expect(controlMessageOwner(m, "assign", label)).toBe("changed");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
   });
 
   it("A15 (positive): A holds D and E, each with a waiting comment; one lapse: exactly one pass, one wake", async () => {

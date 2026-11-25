@@ -1119,10 +1119,13 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     return text.slice(start, text.indexOf("\n}\n", start));
   };
 
-  it("the admit: not Tandem's Claude as caller, the departure gate only with no caller, then the changed key alone", () => {
+  it("the admit: not Tandem's Claude as caller, the departure gate only with no caller and not the user, then the changed key alone", () => {
     const body = fnBody("messageOwnerChanged");
     expect(body).toContain("change.caller !== TANDEM_OWNER_ID");
-    expect(body).toContain("(change.caller !== undefined || !anotherSessionConnected())");
+    // #2358 PR 5a-2: the user's Release or Assign (`byUser`) is not gated.
+    expect(body).toContain(
+      "(change.byUser === true || change.caller !== undefined || !anotherSessionConnected())",
+    );
     expect(body).toContain("tandemChatWaiting((k) => k === change.key)");
     // In the brief's order: the caller, the gate, then the scan.
     expect(body.indexOf("change.caller !== TANDEM_OWNER_ID")).toBeLessThan(
@@ -1144,10 +1147,15 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
     }
   });
 
-  it("R6's three sites: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing", () => {
+  it("R6's three sites and the user's: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing, the controls the key and byUser", () => {
     const calls = [...text.matchAll(/\bmessageOwnerChanged\(([^)]*)\)/g)].map((m) => m[1]);
-    // The definition's parameter list, then the three sites.
-    expect(calls).toHaveLength(4);
+    // The definition's parameter list, then the three sites, then the
+    // user's controls (#2358 PR 5a-2, `wakeForMovedMessages`).
+    expect(calls).toHaveLength(5);
+    expect(fnBody("wakeForMovedMessages")).toContain(
+      "if (messageOwnerChanged({ key, byUser: true })) forwarded = true;",
+    );
+    expect(text.match(/byUser: true/g)).toHaveLength(1);
     // 3b-2b5: the release notes whether any key was forwarded, for its rounds.
     expect(fnBody("releaseMessageOwners")).toContain(
       "if (messageOwnerChanged({ key })) forwarded = true;",
@@ -1156,6 +1164,42 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
       /dropChatOwners: \(out\) => \{[\s\S]*?messageOwnerChanged\(\{ key, caller: callerId \}\);/,
     );
     expect(fnBody("setMessageOwner")).toContain("messageOwnerChanged();");
+  });
+
+  it("R3.3 and its one exception (#2358 PR 5a-2): a per-message owner is written only by the check-and-set and by the user's Assign", () => {
+    const writes = [...text.matchAll(/\bownerByMessage\.set\(/g)].map((m) => m.index as number);
+    expect(writes).toHaveLength(2);
+    const check = fnBody("setMessageOwner");
+    expect(check).toContain("ownerByMessage.has(key)");
+    expect(check).toContain("ownerByMessage.set(key, {");
+    // The overwrite: only in the message control's write, origin "assign".
+    expect(fnBody("applyMessageControl")).toContain(
+      'ownerByMessage.set(key, { ownerId: next, origin: "assign" });',
+    );
+  });
+
+  it("carried-over messages (Bryan's 'Let Assign own them', 2026-11-23): the check-and-set refuses one, and only the user's Assign ends the status before giving an owner", () => {
+    // The check-and-set refuses a carried-over message (the posts PR, R0.1).
+    expect(fnBody("setMessageOwner")).toContain(
+      "if (!ownershipEnabled() || ownerByMessage.has(key) || carriedOver.has(key)) return false;",
+    );
+    // Joined only at the boot's capture.
+    expect(text.match(/\bcarriedOver\.add\(/g)).toHaveLength(1);
+    expect(fnBody("captureCarriedOverChat")).toContain("carriedOver.add(key)");
+    // Left only with the row, or by the user's Assign, before its owner is written.
+    const deletes = [...text.matchAll(/\bcarriedOver\.delete\(/g)];
+    expect(deletes).toHaveLength(2);
+    expect(fnBody("forgetChatMessageOwners")).toContain("carriedOver.delete(key);");
+    const apply = fnBody("applyMessageControl");
+    const ends = apply.indexOf(
+      "if (endsCarriedOver && next !== undefined) carriedOver.delete(key);",
+    );
+    expect(ends).toBeGreaterThan(apply.indexOf("reOweChat([key])"));
+    expect(ends).toBeLessThan(apply.indexOf("ownerByMessage.set("));
+    // Only the carried-over control passes it.
+    expect(text.match(/applyMessageControl\([^)]*\btrue\)/g)).toEqual([
+      "applyMessageControl(key, target.ownerId, undefined, true)",
+    ]);
   });
 });
 
@@ -1265,8 +1309,11 @@ describe("waiting, the chat half and the decision (#2358 PR 3b-2b1b-chat)", () =
     );
     expect(text.indexOf("export function setDocOwner(")).toBeGreaterThanOrEqual(0);
     expect(setDocOwner).toMatch(
-      /cause !== "take-back" &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
+      /cause !== "take-back" &&\s*!\(cause === "release" && previousId === next\.ownerId\) &&\s*waitingAtDocumentChange\(documentId, next\.ownerId\)\s*\)\s*\{\s*if \(startOrWake\(cause\) && leavesRecord\)/,
     );
+    // A Release that leaves Tandem's Claude the holder forwards nothing
+    // (#2358 PR 5a, Bryan's "Skip the wake (Recommended)"); scoped to
+    // `release`, so no other cause's forward changes.
     expect(setDocOwner).not.toContain("waitingProbe(");
     // The re-owe precedes step 5.
     expect(setDocOwner.indexOf("reOweDocumentChat(documentId)")).toBeGreaterThanOrEqual(0);
@@ -1491,15 +1538,21 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
   // Unwired, the sink does nothing, so every unit test passes without the
   // wiring; `main()` cannot run in a unit test, so it is pinned from source.
   // `ownership-wake-frame.test.ts` wires the same expression against a real
-  // wake socket.
+  // wake socket, and `ownership-push-narrowing.test.ts` against a real
+  // `/api/events` stream (PR 4a).
   const OWNERSHIP = "src/server/sessions/ownership.ts";
   const index = SRC_FILES.get("src/server/index.ts") as string;
 
-  it("only index.ts sets it, once, to the wake socket's requestOwnershipFrame, before either branch", () => {
+  it("only index.ts sets it, once, to the wake socket's frame and the SSE nudge, before either branch", () => {
     expect(filesMentioning("setOwnershipFrameSink", [OWNERSHIP])).toEqual(["src/server/index.ts"]);
-    const line = "  setOwnershipFrameSink(requestOwnershipFrame);";
-    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const line =
+      "  setOwnershipFrameSink(() => {\n" +
+      "    requestOwnershipFrame();\n" +
+      "    requestOwnershipChangedEvent();\n" +
+      "  });\n";
+    expect(index.split(line)).toHaveLength(2);
     expect(stripComments(index).match(/\bsetOwnershipFrameSink\b/g)).toHaveLength(2);
+    expect(stripComments(index).match(/\brequestOwnershipChangedEvent\b/g)).toHaveLength(2);
     const wired = index.indexOf(line);
     const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
     const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
@@ -1509,14 +1562,15 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     expect(wired).toBeLessThan(stdio);
   });
 
-  it("ownership.ts calls the sink in one place, outside any MCP request context, from three callers", () => {
+  it("ownership.ts calls the sink in one place, outside any MCP request context, from four callers", () => {
     const text = stripComments(SRC_FILES.get(OWNERSHIP) as string);
     // The setter's and the reset's assignments (the declaration is typed).
     expect(text.match(/\bownershipFrameSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bownershipFrameSink\(\)/g)).toHaveLength(1);
     expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
-    // Step 5, a release of per-message owners, and the end of presence.
-    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(3);
+    // Step 5, a release of per-message owners, the end of presence, and the
+    // messages the user's control moved (#2358 PR 5a-2, `wakeForMovedMessages`).
+    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(4);
   });
 });
 

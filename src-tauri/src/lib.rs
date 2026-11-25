@@ -1,10 +1,48 @@
+// The sidecar's bind host and MCP port, spelled ONCE (#1825). Every loopback
+// URL the shell sends to its own sidecar is built from these by `sidecar_url!`
+// at compile time, and `sidecar::{MCP_PORT, SIDECAR_BIND_HOST}` -- the values
+// the spawn site exports as `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` -- expand
+// from the same two macros, so the address the child is told to bind and the
+// address the shell polls, POSTs to and probes cannot drift apart. Macros
+// rather than consts because `concat!` takes only literals, and these must stay
+// `&'static str` consts (no allocation, usable in `const` items).
+//
+// Defined here, above every `mod` line, because `macro_rules!` is textually
+// scoped: a child module sees only macros defined before its `mod` item.
+// Keep in sync with DEFAULT_BIND_HOST / DEFAULT_MCP_PORT in
+// src/shared/constants.ts.
+macro_rules! sidecar_bind_host {
+    () => {
+        "127.0.0.1"
+    };
+}
+macro_rules! sidecar_mcp_port {
+    () => {
+        3479
+    };
+}
+/// `http://<sidecar_bind_host!()>:<sidecar_mcp_port!()><path>` as a `&'static str`.
+macro_rules! sidecar_url {
+    ($path:literal) => {
+        concat!("http://", sidecar_bind_host!(), ":", sidecar_mcp_port!(), $path)
+    };
+}
+
 mod autostart;
+// Tandem's own HKCU-only start-at-login registration (#2160); on every other
+// platform `autostart.rs` uses `tauri-plugin-autostart`.
+#[cfg(target_os = "windows")]
+mod autostart_win;
 mod context_menu;
 mod cowork_commands;
 mod native_theme;
 mod notifications;
 mod pending_update;
 pub mod keychain;
+// Scrubs an opted-in crash report's minidump (#2161); the integration it hooks
+// exists only on these three targets.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod minidump_scrub;
 mod sentry_reporting;
 mod sidecar;
 mod startup_rejection;
@@ -155,20 +193,20 @@ use crate::sidecar::{
 #[cfg(target_os = "windows")]
 use crate::sidecar::{wait_for_sidecar_unlock, SIDECAR_UNLOCK_DEADLINE_SECS};
 
-const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
+const OPEN_URL: &str = sidecar_url!("/api/open");
 /// Launcher nonce + deferred-start endpoints (#1236). A boot launch tells the
 /// sidecar to hold the Claude Code launcher; these promote it once a human
 /// actually shows up. Keep in sync with API_LAUNCHER_NONCE / API_LAUNCHER_START
 /// in src/shared/api-paths.ts.
-const LAUNCHER_NONCE_URL: &str = "http://127.0.0.1:3479/api/launcher/nonce";
-const LAUNCHER_START_URL: &str = "http://127.0.0.1:3479/api/launcher/start";
+const LAUNCHER_NONCE_URL: &str = sidecar_url!("/api/launcher/nonce");
+const LAUNCHER_START_URL: &str = sidecar_url!("/api/launcher/start");
 /// Origin header for the launcher hops (#1763). Both routes call
 /// `assertOriginAllowlisted`, which fails CLOSED on a missing header, so a
 /// header-less reqwest call 403s at the *nonce* GET and the deferred launcher
 /// can never be released. This is the actual origin of the URLs being
 /// requested — a same-origin declaration rather than a claim to be the WebView,
 /// which also keeps the raw `"tauri.localhost"` literal out of Rust.
-const LOOPBACK_ORIGIN: &str = "http://127.0.0.1:3479";
+const LOOPBACK_ORIGIN: &str = sidecar_url!("");
 /// How long a presence signal waits for the sidecar before giving up and
 /// re-arming the latch. Generous: the user has already shown up, so a slow boot
 /// should still get Claude launched rather than silently skipping it.
@@ -177,7 +215,7 @@ const PRESENCE_HEALTH_DEADLINE: Duration = Duration::from_secs(90);
 /// `updateWindowCurrent` to decide whether to route update checks through the
 /// license-gated Worker (#1116, licensing design spec §7). Keep in sync with
 /// API_LICENSE_STATUS in src/shared/api-paths.ts.
-const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
+const LICENSE_STATUS_URL: &str = sidecar_url!("/api/license/status");
 /// Deployed license-update Worker endpoint (owner-configured; see
 /// docs/licensing-operations.md §3). EMPTY until the Worker is deployed for
 /// v1.0 — while empty, update checks always use the default public endpoint
@@ -185,6 +223,30 @@ const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
 /// `{{target}}`, `{{arch}}`, and `{{current_version}}` template vars are
 /// expanded by tauri-plugin-updater at check time.
 const LICENSE_UPDATE_ENDPOINT: &str = "";
+// #1825: tauri-plugin-updater refuses a non-https endpoint in release builds,
+// and the automatic 8-hourly check only logs that error -- so an `http://` (or
+// scheme-less) value here would be a silent, permanent update blackout for
+// every licensed device after the flip. Refuse it at compile time instead.
+const _: () = assert!(
+    LICENSE_UPDATE_ENDPOINT.is_empty() || is_https_url(LICENSE_UPDATE_ENDPOINT),
+    "LICENSE_UPDATE_ENDPOINT must be empty or start with https://"
+);
+/// `s.starts_with("https://")`, usable in a `const` assertion
+/// (`str::starts_with` is not a `const fn`).
+const fn is_https_url(s: &str) -> bool {
+    let (s, prefix) = (s.as_bytes(), b"https://");
+    if s.len() < prefix.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < prefix.len() {
+        if s[i] != prefix[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 
 /// Cadence of the Cowork self-heal pass (see `cowork_heal_pass`): installs
@@ -1085,6 +1147,43 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_sentry::init_with_no_injection(guard.client()));
     }
 
+    // Start-at-login (#1236). Default OFF — registering the plugin only
+    // makes the capability available; it never writes a registration on its
+    // own. The flag is what makes a login launch distinguishable from a
+    // user-initiated one downstream.
+    //
+    // NOT registered on Windows, where the plugin is not even a dependency
+    // (#2160): its `auto-launch` 0.6 writes the machine-wide HKLM Run key
+    // from any elevated launch, so `autostart_win.rs` writes Tandem's own
+    // HKCU-only registration instead.
+    //
+    // macOS launcher variant — LaunchAgent, and the deciding factor is the
+    // READ path, not the write path.
+    //
+    // In `auto-launch` 0.5 and 0.6 (the plugin's 2.6 and 2.7 lines), AppleScript mode's
+    // `is_enabled()` shells out to `osascript` ("get the name of every login
+    // item"), which needs Automation (TCC) approval. `autostart_get_status`
+    // runs on every Settings open, so choosing AppleScript would pop a
+    // scary "Tandem wants to control System Events" prompt at users who
+    // never asked for autostart at all. LaunchAgent's `is_enabled()` is a
+    // plain `plist.exists()` — free, silent, no permissions. Enabling costs
+    // two pop-ups under AppleScript versus none here.
+    //
+    // The known trade-off: a LaunchAgent plist points at the Mach-O inside
+    // the bundle and launches it outside LaunchServices, which may weaken
+    // the Apple Events (`RunEvent::Opened`) that file associations rely on.
+    // That risk is narrower than prompting every macOS user, it only
+    // affects login-launched instances, and `RunEvent::Reopen` plus
+    // single-instance still work. If real hardware shows Apple Events
+    // break (S4), this is a one-constant change. See ADR-046.
+    #[cfg(not(target_os = "windows"))]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ));
+    }
+
     builder
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
         // DevTools, Find, Print, and right-click are preserved. Fixes #541.
@@ -1111,34 +1210,6 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
-        // Start-at-login (#1236). Default OFF — registering the plugin only
-        // makes the capability available; it never writes a registration on its
-        // own. The flag is what makes a login launch distinguishable from a
-        // user-initiated one downstream.
-        //
-        // macOS launcher variant — LaunchAgent, and the deciding factor is the
-        // READ path, not the write path.
-        //
-        // In `auto-launch` 0.5 (what the plugin pins), AppleScript mode's
-        // `is_enabled()` shells out to `osascript` ("get the name of every login
-        // item"), which needs Automation (TCC) approval. `autostart_get_status`
-        // runs on every Settings open, so choosing AppleScript would pop a
-        // scary "Tandem wants to control System Events" prompt at users who
-        // never asked for autostart at all. LaunchAgent's `is_enabled()` is a
-        // plain `plist.exists()` — free, silent, no permissions. Enabling costs
-        // two pop-ups under AppleScript versus none here.
-        //
-        // The known trade-off: a LaunchAgent plist points at the Mach-O inside
-        // the bundle and launches it outside LaunchServices, which may weaken
-        // the Apple Events (`RunEvent::Opened`) that file associations rely on.
-        // That risk is narrower than prompting every macOS user, it only
-        // affects login-launched instances, and `RunEvent::Reopen` plus
-        // single-instance still work. If real hardware shows Apple Events
-        // break (S4), this is a one-constant change. See ADR-046.
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![AUTOSTART_FLAG]),
-        ))
         // Chat-reply notifications (#2168). Order-insensitive; it only has to
         // be registered before `setup()`, which installs its click handler.
         .plugin(tauri_plugin_notification::init())
@@ -1583,7 +1654,8 @@ pub fn run() {
             // case it exists to fix. The guard is needed because `enable()`
             // bakes this launch's executable path — see the predicate.
             //
-            // The path handed to the predicate is the one the PLUGIN will bake,
+            // The path handed to the predicate is the one the backend will
+            // bake (the plugin on macOS/Linux, `autostart_win.rs` on Windows),
             // resolved the same way it resolves it: `$APPIMAGE` first on Linux,
             // else `current_exe()`. Passing bare `current_exe()` would put every
             // non-autostart AppImage launch under `/tmp/.mount_XXXXXX/` and
@@ -2131,6 +2203,19 @@ fn reveal_command_args(path: &str, target_os: &str) -> (&'static str, Vec<String
     }
 }
 
+/// Why `show_in_file_manager` refuses `path` before spawning anything, beyond
+/// the network-path refusal (#1825): `path` is unconfined webview input, and
+/// every legitimate caller passes an absolute document or log-folder path.
+/// Requiring an absolute path refuses a URL (`https://…` is relative on every
+/// OS, and `xdg-open` would hand it to the browser), an option-shaped argument
+/// (`-a…` after `open -R`) and a bare name resolved against our own cwd.
+fn reveal_path_refusal(path: &str) -> Option<&'static str> {
+    if !std::path::Path::new(path).is_absolute() {
+        return Some("Refusing to reveal a path that is not absolute.");
+    }
+    None
+}
+
 /// Reveal `path` in the OS file manager (Explorer / Finder / file manager).
 ///
 /// Implemented as a native `std::process::Command` — this needs NO capability
@@ -2148,10 +2233,24 @@ fn show_in_file_manager(path: String) -> Result<(), String> {
     if is_unc_or_network_path(&path) {
         return Err("Refusing to reveal a network path in the file manager.".to_string());
     }
+    if let Some(reason) = reveal_path_refusal(&path) {
+        return Err(reason.to_string());
+    }
     // The helper's `program` is the answer everywhere except Windows, where the
     // anchored path below shadows it — so on Windows it is deliberately unread.
     #[cfg_attr(target_os = "windows", allow(unused_variables))]
     let (program, args) = reveal_command_args(&path, std::env::consts::OS);
+
+    // #1825: on Linux and the other Unix-likes the reveal is `xdg-open <parent>`,
+    // and `xdg-open` OPENS whatever it is given with its default handler. Every
+    // caller passes a document or a directory, so the parent is a directory; if
+    // it is not (`/some/file.desktop/x`), the argument would launch that file
+    // rather than show a folder. Refuse anything that is not an existing
+    // directory. (`open -R` and `explorer /select,` only ever reveal.)
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    if !args.first().is_some_and(|dir| std::path::Path::new(dir).is_dir()) {
+        return Err("Refusing to reveal: the containing folder does not exist.".to_string());
+    }
 
     // Anchor the Windows program HERE rather than inside `reveal_command_args`.
     // That helper takes `target_os` as a parameter precisely so all four arms
@@ -3792,6 +3891,19 @@ mod reveal_command_tests {
     // a discrete argv element appended to a fixed literal, never shell-spliced).
 
     #[test]
+    fn reveal_refuses_relative_url_and_option_shaped_paths() {
+        // #1825: none of these is absolute on any OS, so all three legs refuse.
+        for p in ["https://evil.example/x", "-a", "notes.md", "rel/notes.md", ""] {
+            assert!(reveal_path_refusal(p).is_some(), "{p:?} must be refused");
+        }
+        #[cfg(target_os = "windows")]
+        let ok = r"C:\Users\me\notes.md";
+        #[cfg(not(target_os = "windows"))]
+        let ok = "/home/me/notes.md";
+        assert_eq!(reveal_path_refusal(ok), None);
+    }
+
+    #[test]
     fn windows_selects_the_file_with_single_select_arg() {
         // Explorer's documented contract is `/select,<path>` as ONE argv
         // element — splitting `/select,` and the path into two args makes
@@ -4158,6 +4270,20 @@ mod classify_opened_url_tests {
 #[cfg(test)]
 mod update_route_tests {
     use super::*;
+
+    /// The predicate behind `LICENSE_UPDATE_ENDPOINT`'s compile-time assertion
+    /// (#1825). The assertion itself can only be seen red by editing the const,
+    /// so its predicate is pinned here instead.
+    #[test]
+    fn is_https_url_accepts_only_an_https_prefix() {
+        assert!(is_https_url("https://updates.example/{{target}}"));
+        assert!(is_https_url("https://"));
+        assert!(!is_https_url("http://updates.example/"));
+        assert!(!is_https_url("HTTPS://updates.example/"));
+        assert!(!is_https_url("updates.example/"));
+        assert!(!is_https_url("https:/"));
+        assert!(!is_https_url(""));
+    }
 
     /// Every case spells `status` explicitly -- never `..Default::default()` for
     /// it -- because step 5 of `update_route` branches on exactly that field.

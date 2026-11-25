@@ -82,6 +82,11 @@ const ROUTE_GATES: RouteGate[] = [
   },
   { constant: "API_CLOSE", gate: "open", why: "tab management" },
   {
+    constant: "API_OWNERSHIP",
+    gate: "open",
+    why: "Release and Assign of a document (#2358 PR 5a, ownership design §10.1): the user's own control over which session answers a tab, which must work keyless; its AI effect (step 5's start-or-wake and the `ownership` frame) is refused downstream, by the supervisor's start and by each frame writer. The owners list (`API_OWNERSHIP_OWNERS`) is a GET, so it has no row here",
+  },
+  {
     constant: "API_MODE_RELEASE",
     gate: "open",
     why: "a browser action on the user's own mode (Solo to Tandem release). Decision F (#1788) once asked for it to be gated; #1521 supersedes that: keyless is an editable editor, and the wake this emits is refused at fan-out like any other event",

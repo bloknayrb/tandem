@@ -42,6 +42,9 @@ One line per file, taken from its opening lines.
   auto-launch supervisor; GO with caveats (2026-05-17).
 - [sidecar-launcher-spike.md](sidecar-launcher-spike.md): validating the sidecar launcher; GO with
   caveats (2026-05-14).
+- [launcher-child-env.md](launcher-child-env.md): what the launched Claude Code inherits from
+  Tandem's environment and what it reads, with the options for #2479; decision still owed
+  (2026-11-24).
 - [per-client-identity-spec.md](per-client-identity-spec.md): a design spec for telling
   concurrent clients apart; its transport-multiplexing part shipped as ADR-045.
 - [session-identity-transport-probe.md](session-identity-transport-probe.md): a proposed probe

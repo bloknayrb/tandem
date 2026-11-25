@@ -73,9 +73,27 @@ export function isStartWorthy(event: TandemEvent): boolean {
  * each line to the model, whose skill says "a wake tells you that, never
  * what") wakes on it as on any frame; nothing in Tandem switches on a wake
  * frame's `type`, and the plugin monitor reads `/api/events`, never this
- * socket. Never an SSE event name here: the push-stream nudge is PR 4a's.
+ * socket. Never an SSE event name: the push-stream nudge is
+ * {@link OWNERSHIP_CHANGED_SSE_EVENT}.
  */
 export const OWNERSHIP_WAKE_FRAME_TYPE = "ownership";
+
+/**
+ * The SSE event name of the push-stream nudge (#2358 PR 4a; ADR-054;
+ * ownership design §8.6, §9.1): written on every `/api/events` stream, mapped
+ * or not, whenever the `ownership` frame is written on `/api/wake`. Outside
+ * the `TandemEvent` union, and written as exactly
+ * {@link OWNERSHIP_CHANGED_SSE_FRAME}: an `event:` line, **no `id:` line**
+ * (an id missing from the replay buffer would make `replaySince` replay the
+ * whole buffer) and an empty `data: {}`. A current consumer
+ * (`src/shared/sse-consumer.ts`) recognises the name and wakes its host with
+ * no payload; an older one ignores `event:` lines, parses `{}` as an event,
+ * fails validation and logs one line, advancing nothing.
+ */
+export const OWNERSHIP_CHANGED_SSE_EVENT = "ownership-changed";
+
+/** The whole `ownership-changed` frame, byte for byte. */
+export const OWNERSHIP_CHANGED_SSE_FRAME = `event: ${OWNERSHIP_CHANGED_SSE_EVENT}\ndata: {}\n\n`;
 
 /** A wake notification: enough to know something happened, never what. */
 export interface WakeFrame {

@@ -126,7 +126,7 @@ correctness, security, install or a named gate. Not all of them block. Triage ea
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
-- **Security findings:** #2323 (the dated gate for #1949's accepted signing-job isolation bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing), #2501 (the notify stream's local-model notices reach any allowed local origin; owed: limit it, or record it under #2410), #2479 (the launcher passes its whole environment, third-party API keys included, to the Claude it starts), #2481 (the indeterminate-mode hold fails open on a non-boolean reply marker). The RC security sweep is #1199.
+- **Security findings:** #2323 (the dated gate for #1949's accepted signing-job isolation bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing; accepted 2026-11-24 in [security.md](security.md#accepted-bounded--decided-not-fixed), a real-crash check on a desktop build still owed), #2501 (the notify stream's local-model notices reach any allowed local origin; owed: limit it, or record it under #2410), #2479 (the launcher passes its whole environment, third-party API keys included, to the Claude it starts), #2481 (the indeterminate-mode hold fails open on a non-boolean reply marker). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit: the Linux fix landed in #2326 and waits on a desktop smoke run; macOS is accepted), #1994, #1869, #2041.
 - **Correctness:** #1982, #1980, #2009 (#2324 landed its tombstone half; whole-envelope cleanup still open), #1920.
 - **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2186 (a beta report's diagnosis tracker), #2286 (an auto-launched Claude can't call Tandem tools when `claude -p` starts in `default` permission mode; #2326 landed the fix, a real desktop run still needs human evidence), #2515 (Claude Code 2.1.326–2.1.330 changed what `/mcp` shows; update the troubleshooting copy).
@@ -134,7 +134,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Accessibility:** #2489 (focus is lost when a focused toast closes, and new toasts may not be announced).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run; its pre-live Worker fixes merged in #2344, and the remaining U-checks re-run on master's Worker before the live deploy; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
+- **CI and tests:** #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 
@@ -231,10 +231,10 @@ rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 - CHANGELOG `[1.0.0]` section finalized.
 - Every redesign artboard is either shipped or deferred with a reason.
 - Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
-- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.
-  - **Rehearsal build.** Rehearsing needs a way to point a build at a staged manifest. The smoke checklist assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is a compiled const.
+- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. **Written; not rehearsed** (#2280): [bad-release-runbook.md](bad-release-runbook.md).
+  - **Rehearsal build.** Exists: `npm run build:tauri:staging` makes a staging build whose updater reads a manifest you name, baked in at build time through a Tauri `--config` overlay. Shipped builds still have no runtime override, as decided 2026-10-22. It covers the public route only; the licensed route needs a staging Worker that does not exist yet.
+  - **Rehearsal.** Needs Bryan with a test machine and the npm login; the steps are in the runbook. It uses a separate staging repository, so the real pointer never moves.
   - **Desktop.** The license update Worker is meant to proxy the same `releases/latest/download/latest.json` (its `wrangler.toml` holds a placeholder until it is deployed), and it adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
-  - **npm.** `npm dist-tag` and/or `npm deprecate`.
   - **ADR-043.** This doesn't conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback.
 
 ## After v1.0
