@@ -5,10 +5,11 @@ name: Claude Code Review
 # - Authentication is the owner's Claude subscription (CLAUDE_CODE_OAUTH_TOKEN),
 #   never an API key; tests/scripts/claude-review-wiring.test.ts refuses any
 #   API-key path in any workflow.
-# - The model gets Read/Grep/Glob only, confined to the PR checkout by
-#   --restricted, with no MCP servers and no GitHub token in its step. It
-#   returns JSON; scripts taken from master scan that JSON for the token and
-#   only then post it as github-actions[bot].
+# - The review is the CLI's bundled `/code-review high` skill. It runs as one
+#   task with Read/Grep/Glob only, confined to the PR checkout by --restricted,
+#   with no MCP servers, no Skill tool and no GitHub token in its step. Scripts
+#   taken from master scan its markdown for the token and only then post it, as
+#   rendered markdown, from github-actions[bot].
 # - The run's conclusion is the signal the merge gate reads
 #   (scripts/ci/await-claude-review.mjs): green means a review or a
 #   "did not complete" note is on the PR, red means a person should look.
@@ -52,8 +53,10 @@ jobs:
     env:
       # The exact native build of the Claude Code CLI and the sha512 of its npm
       # tarball. Bumped by hand: Dependabot does not see this.
-      CLAUDE_CODE_VERSION: "2.1.331"
-      CLAUDE_CODE_INTEGRITY: "sha512-IpvZ9c/NopO/sr8ThWLVAUDXVAFT3auLWrhbR6wq1dgkuJfZYdTtoXf6GajE5KL9R58iTt/86OPXrJAsM4+l8g=="
+      # Moving it means repeating the lockdown probe in docs/security.md's
+      # Claude review entry: the skill's text and tools ship inside the CLI.
+      CLAUDE_CODE_VERSION: "2.1.332"
+      CLAUDE_CODE_INTEGRITY: "sha512-f4JWhzwYutJIHScC7/dYOPX6s28tt7ZADhsOi8zwOHq5fFPEuUeChh2NMfinSg0GrUckYxaeebC4h0DqiKzLcw=="
     steps:
       # A fork, draft, bot or closed PR is refused with skip=true (no failure,
       # no comment). A PR number that does not exist fails the step.
@@ -94,7 +97,6 @@ jobs:
             /CLAUDE.md
             /AGENTS.md
             /.github/claude-review/
-            /.claude/agents/
 
       - name: Check out the PR
         if: steps.recheck.outputs.skip == 'false'
@@ -158,12 +160,10 @@ jobs:
             --no-textconv --no-ext-diff --no-renames --numstat \
             --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
             | awk '/^-\t-\t/ { print substr($0, 5) }' > inputs/binary-paths.txt
-          node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
+          # The raw diff, as the measured setup used (no PR title or body: the
+          # skill reviews the change, and they are author text).
           mkdir pr/.review-input
-          # The model reads a diff with new-file line numbers on each line, so
-          # its findings cite real lines; post.mjs maps against the raw diff.
-          node trusted/.github/claude-review/number-diff.mjs inputs/pr.diff > pr/.review-input/pr.diff
-          cp inputs/pr.json inputs/binary-paths.txt pr/.review-input/
+          cp inputs/pr.diff inputs/binary-paths.txt pr/.review-input/
 
       # The native build has no install script and no dependencies; its
       # tarball is checked against the pinned sha512 before it is unpacked.
@@ -195,21 +195,23 @@ jobs:
         # No CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: there is no shell for it to
         # protect, and setting it silently forces the permission mode back to
         # default, overriding dontAsk (seen on CLI 2.1.331). Background tasks
-        # are off so specialists finish before the answer is written.
+        # are off so the skill's task finishes before the answer is written.
+        # The skill runs as one task, so the top-level session takes no turns
+        # and --max-turns binds nothing (probe, 2.1.332): the step timeout is
+        # the real bound. stream-json is load-bearing: under text or json
+        # output the CLI returns the skill's raw JSON block instead of the
+        # formatted findings that classify.mjs recognises.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         run: |
           prompt=$(cat ../trusted/.github/claude-review/prompt.md)
-          schema=$(cat ../trusted/.github/claude-review/schema.json)
           "$RUNNER_TEMP/claude-cli/package/claude" -p "$prompt" \
             --model opus --max-turns 80 \
             --restricted --permission-mode dontAsk --permission-prompts none \
             --setting-sources user --strict-mcp-config \
             --tools "Read,Grep,Glob,Agent" \
             --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch" \
-            --agents ../inputs/agents.json \
-            --json-schema "$schema" \
             --output-format stream-json --verbose > ../stream.jsonl
 
       - name: Classify and scan for secrets
@@ -220,6 +222,7 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          REVIEW_WORKDIR: ${{ github.workspace }}/pr
         run: node trusted/.github/claude-review/classify.mjs stream.jsonl inputs
 
       - name: Summarise tool use
@@ -232,8 +235,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node trusted/.github/claude-review/post.mjs inputs
 
-      # Red means a person should look: a withheld review, or a review system
-      # that is down (missing or expired token, usage limit, API outage).
+      # Red means a person should look: a withheld review, a review system
+      # that is down (missing or expired token, usage limit, API outage), or
+      # text that isn't a review (how an auth or usage failure inside the skill
+      # arrives, and how a change in the CLI's output format would show).
+      # Keep the reason list equal to classify.mjs's SYSTEMIC_REASONS.
       - name: Fail if the review was withheld or the review system is down
         if: always() && steps.recheck.outputs.skip == 'false' && steps.mark-started.outputs.review_started == 'true' && steps.classify.outcome == 'success'
         run: |
@@ -245,5 +251,9 @@ jobs:
           fi
           if [ "$reason" = "api-error" ] || [ "$reason" = "no-token" ]; then
             echo "The review could not run ($reason): check CLAUDE_CODE_OAUTH_TOKEN and the subscription's usage."
+            exit 1
+          fi
+          if [ "$reason" = "unrecognised-output" ]; then
+            echo "The review returned text that isn't a review; check the run log."
             exit 1
           fi

@@ -364,7 +364,11 @@ Two maintenance notes on that workflow: it runs the Claude Code CLI at an exact 
 hash that Dependabot does not see, so it is bumped by hand (`CLAUDE_CODE_VERSION` and
 `CLAUDE_CODE_INTEGRITY`, from `npm view @anthropic-ai/claude-code-linux-x64@<v> dist.integrity`),
 and that bump changes code which holds the owner's subscription token, so it gets the same
-provenance care as an action SHA (docs/security.md, #2554).
+provenance care as an action SHA (docs/security.md, #2554). The review is the CLI's bundled
+`/code-review high` skill, which ships inside the CLI, so a bump also means repeating the lockdown
+probe that entry describes. Each review is an Opus run on the owner's subscription: measured on
+13 past PRs at $0.57–2.80 (mean about $1.30) and 1.5–6.5 minutes, drawing on the same usage limits
+as interactive sessions, and each manual re-review costs another.
 
 If a change touches network posture, CORS, authentication, or the `/api` surface, read
 [docs/security.md](docs/security.md) first — several invariants there are enforced by review

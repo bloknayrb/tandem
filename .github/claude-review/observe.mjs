@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Prints what the review model did (#1831): tool names with counts, how many
-// calls were denied, turns and duration. Never tool inputs or results: the
-// repo is public, so this log is too, and denial records carry the paths the
-// model asked for. Holds no token. Node built-ins only.
+// Prints what the review model did (#1831): tool names with counts, split into
+// the top-level session and the tasks it started (/code-review does all its
+// reading inside one task), how many calls were denied, and duration. Never
+// tool inputs or results: the repo is public, so this log is too, and denial
+// records carry the paths the model asked for. Holds no token. Node built-ins
+// only.
 //
 // Usage: node observe.mjs <stream.jsonl>
 
@@ -12,15 +14,15 @@ import { pathToFileURL } from "node:url";
 /**
  * The only tool names printed as themselves. A name outside this set is
  * counted as "other": nothing outside the CLI guarantees what string a
- * tool_use carries, and this log is public.
+ * tool_use carries, and this log is public. Skill is listed so a call to it
+ * (which the lockdown should make impossible) shows by name.
  */
-export const KNOWN_TOOLS = new Set(["Read", "Grep", "Glob", "Agent", "Task", "StructuredOutput"]);
+export const KNOWN_TOOLS = new Set(["Read", "Grep", "Glob", "Agent", "Task", "Skill", "StructuredOutput"]);
 
-/** Pure summary of a stream-json transcript. */
+/** Pure summary of a stream-json transcript. Task calls are keyed "task:<name>". */
 export function summarize(streamText) {
   const tools = {};
   let denials = 0;
-  let turns = null;
   let durationMs = null;
   for (const line of streamText.split("\n")) {
     if (!line.trim()) continue;
@@ -31,20 +33,20 @@ export function summarize(streamText) {
       continue;
     }
     if (event?.type === "assistant" && Array.isArray(event.message?.content)) {
+      const prefix = event.parent_tool_use_id ? "task:" : "";
       for (const block of event.message.content) {
         if (block?.type === "tool_use") {
-          const name = KNOWN_TOOLS.has(block.name) ? block.name : "other";
+          const name = prefix + (KNOWN_TOOLS.has(block.name) ? block.name : "other");
           tools[name] = (tools[name] ?? 0) + 1;
         }
       }
     }
     if (event?.type === "result") {
       denials = Array.isArray(event.permission_denials) ? event.permission_denials.length : 0;
-      turns = Number.isInteger(event.num_turns) ? event.num_turns : null;
       durationMs = Number.isFinite(event.duration_ms) ? event.duration_ms : null;
     }
   }
-  return { tools, denials, turns, durationMs };
+  return { tools, denials, durationMs };
 }
 
 function main() {
@@ -59,7 +61,7 @@ function main() {
   const s = summarize(text);
   for (const [name, count] of Object.entries(s.tools).sort()) console.log(`tool ${name} x${count}`);
   console.log(`denials ${s.denials}`);
-  console.log(`turns ${s.turns ?? "-"} duration_ms ${s.durationMs ?? "-"}`);
+  console.log(`duration_ms ${s.durationMs ?? "-"}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
