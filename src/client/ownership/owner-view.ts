@@ -549,7 +549,7 @@ export function composerLine(
   // then (the same test as the not-present offer). With the per-message facts
   // (`chatOwners`, which App passes), not when every such stale message is
   // held per message by another session: a per-message owner wins over
-  // presence (§7.1), so a started Tandem's Claude could not answer it.
+  // presence (ownership design §7.1), so a started Tandem's Claude could not answer it.
   if (
     line?.kind === "to" &&
     summary?.chatStale === true &&
