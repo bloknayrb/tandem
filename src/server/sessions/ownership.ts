@@ -2168,14 +2168,18 @@ function frameOwedAtDocumentChange(
  * that chat's standing names the new holder, or the document's claim. Each
  * half in its own catch, read as false with one fixed, rate-limited line.
  */
-function workWaitingOnDocument(documentId: string, ownerId: string | undefined): boolean {
+function workWaitingOnDocument(
+  documentId: string,
+  ownerId: string | undefined,
+  owed?: readonly string[],
+): boolean {
   try {
     if (waitingProbe(documentId, ownerId ?? "")) return true;
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
   }
   try {
-    for (const key of chatSide.owedToFreshReader()) {
+    for (const key of owed ?? chatSide.owedToFreshReader()) {
       if (carriedOver.has(key)) continue;
       const facts = chatSide.message(key);
       if (facts === undefined || facts.documentId !== documentId) continue;
@@ -2566,7 +2570,13 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
   // Tandem's Claude are told too, by step 5's frame and only when work waits
   // for one of them. Its own catches; `total` for anything else.
   total("modeKnownFrame", undefined, () => {
-    if (otherOwnersWorkWaiting()) sendOwnershipFrame();
+    const waiting = otherOwnersWorkWaiting();
+    if (waiting === undefined) return;
+    sendOwnershipFrame();
+    // Rounds open wherever a wake was sent for the work (`openOwedRounds`'
+    // contract), so /health and the stall banner see a session that never
+    // polls after it.
+    openOwedRounds(waiting.documents, waiting.keys);
   });
 }
 
@@ -2579,29 +2589,35 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
  * privacy gate, then the chat that follows it), or a user chat message a fresh
  * reader would be handed that is now another record's or claimable
  * ({@link frameOwedForMessages}, the release's check). Unscoped as the frame
- * is (ownership design §9.4): it says whether to wake, not whom. The open
- * documents and the chat side are each read in their own catch: false, one
- * fixed line.
+ * is (ownership design §9.4): it says whether to wake, not whom. Answers the
+ * documents with work waiting and, when the chat half frames, the owed chat,
+ * for the delivery rounds the frame opens; undefined when nothing waits. The
+ * owed chat is read once for every document. The open documents and the chat
+ * side are each read in their own catch: nothing, one fixed line.
  */
-function otherOwnersWorkWaiting(): boolean {
+function otherOwnersWorkWaiting(): { documents: string[]; keys: readonly string[] } | undefined {
   let documents: string[] = [];
   try {
     documents = [...openDocumentIds()];
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
   }
-  for (const documentId of documents) {
-    const holder = readEntry(documentId)?.ownerId;
-    if (holder === TANDEM_OWNER_ID) continue;
-    if (workWaitingOnDocument(documentId, holder)) return true;
-  }
-  let keys: readonly string[] = [];
+  // Read once: each document's check walks the same owed chat.
+  let owed: readonly string[] = [];
   try {
-    keys = chatSide.owedToFreshReader();
+    owed = chatSide.owedToFreshReader();
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
   }
-  return keys.length > 0 && frameOwedForMessages(keys);
+  const waitingDocuments: string[] = [];
+  for (const documentId of documents) {
+    const holder = readEntry(documentId)?.ownerId;
+    if (holder === TANDEM_OWNER_ID) continue;
+    if (workWaitingOnDocument(documentId, holder, owed)) waitingDocuments.push(documentId);
+  }
+  const keys = owed.length > 0 && frameOwedForMessages(owed) ? owed : [];
+  if (waitingDocuments.length === 0 && keys.length === 0) return undefined;
+  return { documents: waitingDocuments, keys };
 }
 
 /**
@@ -2762,10 +2778,10 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
         const keys = chatSide
           .messagesOn(documentId)
           .filter((key) => !ownerByMessage.has(key) && !carriedOver.has(key));
-        if (keys.length > 0) {
-          chatSide.reOwe(keys);
-          forwardClosedChatAfterUntrack(keys);
-        }
+        // Through `reOweChat`, as every other handover: it also restarts each
+        // message's pickup and stall clock (ownership design §6.5) and asks
+        // a chat republish. A failed re-owe tells nothing.
+        if (keys.length > 0 && reOweChat(keys)) forwardClosedChatAfterUntrack(keys);
       }
       return;
     }

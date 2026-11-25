@@ -78,6 +78,7 @@ import {
   forgetChatMessageOwners,
   getDocOwner,
   getOwnerRecord,
+  messageClocksForTests,
   noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
@@ -1395,7 +1396,13 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     // This file's messages carry made-up timestamps from before this run's
     // boot, which the waiting rule ("written since boot") would never count.
     beforeEach(() => setWaitingWrittenSinceForTests(undefined));
-    afterEach(() => setWaitingWrittenSinceForTests(Date.now()));
+    // Each world's operation is released here too, so a failed assertion
+    // ahead of `finish()` leaves no document queue busy (#2571 review).
+    const releases: Array<() => void> = [];
+    afterEach(() => {
+      for (const release of releases.splice(0)) release();
+      setWaitingWrittenSinceForTests(Date.now());
+    });
 
     /** D held by A, a user message on it, A lapsed with its move waiting on D's queue. */
     function lapsedHolderWorld(name: string) {
@@ -1404,6 +1411,7 @@ describe("R6: the chat half of a handover, and the tab close", () => {
       const m = userChat(key("m"), d.id);
       let release!: () => void;
       const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+      releases.push(() => release());
       lapseByGrace(A, "transport removed");
       expect(getOwnerRecord(A)?.lapsed).toBe(true);
       expect(ownerOf(d.id)).toBe(A);
@@ -1447,7 +1455,12 @@ describe("R6: the chat half of a handover, and the tab close", () => {
 
     it("Tandem's Claude not present: the message is claimable per message, so attached sessions get one frame", async () => {
       const w = lapsedHolderWorld("lapsed-claimable");
+      const beforeClose = Date.now();
       await closeByRoute(w.d.id);
+      // The close is a handover, so it restarts the message's pickup and
+      // stall clock, as every re-owe does (#2571 review; ownership design §6.5).
+      const clock = new Map(messageClocksForTests()).get(w.m);
+      expect(clock).toBeGreaterThanOrEqual(beforeClose);
       expect(w.sink).not.toHaveBeenCalled();
       expect(w.frames).toHaveBeenCalledTimes(1);
       expect(chatIds(await reader(B).poll())).toEqual([w.m]);

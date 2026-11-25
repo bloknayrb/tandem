@@ -424,20 +424,24 @@ describe("handover gap (d): a re-owe that wakes someone opens the round of what 
     await handedAndAcknowledgedBy(A, [m]);
     let release!: () => void;
     const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
-    lapseByGrace(A);
-    // The move waits on d's queue, so A still holds it when the tab closes.
-    expect(getDocOwner(d.id)).toMatchObject({ ownerId: A });
-    expect(rounds()).toEqual([]);
-    frames = 0;
+    // Released in `finally`, so a failed assertion leaves no queue busy (#2571 review).
+    try {
+      lapseByGrace(A);
+      // The move waits on d's queue, so A still holds it when the tab closes.
+      expect(getDocOwner(d.id)).toMatchObject({ ownerId: A });
+      expect(rounds()).toEqual([]);
+      frames = 0;
 
-    await userClose(d.id);
-    expect(frames).toBe(1);
-    expect(rounds()).toEqual([`message:${m}`]);
-    register(B);
-    expect(handed(await reader(B).poll())).toEqual([m]);
-    expect(rounds()).toEqual([]);
-    release();
-    await op;
+      await userClose(d.id);
+      expect(frames).toBe(1);
+      expect(rounds()).toEqual([`message:${m}`]);
+      register(B);
+      expect(handed(await reader(B).poll())).toEqual([m]);
+      expect(rounds()).toEqual([]);
+    } finally {
+      release();
+      await op;
+    }
   });
 
   it("the run start's self re-owe wakes Tandem's Claude and opens the rounds of the held document and the chat it owed again", async () => {

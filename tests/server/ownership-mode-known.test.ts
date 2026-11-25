@@ -38,6 +38,7 @@ import {
   ownershipSnapshotForTests,
   replayModeKnownAfterSupervisorStart,
   resetOwnershipForTests,
+  setDeliveryRoundOpener,
   setDocOwner,
   setOpenDocumentIdsSource,
   setOwnershipChatSide,
@@ -342,6 +343,30 @@ describe("the mode-unknown observer's other-owner half: the ownership frame", ()
     clientWritesMode("tandem");
     expect(forwarded).toEqual(["mode-known"]);
     expect(frames).toBe(0);
+  });
+
+  it("the frame opens the delivery rounds of the work it woke someone for (#2571 review)", () => {
+    const opened: Array<{ documents: readonly string[]; messages: readonly string[] }> = [];
+    setDeliveryRoundOpener((owed) => opened.push(owed));
+    const d = mkDoc("rounds");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    attachCtrlObservers();
+    userComment(d.ydoc, "c1");
+    userChat("m-rounds");
+    clientWritesMode("tandem");
+    expect(frames).toBe(1);
+    expect(opened).toEqual([{ documents: [d.id], messages: ["m-rounds"] }]);
+  });
+
+  it("no frame, no round (anchor: the row above)", () => {
+    const opened: unknown[] = [];
+    setDeliveryRoundOpener((owed) => opened.push(owed));
+    const d = mkDoc("rounds-none");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    attachCtrlObservers();
+    clientWritesMode("tandem");
+    expect(frames).toBe(0);
+    expect(opened).toEqual([]);
   });
 
   it("a Solo reading first: unknown→Solo→Tandem is the release route's, so no frame (anchor: the first row)", () => {

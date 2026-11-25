@@ -1580,7 +1580,7 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     // half), which asks only when work waits for another session or nobody.
     expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(6);
     expect(text).toMatch(
-      /export function noteModeObserved\([\s\S]*?modeKnownAsked = true;[\s\S]*?if \(otherOwnersWorkWaiting\(\)\) sendOwnershipFrame\(\);\s*\}\);\s*\}/,
+      /export function noteModeObserved\([\s\S]*?modeKnownAsked = true;[\s\S]*?const waiting = otherOwnersWorkWaiting\(\);\s*if \(waiting === undefined\) return;\s*sendOwnershipFrame\(\);\s*openOwedRounds\(waiting\.documents, waiting\.keys\);\s*\}\);\s*\}/,
     );
   });
 });
