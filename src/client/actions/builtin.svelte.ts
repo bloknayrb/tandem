@@ -765,7 +765,8 @@ async function postLauncherMutation(
   // about a relaunch that succeeded. They click again, and Claude is killed a
   // second time. A throw here is not hypothetical: neither launcher call site
   // passes a toast `id`, and App mints `launcher-${Date.now()}`, so two toasts
-  // in the same millisecond collide on ToastContainer's `{#each}` key.
+  // in the same millisecond collide on ToastContainer's `{#each}` key (the id,
+  // for a toast with no `dedupKey`; see `toastKey`).
   d.notify("info", success);
   return null;
 }
