@@ -5317,7 +5317,9 @@ export function freshChatLook(): void {
  *   local-period chat), each read through {@link messageControl}.
  * - **The clock** (`since`): restarted when the message's holder differs from
  *   the one the clock last saw; a message first seen starts at its own
- *   timestamp (or now, with none).
+ *   timestamp (or now, with none, or when the timestamp is later than now:
+ *   the row's `timestamp` is a client-written field, and a clock that starts
+ *   in the future would never read stale).
  * - **`stale`**: no final answer for more than {@link OWNERSHIP_STALE_AFTER_MS}
  *   since `since`, and only for a message written in this server run (the
  *   restart row, Bryan's "Same rule (Recommended)").
@@ -5354,7 +5356,8 @@ function lookAtChat(now: number): ChatPublishState {
     if (facts === undefined || facts.localPeriod) continue;
     seen.add(key);
     const control = messageControl(key, facts);
-    const since = tickMessageClock(key, control.holder ?? null, facts.timestamp ?? now, now);
+    const arrival = Math.min(facts.timestamp ?? now, now);
+    const since = tickMessageClock(key, control.holder ?? null, arrival, now);
     const thisRun = facts.writtenThisRun === true;
     const stale = thisRun && now - since > OWNERSHIP_STALE_AFTER_MS;
     const record = control.holder === undefined ? undefined : records.get(control.holder);

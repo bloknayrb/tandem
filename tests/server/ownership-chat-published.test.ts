@@ -478,6 +478,20 @@ describe("the pickup and stall clock (ownership design §6.5)", () => {
     expect(published()?.[m]?.since, "the same holder: the clock holds").toBe(t0 + 3 * MIN);
   });
 
+  it("never starts in the future: a row's client-written timestamp later than now starts at now", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    const m = userChat(key("m"), undefined, t0 + 60 * MIN);
+    await startPublishing();
+    expect(published()?.[m]?.since).toBe(t0);
+
+    vi.setSystemTime(t0 + 6 * MIN);
+    runOwnershipTickForTests();
+    expect(published()?.[m]?.stale, "stale five minutes after now, not after its timestamp").toBe(
+      true,
+    );
+  });
+
   it("restarts at a handover and adopts the new holder without a second restart", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const t0 = Date.now();
