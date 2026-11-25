@@ -14,6 +14,7 @@
  */
 
 import { z } from "zod";
+import { isHeldInSoloMarker } from "../../shared/sanitize.js";
 import {
   AgentIdentitySchema,
   AnnotationStatusSchema,
@@ -183,7 +184,13 @@ export const AnnotationReplyRecordSchemaV1 = z
     // WS-A2: Solo-hold marker (badge + fail-closed-restart tiebreaker). Already
     // preserved by `.passthrough()`; listed explicitly for parity with the
     // annotation record and type-safety at the write site.
-    heldInSolo: z.boolean().optional(),
+    //
+    // #2481: a non-boolean marker is normalised to `true` by the predicate the
+    // hold reads (`isHeldInSoloMarker`), never rejected. A bare `z.boolean()`
+    // failed the whole row, so `normalizeReply` dropped the reply from every
+    // snapshot and the load filter dropped it from the file: a reply the hold
+    // was withholding was instead lost on the next restart.
+    heldInSolo: z.preprocess((v) => isHeldInSoloMarker(v), z.boolean()).optional(),
     // #1123 M3: authoring agent identity (local-model collaborator replies only).
     agentIdentity: AgentIdentitySchema.optional(),
     // #1626: a Claude-authored reply's replacement proposal, over the PARENT's
