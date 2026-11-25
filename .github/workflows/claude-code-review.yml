@@ -145,20 +145,25 @@ jobs:
           # .gitattributes cannot mark a source file binary (-diff) to hide it.
           # Real binaries still show as "Binary files differ". No textconv or
           # external diff drivers, which a PR could also name.
-          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
-            --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
+          git -C pr -c core.quotePath=false --attr-source="origin/$DEFAULT_BRANCH" diff \
+            --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
           # Git also calls any file with a NUL byte binary, whatever the
           # attributes, so a source file could hide its change that way. List
           # every path shown as binary; the prompt has the model Read the ones
           # that are source by their name. No -z: git then C-quotes any name
           # with a tab, newline or quote, so each file is exactly one line and
-          # a filename cannot forge or hide an entry.
-          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
-            --no-renames --numstat --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
+          # a filename cannot forge or hide an entry. core.quotePath=false keeps
+          # non-ASCII names readable; control characters stay escaped.
+          git -C pr -c core.quotePath=false --attr-source="origin/$DEFAULT_BRANCH" diff \
+            --no-textconv --no-ext-diff --no-renames --numstat \
+            --merge-base "origin/$BASE_REF" "$HEAD_SHA" \
             | awk '/^-\t-\t/ { print substr($0, 5) }' > inputs/binary-paths.txt
           node trusted/.github/claude-review/build-agents.mjs trusted/.claude/agents inputs/agents.json
           mkdir pr/.review-input
-          cp inputs/pr.diff inputs/pr.json inputs/binary-paths.txt pr/.review-input/
+          # The model reads a diff with new-file line numbers on each line, so
+          # its findings cite real lines; post.mjs maps against the raw diff.
+          node trusted/.github/claude-review/number-diff.mjs inputs/pr.diff > pr/.review-input/pr.diff
+          cp inputs/pr.json inputs/binary-paths.txt pr/.review-input/
 
       # The native build has no install script and no dependencies; its
       # tarball is checked against the pinned sha512 before it is unpacked.

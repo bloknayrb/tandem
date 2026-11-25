@@ -83,14 +83,15 @@ export function fence(text) {
 const findingText = (f) => `[${f.severity}] ${f.path}:${f.line}\n${f.body}`;
 
 /**
- * Lines that can carry an inline comment: every right-hand (new-file) line
- * inside a hunk of the unified diff, context lines included.
- * Hunks are consumed by their header's line counts, so an added line whose
- * content begins "++ " (shown as "+++ ...") is never mistaken for a file header.
- * Returns Map<path, Set<line>>.
+ * Walk a unified diff line by line. Each line is classified as "new" (an added
+ * or context line, which has a line number in the new file), "old" (a removed
+ * line) or "meta" (headers, hunk markers, "\ No newline"). Hunks are consumed
+ * by their header's line counts, so an added line whose content begins "++ "
+ * (shown as "+++ ...") is never mistaken for a file header.
+ * Returns [{ raw, kind, file, line }] where line is set for "new" lines.
  */
-export function commentableLines(diffText) {
-  const map = new Map();
+export function walkDiff(diffText) {
+  const out = [];
   let file = null;
   let line = 0;
   let oldLeft = 0;
@@ -100,44 +101,79 @@ export function commentableLines(diffText) {
       const c = raw[0];
       if (c === "+" || c === " " || raw === "") {
         if (c === "+" || newLeft > 0) {
-          if (file !== null) {
-            if (!map.has(file)) map.set(file, new Set());
-            map.get(file).add(line);
-          }
+          out.push({ raw, kind: "new", file, line });
           line++;
           newLeft--;
+        } else {
+          out.push({ raw, kind: "meta", file });
         }
         if (c !== "+") oldLeft--;
         continue;
       }
       if (c === "-") {
         oldLeft--;
+        out.push({ raw, kind: "old", file });
         continue;
       }
-      if (c === "\\") continue; // "\ No newline at end of file": no line of either side
+      if (c === "\\") {
+        out.push({ raw, kind: "meta", file }); // "\ No newline at end of file": no line of either side
+        continue;
+      }
       // Anything else means the counts were off: stop the hunk and parse this line as a header.
       oldLeft = 0;
       newLeft = 0;
-    } else if (raw.startsWith("\\")) {
-      continue; // a "\ No newline" after the hunk's last line
     }
     if (raw.startsWith("diff --git ")) {
       file = null;
-      continue;
-    }
-    if (raw.startsWith("+++ ")) {
+    } else if (raw.startsWith("+++ ")) {
       const target = raw.slice(4).replace(/\t.*$/, "").trim();
       file = target === "/dev/null" ? null : target.replace(/^b\//, "");
-      continue;
+    } else {
+      const hunk = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+      if (hunk) {
+        oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1]);
+        line = Number(hunk[2]);
+        newLeft = hunk[3] === undefined ? 1 : Number(hunk[3]);
+      }
     }
-    const hunk = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw);
-    if (hunk) {
-      oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1]);
-      line = Number(hunk[2]);
-      newLeft = hunk[3] === undefined ? 1 : Number(hunk[3]);
-    }
+    out.push({ raw, kind: "meta", file });
+  }
+  return out;
+}
+
+/**
+ * Lines that can carry an inline comment: every right-hand (new-file) line
+ * inside a hunk of the unified diff, context lines included.
+ * Returns Map<path, Set<line>>.
+ */
+export function commentableLines(diffText) {
+  const map = new Map();
+  for (const { kind, file, line } of walkDiff(diffText)) {
+    if (kind !== "new" || file === null) continue;
+    if (!map.has(file)) map.set(file, new Set());
+    map.get(file).add(line);
   }
   return map;
+}
+
+export const NUMBER_WIDTH = 6;
+
+/**
+ * The diff the model reads: every added or context line is prefixed with its
+ * line number in the new file, every removed line with blanks, so the model
+ * can cite real file lines. The live probe (#2557) showed that, given a raw
+ * diff, the model cites positions in the diff file instead, and every finding
+ * then misses the diff and falls out of the inline comments.
+ */
+export function numberDiff(diffText) {
+  const pad = " ".repeat(NUMBER_WIDTH);
+  return walkDiff(diffText)
+    .map(({ raw, kind, line }) => {
+      if (kind === "new") return `${String(line).padStart(NUMBER_WIDTH)} ${raw}`;
+      if (kind === "old") return `${pad} ${raw}`;
+      return raw;
+    })
+    .join("\n");
 }
 
 /** Build the request for the run's outcome. Pure. */
