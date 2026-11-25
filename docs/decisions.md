@@ -4063,6 +4063,16 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 - **Flip-blocker rows.** **Closed:** the stale-chat Start row ("The composer offers Start for stale chat when a stale message is not held per message by another session …"; its closer, a published fact saying whether Tandem's Claude may take each message, read by the composer's Start gate, with a test where a message lost to Tandem's Claude offers no Start, is met).
 - **`docs/security.md`**'s ownership entry: the facts now carry `tandemMayTake`.
 
+**Amended 2026-11-25 (#2358, Bryan's flip decisions) — two flip-blocker rows closed by decision, two kept for the smoke, one rule kept.** Docs and tests only: no source changes, so flag-off behaviour and logs are unchanged. **Decided by Bryan, 2026-11-25 (picked from options; quoted as picked):**
+- **The stall banner as built in 3b-2e2: "Accept as built (Recommended)".** The flip-blocker row asking for his review of it against keyed rounds closes. Its two-session misfires stay as the row described them: a session idle at its prompt that holds a document keeps the banner up while another session polls and is never handed that document's item, and a turn of Tandem's Claude written after the message hides it even when the message is another session's. Both are to be looked at again in the consolidated hardware smoke.
+- **#2439 at the flip: "Keep it accepted (Recommended)".** On Windows the launcher folder's owner and access-list checks run once per server process. The 2026-11-17 acceptance, made for the dark state, now holds with `OWNERSHIP_ENABLED` on. `docs/security.md`'s register entry records the re-decision and drops "the flag flips" from its void conditions, and the row closes.
+- **PR 3a's unmeasured smoke assumptions and the unexercised resumes: "Run them in the smoke (Recommended)".** Both rows stay open for the consolidated hardware smoke.
+- **A message Assigned away from Tandem's Claude whose assignee then lapses: "Keep it (Recommended)".** The lapse is a change of owner and ends the loss (`releaseMessageOwners`), so the message comes back to Tandem's Claude, as `ownership-message-control.test.ts` already pins. No change.
+
+Two follow-ups from #2572's review:
+- **The `with-document` arm of `tandemMayTakeMessage`.** The review's case, a present Tandem's Claude blocked by a released loss on an unowned document, does not arise. While Tandem's Claude is present, the default rule gives a document Released from it back at once, with no loss (ownership design §5.3: a Release lasts while Tandem's Claude is not present). So the arm's answer stands, and a new row in `tests/server/ownership-chat-published.test.ts` pins this: the message reads true and is handed to Tandem's Claude. The finding is withdrawn on the merits.
+- **The file's `lapseByGrace`** now restores real timers in `finally`.
+
 **Cross-references:** #2358, design v5 (`docs/spikes/multi-session-ownership/README.md`), the plan (`docs/plans/2358-ownership.md`), ADR-011, ADR-040 and ADR-053 (the flag pattern), ADR-045, ADR-049, ADR-051, ADR-056, #1906, #1952.
 
 ## ADR-055: Cowork Setup Ships Dark

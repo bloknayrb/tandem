@@ -151,17 +151,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Flag on, the stall banner as built in 3b-2e2 (hidden while Tandem's Claude is started or " +
-      "woken after the oldest waiting message, then 'Claude hasn't picked this up for N minutes. " +
-      "Your message is still waiting.', no dismiss) has not been reviewed by Bryan against keyed " +
-      "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
-      "banner up while another session polls and is never handed that document's item, and a " +
-      "turn of Tandem's Claude written after the message hides it even when the message is " +
-      "another session's.",
-    closedBy: "Bryan's review of the built banner (3b-2e2).",
-  },
-  {
-    gap:
       "A document claimed by a poll whose items its holder then never answers: the holder keeps " +
       "it, and no other session is handed its items until a lapse, a close or a take moves it " +
       "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does). " +
@@ -241,15 +230,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
       "resume across a server restart, a resume after a crash.",
     closedBy: "A smoke run of each, or Bryan's acceptance.",
-  },
-  {
-    gap:
-      "#2439: on Windows the launcher folder's owner and access-list checks run once per server " +
-      "process (verifiedWindowsDirs, src/server/launcher/run-files.ts), so an entry new files do " +
-      "not inherit, added after the first check, is not seen again in that process. Bryan accepted " +
-      "it on 2026-11-17 for the dark state (docs/security.md, Accepted (bounded)); the acceptance " +
-      "is re-decided when OWNERSHIP_ENABLED flips.",
-    closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
   },
   {
     gap:

@@ -285,7 +285,8 @@ Bryan's pick of 2026-11-23, "One consolidated smoke (Recommended)": every flip-b
 | S6 | Claude Desktop is left out of 'another session' | Connect Claude Desktop to Tandem with no other session; comment on a document nobody holds | The client name the transport registered; whether Tandem's Claude was started for the comment |
 | S7 | Whether Claude Code shows output-schema descriptions to a model | In a terminal session, ask the model to quote the description of `tandem_checkInbox`'s `ownership.changed` field | Verbatim answer; if it cannot see it, the row's decision on where that sentence goes is owed |
 | S8 | The posts PR's pending CTRL-doc update data (security review H1) | Two browser tabs on one document: take one offline, chat and switch mode in it, reconnect; repeat with a reload mid-edit | Whether any chat or mode write was lost (it would be dropped silently) |
-| S9 | #2439 (Windows launcher folder checks run once per process) | Not a measurement: Bryan re-decides the acceptance at the flip, recorded in `docs/security.md` | His pick |
+| S9 | #2439 (Windows launcher folder checks run once per process) | Decided 2026-11-25: Bryan kept the acceptance for the flip ("Keep it accepted (Recommended)"), recorded in `docs/security.md`; the row is closed | Nothing to measure |
+| S10 | The stall banner (row closed 2026-11-25, "Accept as built (Recommended)") | Not a row any more; a look, since its acceptance rests on it. With two sessions, one idle at its prompt holding a document: comment on that document, then let the other session poll; and have Tandem's Claude write a turn after a message another session holds | Whether the banner stayed up or hid in each case, and whether either reads as wrong in use |
 
 ## Manual check (after both flips, before release)
 
