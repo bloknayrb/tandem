@@ -4,6 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
+import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
   type Annotation,
   type ChatMessage,
@@ -2816,10 +2817,10 @@ const marginReplies = createAnnotationReplies({
 const heldCount = $derived.by(() => {
   let n = 0;
   for (const a of visibleAnnotations) {
-    if (a.heldInSolo === true) n++;
+    if (isHeldInSoloMarker(a.heldInSolo)) n++;
     if (a.type === "comment") {
       const replies = marginReplies.byId.get(a.id);
-      if (replies) for (const r of replies) if (r.heldInSolo === true) n++;
+      if (replies) for (const r of replies) if (isHeldInSoloMarker(r.heldInSolo)) n++;
     }
   }
   return n;
