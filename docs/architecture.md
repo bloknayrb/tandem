@@ -1048,8 +1048,11 @@ Install update — and #1756 widened it to **every Quit**. The spawn site now pi
 `TANDEM_PORT` / `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` on the child (the shell
 plugin inherits the parent environment, so an ambient value used to move the
 sidecar off :3479 under a shell still polling it), which removes the ambient-env
-half. The rest is #1825 (derive the URL from the port actually in use) and #1812
-(give the health poll and the POST an identity check); neither is fixed here.
+half, and since #1825 every sidecar URL and the pinned `MCP_PORT` /
+`SIDECAR_BIND_HOST` expand from one macro pair (`sidecar_url!`, `lib.rs`), so the
+address the child is told to bind and the one the shell POSTs to cannot drift.
+The rest is #1812 (give the health poll and the POST an identity check), which
+is only half fixed: the identity check is positive-only.
 
 `RunEvent::Exit` rather than `ExitRequested` because it is the one event every
 quit gesture reaches: tray Quit, macOS ⌘Q / Dock Quit (which go through

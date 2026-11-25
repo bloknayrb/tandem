@@ -1003,3 +1003,80 @@ describe("same-key close-then-reopen (#1257 Fix 4)", () => {
     expect(afterReopen[0]).toBe(initialNode);
   });
 });
+
+describe("DocumentTabs — close button after a cancelled close", () => {
+  // A close the user cancels (an unsaved-content confirm answered "Cancel")
+  // leaves the tab open. The double-click guard used to keep its id anyway, so
+  // that tab's X was dead until reload.
+  it("the X closes again after the previous close resolved false", async () => {
+    const tabs = [makeTab("a"), makeTab("b")];
+    const onTabClose = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { container } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, vi.fn()), onTabClose },
+    });
+    await tick();
+    const closeBtn = () =>
+      container
+        .querySelector('[data-testid="tab-a"]')!
+        .querySelector("button") as HTMLButtonElement;
+
+    closeBtn().click();
+    await vi.waitFor(() => expect(onTabClose).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    closeBtn().click();
+    await vi.waitFor(() => expect(onTabClose).toHaveBeenCalledTimes(2));
+  });
+
+  it("a second click while the first close is still pending does not close twice", async () => {
+    const tabs = [makeTab("a"), makeTab("b")];
+    let answer!: (ok: boolean) => void;
+    const onTabClose = vi.fn(() => new Promise<boolean>((resolve) => (answer = resolve)));
+    const { container } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, vi.fn()), onTabClose },
+    });
+    await tick();
+    const closeBtn = container
+      .querySelector('[data-testid="tab-a"]')!
+      .querySelector("button") as HTMLButtonElement;
+
+    closeBtn.click();
+    closeBtn.click();
+    expect(onTabClose).toHaveBeenCalledTimes(1);
+    // Accepted: the tab stays listed until the server's broadcast, and the
+    // guard must hold through that window too.
+    answer(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    closeBtn.click();
+    expect(onTabClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("the X works again on a tab replaced under the same id while its close was pending", async () => {
+    // Same path reopened while the dialog was up: same id, new Y.Doc. The
+    // funnel declines to close the new tab (resolving `true`), and the id never
+    // leaves `tabs`, so only `guardedClose` can release it.
+    const tabs = [makeTab("a"), makeTab("b")];
+    let answer!: (ok: boolean) => void;
+    const onTabClose = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (answer = resolve)))
+      .mockResolvedValue(true);
+    const { container, rerender } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, vi.fn()), onTabClose },
+    });
+    await tick();
+    const closeBtn = () =>
+      container
+        .querySelector('[data-testid="tab-a"]')!
+        .querySelector("button") as HTMLButtonElement;
+
+    closeBtn().click();
+    await rerender({ ...baseProps([makeTab("a"), tabs[1]], vi.fn()), onTabClose });
+    await tick();
+    answer(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    closeBtn().click();
+    await vi.waitFor(() => expect(onTabClose).toHaveBeenCalledTimes(2));
+  });
+});

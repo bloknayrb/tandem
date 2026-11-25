@@ -145,10 +145,12 @@ export interface CreateDocumentWorkspaceOpts {
   pushNotification: NotificationsState["push"];
 
   /**
-   * Injected so the close funnel is testable without a real dialog. Both call
-   * sites are a plain accept/decline and differ only in message.
+   * Injected so the close funnel is testable without a real dialog. All three
+   * call sites are a plain accept/decline and differ only in message. Async:
+   * `App.svelte` passes `confirmDialog` (`utils/confirm.ts`), never
+   * `window.confirm`, which the desktop app makes return a Promise.
    */
-  confirm: (message: string) => boolean;
+  confirm: (message: string) => Promise<boolean>;
 
   /**
    * Source view replaces the Tiptap editor, so entering it closes the
@@ -205,10 +207,13 @@ export interface DocumentWorkspace {
   // close loop can abort the rest of its batch on Cancel. A bare call site
   // that ignores the return value still typechecks (assignable where `void`
   // was expected).
-  closeTabAndRecord: (tabId: string) => boolean;
-  closeOtherTabs: (keepId: string) => void;
-  closeTabsToLeft: (fromId: string) => void;
-  closeTabsToRight: (fromId: string) => void;
+  // Async since the close confirms became awaited (the desktop dialog is an
+  // IPC round trip). A close with no confirm still finishes synchronously: an
+  // async function runs up to its first await before returning.
+  closeTabAndRecord: (tabId: string) => Promise<boolean>;
+  closeOtherTabs: (keepId: string) => Promise<void>;
+  closeTabsToLeft: (fromId: string) => Promise<void>;
+  closeTabsToRight: (fromId: string) => Promise<void>;
   reopenClosedTab: () => Promise<void>;
 
   saveDocumentTarget: (tabId: string | null, intent: "save" | "save-as") => Promise<void>;
@@ -410,27 +415,57 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
 
   // ---- close / reopen ------------------------------------------------------
 
-  // #1824 item H: returns `false` (cancelled) rather than silently returning
+  // Close confirms are asynchronous (`opts.confirm` resolves a Promise: in the
+  // desktop app the dialog is a native IPC round trip). One pending close per
+  // tab id: a second request for the same id — a held Ctrl+W, a double-clicked
+  // X, a bulk close reaching a tab whose dialog is already up — gets the SAME
+  // promise, so it shares the user's real answer instead of stacking a second
+  // dialog or inventing a `false` that would read as Cancel. Plain Map, like
+  // `inflightReopens`: nothing renders it.
+  const inflightCloses = new Map<string, Promise<boolean>>();
+
+  // #1824 item H: resolves `false` (cancelled) rather than silently returning
   // when a confirm is declined, so a bulk-close loop can tell "closed" from
   // "the user stopped the batch here" and abort instead of prompting for the
-  // rest. #1708 item 7 adds the other early return, and it must answer `true`:
-  // `false` is reserved for the user's Cancel and `closeEachUntilCancelled`
-  // breaks on it, so `false` for an id that never resolved would silently
-  // truncate a bulk close at the ghost.
-  function closeTabAndRecord(tabId: string): boolean {
+  // rest. Every other early return must answer `true`: `false` is reserved for
+  // the user's Cancel and `closeEachUntilCancelled` breaks on it, so `false`
+  // for an id that never resolved (#1708 item 7), or for a tab that went away
+  // while its dialog was open, would silently truncate a bulk close.
+  function closeTabAndRecord(tabId: string): Promise<boolean> {
+    const pending = inflightCloses.get(tabId);
+    if (pending) return pending;
+    const run = closeTabAndRecordOnce(tabId).finally(() => {
+      inflightCloses.delete(tabId);
+    });
+    inflightCloses.set(tabId, run);
+    return run;
+  }
+
+  async function closeTabAndRecordOnce(tabId: string): Promise<boolean> {
     const tab = opts.getTabs().find((t) => t.id === tabId);
     if (!tab) {
       // Before #1708 an unresolvable id ran most of the funnel on nothing: it
       // skipped both confirms and the stack push, then still cleared the draft
-      // and called `onTabClosed` + `closeTab`. It logs rather than notifying —
-      // `closeOtherTabs` sources its ids from `getOrderedTabs()`, a `$derived`
-      // over the same list this resolves against, so a ghost id is not a state
-      // the user can cause and a toast would name one that does not exist.
+      // and called `onTabClosed` + `closeTab`. It logs rather than notifying:
+      // the callers source ids from the live tab list, so a ghost id here is a
+      // race (the tab closed between the gesture and this call), and a toast
+      // would name a tab the user can no longer see.
       console.warn(`[Tandem] closeTabAndRecord: no open tab with id "${tabId}"`);
       return true;
     }
-    // #864 / #1021: both confirms below must be settled (and both must be
-    // accepted) BEFORE either one's side effect runs. A scratchpad with
+    // Every confirm is an await, and anything can happen while a dialog is
+    // open: the server can close or replace the tab (an id is a path hash, so
+    // close + reopen of the same path reuses it — compare the Y.Doc, as
+    // `DocumentTabs` does), or "Try to recover" can tear this workspace down.
+    // Either way the close the user was asked about no longer exists, so it
+    // answers `true` (not a Cancel) and runs no side effect.
+    const current = (): OpenTab | null => {
+      if (disposed) return null;
+      const live = opts.getTabs().find((t) => t.id === tabId);
+      return live && live.ydoc === tab.ydoc ? live : null;
+    };
+    // #864 / #1021: every confirm below must be settled (and all must be
+    // accepted) BEFORE any one's side effect runs. A scratchpad with
     // unsaved content that has also picked up unsaved source-view edits is
     // reachable through one tab (a scratchpad's format is "md", so source
     // view is available on it), so accepting the first confirm and then
@@ -443,10 +478,11 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     if (isScratchpadPath(tab.filePath)) {
       const uuid = scratchpadUuidFromPath(tab.filePath);
       if (uuid && opts.scratchpad.hasUnsavedContent(uuid)) {
-        const ok = opts.confirm(
+        const ok = await opts.confirm(
           "This scratchpad has unsaved content that will be lost. Close it anyway?",
         );
         if (!ok) return false;
+        if (!current()) return true;
         scratchpadUuidToClear = uuid;
       }
     }
@@ -454,10 +490,11 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     // (mirrors the #864 scratchpad confirm above). The disk file is intact — this
     // is loss of unsaved source-view work only.
     if (sourceDirtyTabs.has(tabId)) {
-      const ok = opts.confirm(
+      const ok = await opts.confirm(
         "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
       );
       if (!ok) return false;
+      if (!current()) return true;
     }
     // #2273: a document whose saves a read-only file refused never autosaves,
     // so its unsaved edits survive a close only in the session the server
@@ -466,19 +503,23 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     // by an undo-to-clean does not cry wolf.
     const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
     if (meta.get(Y_MAP_READ_ONLY_FILE) !== undefined && meta.get(Y_MAP_DIRTY) === true) {
-      const ok = opts.confirm(
+      const ok = await opts.confirm(
         `${tab.fileName} is read-only on disk, so your edits haven't been saved to it. Close it anyway? Tandem keeps the edits and reopens the file the next time it starts.`,
       );
       if (!ok) return false;
     }
-    // Both confirms (whichever applied) passed — now safe to discard the
+    // Re-resolve after the last await: the side effects below use the LIVE
+    // record (a rename while a dialog was open changes `filePath`).
+    const live = current();
+    if (!live) return true;
+    // All confirms (whichever applied) passed — now safe to discard the
     // scratchpad recovery copy so the next scratchpad open doesn't restore
     // content the user just accepted losing.
     if (scratchpadUuidToClear) {
       opts.scratchpad.clearUnsaved(scratchpadUuidToClear);
     }
-    if (!isUploadPath(tab.filePath)) {
-      opts.closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
+    if (!isUploadPath(live.filePath)) {
+      opts.closedTabStack.push({ filePath: live.filePath, closedAt: Date.now() });
     }
     // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
     if (sourceViewTabs.has(tabId)) {
@@ -500,23 +541,24 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   // list, so iterating live tabs would skip entries. Each close routes through
   // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
   // #1824 item H: Cancel on any one tab ABORTS the rest of the batch (not
-  // skip-and-continue) — `break` on the first `false`.
-  function closeEachUntilCancelled(ids: Iterable<string>): void {
+  // skip-and-continue) — `break` on the first `false`. Each close is awaited
+  // so only one dialog is ever up, and so a Cancel is seen before the next tab.
+  async function closeEachUntilCancelled(ids: Iterable<string>): Promise<void> {
     for (const id of ids) {
-      if (!closeTabAndRecord(id)) break;
+      if (!(await closeTabAndRecord(id))) break;
     }
   }
 
-  function closeOtherTabs(keepId: string): void {
-    closeEachUntilCancelled(tabIdsToCloseOthers(opts.getOrderedTabs(), keepId));
+  function closeOtherTabs(keepId: string): Promise<void> {
+    return closeEachUntilCancelled(tabIdsToCloseOthers(opts.getOrderedTabs(), keepId));
   }
 
-  function closeTabsToLeft(fromId: string): void {
-    closeEachUntilCancelled(tabIdsToCloseLeft(opts.getOrderedTabs(), fromId));
+  function closeTabsToLeft(fromId: string): Promise<void> {
+    return closeEachUntilCancelled(tabIdsToCloseLeft(opts.getOrderedTabs(), fromId));
   }
 
-  function closeTabsToRight(fromId: string): void {
-    closeEachUntilCancelled(tabIdsToCloseRight(opts.getOrderedTabs(), fromId));
+  function closeTabsToRight(fromId: string): Promise<void> {
+    return closeEachUntilCancelled(tabIdsToCloseRight(opts.getOrderedTabs(), fromId));
   }
 
   /**
@@ -525,9 +567,10 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
    * Every `opts.*` collaborator is bound to ONE `App.svelte` instance, and
    * `Root.svelte` wraps `<App/>` in `ErrorBoundary` whose `reset()` is a real
    * production remount — the same fact `mountActionExecutor`'s `onDestroy`
-   * release exists for. The reopen poll below is the only await in this module
-   * long enough to straddle one, so without this a "Try to recover" during the
-   * wait leaves work still writing into the destroyed instance's closures.
+   * release exists for. Two awaits in this module are long enough to straddle
+   * one — the reopen poll below and the close funnel's confirm dialogs above —
+   * so without this a "Try to recover" during either leaves work still writing
+   * into the destroyed instance's closures.
    *
    * Its own `$effect` with an EMPTY body, deliberately: the body reads nothing
    * reactive, so the effect never re-runs and its teardown therefore fires on

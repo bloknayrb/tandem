@@ -4,6 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
+import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
   type Annotation,
   type ChatMessage,
@@ -193,6 +194,7 @@ import { NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
+import { confirmDialog } from "./utils/confirm";
 import { createLaunchLatch } from "./utils/launch-latch.svelte";
 import { planLicenseGraceNotice } from "./utils/license-ui";
 import { resolveDefaultModelChip } from "./utils/model-chip";
@@ -1393,8 +1395,9 @@ const actionExecutor = mountActionExecutor({
   // `opts` lets a non-launcher caller (the executor's failure funnel) classify
   // its toast correctly instead of inheriting `type: "launcher"`, and supply a
   // deterministic id. The default id is millisecond-keyed and ToastContainer
-  // keys its `{#each}` on it, so two toasts pushed in the same millisecond are
-  // an `each_key_duplicate` throw.
+  // keys its `{#each}` on it when the toast has no `dedupKey` (`toastKey`), so
+  // two such toasts pushed in the same millisecond are an `each_key_duplicate`
+  // throw.
   notify: (severity, message, opts) => {
     notifications.push({
       id: opts?.id ?? `launcher-${Date.now()}`,
@@ -1438,9 +1441,9 @@ const actionExecutor = mountActionExecutor({
       findBarOpen = true;
     }
   },
-  closeActiveTab: () => {
+  closeActiveTab: async () => {
     const id = yjsSync.activeTabId;
-    if (id) documentWorkspace.closeTabAndRecord(id);
+    if (id) await documentWorkspace.closeTabAndRecord(id);
   },
   openFileDialog: () => requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
@@ -2070,7 +2073,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const id = yjsSync.activeTabId;
-    if (id) documentWorkspace.closeTabAndRecord(id);
+    if (id) void documentWorkspace.closeTabAndRecord(id);
   },
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -2422,7 +2425,9 @@ const documentWorkspace = createDocumentWorkspace({
   triggerSave,
   triggerSaveAs,
   pushNotification: (notification, action) => notifications.push(notification, action),
-  confirm: (message) => window.confirm(message),
+  // Never `window.confirm`: the desktop app's dialog plugin makes it return a
+  // Promise, which reads as an instant OK (utils/confirm.ts).
+  confirm: confirmDialog,
   closeEditorOverlays: () => {
     findBarOpen = false;
     slashCommandMenuOpen = false;
@@ -2816,10 +2821,10 @@ const marginReplies = createAnnotationReplies({
 const heldCount = $derived.by(() => {
   let n = 0;
   for (const a of visibleAnnotations) {
-    if (a.heldInSolo === true) n++;
+    if (isHeldInSoloMarker(a.heldInSolo)) n++;
     if (a.type === "comment") {
       const replies = marginReplies.byId.get(a.id);
-      if (replies) for (const r of replies) if (r.heldInSolo === true) n++;
+      if (replies) for (const r of replies) if (isHeldInSoloMarker(r.heldInSolo)) n++;
     }
   }
   return n;
@@ -3397,7 +3402,11 @@ function dismissModelPicker() {
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
     />
 
-    <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+    <ToastContainer
+      toasts={notifications.toasts}
+      announced={notifications.announced}
+      onDismiss={notifications.dismiss}
+    />
 
     <ActivityTray
       items={notifications.activity}

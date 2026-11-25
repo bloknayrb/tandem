@@ -44,9 +44,29 @@ export interface ActivityItem extends TandemNotification {
   count: number;
 }
 
+/**
+ * Which toast each of the toast stack's two announcers speaks (#2489): the id
+ * of the toast whose push (or coalescing re-push) came last at that
+ * politeness, or null before any. `polite` takes info, `assertive` warning and
+ * error, matching the roles the cards used to carry.
+ *
+ * Ids, not sentences, on purpose: `ToastContainer` looks the id up in the
+ * CURRENT `toasts` and speaks nothing once that toast is gone. So a dismissed,
+ * expired or evicted toast empties its announcer (a removal, which no screen
+ * reader speaks) instead of letting an older toast's sentence slide back in
+ * (an addition, which would be spoken as if new). Written only by a push,
+ * never by a removal, so no removal path needs to remember it.
+ */
+export interface ToastAnnouncement {
+  readonly polite: string | null;
+  readonly assertive: string | null;
+}
+
 export interface NotificationsState {
   /** Transient pop toasts (warning/error always; client-originated info too). */
   readonly toasts: Toast[];
+  /** The toast each announcer speaks; see `ToastAnnouncement`. */
+  readonly announced: ToastAnnouncement;
   /** Persistent activity-tray history (all severities, localStorage-backed). */
   readonly activity: ActivityItem[];
   /** Non-dismissed activity count — drives the pill badge. */
@@ -133,6 +153,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
   const storageKey = opts.storageKey ?? ACTIVITY_HISTORY_KEY;
 
   let toasts = $state<Toast[]>([]);
+  let announced = $state<ToastAnnouncement>({ polite: null, assertive: null });
   let activity = $state<ActivityItem[]>(persist ? loadActivity(storageKey) : []);
 
   const popTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -175,6 +196,17 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     );
   };
 
+  // A coalescing re-push can keep its id and change severity (info → error):
+  // the other announcer then still names that id and would speak it too, so
+  // it is cleared rather than left pointing at a toast now spoken elsewhere.
+  const announce = (toast: Toast) => {
+    const info = toast.severity === "info";
+    const other = (id: string | null) => (id === toast.id ? null : id);
+    announced = info
+      ? { polite: toast.id, assertive: other(announced.assertive) }
+      : { polite: other(announced.polite), assertive: toast.id };
+  };
+
   const pushTransient = (notification: TandemNotification, action?: ToastAction) => {
     if (notification.dedupKey) {
       const idx = toasts.findIndex((t) => t.dedupKey === notification.dedupKey);
@@ -186,6 +218,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
         const next = [...toasts];
         next[idx] = updated;
         toasts = next;
+        announce(updated);
         if (updated.action?.stay !== true) schedulePopDismiss(updated.id, updated.severity);
         return;
       }
@@ -200,6 +233,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
       clearPopTimer(evicted.id);
     }
     toasts = next;
+    announce(newToast);
     if (newToast.action?.stay !== true) schedulePopDismiss(newToast.id, newToast.severity);
   };
 
@@ -359,6 +393,9 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
   return {
     get toasts() {
       return toasts;
+    },
+    get announced() {
+      return announced;
     },
     get activity() {
       return activity;

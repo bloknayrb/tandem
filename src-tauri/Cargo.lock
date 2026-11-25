@@ -6220,6 +6220,7 @@ dependencies = [
  "libappindicator-sys",
  "libloading 0.8.9",
  "log",
+ "memchr",
  "objc2-foundation",
  "rand 0.10.3",
  "reqwest 0.12.28",

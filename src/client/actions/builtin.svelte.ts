@@ -39,6 +39,7 @@ import {
 } from "../../shared/launcher/contract.js";
 import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDismiss.svelte.js";
 import { logClientWarning } from "../utils/client-log.js";
+import { confirmDialog } from "../utils/confirm.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { AI_OFF_TITLE, aiOffCopy } from "../utils/license-ui.js";
@@ -765,7 +766,8 @@ async function postLauncherMutation(
   // about a relaunch that succeeded. They click again, and Claude is killed a
   // second time. A throw here is not hypothetical: neither launcher call site
   // passes a toast `id`, and App mints `launcher-${Date.now()}`, so two toasts
-  // in the same millisecond collide on ToastContainer's `{#each}` key.
+  // in the same millisecond collide on ToastContainer's `{#each}` key (the id,
+  // for a toast with no `dedupKey`; see `toastKey`).
   d.notify("info", success);
   return null;
 }
@@ -777,8 +779,9 @@ async function postLauncherMutation(
  * used to live inside `checkLauncherAvailable`, behind the status fetch — so a
  * second press arriving while the first was still awaiting that fetch saw
  * `launcherInflight === false`, and both went on to confirm and relaunch:
- * Claude SIGTERMed twice, the user's task killed twice. (`confirm()` blocks the
- * event loop, so the modal is NOT the vulnerable window; the fetch before it is.)
+ * Claude SIGTERMed twice, the user's task killed twice. The confirm dialog is a
+ * vulnerable window too: it is awaited (`confirmDialog`; in the desktop app it
+ * is an IPC round trip, not a blocking `confirm()`), and the claim spans it.
  *
  * These branches back visible buttons in the empty state, including a "Restart
  * Claude anyway" offered to someone who has just been told to install software
@@ -810,8 +813,8 @@ async function withLauncherClaim(d: ActionDeps, body: () => Promise<boolean>): P
     launcherInflight = false;
     // Re-probe from HERE, not from the click. The callers used to fire this
     // synchronously alongside `void relaunchHere(...)`, which runs the instant
-    // this function suspends at its first `await` — i.e. BEFORE the blocking
-    // `confirm()`, whose four lines a user may spend ten seconds reading while
+    // this function suspends at its first `await` — i.e. BEFORE the confirm
+    // dialog, whose four lines a user may spend ten seconds reading while
     // the staggered +2s/+5s refresh timers advance on wall clock. Both would
     // then fire before the POST completed, answer with the pre-relaunch cwd, and
     // leave the drift pill asserting Claude is in a folder it has already left —
@@ -938,7 +941,7 @@ async function relaunchConfirmed(
       ? `Restart Claude in:\n${cwd}\n\nYour current task will be interrupted, and this becomes Claude's working directory for future restarts. If the current conversation was started in another folder, it is replaced with a new one.`
       : `Restart Claude in:\n${cwd}\n\nIf that folder isn't usable, Claude restarts in its configured directory instead.\n\nYour current task may be interrupted.`
     : "Restart Claude in its configured working directory.\n\nYour current task may be interrupted.";
-  if (!confirm(prompt)) return;
+  if (!(await confirmDialog(prompt))) return;
   const labels = {
     failPrefix: "Relaunch failed",
     requestFailPrefix: "Relaunch request failed",
@@ -1020,7 +1023,11 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
   if (refusedByLicence(d)) return;
   await withLauncherClaim(d, async () => {
     if (!(await checkLauncherAvailable(d))) return false;
-    if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
+    if (
+      !(await confirmDialog(
+        "Drop Claude's saved conversation and restart fresh. This cannot be undone.",
+      ))
+    ) {
       return false;
     }
     await postLauncherMutation(
@@ -1081,9 +1088,9 @@ export function turnOffTandemClaude(): void {
       const busy = status.ok && status.value.available && status.value.running && status.value.busy;
       if (
         busy &&
-        !confirm(
+        !(await confirmDialog(
           "Tandem's Claude is in the middle of a turn. Turn it off anyway?\n\nIt stays off, including the next time Tandem starts, until you start it again.",
-        )
+        ))
       ) {
         return false;
       }
@@ -1170,7 +1177,7 @@ function formatBackupTimestamp(iso: string): string {
 async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
   if (restoreBackupInflight) {
     // Same reasoning as createScratchpad's guard: silence here reads as a
-    // broken palette entry, and this one can sit behind a blocking confirm.
+    // broken palette entry, and this one can sit behind an awaited confirm.
     d.notify("info", "A restore is already in progress.", {
       dedupKey: "restore-backup-inflight",
       id: "restore-backup-inflight",
@@ -1218,7 +1225,7 @@ async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
     const lines = backups
       .map((b, i) => `  ${i + 1}. ${formatBackupTimestamp(b.timestamp)}`)
       .join("\n");
-    const ok = confirm(
+    const ok = await confirmDialog(
       `Available backups (newest first):\n${lines}\n\n` +
         `Restore the most recent backup (${formatBackupTimestamp(newest.timestamp)})? ` +
         "The document reloads with the backup's content; annotations are preserved.\n\n" +

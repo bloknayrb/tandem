@@ -303,8 +303,9 @@ describe("failure reporting", () => {
     runBoundAction("save", () => Promise.reject(new Error("nope")));
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
 
-    // The id must be deterministic: ToastContainer keys its {#each} on it, and
-    // App's default is millisecond-derived, so two same-ms pushes collide.
+    // The id must be deterministic: ToastContainer keys its {#each} on it for a
+    // toast with no dedupKey, and App's default is millisecond-derived, so two
+    // same-ms pushes collide.
     expect(notify.mock.calls[0][2]).toMatchObject({
       type: "general-error",
       dedupKey: "action-failed-save",

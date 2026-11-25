@@ -29,6 +29,7 @@ import {
   API_BACKUPS_RESTORE,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
+  API_LAUNCHER_START_FRESH,
   API_LAUNCHER_STATUS,
   API_SAVE,
 } from "../../../src/shared/api-paths.js";
@@ -364,5 +365,86 @@ describe("in-flight announcements", () => {
     expect(notify).not.toHaveBeenCalled();
     release();
     await first;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The desktop app's confirm is asynchronous
+// ---------------------------------------------------------------------------
+
+/**
+ * `tauri-plugin-dialog` replaces `window.confirm` with an async function. A
+ * `confirm(...)` read as a value was a pending Promise — always truthy — so
+ * every one of these ran its destructive request on Cancel. The browser's
+ * synchronous stub in the specs above could never show it.
+ */
+describe("an asynchronous (desktop) Cancel stops the action", () => {
+  function asyncCancel(): void {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(async () => false),
+    );
+  }
+
+  it("relaunch sends nothing", async () => {
+    mount({});
+    asyncCancel();
+    const relaunches = vi.fn();
+    routes([
+      [API_LAUNCHER_STATUS, () => json({ available: true })],
+      [API_LAUNCHER_NONCE, () => json({ nonce: "n1" })],
+      [
+        API_LAUNCHER_RELAUNCH,
+        () => {
+          relaunches();
+          return json({ cwd: "/home/user" });
+        },
+      ],
+    ]);
+    relaunchClaudeHere();
+    await vi.waitFor(() => expect(globalThis.confirm).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(relaunches).not.toHaveBeenCalled();
+  });
+
+  it("start fresh keeps the saved conversation", async () => {
+    mount({});
+    asyncCancel();
+    const startFresh = vi.fn();
+    routes([
+      [API_LAUNCHER_STATUS, () => json({ available: true })],
+      [API_LAUNCHER_NONCE, () => json({ nonce: "n1" })],
+      [
+        API_LAUNCHER_START_FRESH,
+        () => {
+          startFresh();
+          return json({});
+        },
+      ],
+    ]);
+    startFreshClaudeCode();
+    await vi.waitFor(() => expect(globalThis.confirm).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(startFresh).not.toHaveBeenCalled();
+  });
+
+  it("restore leaves the document alone", async () => {
+    mount({});
+    asyncCancel();
+    const restores = vi.fn();
+    routes([
+      [
+        API_BACKUPS_RESTORE,
+        () => {
+          restores();
+          return json({ data: {} });
+        },
+      ],
+      [API_BACKUPS, () => json({ data: { backups: [{ name: "b1", timestamp: "2026-01-01" }] } })],
+    ]);
+    runRestore();
+    await vi.waitFor(() => expect(globalThis.confirm).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(restores).not.toHaveBeenCalled();
   });
 });

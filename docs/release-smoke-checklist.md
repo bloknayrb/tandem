@@ -52,6 +52,7 @@ matrix across OS versions, observer soak, accessibility) live in
 
   **Run this against a built install, not `cargo tauri dev`.** A dev build takes the "Server already healthy — skipping sidecar spawn" fast path against `dev:standalone`, so it owns no child and produces `verdict=Skipped, owned_child=false` by construction — the row passes nothing.
 - [ ] **Quit during a restart (#1756 respawn guard).** Settings → Network → **Restart server**, then Quit from the tray while the restart is in flight. No orphaned `node-sidecar` afterwards, and `tandem.log` shows either `start_sidecar: shutdown in progress — not spawning` or `start_sidecar: shutdown began while spawning — killing the fresh child`. **Both are `warn!`, so both clear the release log floor.** The first was `info!` until #1756's review — invisible on exactly the built install this row mandates, and it is the *likely* branch: a Quit mid-restart usually finds `spawn_allowed()` already false at the top of the spawn loop, leaving the store-site line to a sub-second race window. If neither string appears, the row failed; it is not "the other branch ran".
+- [ ] **Start at login is per-user and survives an elevated launch (#2160, first run owed: the registration moved from `tauri-plugin-autostart` to Tandem's own `autostart_win.rs`).** Settings → turn **Start at login** on. `reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem` shows the install path **in quotes** followed by `--tandem-autostart`. Sign out and back in: Tandem starts hidden in the tray. Then quit, start Tandem once with **Run as administrator**, quit again, and run `reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem` — it must report that the value does not exist; **any `Tandem` value under `HKLM` is a High finding: stop the release.** Turn the setting off: the `HKCU` value is gone and the toggle stays off. On a machine whose Start at login was turned on by 0.32.0 or earlier, the toggle reads on after the update, and the value has gained its quotes after the first launch.
 - [ ] **No Cowork surface (ADR-055).** Settings → AI Assistant shows no Cowork block, the integration wizard's "More integrations" has no Cowork row, and the first-run tutorial on `welcome.md` runs through to "You're ready!" with no Cowork step.
 - [ ] **Uninstall on a past-enabler machine (ADR-055).** On a machine that enabled Cowork on v0.28.0 or earlier, uninstall the desktop app. The Tandem entries are gone from every Cowork workspace, and `%LOCALAPPDATA%\tandem\Data\cowork-meta.json` is gone. The firewall rule may remain, because the scrub runs unelevated; record whether it did.
 - [ ] **The Default radio group in the built desktop app (owed from ADR-039 item 15, 0.32 and later).** Settings → **Models** with two local models saved: move **Default** from one to the other by mouse, then back by the arrow keys. The selected radio, its focus ring and the saved Default must follow each move. The flip merged with this owed (it passed in installed Edge and in E2E, not in the desktop window); close item 15 in ADR-039 when this passes.
@@ -132,26 +133,29 @@ previous one. The RC pass also has to prove this release can update **forward**
 — the seam users actually hit after launch — and exercise the [license gate](glossary.md#licensing-gate)
 before it meets a paying user.
 
-- [ ] **Forward-update — NOT RUNNABLE AS WRITTEN.** Goal: verify the
-      just-built RC updates to a *next* version. Mechanic: the updater's `.sig`
-      signs the artifact bytes and the `latest.json` `version` field is
-      independent of the signature — so re-serve the **current RC's own signed
-      artifact** under a bumped version number in a staged `latest.json`, point
-      the updater at it, and confirm: update dot appears → install → restart →
-      app healthy. **The pointing step has no mechanism today.** There is no
-      runtime updater-endpoint override: the endpoint list is fixed in
-      `src-tauri/tauri.conf.json` (the public GitHub `latest.json`), no
-      environment variable reaches the updater, and the only alternate route is
-      the compile-time `LICENSE_UPDATE_ENDPOINT` const in `src-tauri/src/lib.rs`,
-      which is empty while licensing ships dark. *Decided 2026-10-22 (Bryan):*
-      the route is a staging build compiled against a separate update manifest
-      that offers a fake newer version. A runtime endpoint override in shipped
-      builds was rejected, because it would add attack surface to the updater.
-      That staging channel is not built yet; #2280 tracks it. Until #2280 lands,
-      record this row as not run rather than ticking it.
-      (Added 2026-06-11; once the updater authenticates against the
-      license-checked endpoint — #1116 L3 — run this against the staging
-      endpoint so the entitlement check is in the loop.)
+- [ ] **Forward-update** (#2280; Windows + macOS). Goal: verify an installed
+      build updates itself to the RC through the RC's own signed manifest. On a
+      test machine or VM, from a checkout of the RC tag, build the staging
+      channel against the RC's per-tag manifest:
+      `npm run build:tauri:staging -- --manifest-url https://github.com/bloknayrb/tandem/releases/download/<RC tag>/latest.json`.
+      The staging build's shell version is `0.0.1` and it is otherwise the RC's
+      code, so the RC reads as newer with nothing re-signed. Install it, then
+      confirm: update dot appears → install → restart → the **installed app's**
+      version (Settings → Apps, or Get Info on `Tandem.app`) reads the RC's, not
+      `0.0.1`, and **no** "may not have finished updating" banner appears. About
+      proves nothing here: it shows the version compiled into the checkout, which
+      is the RC's before the update too. (Watch the window;
+      a successful update logs nothing at the release log level, see
+      [what the v0.25.0 run settled](#what-the-v0250-run-settled)). There is
+      still no runtime updater-endpoint override: *decided 2026-10-22 (Bryan)*,
+      a runtime override in shipped builds would add attack surface to the
+      updater, so the redirect is a build-time `--config` overlay the release
+      workflow never applies. What the staging build is and is not:
+      [bad-release-runbook.md](bad-release-runbook.md#the-staging-update-channel).
+      It exercises the **public** route only. Once `LICENSE_UPDATE_ENDPOINT` is
+      set (#1116 L3), run it on a trialing device, which still takes that route;
+      putting the entitlement check in the loop needs a staging Worker, which
+      does not exist yet. (Added 2026-06-11; made runnable by #2280.)
 - [ ] **v1.0 setup walkthrough** (#2198; Windows + macOS): `isV1Release`
       rejects an rc, so launch the RC with `TANDEM_FORCE_V1_WALKTHROUGH=1`
       on a profile that has a working 0.x setup. Expect: the wizard opens

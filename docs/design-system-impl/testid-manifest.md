@@ -576,7 +576,9 @@ site.
 
 ### Toasts & notifications
 - `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`,
-  `toast-action-{*}` (a toast's action button; clicking it also dismisses)
+  `toast-action-{*}` (a toast's action button; clicking it also dismisses),
+  `toast-announcer-polite`, `toast-announcer-assertive` (the stack's two
+  always-mounted screen-reader announcers, #2489)
 
 ### Activity center (1.10)
 - `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`
