@@ -227,7 +227,7 @@ mod tests {
             .next()
             .unwrap()
             .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| !l.trim_start().starts_with('/'))
             .collect::<Vec<_>>()
             .join("
 ");
