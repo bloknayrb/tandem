@@ -60,19 +60,33 @@ pub fn is_uninstall_scrub(args: &[String]) -> bool {
 
 /// Name the autostart registration is filed under.
 ///
-/// `tauri-plugin-autostart` defaults `app_name` to `app.package_info().name`,
-/// which Tauri populates from `productName` in `tauri.conf.json`. Keep the two
-/// in sync — a mismatch here silently leaves the user auto-starting a deleted
-/// executable after uninstall.
+/// On macOS and Linux `tauri-plugin-autostart` defaults `app_name` to
+/// `app.package_info().name`, which Tauri populates from `productName` in
+/// `tauri.conf.json`. On Windows Tandem's own backend (`autostart_win.rs`,
+/// #2160) files the Run value under this constant directly, which is the name
+/// the plugin used there before, so an earlier registration is still found.
+/// Keep this and `productName` in sync — a mismatch here silently leaves the
+/// user auto-starting a deleted executable after uninstall.
 pub const AUTOSTART_APP_NAME: &str = "Tandem";
 
-/// Registry paths `auto-launch` 0.5 writes on Windows. `disable()` only removes
-/// the first; the StartupApproved value is left behind, so the scrub takes both.
+/// The two values Tandem's Windows registration writes (`autostart_win.rs`,
+/// #2160; the same two `auto-launch` 0.5 wrote for earlier builds). `disable()`
+/// only removes the Run value; the StartupApproved value is left behind, so the
+/// scrub takes both.
+///
+/// `HKCU` only. No Tandem build has ever written the machine-wide `HKLM` Run
+/// key (0.5 wrote HKCU only, and since #2160 the plugin whose 0.6 backend
+/// would is not a Windows dependency), so the scrub does not touch `HKLM`: a
+/// value there named `Tandem` would be some other program's, and an uninstall
+/// is in no position to judge that.
 #[cfg(target_os = "windows")]
-const RUN_KEY: &str = r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-#[cfg(target_os = "windows")]
-const STARTUP_APPROVED_KEY: &str =
-    r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+fn autostart_registry_keys() -> [String; 2] {
+    use crate::autostart::{WIN_RUN_SUBKEY, WIN_STARTUP_APPROVED_SUBKEY};
+    [
+        format!(r"HKCU\{WIN_RUN_SUBKEY}"),
+        format!(r"HKCU\{WIN_STARTUP_APPROVED_SUBKEY}"),
+    ]
+}
 
 /// Remove the OS start-at-login registration, if any.
 ///
@@ -108,12 +122,12 @@ fn remove_autostart_registration() {
         return;
     };
 
-    for key in [RUN_KEY, STARTUP_APPROVED_KEY] {
+    for key in autostart_registry_keys() {
         // Array args, never a composed shell string — the value name is an
         // exact literal, so there is nothing to quote-escape and nothing to
         // enumerate. `/f` suppresses the confirmation prompt.
         let output = Command::new(&reg_exe)
-            .args(["delete", key, "/v", AUTOSTART_APP_NAME, "/f"])
+            .args(["delete", key.as_str(), "/v", AUTOSTART_APP_NAME, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         match output {
@@ -158,7 +172,7 @@ fn remove_autostart_registration() {
 /// deliberately ignoring `XDG_CONFIG_HOME`.** That is not XDG-correct, but it is
 /// what `auto-launch` 0.5 does: its `get_dir()` is literally
 /// `dirs::home_dir().unwrap().join(".config").join("autostart")`, with no env
-/// lookup anywhere. The scrub's job is to delete the file the plugin *wrote*, so
+/// lookup anywhere (0.6's `get_xdg_autostart_dir()` is the same join). The scrub's job is to delete the file the plugin *wrote*, so
 /// honoring `XDG_CONFIG_HOME` here would send it looking somewhere the plugin
 /// never writes and leave the real orphan behind on exactly the machines where
 /// the variable is set. If upstream ever becomes XDG-aware, change both together.

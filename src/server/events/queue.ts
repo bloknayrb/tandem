@@ -16,6 +16,7 @@ import {
 } from "../../shared/constants.js";
 import { makeHeldInSoloStampObserver } from "../annotations/held-in-solo.js";
 import { attachKeyIdentityObserver, reconcileAnnotationKeys } from "../annotations/key-identity.js";
+import { makeAnnotationWriteArbiter } from "../annotations/write-arbiter.js";
 import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
@@ -778,6 +779,11 @@ export function attachObservers(
   // included — the marker is a privacy substrate, not a channel event), and
   // re-run by `reattachObservers` after the Hocuspocus doc swap.
   cleanups.push(makeHeldInSoloStampObserver({ docName, doc }));
+
+  // #1920: the server arbitrates two writes to one annotation made without
+  // seeing each other, which Yjs alone resolves by clientID. Every doc, and
+  // re-run after the Hocuspocus doc swap like the observers above.
+  cleanups.push(makeAnnotationWriteArbiter({ docName, doc }));
 
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).

@@ -51,8 +51,10 @@ import { handleClose } from "../../src/server/mcp/routes/close.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
 import {
   CHANGE_CAUSES,
+  controlDocumentOwner,
   DEFAULT_GRACE_MS,
   getDocOwner,
+  getOwnerRecord,
   MAX_CHANGE_NOTICES,
   noteTandemRunStart,
   noteTransportChanged,
@@ -449,7 +451,7 @@ describe("R1: the field", () => {
       '"gained": this session held the document after the change and not before; "lost": it held it before and not after',
     );
     expect(CAUSE_FIELD_DESCRIPTION).toBe(
-      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "a chat post of yours claimed it": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it; "Tandem\'s Claude took it back": Tandem\'s Claude took it from this session, when a run of it started or when it opened the document',
+      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "a chat post of yours claimed it": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it; "Tandem\'s Claude took it back": Tandem\'s Claude took it from this session, when a run of it started or when it opened the document; "it was released": it was released from this session; "it was assigned to another session": it was assigned to another session; "it was assigned to this session": it was assigned to this session',
     );
   });
 
@@ -495,7 +497,9 @@ describe("R1: the field", () => {
     }
     for (const [word, fact] of Object.entries(CHANGE_CAUSE_FACTS)) {
       // Past tense: each word and fact carries a past-tense verb.
-      expect(`${word} | ${fact}`).toMatch(/\b(claimed|opened|created|took|was closed|stopped)\b/);
+      expect(`${word} | ${fact}`).toMatch(
+        /\b(claimed|opened|created|took|was closed|stopped|was released|was assigned)\b/,
+      );
       // Never another session's identity, never the user's choice, never a state now.
       expect(fact).not.toMatch(/owner-|terminal|Claude Desktop|other app|label/i);
       expect(fact).not.toMatch(/\buser\b|\bchose\b/i);
@@ -574,6 +578,15 @@ describe("R1: the field", () => {
     await writeAs(B, mkDoc("tb"));
     tandemPresent();
     noteTandemRunStart();
+    await rawPoll(B);
+    // Release and Assign (#2358 PR 5a), through the route's own entry point:
+    // B's document is assigned to A (B lost, A gained), then released from A.
+    const ra = mkDoc("ra");
+    await writeAs(B, ra);
+    const labelA = getOwnerRecord(A)?.label;
+    expect(await controlDocumentOwner(ra.id, "assign", labelA, () => true)).toBe("changed");
+    expect(await controlDocumentOwner(ra.id, "release", undefined, () => true)).toBe("changed");
+    await rawPoll(A);
     await rawPoll(B);
     expect(seen).toEqual(new Set(CHANGE_CAUSES));
   });

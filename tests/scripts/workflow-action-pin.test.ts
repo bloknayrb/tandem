@@ -65,7 +65,6 @@ const ALLOWED_ACTIONS = [
   "actions/setup-node",
   "actions/setup-python",
   "actions/upload-artifact",
-  "anthropics/claude-code-action",
   "azure/login",
   "dtolnay/rust-toolchain",
   "swatinem/rust-cache",

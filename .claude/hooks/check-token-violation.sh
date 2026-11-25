@@ -23,8 +23,8 @@ FILE_PATH=$(printf '%s' "$INPUT" | node -e "
 FILE_PATH="${FILE_PATH//\\//}"
 
 # Worktree guard, the same one typecheck-on-edit.sh carries. The scanner below
-# runs from the session's project checkout and exempts files by their path
-# relative to ITS root (SKIP_FILE_RELS in scripts/check-semantic-tokens.ts), so an exempt file
+# runs from the main checkout and exempts files by their path relative to ITS
+# root (SKIP_FILE_RELS in scripts/check-semantic-tokens.ts), so an exempt file
 # edited in another worktree does not match the list and is reported as a
 # violation. Skip; the worktree's own pre-commit (lint-staged) runs the scanner
 # with the right root.
@@ -33,24 +33,26 @@ FILE_PATH="${FILE_PATH//\\//}"
 # compares it without regard to case: on Windows the tool input is a drive
 # path, so a "starts with /" test never fires there and a sibling worktree
 # (../tandem-fix-x) would still be scanned against the wrong root.
-#
-# The nested-worktree test reads the path BELOW the project dir when the file is
-# inside it, so a session whose project dir is itself a worktree
-# (.../.claude/worktrees/x) still scans its own files with its own root.
 _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
 while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
-# A drive path is compared without regard to case, as in the containment test
-# below, so a worktree session on Windows whose tool input differs from the
-# project dir only by case still has its own files scanned.
+# The worktree test reads the path BELOW the project dir when the file is inside
+# it, so a session whose project dir is itself a worktree under
+# .claude/worktrees/ still scans its own files (the scanner is addressed from
+# that worktree below, the right root). Matched on the whole path, that session's every
+# edit was skipped, and this hook's own "inside the project" test failed in it.
+# A drive path is compared without regard to case, as in the inside-the-project
+# test below: otherwise C:/x against a project dir of c:/x is not stripped, and
+# the worktree session's own edit is skipped again. The strip is by length, not
+# by `${FILE_PATH#...}`, so it does not depend on how that expansion treats case.
 _REL_PATH="$FILE_PATH"
 if [[ -n "$_PROJECT_DIR" ]]; then
   if [[ "$FILE_PATH" == [A-Za-z]:/* ]]; then shopt -s nocasematch; fi
   if [[ "$FILE_PATH" == "$_PROJECT_DIR"/* ]]; then
-    _REL_PATH="${FILE_PATH:${#_PROJECT_DIR}}"
+    _REL_PATH="${FILE_PATH:$((${#_PROJECT_DIR} + 1))}"
   fi
   shopt -u nocasematch
 fi
-case "$_REL_PATH" in */.claude/worktrees/*) exit 0 ;; esac
+case "/$_REL_PATH" in */.claude/worktrees/*) exit 0 ;; esac
 # Known limits, all of which skip the advisory scan rather than run it wrongly:
 # a project dir and a file path in different forms (/c/x against C:/x), a POSIX
 # path that differs from the project dir only by case, and `..` segments.
@@ -75,7 +77,11 @@ RC=0
 # ignores stdout — so the BLOCKED framing below MUST also go to stderr,
 # otherwise Claude self-correct (continueOnBlock) has only the generic message
 # and not the actionable file:line details.
-npx tsx scripts/check-semantic-tokens.ts "$FILE_PATH" || RC=$?
+# The scanner is addressed from the project dir when there is one, never by a
+# path relative to the hook's working directory: a session that has cd'd into a
+# subfolder would otherwise make tsx exit 1 on a missing script, read here as a
+# violation. The scanner takes its scan root from its own location.
+npx tsx "${_PROJECT_DIR:-.}/scripts/check-semantic-tokens.ts" "$FILE_PATH" || RC=$?
 if [[ $RC -eq 1 ]]; then
   echo "BLOCKED: Raw hex/rgba color tokens in client code — use semantic --tandem-* CSS variables." >&2
   echo "Fix: Replace raw color values with var(--tandem-*) tokens or import from src/client/utils/colors.ts." >&2

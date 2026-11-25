@@ -586,7 +586,8 @@ describe("R3: the handled rule, `settles` and the sweep", () => {
     expect(chatIds(await b.poll())).toEqual([m1, m2, m3].sort());
     expect((await reply(B, m3)).error).toBe(false);
     // A server-origin final reply with no replier (as /api/channel-reply
-    // writes one) naming M2, which is in B's unconfirmed hand-out.
+    // wrote one before its permit, #2358 PR 4b; a dark-era row still reads
+    // so) naming M2, which is in B's unconfirmed hand-out.
     withMcp(ctrl(), () =>
       chatMap().set(key("shim"), {
         id: key("shim"),
@@ -1520,14 +1521,10 @@ describe("dark", () => {
 });
 
 describe("R0.3: the flip-blocker rows this PR rewords", () => {
-  it("the /api/channel-reply row: an acknowledgement handles nothing but still stamps read", async () => {
+  it("the /api/channel-reply row is closed by the shim's permit (#2358 PR 4b)", async () => {
     const { OWNERSHIP_FLIP_BLOCKERS } = await import("./ownership-flip-blockers.js");
     const rows = OWNERSHIP_FLIP_BLOCKERS.map((r) => r.gap);
-    const channel = rows.find((g) => g.startsWith("/api/channel-reply appends")) as string;
-    expect(channel).toContain("A channel-reply final reply handles its message");
-    expect(channel).toContain("acknowledgement handles nothing and sets no owner");
-    expect(channel).toContain("it still stamps `read`");
-    expect(channel).not.toContain("an acknowledgement included");
+    expect(rows.some((g) => g.startsWith("/api/channel-reply appends"))).toBe(false);
     const never = rows.find((g) => g.startsWith("A document claimed by a poll")) as string;
     expect(never).toContain("an acknowledgement handles nothing");
     expect(never).not.toContain("acknowledged, for instance");
