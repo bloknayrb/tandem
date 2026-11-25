@@ -107,7 +107,7 @@ async function replyAs(who: { ownerId: string; claudeSessionId?: string }) {
   return res.data?.messageId as string;
 }
 
-function channelReply(sessionId?: string): string {
+function channelReply(sessionId?: string): string | undefined {
   const { app, routes } = makeRecorderApp();
   registerChannelRoutes(app as never, (() => {}) as never);
   const res = callRoute(
@@ -156,12 +156,19 @@ describe("flag on: the reply's transport decides, never its session id", () => {
   });
 
   it("a /api/channel-reply reply is never the greeting, whatever session id it carries", () => {
-    const id = channelReply(CHILD_SESSION);
+    // A terminal's shim (its session id names a live record) is accepted and
+    // asked with `bound: false`.
+    const id = channelReply("greeting-terminal") as string;
     expect(asked).toEqual([
-      { sessionId: CHILD_SESSION, replyTo: undefined, inProgress: false, bound: false },
+      { sessionId: "greeting-terminal", replyTo: undefined, inProgress: false, bound: false },
     ]);
     expect(row(id)).not.toHaveProperty("greeting");
-    expect(heard).toEqual([[CHILD_SESSION, false]]);
+    expect(heard).toEqual([["greeting-terminal", false]]);
+    // One carrying the child's session id, with no record of its own, is
+    // refused by the permit (#2358 PR 4b) before the classifier is asked.
+    expect(channelReply(CHILD_SESSION)).toBeUndefined();
+    expect(asked).toHaveLength(1);
+    expect(heard).toHaveLength(1);
   });
 });
 

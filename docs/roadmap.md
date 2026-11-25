@@ -134,7 +134,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Accessibility:** #2489 (focus is lost when a focused toast closes, and new toasts may not be announced).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run; its pre-live Worker fixes merged in #2344, and the remaining U-checks re-run on master's Worker before the live deploy; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
+- **CI and tests:** #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 

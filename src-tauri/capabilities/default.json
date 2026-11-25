@@ -12,7 +12,6 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "shell:default",
-    "fs:default",
     "dialog:default",
     "dialog:allow-message",
     "dialog:allow-open",

@@ -138,7 +138,7 @@ Where the registration lives:
 
 | OS | Location |
 |---|---|
-| Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
+| Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value). Always the per-user key, never the machine-wide `HKLM` one, even when Tandem runs as administrator (#2160) |
 | macOS | `~/Library/LaunchAgents/Tandem.plist` |
 | Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 

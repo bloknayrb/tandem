@@ -5,6 +5,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../shared/constants.js";
+import { isHeldInSoloMarker } from "../shared/sanitize.js";
 import { TandemModeSchema } from "../shared/types.js";
 import { getOrCreateDocument } from "./yjs/provider.js";
 
@@ -80,14 +81,17 @@ export function readLiveMode(): "solo" | "tandem" {
  * - indeterminate (restart, mode lost): fail CLOSED — hide exactly the records
  *   that carry the persisted `heldInSolo` marker, so previously-held items stay
  *   held until an explicit release, while everything else surfaces normally.
+ *   "Carry" means any value but literally `false` or absent
+ *   (`isHeldInSoloMarker`, #2481): replies reach here unsanitized, so a marker
+ *   stored as `"true"`, `1` or `null` must hold, not fall through to visible.
  * - tandem: hide nothing.
  */
 export function hideFromAI(
-  record: { author: string; heldInSolo?: boolean },
+  record: { author: string; heldInSolo?: unknown },
   modeState: ModeState,
 ): boolean {
   if (modeState === "solo") return record.author === "user";
-  if (modeState === "indeterminate") return record.heldInSolo === true;
+  if (modeState === "indeterminate") return isHeldInSoloMarker(record.heldInSolo);
   return false;
 }
 
