@@ -87,7 +87,10 @@ import {
   type TransportViewEntry,
   tandemWorkWaiting,
 } from "../../../src/server/sessions/ownership.js";
-import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
+import {
+  REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_WAKE_PROMPT,
+} from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
 
 // --- Fake child ---------------------------------------------------------------
@@ -1078,8 +1081,21 @@ describe("R2.6: a throwing stopAndSpawn records spawn-failed when nothing else d
     const h = makeSupervisor();
     await boundFreshRun(h);
     vi.stubEnv("TANDEM_REAPER_PATH", path.join(tmpRoot, "no-such-reaper"));
-    await expect(h.sup.relaunch()).rejects.toThrow();
-    expect(h.sup.status().lastError).toBe("binary-not-found");
+    // Nor at any fallback `reaperPath` probes (beside node, Tauri's binaries/,
+    // `<cwd>/reaper/target/release/`), which a developer's build can fill —
+    // the `hideReaper()` shape from supervisor-turn-delivery.test.ts.
+    const realExistsSync = fs.existsSync;
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) =>
+        path.basename(String(p)).startsWith("tandem-reaper") ? false : realExistsSync(p),
+      );
+    try {
+      await expect(h.sup.relaunch()).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
+      expect(h.sup.status().lastError).toBe("binary-not-found");
+    } finally {
+      exists.mockRestore();
+    }
   });
 
   it("with the late licence refusal: unlicensed kept", async () => {
