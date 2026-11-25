@@ -52,6 +52,7 @@ import {
   saveCtrlSession,
 } from "../../src/server/session/manager.js";
 import {
+  applyUserOpenDefault,
   captureCarriedOverChat,
   controlMessageOwner,
   forgetChatMessageOwners,
@@ -526,6 +527,82 @@ describe("the pickup and stall clock (ownership design §6.5)", () => {
     tandemPresent();
     await settle();
     expect(published()?.[loose]?.since).toBe(t0 + 3 * MIN);
+  });
+
+  it("restarts at a first claim of a message nobody held, and at a move from one holder to another", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    const m = userChat(key("m"), undefined, t0);
+    const d = mkDoc("d");
+    const onDoc = userChat(key("on-doc"), d, t0);
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "none", owner: null, since: t0 });
+
+    vi.setSystemTime(t0 + 2 * MIN);
+    await poll(A);
+    await settle();
+    expect(published()?.[m]?.since, "a first claim: nobody to A").toBe(t0 + 2 * MIN);
+
+    // A move with no chat handover: the document the message follows goes
+    // from A to B.
+    setDocOwner(d, { ownerId: A, kind: "claimed" }, "take", A);
+    await settle();
+    expect(published()?.[onDoc]).toMatchObject({ owner: { label: labelOf(A) } });
+    vi.setSystemTime(t0 + 3 * MIN);
+    setDocOwner(d, { ownerId: B, kind: "claimed" }, "take", B);
+    await settle();
+    expect(published()?.[onDoc]).toMatchObject({
+      owner: { label: labelOf(B) },
+      since: t0 + 3 * MIN,
+    });
+  });
+
+  it("restarts at a claim of a message released to nobody, after the release's own restart", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    const m = userChat(key("m"), undefined, t0);
+    await startPublishing();
+    await poll(A);
+    vi.setSystemTime(t0 + 2 * MIN);
+    expect(controlMessageOwner(m, "release", undefined)).toBe("changed");
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "none", since: t0 + 2 * MIN });
+
+    vi.setSystemTime(t0 + 3 * MIN);
+    runOwnershipTickForTests();
+    expect(published()?.[m]?.since, "still nobody's").toBe(t0 + 2 * MIN);
+    await poll(B);
+    await settle();
+    expect(published()?.[m]).toMatchObject({ heldBy: "message", since: t0 + 3 * MIN });
+  });
+
+  it("does not restart when a reopen passes the message's holder through nobody and back (Tandem's Claude before and after)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    tandemPresent();
+    // On a closed document: Tandem's Claude's, by presence.
+    const d = docId("d");
+    const m = userChat(key("m"), d, t0);
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "presence", since: t0 });
+
+    // The user opens it: the open's broadcast reads it with nobody holding
+    // its document, then the open's default rule gives the document to
+    // Tandem's Claude.
+    vi.setSystemTime(t0 + 4 * MIN);
+    mkDoc("d");
+    broadcastOpenDocs();
+    applyUserOpenDefault(d);
+    await settle();
+    expect(published()?.[m]).toMatchObject({
+      heldBy: "document",
+      owner: { label: labelOf(TANDEM) },
+      since: t0,
+    });
+
+    vi.setSystemTime(t0 + OWNERSHIP_STALE_AFTER_MS + 1);
+    runOwnershipTickForTests();
+    expect(published()?.[m]).toMatchObject({ since: t0, stale: true });
   });
 
   it("does not show a re-owed message as stale at once (the flip-blocker's case)", async () => {

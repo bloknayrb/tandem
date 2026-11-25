@@ -533,17 +533,25 @@ const replierByRow = new Map<string, string>();
  * Each unanswered user chat message's pickup and stall clock (#2358 PR 5d;
  * ownership design §6.5: "counts from the message's last change of owner
  * (its arrival, if it never had one)"), keyed by chat key. `since` is the
- * clock's start; `holder` the message's holder (ownership design §7.1's
- * table, as {@link messageControl} reads it: an owner id, or null when
- * nobody holds it) when the clock last looked.
+ * clock's start; `holder` the last holder the clock saw since it started
+ * (ownership design §7.1's table, as {@link messageControl} reads it: an
+ * owner id), or null when it has seen nobody hold the message since then.
  *
  * **Observed, not stamped at each writer.** A message's holder is derived
  * (its per-message owner, its document's holder, Tandem's Claude by
  * presence), and every change of any of those asks a republish (step 4, the
  * presence and grace hooks, {@link requestChatPublish}). The republish reads
- * the holder ({@link chatPublishState}) and restarts the clock where it
- * differs from what the clock last saw, so one definition covers every path
- * that changes a holder. A message first seen starts at its own timestamp. A
+ * the holder ({@link chatPublishState}) and restarts the clock where a
+ * holder is there and differs from the last one the clock saw (a first
+ * claim, or a move from one holder to another), so one definition covers
+ * every path that changes a holder. A change to nobody restarts nothing on
+ * its own and keeps the last holder, so holder, nobody, the same holder
+ * restarts nothing: a user's reopen of a closed document reads its message
+ * with nobody holding the document before the open's default rule gives it
+ * back to the same holder, and two restarts there would show a stalled
+ * message as fresh. A real handover to nobody (a Release, an Assign, a
+ * lapse) restarts through {@link reOweChat}. A message first seen starts at
+ * its own timestamp. A
  * chat handover ({@link reOweChat}: ownership design §6.5 steps 1 and 2)
  * restarts the clock at once whatever the holder becomes, and leaves
  * `holder` undefined so the next look adopts the new holder without a second
@@ -5391,10 +5399,11 @@ function lookAtChat(now: number): ChatPublishState {
 
 /**
  * The clock's start for the message under `key` whose holder is `holder` now
- * ({@link messageClock}): kept while the holder is the one last seen,
- * restarted at `now` when it differs, adopted without a restart after a
- * handover (which already restarted it), and `arrival` for a message first
- * seen.
+ * ({@link messageClock}): kept while the holder is the one last seen or
+ * nobody (which keeps the last holder seen), restarted at `now` when a holder
+ * is there and differs from the last one seen (null included: a first
+ * claim), adopted without a restart after a handover (which already
+ * restarted it), and `arrival` for a message first seen.
  */
 function tickMessageClock(
   key: string,
@@ -5407,10 +5416,11 @@ function tickMessageClock(
     messageClock.set(key, { since: arrival, holder });
     return arrival;
   }
-  if (clock.holder === undefined || clock.holder === holder) {
-    if (clock.holder === undefined) messageClock.set(key, { since: clock.since, holder });
+  if (clock.holder === undefined) {
+    messageClock.set(key, { since: clock.since, holder });
     return clock.since;
   }
+  if (holder === null || holder === clock.holder) return clock.since;
   messageClock.set(key, { since: now, holder });
   return now;
 }
