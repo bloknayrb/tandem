@@ -129,7 +129,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",
-    "@biomejs/biome": "2.6.4",
+    "@biomejs/biome": "2.6.8",
     "@hocuspocus/provider": "3.4.4",
     "@hocuspocus/server": "2.15.3",
     "@playwright/test": "^1.58.2",
@@ -188,7 +188,7 @@
     "remark-stringify": "^11.0.0",
     "svelte": "^5.46.4",
     "svelte-check": "^4.0.0",
-    "tauri-plugin-sentry-api": "^0.5.0",
+    "tauri-plugin-sentry-api": "^0.9.0",
     "tsup": "^9.0.0",
     "tsx": "^4.22.4",
     "typescript": "^5.6.0",
