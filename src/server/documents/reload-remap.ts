@@ -418,7 +418,7 @@ function hasRangeShape(value: unknown): value is { id: string; range: DocumentRa
 }
 
 function clampRange(range: DocumentRange, length: number): DocumentRange {
-  const clamp = (n: number) => toFlatOffset(Math.min(Math.max(n, 0), length));
+  const clamp = (n: number) => toFlatOffset(Math.min(Math.max(n, 0), length - 1));
   const from = clamp(range.from);
   const to = clamp(range.to);
   return { from, to };
