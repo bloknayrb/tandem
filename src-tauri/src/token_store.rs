@@ -35,19 +35,11 @@ fn token_file_path() -> Option<PathBuf> {
     data_dir().map(|d| d.join(TOKEN_FILE_NAME))
 }
 
-/// `Ok(None)` only when there is no file (or it is empty). A file that exists
-/// but cannot be read is an `Err`, so no caller overwrites the npm install's
-/// token on a read error.
-fn read_from_file() -> Result<Option<String>, String> {
-    let Some(path) = token_file_path() else { return Ok(None) };
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            let trimmed = content.trim();
-            Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("token file exists but cannot be read ({}): {e}", path.display())),
-    }
+fn read_from_file() -> Option<String> {
+    let path = token_file_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let trimmed = content.trim().to_string();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
 }
 
 fn write_to_file(token: &str) -> Result<(), String> {
@@ -126,14 +118,9 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
         }
     }
 
-    // 2. Try env-paths file. An unreadable one is minted past into the
-    // keyring, never overwritten: the desktop then holds its own token
-    // (`tandem rotate-token` no longer reaches it) but still starts, where a
-    // token-less sidecar would die on the same unreadable file.
-    match read_from_file() {
-        Ok(Some(token)) => return Ok(token),
-        Ok(None) => {}
-        Err(e) => log::warn!("{KEYRING_LOG_PREFIX} storing a new token because the {e}"),
+    // 2. Try env-paths file.
+    if let Some(token) = read_from_file() {
+        return Ok(token);
     }
 
     // 3. Generate a fresh token and persist it.
@@ -150,7 +137,7 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
 
 /// Steps 2–3 when there is no credential store to talk to at all.
 fn token_from_file_or_generate() -> Result<String, String> {
-    if let Some(token) = read_from_file()? {
+    if let Some(token) = read_from_file() {
         return Ok(token);
     }
 
@@ -252,7 +239,7 @@ mod tests {
         assert!(!prod.contains("eprintln!"), "keyring fallbacks must log with log::warn!, which reaches tandem.log");
         let warns = prod.matches("log::warn!(").count();
         let prefixed = prod.matches("\"{KEYRING_LOG_PREFIX}").count();
-        assert_eq!(warns, 4, "four keyring fallbacks: unavailable, read failed, unreadable file, write failed");
+        assert_eq!(warns, 3, "three keyring fallbacks: unavailable, read failed, write failed");
         assert_eq!(prefixed, warns, "every fallback line must start with KEYRING_LOG_PREFIX");
         // `{e:?}` prints a keyring error's payload, and `BadEncoding` carries
         // the stored secret's bytes; these lines reach a file that persists.
