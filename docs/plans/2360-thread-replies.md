@@ -1,251 +1,371 @@
 # Plan: #2360, Claude replies inside a user's comment thread
 
-**Plan rev 1, 2026-11-25.** Issue #2360 (Bryan). Tied to #2358 (multi-session ownership,
-ADR-054, ships dark behind `OWNERSHIP_ENABLED`). Cites are to `origin/master` `92ff4cc8`.
-"Ownership design §N" means `docs/spikes/multi-session-ownership/README.md`; "the series plan" is
+**Plan rev 2, 2026-11-25.** Rev 2 applies two adversarial reviews (annotation-model and
+security); §9 records how each item was handled. Issue #2360 (Bryan). Tied to #2358
+(multi-session ownership, ADR-054, ships dark behind `OWNERSHIP_ENABLED`). Cites are to
+`origin/master` `92ff4cc8`. "Ownership design §N" means
+`docs/spikes/multi-session-ownership/README.md`; "the series plan" is
 `docs/plans/2358-ownership.md`. This plan writes no code; each PR below gets its own adversarial
 review before code, per CLAUDE.md's workflow.
 
 ## 1. The problem
 
 `tandem_annotationReply` refuses a user-authored parent with `NOT_OWNED`
-(`src/server/annotations/lifecycle.ts:1643-1645`, `replyForClaude`), and the shipped skill tells
+(`src/server/annotations/lifecycle.ts:1643-1645`, `replyForClaude`). The shipped skill tells
 Claude to answer user comments in chat (`skills/tandem/SKILL.md:59`, `:65`). In the v0.30.0 Linux
-smoke (#2349) Bryan saw the answer land in chat, "which is not really the desired behavior".
+smoke (#2349), Bryan saw the answer land in chat, "which is not really the desired behavior".
 
-The ownership series also needs this. Its three open flip-blocker rows on it
+The ownership series needs this too. Three open flip-blocker rows depend on it
 (`tests/server/ownership-flip-blockers.ts`):
 
 | Row | Line | Gap, in short | `closedBy` |
 |---|---|---|---|
-| H, the handled filter | :74 | Without ownership design §6.4's first two bullets, an answered comment or reply is re-owed by every handover. Without stripping client-written Claude replies, a browser client could hide a comment from every inbox. | "The PR that lets Claude reply on a user's comment thread (#2360), after its 'later reply' rule is reworked (as designed it would lose a user reply written during Solo)." |
+| H, the handled filter | :74 | Without ownership design §6.4's first two bullets, every handover re-owes an answered comment or reply. Without stripping client-written Claude replies, a browser client could hide a comment from every inbox. | "The PR that lets Claude reply on a user's comment thread (#2360), after its 'later reply' rule is reworked (as designed it would lose a user reply written during Solo)." |
 | S, the switch | :204 | "#2360's switch has not merged (decisions 5 and 6 …)." | "#2360's switch PR merged." |
-| W, answered work starts Tandem's Claude | :344 | After any handover or restart, every user comment and thread reply reads as waiting, so it starts or wakes Tandem's Claude again for work already answered. | "The handled filter (#2360), with a test where a lapse of a holder that answered everything in its threads starts nothing; for what it cannot see (answers in chat or by an edit, state lost at a restart), the restart row's closer or Bryan's answer." |
+| W, answered work starts Tandem's Claude | :344 | After any handover or restart, every user comment and thread reply reads as waiting, so Tandem's Claude is started or woken again for work it already answered. | "The handled filter (#2360), with a test where a lapse of a holder that answered everything in its threads starts nothing; for what it cannot see (answers in chat or by an edit, state lost at a restart), the restart row's closer or Bryan's answer." |
 
 ## 2. Decisions already made
 
-- **#2360, 2026-11-04.** Bryan chose "allowing Claude to reply inside a thread the user started"
-  over a chat answer linked to the comment, or deciding later. The scope is in the issue: user
-  `type: "comment"` parents that are Claude-facing. Every other refusal stays: notes (ADR-027),
-  private (non-outbound) comments, highlights and resolved threads. `tandem_editAnnotation` keeps
-  `NOT_OWNED`.
+- **#2360, 2026-11-04.** Bryan chose "allowing Claude to reply inside a thread the user started".
+  He was offered two alternatives: a chat answer linked to the comment, or deciding later. The
+  issue sets the scope: user `type: "comment"` parents that are Claude-facing. Every other refusal
+  stays: notes (ADR-027), private (non-outbound) comments, highlights and resolved threads.
+  `tandem_editAnnotation` keeps `NOT_OWNED`.
 - **The series plan, Bryan's decisions of 2026-11-04** (`docs/plans/2358-ownership.md:13-25`):
   - decision 5: "#2360's switch lands after ownership";
   - decision 6: "comments should get answered with replies to the comment directly, not in the
     chat";
   - confirmed reading (`:330`): "#2360's switch merges right before the flip, in the same
     release".
-- **Already shipped live for #2360 in v0.31.0** (CHANGELOG `:83-86`, `:102`). A Claude answer in a
-  user's thread chimes and notifies ("Claude replied to your comment"; `useThreadAnswers.svelte.ts`,
-  `Y_MAP_REPLY_SEEN`). The user can Resolve their own comment (`dismissed`). Accept replacement is
-  "prepared" for user comments that carry a usable `textSnapshot`. So both of the issue's open
-  questions already have answers, and this plan adopts them:
+- **Already shipped live for #2360 in v0.31.0** (CHANGELOG `:83-86`, `:102`):
+  - a Claude answer in a user's thread chimes and notifies ("Claude replied to your comment";
+    `useThreadAnswers.svelte.ts`, `Y_MAP_REPLY_SEEN`);
+  - the user can Resolve their own comment (`dismissed`);
+  - Accept replacement is "prepared" for user comments that carry a usable `textSnapshot`.
+
+  This plan adopts the answers those changes give to the issue's two questions:
   - **No new event or UI.** Claude's reply is a `withMcp` write, so it derives no channel event
-    (Critical Rule 2). The client already gives it its own treatment.
-  - **`suggestedText` is allowed.** The parent's live span is screened by
-    `screenSuggestionSpan` (`lifecycle.ts:1574`, Critical Rule 6's interior term) exactly as on
-    Claude's own threads. The client's Accept on a user comment is already gated on the snapshot.
-- **Refusal order** (ownership design §5.1, `:257`): `NOT_DOC_OWNER` (including
-  `reason: "answered"`) comes before any lifecycle refusal. `ownedIdKeyed` already runs before
-  the body (`src/server/mcp/annotations.ts:1257-1335`, `owned-op.ts:236-300`).
+    (Critical Rule 2).
+  - **`suggestedText` is allowed.** It is screened against the parent's live span by
+    `screenSuggestionSpan` (`lifecycle.ts:1574`, Critical Rule 6's interior term).
+- **Refusal order** (ownership design §5.1, `:257`): `NOT_DOC_OWNER` (with
+  `reason: "answered"`) comes before any lifecycle refusal. `ownedIdKeyed` already runs before the
+  body (`src/server/mcp/annotations.ts:1257-1335`, `owned-op.ts:236-300`).
 
-## 3. The "later reply" rule, and why it loses a reply
+## 3. The "later reply" rule, why it loses replies, and the rework
 
-Ownership design §6.4 (`:356-362`) says a user comment at a given `editedAt`, or a user thread
-reply, is handled when the thread has "a later final Claude reply". "Later" compares timestamps.
+Ownership design §6.4 (`:356-362`) calls a user comment at a given `editedAt`, or a user thread
+reply, handled when its thread has "a later final Claude reply". "Later" compares timestamps.
+That rule fails in four ways.
 
-**The loss, as the row says.** During Solo, the user writes reply R1, which is stamped
-`heldInSolo` (`lifecycle.ts:1476-1478`). `hideFromAI` hides it (`src/server/mode.ts:89-96`), so
-Claude cannot see it. Claude then replies on the same thread, for example to a chat request about
-an item it saw before Solo. When Solo lifts, `mode-release.ts:19-48` removes the marker but keeps
-R1's timestamp. R1 is now earlier than a final Claude reply, so the filter calls it handled, and
-it is never handed to anyone.
+1. **Solo, as the row says.** A reply R1 that the user writes in Solo is stamped `heldInSolo`
+   (`lifecycle.ts:1476-1478`). `hideFromAI` (`src/server/mode.ts:89-96`) hides it from Claude.
+   Claude then replies on the thread. When Solo lifts, `mode-release.ts:19-48` drops the marker
+   but keeps R1's timestamp, so R1 reads as answered and is never handed out.
+2. **The window when Claude has not seen the reply.** This is not a few seconds. It runs from
+   Claude's last look at the thread until its reply is accepted. Reply R2 arriving while Claude
+   works on comment C counts as answered.
+3. **Another session.** The holder lapses. A session that was handed nothing claims the document
+   and replies, which settles items the earlier holder was handed.
+4. **The comment's clock.** The browser writes a user comment's `timestamp` and `editedAt`, so they
+   come from the client's clock. Claude's reply `timestamp` comes from the server
+   (`lifecycle.ts:1451`).
 
-**The same loss without Solo.** In Tandem mode, a user reply written between Claude's read and
-Claude's reply is also earlier than that reply. A timestamp cannot tell "answered" from "arrived
-while Claude was typing".
+### The rework: a reply lists what it answers, and only what this owner was given
 
-**A second defect in the comment bullet.** A user comment is written by the browser straight into
-`Y_MAP_ANNOTATIONS`, so its `timestamp` and `editedAt` come from the client's clock. Claude's
-reply `timestamp` comes from the server (`writeReply`, `lifecycle.ts:1451`). The design's "server's
-own timestamps where both sides have one" never holds for the comment bullet.
+A final Claude reply carries a server-only field, `answers: string[]`. It is computed **inside
+`replyForClaude`**, after both guards, from the sanitized record. Each key is listed only if it
+passes all three conditions below:
 
-**The rework: what a reply answers is recorded on the reply, at write time.** A final Claude reply
-carries a new server-only field, `answers: string[]`. It holds the thread's user entries that
-Claude could see at the moment the reply was accepted, using exactly the read gates
-`threadItemAnsweredBy` uses (`annotations.ts:218-243`): `narrowForChannel` on the parent,
-`hideFromAI(parent, mode)`, `channelVisibleReplies`, `author === "user"`, and
-`!isHeldInSoloMarker`. Entries that an earlier final Claude reply on the thread already settles
-are not listed again, so the total stays linear in the thread's length. The keys:
+- **(a) Visible at accept time.** Visibility uses the same gates as `threadItemAnsweredBy`
+  (`annotations.ts:218-243`): `narrowForChannel` on the parent, `hideFromAI(parent, mode)`,
+  `channelVisibleReplies`, `author === "user"`, and `!isHeldInSoloMarker`. The two functions share
+  one predicate in the new module.
+- **(b) Already handed out and acknowledged.** The delivery registry must hold a live acknowledged
+  entry for the key at its current version (`handedAtOrAbove`, `inbox-selection.ts:90`, read
+  through the same adapter `documentWaiting` uses).
+- **(c) Held by the caller.** The document must be held by the calling record. A handover retires
+  the old holder's entries (ownership design §6.3), and since the scope PR only the holder reads a
+  held document. So every live entry on a document the caller holds was handed to the caller.
 
-- `"c:" + (editedAt ?? 0)` for the parent comment, only when it is user-authored;
-- `"r:" + replyId` for a user reply. This is the answerer key already in use
-  (`annotations.ts:239`, registry kind `"r"` version 0, `inbox-selection.ts:156`).
+Keys already settled by an earlier final Claude reply on the thread are not listed again.
 
-An entry is **handled** when a final Claude reply on its thread lists its key. No clock is
-compared. This handles the two cases above:
+**Second step, at the next acknowledgement.** This mirrors chat's two-step `settles` (ownership
+design §5.5). A key can fail condition (b) only because the poll that would acknowledge it has not
+happened yet: the normal flow is poll, reply, poll. So an in-memory map
+`threadReplyWriter: replyId → {ownerId, seqAtAccept}` is recorded when the reply is accepted. When a
+later poll by the same owner commits its acknowledgement, it appends to that reply's `answers`
+every key that poll acknowledges on the reply's thread and that the registry had handed out at or
+below `seqAtAccept`.
 
-- **Solo.** A held reply is not visible, so it is not listed. In Solo, `hideFromAI` hides every
-  user record, so a reply written in Solo lists nothing at all. Both stay owed after release.
-- **An edit.** A comment edited after the answer has a new `editedAt`, so it gets a new key and is
-  owed again, as the design intends.
+- The append is one `withInternal` write per document, with a `rev` bump.
+- Only keys from the caller's own scope are appended.
+- If the map is lost at a restart, the second step does not happen. That fails safe: the entry is
+  owed again.
 
-The race stays as a residual (Q2): an entry the user wrote in the seconds between Claude's read
-and Claude's accepted reply is visible at accept time, so it is listed.
+**Keys.**
+- The parent comment, only when it is user-authored: `"c:" + (finiteOrNull(editedAt) ?? 0)`.
+  `finiteOrNull` moves from `awareness.ts:1706` to the new module so both share one.
+- A user reply: `"r:" + replyId`. This is the answerer key already used at `annotations.ts:239`
+  (registry kind `"r"`, version 0, `inbox-selection.ts:156`).
 
-**Final** means `author === "claude"`, no `agentIdentity` (the local model's), no `inProgress`,
-and `Array.isArray(answers)`. This mirrors `isFinalClaudeReply` in
-`src/server/mcp/chat-handled.ts:24-32`. Rows written before this change have no `answers`; Q3
-covers them.
+**Bounds, enforced when the reply is written.** Two new constants in `src/shared/constants.ts`,
+`THREAD_ANSWER_KEY_MAX` and `THREAD_ANSWERS_MAX`, are read by both `writeReply` and the durable
+schema. This avoids the #1295 L3 class, where a value is accepted live and then `normalizeReply`
+(`sync.ts:165-178`) drops the whole reply at reload.
 
-**What gets stripped, and why.** The design says a client-written `settles`, `superseded` or
-Claude-authored reply must not count, "so a client cannot hide an item from every inbox". Without
-this, any editor connection could add a reply row with `author: "claude"` and `answers: [...]`,
-and the comment would read as handled for every session.
+- A key longer than the key bound is skipped, so its entry stays owed.
+- Over the array cap, the oldest keys in thread order are kept and the rest stay owed.
+- The second step obeys the same cap.
+
+**Handled.** An entry is handled when a final Claude reply on its thread lists its key. No clock is
+compared. A reply is **final** when it has `author === "claude"`, no `agentIdentity`, no
+`inProgress`, and `answers` is an array (mirroring `isFinalClaudeReply`,
+`src/server/mcp/chat-handled.ts:24-32`). This covers the four failures above:
+
+- an entry Claude was never given is never listed;
+- a held reply is not visible, so it is not listed;
+- an edit makes a new comment key;
+- a lapse retires the registry entries, so the next session lists nothing it was not handed.
+
+Rows written before this change carry no `answers` and settle nothing (§4). **No timestamp
+fallback**, because a fallback would bring back failure 2.
+
+### Undoing client writes (what "stripping" means)
 
 The browser never writes `Y_MAP_ANNOTATION_REPLIES`. Every reply goes through a server POST or the
-MCP seam (`writeReply`, `lifecycle.ts:1487-1490`; there is no client `set` or `delete` on that
-map). So the rule is simpler than chat's field-level one (`chat-client-undo.ts`): with ownership
-on, **every change to the replies map whose origin is a Hocuspocus `Connection` is undone**. An add
-is deleted, a changed value is put back, and a delete is restored. This is one `withInternal`
-transaction inside the replies observer, keyed on the `Connection` origin the same way
-`chat-client-undo.ts` keys it.
+MCP seam (`writeReply`, `lifecycle.ts:1487-1490`), and there is no client `set` or `delete` on that
+map. So with ownership on, **every change to the replies map whose origin is a Hocuspocus
+`Connection` is undone**:
+
+- an add is deleted;
+- a changed value is put back;
+- a delete is restored.
+
+Only plain-object old values are restored (`chat-client-undo.ts`'s M2). The undo is one
+`withInternal` transaction, keyed on the `Connection` origin the same way `chat-client-undo.ts`
+keys it. Three further parts:
+
+- **It runs before derivation.** The undo is the first step of the replies observer, before
+  `makePerKeyChangeObserver` derives events (`factory.ts:70-90`; `replies.ts:31` returns early for
+  a non-add). Derivation skips any transaction the undo repaired, and otherwise reads the repaired
+  map. A forged add pushes no event.
+- **Every room gets it.** Upload and scratchpad documents included. Today `attachObservers` skips
+  `makeRepliesObserver` for an `uploadDoc` (`events/queue.ts:750-760`). The undo is attached the
+  way `makeHeldInSoloStampObserver` is (`queue.ts:776-780`): for every document at room creation,
+  and again from `reattachObservers` after the Hocuspocus swap (`queue.ts:812-821`).
+- **A guard for structs held pending.** Per document Y.Doc, with the flag on:
+  `dropPendingUpdates` plus an `afterTransaction` guard on `Connection` origins, copied from
+  `chat-client-undo.ts:189-208` and `ctrl-chat.ts:196-210`. Without it, a struct that waits on the
+  server's next clock would land under the origin of the server's next write and dodge the undo.
+  **This widens the unmeasured H1 premise (a real tab never leaves data pending) from the CTRL doc
+  to document rooms, where a wrong premise would drop a user's typing.** So PR A adds a flip-blocker
+  row for it, closed by the same measurement as the H1 row, run in document rooms.
+
+### Rows already on disk
+
+The reply schema is `.passthrough()`. The envelope merge, session restore and `onLoadDocument` all
+load with no origin, so a forged `answers` row saved before the undo existed would otherwise
+survive.
+
+- **Flag off.** Every build from PR A on strips `answers` and `inProgress` from every reply row on
+  load. No legitimate row carries them while the flag is off.
+- **Flag on.** The same strip runs unless the document's annotation-store envelope meta carries
+  `threadAnswersTrusted: true`. That marker is server-only (it is not in the Y.Doc, so a client
+  cannot write it). It is set by the first flag-on write of `answers` after a load that already
+  stripped. A user who jumps from a pre-PR-A release straight to the flip release therefore loses
+  any forged rows at the first load. A read-only or unwired store has no marker, so it strips,
+  which fails safe.
+- **Where the sweep runs.** At room creation and after the swap, next to `reconcileAnnotationKeys`
+  (`queue.ts:820`), after the file-sync rebind so the strip persists. It is one `withInternal`
+  transaction.
+
+**Chat has the same gap** (`chat-handled.ts:35-46`). Today's undo is flag-gated, so while dark a
+client can save a Claude row with `settles`, `superseded` or `replyTo` into the CTRL session. That
+row counts at the first flag-on boot.
+
+- PR A applies the same treatment to `settles` and `superseded` on CTRL restore: stripped while the
+  flag is off, and stripped without a CTRL-meta marker while it is on. Both are written only with
+  the flag on.
+- `replyTo` cannot be stripped, because it is legitimate data while the flag is off. PR A records
+  it as a new flip-blocker row for the chat side: a forged pre-flip Claude row naming a message
+  hides that message after the flip. Its `closedBy` is a decision by Bryan, or a server-written
+  provenance stamp on Claude chat rows.
+
+### What the guarantee covers
+
+The ADR claim is **"a client cannot mark an entry answered through the replies map"**, and no more.
+A client can still hide a user comment by editing its parent in `Y_MAP_ANNOTATIONS`: changing
+`author`, `audience` or `status`, or rewinding `editedAt` to a settled key. That is ownership
+design D4 (coordination, not security). It is not a security boundary, and it goes into
+`docs/security.md` (§5, PR B; Q7).
 
 ## 4. Choices made here (not for Bryan)
 
-- **The permission is gated on `OWNERSHIP_ENABLED`.** Of everything Bryan decided, this honours
-  decision 5 most strictly. The permission cannot reach users before ownership does, and it
-  reaches them in the same release by construction, whatever slips. Ungated, it would be live from
-  its merge, and any release cut before the flip would ship it without ownership, which decision 5
-  forbids. Q1 asks Bryan to confirm this reading of "merges right before the flip".
+- **The permission is gated on `OWNERSHIP_ENABLED`.** This keeps decision 5 most strictly: the
+  permission cannot reach users before ownership does, and it reaches them in the same release
+  whatever slips. Q1 asks Bryan to confirm this reading of "merges right before the flip".
 - **Critical Rule 9 is unaffected.** `tandem_annotationReply` is already behind the `/mcp`
-  admission point. This adds no `subscribe(cb, "external")` consumer, no `appendClaudeChatMessage`
-  caller and no `/api` route. The undo observer is server-side state repair, not an AI surface.
-  The `tests/server/license-gate-api-coverage.test.ts` and `ai-surface-inventory-claims` sets do
-  not change.
-- **The seam takes the policy as a required discriminant.** It does not read the flag itself, the
-  way the suggestion arm does (CLAUDE.md Rule 6). `replyForClaude` gains
-  `parents: "own" | "claude-facing-comment"`:
-  - the MCP handler passes `ownershipOn() ? "claude-facing-comment" : "own"`;
-  - the local model (`local-model/tools.ts:519`) passes `"own"` (Q4).
+  admission point. Nothing here adds a `subscribe(cb, "external")` consumer, an
+  `appendClaudeChatMessage` caller or an `/api` route. The undo and the load sweep are server-side
+  state repair.
+- **The seam takes two required discriminants.** The seam does not read the flag itself, matching
+  the suggestion arm.
+  - `parents: "own" | "claude-facing-comment"`. The MCP path passes
+    `ownershipOn() ? "claude-facing-comment" : "own"`. The local model
+    (`local-model/tools.ts:519`) passes `"own"` (Q2).
+  - `tracking: "untracked" | "final" | "in-progress"`. The seam computes `answers` itself for
+    `"final"`. The MCP path passes `"final"`, or `"in-progress"` for an `inProgress` call, with the
+    flag on, and `"untracked"` with it off. **The local model passes `"untracked"`.**
 
-  So `lifecycle.ts` gains no flag import, `tests/server/ownership-module-seam.test.ts` keeps its
-  set, and a new caller cannot default into the wider half.
-- **The guard order is unchanged.** `isPrivateForClaude` → `invalid-note` (`:1633`) stays first,
-  and only then is the `author` arm relaxed: `"user"` + `type === "comment"` passes under
-  `"claude-facing-comment"`. Every other author (`"import"`) and every other type keeps
-  `not-owned`, so a user highlight still answers `NOT_OWNED` as today. Resolved parents still
-  answer `not-pending` from `writeReply` (`:1443`). A promoted note or promoted Word comment is
-  stored `author: "user", type: "comment", audience: "outbound"`, so it becomes repliable. That is
-  inside the issue's scope ("Claude-facing"), and the tool description must say so.
-- **`threadItemAnsweredBy` gains the comment item.** When a user-authored parent has no visible
-  user reply, it returns `c:<editedAt ?? 0>`. Its docblock (`:216-217`) already reserves this
-  for #2360. Answered-once (ownership design §5.5) then covers a user comment with no replies.
-- **A reply written in Solo is accepted and settles nothing.** The answers set is computed through
-  `hideFromAI`, so it is empty. No new refusal arm is added, and nothing a read would hide is
-  disclosed beyond what the success already shows: the id was known to the caller.
+  As a result, `lifecycle.ts` gains no flag import and `tests/server/ownership-module-seam.test.ts`
+  keeps its set.
+- **The guard order is unchanged.** `isPrivateForClaude` → `invalid-note` (`:1633`) stays first.
+  Only after it is the `author` arm relaxed, for `"user"` + `type === "comment"` under
+  `"claude-facing-comment"`.
+  - Every other author (`"import"`) and every other type keeps `not-owned`, so a user highlight
+    still answers `NOT_OWNED`.
+  - A resolved parent still answers `not-pending` (`:1443`).
+  - Promoted notes and promoted Word comments (`author: "user"`, `outbound`) become repliable.
+    This is inside the issue's scope, and the description must say so.
+- **The `not-owned` remedy with the flag on.** The MCP path passes a `notOwnedRemedy`
+  (`lifecycle.ts:441-447`, `:489-496`) that no longer says "answer a user's comment with
+  tandem_reply". Proposed text: "only comments take your replies; leave a fresh tandem_comment on
+  the text instead". With the flag off, the default text stays byte-identical.
+- **`threadItemAnsweredBy` gains the comment item** (`c:` key) when a user-authored parent has no
+  visible user reply (its docblock, `:216-217`, reserves this).
+- **Claude replies written before this change settle nothing.** Rev 1's Q3 is withdrawn: its
+  timestamp fallback would reopen failure 2.
+- **A `.docx` comment export skips `inProgress` rows** (`docx-comment-export.ts:360`,
+  `prepareExportComments`). An "I'm on it" written into the user's Word file is noise, and with no
+  answer after it, it would stand as Claude's last word. `.docx` ships dark, so nothing visible
+  changes now.
 
 ## 5. PR split
 
-Three PRs. A and B land dark, in either release. C is the switch and lands immediately before the
-flip PR (series plan PR 6), in the same release, as Bryan confirmed.
+There are three PRs:
 
-### PR A: the seam, `answers`, in-thread acknowledgement, the undo (dark)
+- **A** and **B** land dark, in any release.
+- **C** is the switch. It lands immediately before the flip PR (series plan PR 6), in the same
+  release.
+
+### PR A: the seam, `answers`, acknowledgements, the undo, the load sweep (dark)
 
 Starts with **Carried over from #2573** (below).
 
 **Files and functions:**
 - `src/server/annotations/lifecycle.ts`:
-  - `ReplySuggestion`'s sibling: a new required `ReplyTracking` arm,
-    `{kind: "untracked"} | {kind: "final"; answers: string[]} | {kind: "in-progress"}`, passed
-    through `AnnotationLifecycle.reply` (`:785`), `replyForClaude` (`:1606`) and `writeReply`
-    (`:1403`). `writeReply` writes `answers` only for `"final"` and `inProgress: true` only for
-    `"in-progress"`, and writes nothing new for `"untracked"`.
-  - The `parents` discriminant (§4).
-  - The `describeReplyWriteRefusal` `not-owned` default remedy (`:489-496`) is unchanged. It
-    still applies to `"own"` callers and to non-comment user parents.
+  - the two discriminants, passed through `AnnotationLifecycle.reply` (`:785`), `replyForClaude`
+    (`:1606`) and `writeReply` (`:1403`);
+  - `answers` is computed in `replyForClaude` after both guards, through the new module, and the
+    cap and key bound are enforced in `writeReply`;
+  - the registry read reaches the seam as an injected predicate, so `lifecycle.ts` does not import
+    `awareness.ts`.
+- `src/server/mcp/document-store.ts:450` (`YDocStore.addReply`) takes and forwards the
+  discriminants and the registry predicate. It joins the census in
+  `tests/server/annotation-reply-seam.test.ts`.
 - `src/server/annotations/thread-handled.ts` (new, pure, the twin of `chat-handled.ts`):
-  - `threadEntryKeys(parent, visibleReplies)`, the visible user entries;
-  - `isFinalClaudeThreadReply(reply)`;
-  - `settledThreadKeys(repliesMap): Set<"<annotationId>\0<key>">`.
-
-  It imports types and `shared/` only, so `awareness.ts`, `inbox-selection.ts` and `lifecycle.ts`
-  can share it without a cycle.
+  - `visibleThreadEntries` (shared with `threadItemAnsweredBy`);
+  - `threadEntryKey`;
+  - `isFinalClaudeThreadReply`;
+  - `settledThreadKeys`;
+  - `finiteOrNull`.
 - `src/server/mcp/annotations.ts`:
-  - The handler (`:1235-1335`). With ownership on it computes `answers`: `threadEntryKeys`
-    minus `settledThreadKeys` for this parent, in the same synchronous run as `store.addReply`,
-    with no `await` between them. It passes `{kind: "final", answers}`, or `{kind: "in-progress"}`
-    when the new `inProgress` input is true. With ownership off it passes `{kind: "untracked"}`
-    and `"own"`.
-  - `threadItemAnsweredBy` (`:218`): the comment item.
-  - `owned-op.ts:296`'s `recordAnswerer` must not run for an in-progress reply (ownership design
-    §5.5: an acknowledgement sets no answerer). Pass the tracking kind through `answers?` or skip
-    the record.
-- **Tool registration.** The registration is built per `McpServer` from the flag, as
-  `tandem_checkInbox` is (`awareness.ts:3170-3175`). Flag on, it gets a new description and an
-  `inProgress?: boolean` input (Q5). Flag off, the description and schema stay byte-identical.
+  - the handler (`:1235-1335`) passes `parents`, `tracking` and `notOwnedRemedy` by flag;
+  - `threadItemAnsweredBy` (`:218`): the comment item;
+  - `recordAnswerer` (`owned-op.ts:296`) does not run for `"in-progress"`;
+  - **strip `answers` and `inProgress`** from the reply spread in `tandem_getAnnotations`
+    (`channelVisibleReplies(...)` at `:670`) and `tandem_exportAnnotations` (`:1036`). Both go
+    through one projection helper, next to the `byLocalModel` strip at `:87`. (The reviewers cited
+    `:72-76` and `:970-985`; on `92ff4cc8` the reply spreads are at `:670` and `:1036`.)
+- **Tool registration**, built per `McpServer` from the flag, as `tandem_checkInbox` is
+  (`awareness.ts:3170-3175`). With the flag on there is a new description and an
+  `inProgress?: boolean` input (Q3). With it off, the description and schema stay byte-identical.
 - `src/server/annotations/schema.ts`: `AnnotationReplyRecordSchemaV1` (`:185-203`) declares
-  `answers` (array of bounded strings, capped) and `inProgress`. They are listed for type safety,
-  as `suggestedText` was.
-- `src/shared/types.ts` `AnnotationReply` (`:154`): the two fields, documented server-only.
-- **Projection.** `answers` never reaches a Claude-facing read. Check that `replyPayload` and
-  `channelVisibleReplies`' output and `output-schemas.ts`' reply shapes are allowlists. If one
-  spreads, strip `answers` there. `inProgress` may be projected, so Claude can see its own
-  acknowledgement.
-- `src/server/events/observers/reply-client-undo.ts` (new). Called from `makeRepliesObserver`
-  (`events/observers/replies.ts:19`) only when the flag is on. It undoes every change to the
-  replies map whose origin is a `Connection` (§3).
+  `answers` (with both constants) and `inProgress`.
+- `src/shared/types.ts`: `AnnotationReply` (`:154`) gains both fields.
+- `src/shared/constants.ts`: the two constants.
+- `src/server/events/observers/reply-client-undo.ts` (new): the undo and the pending guard.
+  `src/server/events/queue.ts` (`attachObservers`, `reattachObservers`) attaches them to every
+  document, with the undo ahead of derivation.
+- The load sweep (§3), in `queue.ts`'s attach path, plus the envelope meta marker in
+  `src/server/annotations/store.ts` and `schema.ts`.
+- The CTRL `settles` / `superseded` restore strip, in `src/server/session/manager.ts`
+  (`restoreCtrlDoc`), with a CTRL-meta marker.
+- `src/server/file-io/docx-comment-export.ts`: skip `inProgress` rows.
+- `tests/server/ownership-flip-blockers.ts`: **add** two rows, the pending guard in document rooms
+  (§3) and chat `replyTo` on pre-flip forged rows (§3).
 
-**Flag off:** byte-identical. The seam is called with `"own"` and `"untracked"`, which is today's
-behaviour and today's stored row. The tool's `tools/list` entry is unchanged and the observer is
-not installed.
-**Flag on:** Claude may reply on a Claude-facing user comment. Final replies carry `answers`,
-acknowledgements carry `inProgress`, and client writes to the replies map are undone. Nothing
-reads `answers` yet.
+**Flag off:** behaviour is byte-identical except for the load sweeps, which remove fields that no
+legitimate row carries while the flag is off. A test shows that a store with no such fields loads
+byte-identical.
+
+**Flag on:** Claude may reply on a Claude-facing user comment. Final replies carry `answers` and
+acknowledgements carry `inProgress`. Client writes and pending structs are undone or dropped on
+every document. Nothing reads `answers` yet.
 
 **Tests:**
-- `tests/server/annotation-reply-seam.test.ts`: the importer sets are unchanged. Add a row that
-  the seam's `parents` argument is required, so a call without it does not type-check. Add a
-  census row for `"claude-facing-comment"`: only `mcp/annotations.ts` passes it.
-- A privacy table in `tests/server/replies-privacy-readwrite.test.ts`, flag on and flag off:
-  - user note → `INVALID_ARGUMENT`;
-  - legacy `flag` (normalises to a note) → `INVALID_ARGUMENT`;
-  - `{comment, audience: "private"}` (user, Claude and import author) → `INVALID_ARGUMENT`;
-  - untriaged imported Word comment (`type: "note"`, private) → `INVALID_ARGUMENT`;
-  - user highlight → `NOT_OWNED`;
-  - `"import"`-authored outbound comment → `NOT_OWNED`;
-  - resolved (`dismissed`) user comment → `ANNOTATION_RESOLVED`;
-  - Claude-facing user comment → ok flag on, `NOT_OWNED` flag off;
-  - promoted note → ok flag on.
+- **Seam census** (`annotation-reply-seam.test.ts`): importer sets unchanged; both discriminants
+  required; only `mcp/annotations.ts` via `document-store.ts` passes `"claude-facing-comment"` or
+  `"final"`; the local model passes `"own"` / `"untracked"`.
+- **Privacy table** (`replies-privacy-readwrite.test.ts`), flag on and flag off:
 
-  On every refusal the map is unchanged and no reply row is written into any note thread.
-- `answers` contents:
-  - a Solo-held reply is excluded, and a reply written in Solo lists nothing;
-  - a private reply is never listed;
-  - an earlier settled key is not re-listed;
-  - an edit makes a new comment key.
-- Answered-once on a user comment with no replies: a second record is refused
-  `reason: "answered"`, and an `inProgress` reply sets no answerer.
-- The undo: a `Connection`-origin add, change and delete each revert, flag on. Flag off, nothing
-  is undone. A restore with no origin is never undone.
-- `suggestedText` on a user comment: a heading overlap gives `INVALID_ARGUMENT` with the cause,
-  and a clear span stores the reply.
+  | Parent | Expected |
+  |---|---|
+  | user note | `INVALID_ARGUMENT` |
+  | legacy `flag` | `INVALID_ARGUMENT` |
+  | `{comment, private}`, any author | `INVALID_ARGUMENT` |
+  | untriaged Word import | `INVALID_ARGUMENT` |
+  | user highlight | `NOT_OWNED` |
+  | `"import"` outbound comment | `NOT_OWNED` |
+  | dismissed user comment | `ANNOTATION_RESOLVED` |
+  | Claude-facing user comment | ok flag on; `NOT_OWNED` flag off |
+  | promoted note | ok flag on |
+
+  On every refusal nothing is written. With the flag on, the `NOT_OWNED` text does not name
+  `tandem_reply`.
+- **`answers` contents:**
+  - R2, arriving after the last poll, is not listed, and the next acknowledging poll does not
+    append it (it was handed after the reply);
+  - a session that claims after a lapse lists nothing;
+  - a Solo-held reply, and a Solo-edge reply with no stamp that was never handed, are not listed;
+  - a private reply is not listed;
+  - the second step appends exactly what the acknowledging poll confirmed and was handed before
+    the reply;
+  - after a restart the second step appends nothing;
+  - an edit makes a new key;
+  - a non-finite `editedAt` keys as `c:0`.
+- **Bounds:** a reply whose keys exceed both bounds is written with the kept prefix, and **the same
+  row survives `normalizeReply`** (a store round-trip). The skipped entries stay owed.
+- **Answered-once** on a user comment with no replies: a second record is refused `answered`, and
+  `inProgress` sets no answerer.
+- **Undo:**
+  - a `Connection` add, change and delete each revert, and a forged add pushes no event;
+  - on an **upload** document;
+  - **after a swap** (`reattachObservers`);
+  - a non-object old value is not restored;
+  - a restore with no origin is not undone.
+- **Pending guard:** a document update leaving pending structs is dropped, flag on only.
+- **On-disk forgery:** a row with `answers` saved with the flag off settles nothing after a flag-on
+  boot, through the envelope path and through the session path. The same holds for a CTRL Claude
+  row with `settles`.
+- **Projection:** `answers` and `inProgress` are absent from `tandem_getAnnotations` and
+  `tandem_exportAnnotations` output, and from the reply event payload.
+- **`.docx` export:** an `inProgress` row is not exported.
 
 **Docs:**
-- An ADR-054 amendment: the reworked rule, the undo, and the gating choice.
-- `docs/mcp-tools.md` `tandem_annotationReply` (`:842-890`): a "ships dark" paragraph. The live
-  text changes in PR C.
-- No `docs/security.md` change: no route, no exposure, and the undo narrows what a client can do.
-  The security reviewer confirms this.
+- An ADR-054 amendment covering the reworked rule, both bounds, the undo and its scope, the load
+  sweep and marker, the chat finding, the gating choice, and the two new rows.
+- `docs/mcp-tools.md` `tandem_annotationReply` (`:842-890`): a "ships dark" paragraph.
 
-**Carried over from #2573** (its review; #2573 merges before PR A):
+**Carried over from #2573** (from its review; #2573 merges before PR A):
 1. ADR-054's 2026-11-25 "Bryan's flip decisions" amendment must say explicitly that the
    stall-banner row was **closed by its own `closedBy`, Bryan's review**. His pick was "Accept as
    built (Recommended)", described as "Close the row on your acceptance". It is not an
    `acceptedFor` acceptance. The two misfires stay recorded and are checked again in smoke S10.
 2. `docs/roadmap.md:58`: the PR 6 bullet still says the flip waits on a decision of Bryan's
-   "(#2439 among them)". Say instead that #2439 was decided on 2026-11-25 ("Keep it accepted
-   (Recommended)") and that the stall-banner row is closed.
+   "(#2439 among them)". Change it to say #2439 was decided on 2026-11-25 ("Keep it accepted
+   (Recommended)"), and that the stall-banner row is closed.
 3. The same amendment claims a new `tests/server/ownership-chat-published.test.ts` row pins the
    with-document arm of `tandemMayTakeMessage`. It does not: after the Release, Tandem's Claude
    holds the document as `default`, so the owned arm answers. Fix the ADR wording. Also add a row
@@ -254,165 +374,198 @@ reads `answers` yet.
 
 ### PR B: the handled filter (dark). Closes rows H and W
 
-**Files and functions** (every reader is gated on the flag):
-- `src/server/mcp/awareness.ts`, the cursor and legacy collectors:
-  - the user-comment arm of `processInboxAnnotations` (`userActions`, `:3921`);
-  - `collectInboxUserReplies` (`:4149`);
-  - their legacy-ledger twins.
+**Files and functions.** Every reader below is gated on the flag.
 
-  Each skips an entry whose `<annotationId>\0<key>` is in `settledThreadKeys`. This is exclusion
-  with nothing logged as dropped, as ownership design §6.2 excludes. On the registry: a skipped
-  entry is neither held nor retired. If its live entry is still there, it is marked acknowledged,
-  the way §6.4's notice bullet treats `carryHeld` (`:999-1039`), so the filter never retires what
-  it depends on.
-- `handOverDocumentInbox` (`awareness.ts:518`). The retire predicate (`:540-543`) gains "and not
-  handled". The legacy ledger walk (`:550`) keeps the keys of handled items. This is ownership
-  design §6.3 step 1's "and that is not handled".
-- `src/server/mcp/inbox-selection.ts`: `DocumentWaitingInput` gains
-  `isHandled?: (annotationId, key) => boolean`, set only with the flag on. `commentWaits` (`:123`)
-  and `replyWaits` (`:143`) return false for a handled entry, and so does `oldestDocumentWaitingAt`.
-  `documentWaiting` (`awareness.ts:621`) supplies it.
-- Q3's answer decides whether rows without `answers` count.
+- **`src/server/mcp/awareness.ts` collectors.** The user-comment arm feeding `userActions`
+  (`:3921`), `collectInboxUserReplies` (`:4149`), and their legacy-ledger twins each skip an entry
+  whose key is in `settledThreadKeys`.
+  - This is exclusion: nothing is logged as dropped (ownership design §6.2).
+  - A skipped entry is neither held nor retired. A live registry entry for it is marked
+    acknowledged, as §6.4 treats `carryHeld` (`:999-1039`).
+- **The second step's append** (§3) runs in the poll's acknowledgement commit.
+- **`handOverDocumentInbox` (`awareness.ts:518`).** The retire predicate (`:540-543`) gains "and
+  not handled", and the legacy walk (`:550`) keeps handled keys (ownership design §6.3 step 1).
+- **`src/server/mcp/inbox-selection.ts`.** `DocumentWaitingInput` gains
+  `isHandled?: (annotationId, key) => boolean`, set only with the flag on.
+  - `commentWaits` (`:123`), `replyWaits` (`:143`) and `oldestDocumentWaitingAt` use it.
+  - `documentWaiting` (`awareness.ts:621`) supplies it.
 
-**Flag off:** byte-identical. The predicate is unset and every reader returns on the flag.
-**Flag on:** an answered thread entry is never handed or re-owed, and never counts as waiting.
+**Flag off:** byte-identical.
+
+**Flag on:** an answered thread entry is never handed out, re-owed or counted as waiting.
 
 **Tests (these close the rows):**
 - **Row H:**
-  - `tests/server/ownership-handover.test.ts`: a handover after
-    X answered every entry in a thread re-owes nothing on that thread. The next owner's fresh
-    cursor is handed nothing, and a legacy poll too.
-  - The Solo regression: R1 written in Solo, then a Claude reply, then release. R1 is handed at
-    the next poll, and is owed again after a handover.
-  - The race row as Q2 decides.
-  - Undo plus filter: a `Connection` writes a Claude reply with `answers` naming the user's
-    comment. It is undone, and the comment is still handed to a fresh reader.
-- **Row W:** `tests/server/launcher/ownership-forward.test.ts`. Tandem's Claude holds D and
-  answered everything in its threads. A terminal claims D and then lapses, so D goes back to
-  Tandem's Claude. The forward starts nothing and `tandemWorkWaiting()` is false. The same with one
-  unanswered user reply starts it. The agreement table in `tests/server/ownership-waiting.test.ts`
-  gains handled worlds (a fresh poll and `isDocumentWaiting` agree).
-- The `ownership-flag-on` CI job: all green flag on. A dark row pins that, flag off, a
-  forged `answers` row hides nothing and the observer is absent.
+  - `tests/server/ownership-handover.test.ts`: after X answered every entry it was handed, a
+    handover re-owes nothing on that thread, to a fresh cursor or a legacy poll;
+  - **the Solo regression:** R1 is written in Solo, Claude replies, Solo is released, and R1 is
+    handed at the next poll and owed again after a handover;
+  - **the window regression:** R2 arrives while Claude answers C, C is handled, and R2 is handed
+    out;
+  - **forgery plus filter:** a `Connection`'s Claude row is undone and hides nothing, including on
+    an upload document and after a swap;
+  - **on-disk forgery** across a flag-on boot (from PR A) still hides nothing with the filter
+    reading.
+- **Row W:** in `tests/server/launcher/ownership-forward.test.ts`, Tandem's Claude holds D and
+  answered everything it was handed. A terminal claims D and lapses. The forward starts nothing and
+  `tandemWorkWaiting()` is false. With one unanswered reply, the same sequence starts it. The
+  agreement table in `ownership-waiting.test.ts` gains handled worlds.
+- **Dark row:** flag off, a forged `answers` row hides nothing.
 
 **Rows:**
 - Delete row H.
-- Delete row W only with Bryan's answer to Q6, which covers what the filter cannot see. The
-  restart row (`:256`) is accepted, not closed, so "the restart row's closer" does not exist yet.
-  Row W's `closedBy` therefore resolves to "Bryan's answer".
+- Delete row W with Bryan's answer to Q4. Row W cites "the restart row's closer", but the restart
+  row (`:256`) is accepted, not closed, so that closer does not exist yet.
 
 **Docs:**
-- An ADR-054 amendment: the rule as built, the residuals, and the rows closed.
-- Mark ownership design §6.4's first two bullets and the "later" sentence as amended by it. This
-  is the series' convention of `*[Amended: …]*` notes, so the merged text is not rewritten.
+- An ADR-054 amendment on the filter as built and the residuals (§8).
+- `*[Amended: …]*` notes on ownership design §6.4's first two bullets and its "later" sentence.
+- **`docs/security.md`, a new register entry** (rev 1's "no change" was wrong). It describes the
+  client-writable Y.Map threat to `answers` and its bound:
+  - the replies-map undo, the pending guard and the load sweep stop forgery through that map;
+  - parent-record edits in `Y_MAP_ANNOTATIONS` (`author`, `audience`, `status`, an `editedAt`
+    rewind) can still hide a comment;
+  - pre-PR-A forged chat `replyTo` rows remain (the new chat row).
+
+  Q7 decides whether the entry is filed as accepted (bounded) or open. CLAUDE.md's Security bullet
+  count and `tests/docs/security-findings-claims.test.ts` move with it.
 
 ### PR C: the switch (live text). Lands immediately before the flip PR, same release. Closes row S
 
 **What it changes:**
-- `skills/tandem/SKILL.md:59` and `:65`, rewritten:
+- `skills/tandem/SKILL.md:59` and `:65`, rewritten to say:
   - answer a user's comment in its own thread with `tandem_annotationReply`;
-  - use chat for anything not about one comment;
+  - use chat for anything that is not about one comment;
   - the user's card text stays theirs, so `tandem_editAnnotation` still refuses;
-  - an "I'm on it" in a thread passes `inProgress: true` (if Q5 is yes);
-  - notes and private comments still refuse.
+  - mark an "I'm on it" in a thread with `inProgress: true` (if Q3 is yes);
+  - notes, private comments, highlights and resolved threads still refuse.
 
-  Bump the frontmatter `version` (41 today). Use one bump if it rides with the flip's own skill
-  edits. Per CLAUDE.md, `refreshExistingSkillIfStale` refreshes only on a strictly newer version,
-  so a text edit at an unchanged version reaches nobody. The plugin's pinned ref moves with the
-  flip (series plan, PR 6).
-- `docs/mcp-tools.md` `tandem_annotationReply`: the live text, with the "ships dark" paragraph
-  removed at the flip.
-- `CHANGELOG.md` Unreleased: the user-facing line. Claude answers your comment in its thread, and
-  the v0.31.0 chime and notification now fire.
+  The frontmatter `version` (41 today) goes up once if this rides with the flip's other skill
+  edits. `refreshExistingSkillIfStale` refreshes only on a strictly newer version. The plugin's
+  pinned ref moves with the flip.
+- `docs/mcp-tools.md`: the live `tandem_annotationReply` text replaces the "ships dark" paragraph.
+- `CHANGELOG.md` Unreleased: Claude answers your comment in its thread, and the v0.31.0 chime and
+  notification now fire.
 - Delete row S.
 
-**Ordering.** C merges, then the flip PR merges, then the release is cut. If the flip slips past a
-release cut, C must not be in it. The skill would then tell Claude to reply where a dark server
-answers `NOT_OWNED`.
-
-**Alternative.** Fold C into the flip PR (Q1). Then "merged" and "shipped" cannot diverge.
+**Ordering.** C merges, then the flip PR, then the release is cut. If the flip slips past a cut, C
+must not be in that release. The alternative is to fold C into the flip PR (Q1).
 
 ## 6. Privacy (ADR-027)
 
-- The guard order in `replyForClaude` is unchanged. `isPrivateForClaude` (`lifecycle.ts:282`)
-  runs first, on the **sanitized** record, so a legacy `flag` is caught as a note. Only the
-  following author arm is relaxed, and only for `type === "comment"`. So a Claude reply can never
-  be written into a note thread, a private comment's thread, or a highlight.
-- `addUserReply` and `removeAnnotationRecord` stay unguarded and unchanged.
-  `annotation-reply-seam.test.ts` and `annotation-remove-seam.test.ts` keep their pins.
-- `answers` is built only from what `channelVisibleReplies` and the Solo gate return, and is never
-  projected to Claude. Even a wrong key could not disclose a private reply's id.
-- Row H's undo also stops a client from **deleting** a Claude reply to make an entry owed again.
-  That direction is safe anyway.
+- The guard order in `replyForClaude` is unchanged. `isPrivateForClaude` (`lifecycle.ts:282`) runs
+  first, on the sanitized record, and `answers` is computed only after both guards. Only the author
+  arm is relaxed, and only for `type === "comment"`. A Claude reply can never land in a note
+  thread, a private comment's thread or a highlight.
+- `addUserReply` and `removeAnnotationRecord` stay unguarded. Their seam pins hold.
+- `answers` comes only from the visible-and-handed entries, and is stripped from every
+  Claude-facing output.
 
 ## 7. Questions only Bryan can answer
 
 **Q1. How "the switch merges right before the flip, in the same release" is honoured.**
-- (a) The permission is gated on `OWNERSHIP_ENABLED` and lands dark in PR A. PR C (skill and docs)
-  merges right before the flip. *(Recommended: the server half cannot ship without ownership
-  whatever slips. Only the live skill text needs the ordering.)*
-- (b) As (a), but PR C is folded into the flip PR.
-- (c) Literal: an ungated permission in its own PR, merged right before the flip. A release cut
-  from master in between would ship it without ownership.
+- (a) The server permission is gated on `OWNERSHIP_ENABLED` and lands dark in PR A. PR C (skill and
+  docs) merges right before the flip. *(Recommended: the server half cannot ship without ownership
+  whatever slips.)*
+- (b) As (a), with PR C folded into the flip PR.
+- (c) Literal: an ungated permission in its own PR merged right before the flip. A release cut in
+  between would ship it without ownership.
 
-**Q2. A user reply written while Claude is composing its answer.** It is visible when Claude's
-reply is accepted, so it is listed as answered and is never handed (§3).
-- (a) Accept it as a known limit, recorded in the ADR. The window is the time between Claude's
-  read and its reply. *(Recommended for the flip. The Solo case, which runs for hours, is fixed.)*
-- (b) Add an optional `answering: <replyId | "comment">` input. Claude names what it answered, and
-  only that and earlier entries are listed. It is exact, but needs a skill rule and a schema
-  field.
-- (c) List only entries some poll or push already handed. This depends on the delivery registry,
-  which a restart empties.
+**Q2. The local model** (`reply_to_annotation`, `local-model/tools.ts:519`).
+- (a) It keeps `NOT_OWNED` on user comments (`"own"`, `"untracked"`). *(Recommended: Bryan's
+  decision named Claude, and the local model is outside ownership.)*
+- (b) It may reply on user comments, settling nothing.
 
-**Q3. Claude replies written before this change** (no `answers`, on Claude's own threads).
-- (a) They settle nothing. Every old user reply on Claude's threads is re-owed at each handover,
-  as today. *(Recommended: simplest, and the lone-session re-hand is already accepted.)*
-- (b) Fall back to "earlier than the Claude reply by server timestamp", for user replies only
-  (both clocks are the server's). A row a modified client wrote before the flip would then count,
-  because the undo was not running.
+**Q3. An "I'm on it" inside a thread** (ownership design §5.5 requires a marker).
+- (a) An `inProgress` input, flag on only: it settles nothing, sets no answerer, and is not exported
+  to `.docx`. *(Recommended: it matches `tandem_reply`.)* The v0.31.0 chime fires twice, once for
+  the acknowledgement and once for the answer.
+- (b) No in-thread acknowledgement. The skill acknowledges in chat, and every thread reply is
+  final.
 
-**Q4. The local model** (`reply_to_annotation`, `local-model/tools.ts:519`).
-- (a) Keep `NOT_OWNED` on user comments. Its replies settle nothing (`agentIdentity`).
-  *(Recommended: Bryan's decision named Claude, and the local model is outside ownership.)*
-- (b) Let it reply on user comments too, still settling nothing.
+**Q4. What row W says the filter cannot see.** That is a comment answered in chat or by an edit,
+handled state lost at a restart, and (new in rev 2) an answer given from a push before any poll
+acknowledged the entry. That last case fails safe: the entry is owed again.
+- (a) Accept these for the flip, under the restart row's acceptance and #2484. Row W closes on that
+  answer plus PR B's test. *(Recommended.)*
+- (b) Keep row W open until chat answers are linked to comments.
 
-**Q5. An "I'm on it" inside a thread.** Ownership design §5.5 says #2360 must mark one, or it
-counts as the answer.
-- (a) Add an `inProgress` input, flag on only. The row settles nothing and sets no answerer.
-  *(Recommended: it matches `tandem_reply`.)* The v0.31.0 chime fires on it and again on the
-  answer.
-- (b) No in-thread acknowledgement. The skill says to acknowledge in chat, and every thread reply
-  is final. If the run then dies, the comment is never re-owed (the #2484 class).
+**Q5. Claude replying to a user comment the Solo hold hides** (`hideFromAI`, `mode.ts:89`).
+- (a) Refuse it as an unknown id is refused (`NOT_FOUND`), the same answer a read gives. *(Recommended:
+  a read filter is not a write guard, #1680. In Solo Claude cannot see the comment, so it should
+  not write into it.)*
+- (b) Accept it. With the registry rule it settles nothing, and a later release re-owes the thread.
 
-**Q6. Answers row W says the filter cannot see.** A comment answered in chat, or by an edit, or
-handled state lost at a restart.
-- (a) Accept them for the flip, under the restart row's acceptance and #2484. Row W is closed by
-  that answer and PR B's test. *(Recommended: once PR C ships, the skill sends comment answers to
-  the thread.)*
-- (b) Keep row W open until chat-answered comments are linked (the issue's rejected option
-  "a chat answer linked to the comment").
+**Q6. A user's follow-up in their own thread that Claude answered.** Its parent is the user's, so
+`isStartWorthy` (`src/shared/events/wake-scope.ts:57-64`) does not start a stopped Claude for it.
+It waits for the next start, while still counting as owed and as a wake.
+- (a) Start-worthy when the thread holds a final Claude reply. This needs an `annotation:reply`
+  payload field set by the server. It is inert until Claude can reply there. *(Recommended: the
+  user is talking to Claude, which is Bryan's line for a start.)*
+- (b) Leave it: only chat and replies on Claude's own threads start Claude.
 
-## 8. Risks, and what each reviewer looks at
+**Q7. The new `docs/security.md` entry** (a client can hide a comment from every inbox by editing
+the parent record; forged pre-flip chat `replyTo` rows).
+- (a) File it as accepted (bounded) under ownership design D4 (coordination, not security), with
+  its void conditions. *(Recommended.)* This needs Bryan's own acceptance: one made during review
+  does not count (#1602).
+- (b) File it as open, owed a fix before the flip (for example a server-only parent fingerprint
+  inside `answers`).
 
-- **annotation-model-reviewer.** The guard order and the discriminant. That `answers` uses the
-  read path's gates and nothing wider. The origin of every new write (`withMcp` for the reply,
-  `withInternal` for the undo). That a promoted note being repliable is intended. That
-  `threadItemAnsweredBy` and the `answers` builder share one predicate.
-- **crdt-reviewer.** The undo observer under a SyncStep2 reconnect, a Hocuspocus document swap
-  (`onDocSwapped` must reattach it), session restore (no origin) and `.docx` import. The premise
-  that a real tab never changes the replies map. It is analogous to the open H1 row; measure it if
-  it cannot be argued.
-- **security-reviewer.** "A client cannot hide an item from every inbox" holds with the undo and
-  the filter together. `answers` is never projected. No route or licence surface changes
-  (Critical Rule 9). That no `docs/security.md` entry is touched, or one is filed.
-- **The series' own review** (ownership semantics). That the retire exclusion at handover keeps
-  §6.3's notice rule intact. Agreement between the collector and `isDocumentWaiting` in every
-  handled world. That flag off is byte-identical, including `tools/list`.
-- **svelte-migration-reviewer.** Only if Q5(a) changes how the client renders an `inProgress`
-  thread row. Otherwise not needed.
-- **Residuals to record in the ADR:** Q2's race; Q3; answers in chat or by an edit; and a reply on
-  a document not open at a Solo release that keeps a stale `heldInSolo` marker
-  (`mode-release.ts:106`). `threadItemAnsweredBy` skips it in every mode, so no thread reply ever
-  settles it, and it stays owed. That fails safe, but check whether opening a document clears
-  stale markers.
+## 8. Risks, residuals, and what each reviewer looks at
+
+- **annotation-model-reviewer:**
+  - the guard order and both discriminants;
+  - that `answers` is computed after the guards from the sanitized record;
+  - the bounds' parity with `normalizeReply`;
+  - the origins (`withMcp` for the reply; `withInternal` for the undo, the sweep and the append);
+  - promoted notes becoming repliable.
+- **crdt-reviewer:**
+  - the undo-before-derivation order under one observer;
+  - the pending guard's premise in document rooms (the new row);
+  - the sweep's timing after the swap and file-sync rebind;
+  - the second step's write racing the user's edits.
+- **security-reviewer:**
+  - the guarantee's stated scope;
+  - attachment on every room;
+  - the envelope marker's unforgeability;
+  - the chat finding;
+  - Critical Rule 9;
+  - the register entry.
+- **The series' own review:**
+  - that "live entries on a held document were the holder's" holds for claim-less legacy polls and
+    for the claimable-unowned case (§3's condition (c));
+  - that the notice rule survives the retire exclusion;
+  - collector / waiting agreement;
+  - that flag off stays byte-identical except for the sweeps.
+- **svelte-migration-reviewer:** only if Q3(a) changes how `inProgress` thread rows render.
+- **Residuals for the ADR:**
+  - answers in chat or by an edit;
+  - an answer from a push before acknowledgement, or after a restart (owed again: fails safe);
+  - entries over the bounds (owed again);
+  - pre-flip forged chat `replyTo` rows (new row);
+  - a parent-record rewrite or `editedAt` rewind by a client (D4; security.md);
+  - a reply on a document not open at a Solo release that keeps a stale `heldInSolo` marker
+    (`mode-release.ts:106`). It is never listed, so it fails safe. Check whether opening the
+    document clears the marker.
+
+## 9. Review dispositions
+
+| Item | Disposition |
+|---|---|
+| B1: cap at write time, normalized key, bound skips, oldest kept, `normalizeReply` survival test | Fixed (§3 Bounds; PR A tests). |
+| B2: list only entries handed to this owner | Fixed: adopted rev 1's Q2(c), with chat's two-step append for the poll → reply → poll flow (§3). Rev 1's Q2 is dropped. |
+| B3: undo on every room, upload and scratchpad included, reattached after swap | Fixed (§3; `attachObservers` / `reattachObservers`; upload and swap tests). |
+| B4: forged rows on disk; chat check | Fixed: a flag-off strip on load from PR A on, plus a flag-on strip unless the server-only envelope marker is set (§3). Chat `settles` / `superseded` get the same; chat `replyTo` is recorded as a new flip-blocker row and in the security entry. |
+| Pending-structs guard | Fixed (§3), and its premise in document rooms is a new flip-blocker row. |
+| Undo before derivation; plain-object restore; no event on a forged add | Fixed (§3; tests). |
+| `answers` computed inside `replyForClaude`; `document-store.ts` in files and census | Fixed (§4, PR A). The review's `document-store.ts:439` is `:450` on `92ff4cc8`. |
+| Strip `answers` / `inProgress` from getAnnotations and export | Fixed (PR A). The real sites are `:670` and `:1036`, not the cited lines. |
+| Scope the guarantee; security.md entry warranted | Fixed (§3 "What the guarantee covers"; PR B docs; Q7). Rev 1's "no change" is withdrawn. |
+| Solo: refuse or accept a reply to a hidden parent | Made Q5 (recommend refuse). |
+| Flag-on `notOwnedRemedy` | Fixed (§4). |
+| `isStartWorthy` for a follow-up in the user's thread | Made Q6. |
+| `.docx` export of `inProgress` rows | Decided: skip them (§4). |
+| Local model's `ReplyTracking` | Stated: `"untracked"`, with `parents: "own"` (§4; Q2). |
+| Pre-flip forged rows and `editedAt` rewind as residuals | Recorded (§8; security entry). |
+| Rev 1's Q3 (legacy rows, timestamp fallback) | Withdrawn on the merits: a fallback reopens failure 2. Legacy rows settle nothing (§4). |
