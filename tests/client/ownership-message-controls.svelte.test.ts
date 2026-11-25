@@ -54,6 +54,7 @@ function facts(over: Partial<PublishedChatMessageOwner> = {}): PublishedChatMess
     release: true,
     releaseTo: "tandem-claude",
     assign: true,
+    tandemMayTake: false,
     since: T0,
     stale: false,
     ...over,

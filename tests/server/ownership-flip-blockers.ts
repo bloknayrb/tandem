@@ -362,17 +362,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
       "ADR; if it does not, 3b-2b2's re-ask, with a test.",
   },
-  {
-    gap:
-      "The composer offers Start for stale chat when a stale message is not held per message by " +
-      "another session (startCouldAnswerStaleChat, PR 5e), but the published facts carry no loss " +
-      "record: a message whose loss names Tandem's Claude (released from it, or assigned away " +
-      'from it to a session that then lapsed) publishes `heldBy: "none"`, and lostMessage refuses ' +
-      "it to Tandem's Claude, so the offered Start cannot help with it (#2568 review).",
-    closedBy:
-      "A published fact saying whether Tandem's Claude may take each message, read by the " +
-      "composer's Start gate, with a test where a message lost to Tandem's Claude offers no Start.",
-  },
 ];
 
 /**

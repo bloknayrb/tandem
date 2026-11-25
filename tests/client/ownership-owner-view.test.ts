@@ -453,6 +453,7 @@ function chatFacts(over: Partial<PublishedChatMessageOwner> = {}): PublishedChat
     release: true,
     releaseTo: "unassigned",
     assign: true,
+    tandemMayTake: false,
     since: T0,
     stale: false,
     ...over,
@@ -490,6 +491,8 @@ describe("readChatOwners (what yjsSync keeps)", () => {
     ["no releaseTo where Release applies", { releaseTo: null }],
     ["a releaseTo where Release does not apply", { release: false, releaseTo: "unassigned" }],
     ["a non-boolean assign", { assign: 1 }],
+    ["no tandemMayTake", { tandemMayTake: undefined }],
+    ["a non-boolean tandemMayTake", { tandemMayTake: "yes" }],
     ["a non-finite since", { since: Number.NaN }],
     ["a string since", { since: "1800000000000" }],
     ["a non-boolean stale", { stale: null }],
@@ -507,6 +510,7 @@ describe("readChatOwners (what yjsSync keeps)", () => {
       { release: false, releaseTo: null },
       { releaseTo: "tandem-claude" as const },
       { assign: false },
+      { tandemMayTake: true },
       { heldBy: "presence" as const },
       { owner: null },
       { owner: { label: "owner-zz", displayKind: "terminal" as const } },
@@ -675,29 +679,56 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
     const offered = { kind: "to", text: "→ terminal owner-k7qx", remedy: "start" };
     const plain = { kind: "to", text: "→ terminal owner-k7qx" };
     // Held per message by another session: a per-message owner wins over
-    // presence, so Start cannot answer it.
-    const byTerminal = chatFacts({ stale: true, heldBy: "message" });
+    // presence, so Start cannot answer it (the server publishes
+    // `tandemMayTake: false`).
+    const byTerminal = chatFacts({ stale: true, heldBy: "message", tandemMayTake: false });
     expect(composerLine(terminal, stale, new Map([["m", byTerminal]]))).toEqual(plain);
-    // A stale message that follows its document is its badge's, not this line's.
+    // Lost to Tandem's Claude (the user Released it from Tandem's Claude):
+    // nobody holds it, but a started Tandem's Claude may not take it, so no
+    // Start (the flip-blocker row's case; heldBy and owner alone cannot tell).
+    const lostToTandem = chatFacts({
+      stale: true,
+      owner: null,
+      heldBy: "none",
+      release: false,
+      releaseTo: null,
+      tandemMayTake: false,
+    });
+    expect(composerLine(terminal, stale, new Map([["m", lostToTandem]]))).toEqual(plain);
+    // A stale message that follows its document is its badge's, not this
+    // line's, even where Tandem's Claude may take it.
     const followsDoc = chatFacts({
       stale: true,
       heldBy: "document",
       release: false,
       releaseTo: null,
+      tandemMayTake: true,
     });
     expect(composerLine(terminal, stale, new Map([["m", followsDoc]]))).toEqual(plain);
-    // Nobody holds it, Tandem's Claude holds it per message, or by presence: Start can help.
+    // A message Tandem's Claude may take that is not stale offers nothing.
+    const fresh = chatFacts({
+      owner: null,
+      heldBy: "none",
+      release: false,
+      releaseTo: null,
+      tandemMayTake: true,
+    });
+    expect(composerLine(terminal, stale, new Map([["m", fresh]]))).toEqual(plain);
+    // Nobody holds it, Tandem's Claude holds it per message, or by presence,
+    // and Tandem's Claude may take it: Start can help.
     const nobody = chatFacts({
       stale: true,
       owner: null,
       heldBy: "none",
       release: false,
       releaseTo: null,
+      tandemMayTake: true,
     });
     const byTandem = chatFacts({
       stale: true,
       heldBy: "message",
       owner: { label: "owner-t", displayKind: "Tandem's Claude" },
+      tandemMayTake: true,
     });
     const byPresence = chatFacts({
       stale: true,
@@ -705,6 +736,7 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
       owner: { label: "owner-t", displayKind: "Tandem's Claude" },
       release: false,
       releaseTo: null,
+      tandemMayTake: true,
     });
     for (const f of [nobody, byTandem, byPresence]) {
       expect(
@@ -718,6 +750,30 @@ describe("composerLine: Start for stale chat (ownership design §10.2)", () => {
         ),
       ).toEqual(offered);
     }
+  });
+
+  it("through the reader: a stale message lost to Tandem's Claude offers no Start, an unheld one it may take does", () => {
+    const stale = summary({ chatStale: true, tandemStartable: true, tandemRunning: false });
+    const unheld = {
+      ...chatFacts(),
+      owner: null,
+      heldBy: "none",
+      release: false,
+      releaseTo: null,
+      stale: true,
+    };
+    const lost = readChatOwners({ m: { ...unheld, tandemMayTake: false } }, new Map());
+    expect(lost.size).toBe(1);
+    expect(composerLine(terminal, stale, lost)).toEqual({
+      kind: "to",
+      text: "→ terminal owner-k7qx",
+    });
+    const mayTake = readChatOwners({ m: { ...unheld, tandemMayTake: true } }, new Map());
+    expect(composerLine(terminal, stale, mayTake)).toEqual({
+      kind: "to",
+      text: "→ terminal owner-k7qx",
+      remedy: "start",
+    });
   });
 
   it("leaves a no-AI line's own remedy alone", () => {

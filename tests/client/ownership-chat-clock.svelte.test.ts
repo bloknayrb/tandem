@@ -40,6 +40,7 @@ function facts(since: number, over: Partial<PublishedChatMessageOwner> = {}) {
     release: true,
     releaseTo: "unassigned",
     assign: true,
+    tandemMayTake: false,
     since,
     stale: false,
     ...over,

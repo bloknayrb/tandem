@@ -178,7 +178,7 @@ const RELEASE_TO: ReadonlySet<string> = new Set<PublishedChatReleaseTo>([
 /** One message's published facts, or undefined for a shape this client does not know. */
 function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
   if (!isRecord(v)) return undefined;
-  const { owner, heldBy, release, releaseTo, assign, since, stale } = v;
+  const { owner, heldBy, release, releaseTo, assign, tandemMayTake, since, stale } = v;
   let holder: PublishedChatMessageOwner["owner"] = null;
   if (owner !== null) {
     if (!isRecord(owner)) return undefined;
@@ -189,6 +189,7 @@ function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
   }
   if (typeof heldBy !== "string" || !HELD_BY.has(heldBy)) return undefined;
   if (typeof release !== "boolean" || typeof assign !== "boolean") return undefined;
+  if (typeof tandemMayTake !== "boolean") return undefined;
   // #2358 PR 5e: where Release sends it, exactly when Release applies.
   let to: PublishedChatReleaseTo | null = null;
   if (release) {
@@ -203,6 +204,7 @@ function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
     release,
     releaseTo: to,
     assign,
+    tandemMayTake,
     since,
     stale,
   };
@@ -218,6 +220,7 @@ function sameChatOwner(
     a.release !== b.release ||
     a.releaseTo !== b.releaseTo ||
     a.assign !== b.assign ||
+    a.tandemMayTake !== b.tandemMayTake ||
     a.since !== b.since ||
     a.stale !== b.stale
   )
@@ -547,9 +550,11 @@ export function composerLine(
   // it, so the line offers 5b's Start. A "no AI" line already carries its own
   // remedy. Not while Tandem's Claude is already running: Start cannot help
   // then (the same test as the not-present offer). With the per-message facts
-  // (`chatOwners`, which App passes), not when every such stale message is
-  // held per message by another session: a per-message owner wins over
-  // presence (ownership design §7.1), so a started Tandem's Claude could not answer it.
+  // (`chatOwners`, which App passes), not when Tandem's Claude may take no
+  // such stale message (the server's `tandemMayTake`: held by another session,
+  // whose per-message owner wins over presence, ownership design §7.1, or lost
+  // to Tandem's Claude by the user's Release or Assign), so a started
+  // Tandem's Claude could not answer it.
   if (
     line?.kind === "to" &&
     summary?.chatStale === true &&
@@ -565,18 +570,15 @@ export function composerLine(
 /**
  * Whether some stale message with no controlling badge (the summary's
  * `chatStale` set, as {@link chatStaleWaitMs} reads it) is one a started
- * Tandem's Claude could answer: not held per message by another session.
+ * Tandem's Claude could answer: the server's published `tandemMayTake`,
+ * decided by the rules Tandem's Claude's poll is judged by. Never re-derived
+ * here from `heldBy` and `owner`, which carry no loss record.
  */
 function startCouldAnswerStaleChat(
   chatOwners: ReadonlyMap<string, PublishedChatMessageOwner>,
 ): boolean {
   for (const facts of chatOwners.values()) {
-    if (!facts.stale || facts.heldBy === "document") continue;
-    const heldByAnother =
-      facts.heldBy === "message" &&
-      facts.owner !== null &&
-      facts.owner.displayKind !== "Tandem's Claude";
-    if (!heldByAnother) return true;
+    if (facts.stale && facts.heldBy !== "document" && facts.tandemMayTake) return true;
   }
   return false;
 }
