@@ -8,21 +8,18 @@
 // public, so the job log is too. Node built-ins only, because it runs from a
 // sparse checkout of master that has no node_modules.
 //
-// It also builds the exact item post.mjs will send (and the body-only form for
-// a 422 retry) and scans those bytes too, because building rewrites the
-// model's text (carriage returns stripped, lines wrapped, fences added): the
-// scan has to see what is actually posted, not only what the model wrote.
-// post.mjs sends inputs/item.json as is.
+// It scans twice: the raw result text first, then the exact item post.mjs will
+// send, because building rewrites the text (a path prefix removed, a header
+// added, a cut at the cap). post.mjs sends inputs/item.json as is.
 //
 // Usage: node classify.mjs <stream.jsonl> <inputs-dir>
-// Env:   CLAUDE_CODE_OAUTH_TOKEN, REVIEW_OUTCOME (steps.review.outcome), RUN_ID, RUN_ATTEMPT
+// Env:   CLAUDE_CODE_OAUTH_TOKEN, REVIEW_OUTCOME (steps.review.outcome), RUN_ID,
+//        RUN_ATTEMPT, REVIEW_WORKDIR (the checkout the review ran in)
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { bodyOnly, buildItem } from "./post.mjs";
-
-export const SEVERITIES = ["important", "nit"];
+import { buildItem } from "./post.mjs";
 
 // Result subtypes the CLI is known to emit, plus our own reasons. Anything
 // else is reported as "other" so a model- or CLI-chosen string never reaches
@@ -30,22 +27,37 @@ export const SEVERITIES = ["important", "nit"];
 export const REASONS = [
   "error_max_turns",
   "error_during_execution",
-  "error_max_structured_output_retries",
-  "schema-invalid",
   "no-result",
   "step-failed",
   "api-error",
   "no-token",
+  "unrecognised-output",
   "other",
 ];
 
 /**
- * Reasons that mean the review system is down rather than that one PR was too
- * much for it (an expired or missing token, a usage limit, an API outage).
- * The note is still posted, but the workflow's last step turns the run red so
- * a person looks, and the merge gate stops instead of proceeding.
+ * Reasons that mean a person should look rather than that one PR was too much
+ * for the review: an expired or missing token, a usage limit, an API outage,
+ * or text that isn't a review (which is how an auth or usage failure inside
+ * the skill arrives: as prose with subtype "success"). The note is still
+ * posted, but the workflow's last step turns the run red so the merge gate
+ * stops instead of proceeding. That step's shell condition is what acts; this
+ * list documents it, and a wiring test keeps the two equal.
  */
-export const SYSTEMIC_REASONS = ["api-error", "no-token"];
+export const SYSTEMIC_REASONS = ["api-error", "no-token", "unrecognised-output"];
+
+/**
+ * What a /code-review result looks like once the CLI has formatted the skill's
+ * findings (it does so under --output-format stream-json): at least one
+ * numbered item with a severity marker, or the CLI's own line for an empty
+ * list. The `m` flag matters: the text opens with a summary, never an item.
+ */
+export const REVIEW_ITEM_RE = /^\s*\d+\.\s+(🔴|🟡|🟣)/mu;
+export const NO_ISSUES_RE = /^Code review found no issues\.$/m;
+
+export function isRecognisedReview(text) {
+  return typeof text === "string" && (REVIEW_ITEM_RE.test(text) || NO_ISSUES_RE.test(text));
+}
 
 /** Length-gated so the scrubbing code and its tests (short literals) don't trip it. */
 const TOKEN_SHAPE = /sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{40,}/;
@@ -53,7 +65,7 @@ const TOKEN_SHAPE = /sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{40,}/;
 /**
  * Parse the CLI's stream-json output. A CLI killed by the step timeout leaves
  * a truncated last line, so unparseable lines are skipped, not fatal.
- * Returns the last `result` event, or null.
+ * Returns the last top-level `result` event, or null.
  */
 export function lastResultEvent(streamText) {
   let result = null;
@@ -103,40 +115,20 @@ export function scanForSecrets(serialized, token) {
   return null;
 }
 
-/** Validate the review schema: {summary, findings: [{path, line, severity, body}]}. */
-export function isValidReview(output) {
-  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
-  if (typeof output.summary !== "string") return false;
-  if (!Array.isArray(output.findings)) return false;
-  return output.findings.every(
-    (f) =>
-      f &&
-      typeof f === "object" &&
-      typeof f.path === "string" &&
-      Number.isInteger(f.line) &&
-      f.line >= 1 &&
-      SEVERITIES.includes(f.severity) &&
-      typeof f.body === "string",
-  );
-}
-
 function reasonFor(subtype) {
   return REASONS.includes(subtype) ? subtype : "other";
 }
 
 /**
- * Pure decision. Returns { outcome: "posted"|"incomplete"|"withheld", reason?, matchKind?, review? }.
+ * Pure decision. Returns { outcome: "posted"|"incomplete"|"withheld", reason?, matchKind?, text? }.
  * The secret scan runs over everything the model produced, before any other
  * verdict, so a leak inside an otherwise-incomplete run is still withheld.
  */
 export function classify({ streamText, reviewOutcome, token }) {
   const result = lastResultEvent(streamText);
-  const output = result ? result.structured_output : undefined;
+  const text = result?.result;
 
-  const scanned = scanForSecrets(
-    JSON.stringify({ output: output ?? null, result: result?.result ?? null }),
-    token,
-  );
+  const scanned = scanForSecrets(JSON.stringify({ result: text ?? null }), token);
   if (scanned) return { outcome: "withheld", matchKind: scanned };
 
   if (!token) return { outcome: "incomplete", reason: "no-token" };
@@ -149,28 +141,25 @@ export function classify({ streamText, reviewOutcome, token }) {
   if (result.is_error || result.subtype !== "success") {
     return { outcome: "incomplete", reason: reasonFor(result.subtype) };
   }
-  if (!isValidReview(output)) return { outcome: "incomplete", reason: "schema-invalid" };
+  if (!isRecognisedReview(text)) return { outcome: "incomplete", reason: "unrecognised-output" };
   if (reviewOutcome !== "success") return { outcome: "incomplete", reason: "step-failed" };
-  return { outcome: "posted", review: output };
+  return { outcome: "posted", text };
 }
 
 /**
- * Build the exact item(s) post.mjs will send for a verdict, then scan those
+ * Build the exact item post.mjs will send for a verdict, then scan those
  * bytes. A hit turns the verdict into "withheld", whose item is fixed text.
- * Returns { outcome, item, fallback }. Pure.
+ * Returns { outcome, item }. Pure.
  */
-export function prepare({ verdict, diffText, sha, runId, attempt, pr, token }) {
-  const { review, ...outcome } = verdict;
-  const build = (o, findings) => buildItem({ outcome: o, findings, diffText, sha, runId, attempt, pr });
-  if (outcome.outcome === "posted") {
-    const item = build(outcome, review);
-    const fallback = bodyOnly(item);
-    const hit = scanForSecrets(JSON.stringify({ item, fallback }), token);
-    if (!hit) return { outcome, item, fallback };
-    const withheld = { outcome: "withheld", matchKind: hit };
-    return { outcome: withheld, item: build(withheld, null), fallback: null };
-  }
-  return { outcome, item: build(outcome, null), fallback: null };
+export function prepare({ verdict, sha, runId, attempt, pr, token, workdir }) {
+  const { text, ...outcome } = verdict;
+  const build = (o) => buildItem({ outcome: o, text, sha, runId, attempt, pr, workdir });
+  const item = build(outcome);
+  if (outcome.outcome !== "posted") return { outcome, item };
+  const hit = scanForSecrets(JSON.stringify(item), token);
+  if (!hit) return { outcome, item };
+  const withheld = { outcome: "withheld", matchKind: hit };
+  return { outcome: withheld, item: build(withheld) };
 }
 
 function main() {
@@ -188,23 +177,17 @@ function main() {
   const token = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
   const verdict = classify({ streamText, reviewOutcome: process.env.REVIEW_OUTCOME ?? "", token });
   const pr = JSON.parse(readFileSync(path.join(inputsDir, "pr.json"), "utf8"));
-  let diffText = "";
-  try {
-    diffText = readFileSync(path.join(inputsDir, "pr.diff"), "utf8");
-  } catch {
-    // Without a diff every finding goes into the body; nothing is lost.
-  }
   const prepared = prepare({
     verdict,
-    diffText,
     sha: pr.headRefOid,
     runId: process.env.RUN_ID,
     attempt: process.env.RUN_ATTEMPT,
     pr: pr.number,
     token,
+    workdir: process.env.REVIEW_WORKDIR || undefined,
   });
   writeFileSync(path.join(inputsDir, "outcome.json"), `${JSON.stringify(prepared.outcome)}\n`);
-  writeFileSync(path.join(inputsDir, "item.json"), `${JSON.stringify({ item: prepared.item, fallback: prepared.fallback })}\n`);
+  writeFileSync(path.join(inputsDir, "item.json"), `${JSON.stringify({ item: prepared.item })}\n`);
   // Only the verdict's own enum fields are printed, never content.
   const o = prepared.outcome;
   console.log(`outcome=${o.outcome} reason=${o.reason ?? "-"} match=${o.matchKind ?? "-"}`);
