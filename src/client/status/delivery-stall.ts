@@ -84,6 +84,18 @@ export interface DeliveryStallInput {
    * absent reads as false.
    */
   checkInUnderway?: boolean;
+  /**
+   * Multi-session ownership only (#2358 PR 5e; ownership design §10.2, "the
+   * stale flag ... drives the stall banner"; Bryan, 2026-11-24, "Yes, wire it
+   * (Recommended)"): how long the oldest stale chat message with no
+   * controlling badge has gone unanswered since its last change of owner
+   * (`chatStaleWaitMs`), or null. A second signal beside the join, under the
+   * same precedence: Solo, the licence, an unreachable server and a check-in
+   * underway hide it too. Only a flag-on server publishes the facts it is
+   * read from, so a dark build never passes a number. Optional, and absent
+   * reads as null.
+   */
+  chatStaleMs?: number | null;
 }
 
 /**
@@ -99,7 +111,15 @@ export function deliveryStall(input: DeliveryStallInput): number | null {
   // gone, "Claude hasn't picked this up" is true but blames the wrong party.
   if (input.serverUnreachable) return null;
   if (input.checkInUnderway === true) return null;
-  if (input.state !== "awaiting-poll") return null;
-  if (input.waitingMs === null || input.waitingMs < DELIVERY_STALL_MS) return null;
-  return input.waitingMs;
+  const round =
+    input.state === "awaiting-poll" &&
+    input.waitingMs !== null &&
+    input.waitingMs >= DELIVERY_STALL_MS
+      ? input.waitingMs
+      : null;
+  const chat =
+    input.chatStaleMs != null && input.chatStaleMs >= DELIVERY_STALL_MS ? input.chatStaleMs : null;
+  // The longer wait: the banner speaks of the oldest unanswered message.
+  if (round === null) return chat;
+  return chat === null ? round : Math.max(round, chat);
 }

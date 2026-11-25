@@ -15,15 +15,25 @@ import {
   Y_MAP_CLAUDE,
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
+  Y_MAP_OWNERSHIP_CHAT,
   Y_MAP_OWNERSHIP_SUMMARY,
   Y_MAP_STORE_READ_ONLY,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants";
-import type { OwnershipSummary, PublishedOwnerFields } from "../../shared/ownership-published";
+import type {
+  OwnershipSummary,
+  PublishedChatMessageOwner,
+  PublishedOwnerFields,
+} from "../../shared/ownership-published";
 import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { ReplyBaseline } from "../notifications/thread-answer-detector";
-import { ownerFieldsFromList, readOwnershipSummary, sameSummary } from "../ownership/owner-view";
+import {
+  ownerFieldsFromList,
+  readChatOwners,
+  readOwnershipSummary,
+  sameSummary,
+} from "../ownership/owner-view";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
 import { MCP_BASE_URL, WS_URL } from "../utils/backend-ports.js";
 import { installIdFromStoragePath } from "../utils/install-id.js";
@@ -157,6 +167,13 @@ export interface YjsSyncState {
    * mode, or no launcher).
    */
   readonly ownershipSummary: OwnershipSummary | null;
+  /**
+   * #2358 PR 5e: each unanswered chat message's published ownership facts
+   * under `Y_MAP_OWNERSHIP_CHAT` in `CTRL_ROOM`'s `Y_MAP_USER_AWARENESS`,
+   * by message id; empty while ownership is off (a dark server never writes
+   * the key). Read-only: the client never writes it.
+   */
+  readonly chatOwners: ReadonlyMap<string, PublishedChatMessageOwner>;
   /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
   readonly bootstrapYdoc: Y.Doc | null;
   /** True after the current CTRL provider completes its first authoritative sync. */
@@ -231,6 +248,7 @@ export function createYjsSync(opts?: {
   let storeReadOnly = $state(false);
   let ownerFieldsState = $state.raw<ReadonlyMap<string, PublishedOwnerFields>>(new Map());
   let ownershipSummaryState = $state.raw<OwnershipSummary | null>(null);
+  let chatOwnersState = $state.raw<ReadonlyMap<string, PublishedChatMessageOwner>>(new Map());
   let ready = $state(false);
   let serverRestarted = $state(false);
   // Surface bootstrap Y.Doc reactively so `bootstrapYdoc` flips from null to populated
@@ -727,11 +745,18 @@ export function createYjsSync(opts?: {
       const next = readOwnershipSummary(userAwareness.get(Y_MAP_OWNERSHIP_SUMMARY));
       if (!sameSummary(ownershipSummaryState, next)) ownershipSummaryState = next;
     };
+    // #2358 PR 5e: each unanswered message's facts (read-only, like the summary).
+    const readChat = () => {
+      const next = readChatOwners(userAwareness.get(Y_MAP_OWNERSHIP_CHAT), chatOwnersState);
+      if (next !== chatOwnersState) chatOwnersState = next;
+    };
     const summaryObserver = (event: Y.YMapEvent<unknown>) => {
       if (event.keysChanged.has(Y_MAP_OWNERSHIP_SUMMARY)) readSummary();
+      if (event.keysChanged.has(Y_MAP_OWNERSHIP_CHAT)) readChat();
     };
     userAwareness.observe(summaryObserver);
     readSummary();
+    readChat();
 
     // Initial read — process state that synced before observer was wired
     const initDocs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
@@ -745,6 +770,7 @@ export function createYjsSync(opts?: {
       meta.unobserve(bootstrapObserver);
       userAwareness.unobserve(summaryObserver);
       ownershipSummaryState = null;
+      chatOwnersState = new Map();
       provider.off("synced", onCtrlSynced);
       if (restartTimer) {
         clearTimeout(restartTimer);
@@ -950,6 +976,9 @@ export function createYjsSync(opts?: {
     },
     get ownershipSummary() {
       return ownershipSummaryState;
+    },
+    get chatOwners() {
+      return chatOwnersState;
     },
     get storeReadOnly() {
       return storeReadOnly;

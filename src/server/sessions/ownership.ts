@@ -77,6 +77,7 @@ import {
   type PublishedChatHeldBy,
   type PublishedChatMessageOwner,
   type PublishedChatOwners,
+  type PublishedChatReleaseTo,
   type PublishedOwnerFields,
 } from "../../shared/ownership-published.js";
 import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-registry.js";
@@ -3108,16 +3109,25 @@ type MessageStanding =
   | { readonly kind: "with-document"; readonly documentId: string }
   | { readonly kind: "per-message" };
 
-function messageStanding(key: string, facts: ChatMessageFacts): MessageStanding {
+function messageStanding(
+  key: string,
+  facts: ChatMessageFacts,
+  afterRelease?: { readonly lost: string | undefined },
+): MessageStanding {
   if (facts.localPeriod) return { kind: "none" };
-  const own = ownerByMessage.get(key);
+  // `afterRelease` (#2358 PR 5e): the standing a Release would leave, read
+  // without the per-message owner and with the loss `applyMessageControl`
+  // then leaves (`lost`: the owner it records the loss against, or undefined
+  // for the stale backstop, which records none and so clears any), so the
+  // published destination is the route's.
+  const own = afterRelease === undefined ? ownerByMessage.get(key) : undefined;
   if (own && records.has(own.ownerId)) {
     return { kind: "owned", ownerId: own.ownerId, perMessage: true };
   }
   // A message's loss record (#2358 PR 5a-2; ownership design §10.2): where the
   // table would give the message back to the record it was released or
   // reassigned from, it is claimable per message by anyone else instead.
-  const lost = lossByMessage.get(key)?.ownerId;
+  const lost = afterRelease === undefined ? lossByMessage.get(key)?.ownerId : afterRelease.lost;
   if (facts.documentId !== undefined && facts.documentOpen) {
     const entry = readEntry(facts.documentId);
     if (entry) {
@@ -4658,7 +4668,12 @@ export function controlMessageOwner(
 function messageControl(
   key: string,
   facts: ChatMessageFacts,
-): { heldBy: PublishedChatHeldBy; holder?: string; perMessageOwner?: string } {
+): {
+  heldBy: PublishedChatHeldBy;
+  holder?: string;
+  perMessageOwner?: string;
+  releaseTo?: PublishedChatReleaseTo;
+} {
   if (carriedOver.has(key)) return { heldBy: "none" };
   const standing = messageStanding(key, facts);
   const followsDocument =
@@ -4667,9 +4682,26 @@ function messageControl(
     (standing.kind === "with-document" || (standing.kind === "owned" && !standing.perMessage));
   if (standing.kind !== "owned") return { heldBy: followsDocument ? "document" : "none" };
   if (standing.perMessage) {
-    return { heldBy: "message", holder: standing.ownerId, perMessageOwner: standing.ownerId };
+    return {
+      heldBy: "message",
+      holder: standing.ownerId,
+      perMessageOwner: standing.ownerId,
+      releaseTo: releaseDestination(messageStanding(key, facts, { lost: standing.ownerId })),
+    };
   }
   return { heldBy: followsDocument ? "document" : "presence", holder: standing.ownerId };
+}
+
+/**
+ * Where a Release leaves a message (#2358 PR 5e; Bryan, 2026-11-24, "Yes, say
+ * where (Recommended)"), from the standing {@link messageStanding} reads with
+ * the per-message owner dropped and its loss recorded: Tandem's Claude
+ * holding it (by presence or by its document), another session's document it
+ * then follows, or nobody. Pure.
+ */
+function releaseDestination(after: MessageStanding): PublishedChatReleaseTo {
+  if (after.kind !== "owned") return "unassigned";
+  return after.ownerId === TANDEM_OWNER_ID ? "tandem-claude" : "document";
 }
 
 /**
@@ -5369,16 +5401,26 @@ function lookAtChat(now: number): ChatPublishState {
     const thisRun = facts.writtenThisRun === true;
     const stale = thisRun && now - since > OWNERSHIP_STALE_AFTER_MS;
     const record = control.holder === undefined ? undefined : records.get(control.holder);
+    const staleRelease =
+      control.perMessageOwner === undefined &&
+      control.heldBy !== "document" &&
+      !carriedOver.has(key) &&
+      ownerByMessage.has(key);
     owners[key] = {
       owner:
         record === undefined ? null : { label: record.label, displayKind: displayKindOf(record) },
       heldBy: control.heldBy,
       // Exactly what `controlMessageOwner`'s Release acts on: a per-message
       // owner, or one whose record is gone (its stale backstop drops it,
-      // since it holds nothing but would block every later take).
-      release:
-        control.perMessageOwner !== undefined ||
-        (control.heldBy !== "document" && !carriedOver.has(key) && ownerByMessage.has(key)),
+      // since it holds nothing but would block every later take). The stale
+      // case records no loss, and so clears any the message had, so its
+      // destination is the standing read with no loss at all.
+      release: control.perMessageOwner !== undefined || staleRelease,
+      releaseTo:
+        control.releaseTo ??
+        (staleRelease
+          ? releaseDestination(messageStanding(key, facts, { lost: undefined }))
+          : null),
       assign: control.heldBy !== "document",
       since,
       stale,

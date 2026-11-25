@@ -86,6 +86,9 @@ function renderChat(
       noticeAnnouncement: over.noticeAnnouncement ?? "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
+      messageOwners: new Map(),
+      ownershipSummary: null,
       onOwnerLineRemedy: () => {},
     },
   });

@@ -95,3 +95,44 @@ describe("deliveryStall", () => {
     expect(deliveryStall({ ...base, waitingMs: 60 * 60_000 })).toBe(60 * 60_000);
   });
 });
+
+// #2358 PR 5e (ownership design §10.2; Bryan, 2026-11-24, "Yes, wire it
+// (Recommended)"): stale chat is a second signal beside the join.
+describe("deliveryStall: stale chat (#2358 PR 5e)", () => {
+  const quiet = { ...base, state: "polled", waitingMs: null };
+  const STALE = 6 * 60_000;
+
+  it("claims on stale chat alone, whatever the join says", () => {
+    expect(deliveryStall({ ...quiet, chatStaleMs: STALE })).toBe(STALE);
+    expect(deliveryStall({ ...base, state: "consumer-detached", chatStaleMs: STALE })).toBe(STALE);
+  });
+
+  it("reports the longer of the two waits", () => {
+    expect(deliveryStall({ ...base, waitingMs: 10 * 60_000, chatStaleMs: STALE })).toBe(
+      10 * 60_000,
+    );
+    expect(deliveryStall({ ...base, waitingMs: DELIVERY_STALL_MS, chatStaleMs: STALE })).toBe(
+      STALE,
+    );
+  });
+
+  it("keeps the threshold for the chat wait too", () => {
+    expect(deliveryStall({ ...quiet, chatStaleMs: DELIVERY_STALL_MS - 1 })).toBeNull();
+    expect(deliveryStall({ ...quiet, chatStaleMs: DELIVERY_STALL_MS })).toBe(DELIVERY_STALL_MS);
+  });
+
+  it.each([
+    ["Solo", { soloMode: true }],
+    ["the licence", { aiOff: true }],
+    ["an unreachable server", { serverUnreachable: true }],
+    ["a check-in under way (3b-2e2's hide)", { checkInUnderway: true }],
+  ])("is hidden by %s, as the round is", (_name, gate) => {
+    expect(deliveryStall({ ...base, ...gate, chatStaleMs: STALE })).toBeNull();
+  });
+
+  it("absent or null (every dark build): exactly the round's answer", () => {
+    for (const input of [base, quiet, { ...base, waitingMs: DELIVERY_STALL_MS - 1 }]) {
+      expect(deliveryStall({ ...input, chatStaleMs: null })).toBe(deliveryStall(input));
+    }
+  });
+});

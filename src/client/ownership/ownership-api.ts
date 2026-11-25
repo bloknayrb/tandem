@@ -33,13 +33,34 @@ export interface OwnerChoice {
 const DISPLAY_KINDS = new Set(["Tandem's Claude", "terminal", "Claude Desktop", "other app"]);
 
 /** Release or Assign one open document. Never throws. */
-export async function postDocumentOwnership(
+export function postDocumentOwnership(
   documentId: string,
   action: OwnershipAction,
   ownerLabel?: string,
 ): Promise<OwnershipResult> {
-  const body: Record<string, string> = { documentId, action };
-  if (action === "assign" && ownerLabel !== undefined) body.ownerLabel = ownerLabel;
+  return postOwnership({ documentId, action }, ownerLabel);
+}
+
+/**
+ * Release or Assign one unanswered chat message (#2358 PR 5e; the route's
+ * `{messageId, action, ownerLabel?}`, ADR-054's 5a-2 amendment). Never throws.
+ */
+export function postMessageOwnership(
+  messageId: string,
+  action: OwnershipAction,
+  ownerLabel?: string,
+): Promise<OwnershipResult> {
+  return postOwnership({ messageId, action }, ownerLabel);
+}
+
+async function postOwnership(
+  target:
+    | { documentId: string; action: OwnershipAction }
+    | { messageId: string; action: OwnershipAction },
+  ownerLabel: string | undefined,
+): Promise<OwnershipResult> {
+  const body: Record<string, string> = { ...target };
+  if (target.action === "assign" && ownerLabel !== undefined) body.ownerLabel = ownerLabel;
   try {
     const res = await fetch(`${API_BASE}${API_OWNERSHIP}`, {
       method: "POST",

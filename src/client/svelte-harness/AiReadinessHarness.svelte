@@ -11,6 +11,8 @@ interface Props {
   soloMode?: boolean;
   aiNotice?: AiNotice | null;
   refreshLicence?: () => Promise<unknown> | void;
+  /** #2358 PR 5e: the stale-chat wait App derives from the published facts. */
+  chatStaleMs?: number | null;
 }
 
 let {
@@ -20,6 +22,7 @@ let {
   soloMode = false,
   aiNotice = null,
   refreshLicence = () => {},
+  chatStaleMs = null,
 }: Props = $props();
 
 // Created once at mount (inside a real component context so the hook's
@@ -32,6 +35,7 @@ const readiness = untrack(() =>
     soloMode: () => soloMode,
     aiNotice: () => aiNotice,
     refreshLicence: () => refreshLicence(),
+    chatStaleMs: () => chatStaleMs,
   }),
 );
 $effect(() => {

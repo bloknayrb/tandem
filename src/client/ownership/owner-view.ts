@@ -20,6 +20,9 @@
 import type {
   NotPresentReason,
   OwnershipSummary,
+  PublishedChatHeldBy,
+  PublishedChatMessageOwner,
+  PublishedChatReleaseTo,
   PublishedDisplayKind,
   PublishedOwner,
   PublishedOwnerFields,
@@ -138,7 +141,8 @@ export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
     typeof tandemRunning !== "boolean" ||
     typeof tandemStartable !== "boolean" ||
     typeof otherAiAttached !== "boolean" ||
-    // #2358 PR 5d: chat waiting and chat stale (read here, shown by PR 5e).
+    // #2358 PR 5d: chat waiting and chat stale (read and compared here; PR 5e
+    // drives the stall banner from the per-message facts, the same set).
     typeof chatWaiting !== "boolean" ||
     typeof chatStale !== "boolean"
   )
@@ -157,6 +161,116 @@ export function readOwnershipSummary(v: unknown): OwnershipSummary | null {
     chatWaiting,
     chatStale,
   };
+}
+
+const HELD_BY: ReadonlySet<string> = new Set<PublishedChatHeldBy>([
+  "message",
+  "document",
+  "presence",
+  "none",
+]);
+const RELEASE_TO: ReadonlySet<string> = new Set<PublishedChatReleaseTo>([
+  "tandem-claude",
+  "unassigned",
+  "document",
+]);
+
+/** One message's published facts, or undefined for a shape this client does not know. */
+function readChatOwner(v: unknown): PublishedChatMessageOwner | undefined {
+  if (!isRecord(v)) return undefined;
+  const { owner, heldBy, release, releaseTo, assign, since, stale } = v;
+  let holder: PublishedChatMessageOwner["owner"] = null;
+  if (owner !== null) {
+    if (!isRecord(owner)) return undefined;
+    const { label, displayKind } = owner;
+    if (typeof label !== "string" || label.length === 0) return undefined;
+    if (typeof displayKind !== "string" || !DISPLAY_KINDS.has(displayKind)) return undefined;
+    holder = { label, displayKind: displayKind as PublishedDisplayKind };
+  }
+  if (typeof heldBy !== "string" || !HELD_BY.has(heldBy)) return undefined;
+  if (typeof release !== "boolean" || typeof assign !== "boolean") return undefined;
+  // #2358 PR 5e: where Release sends it, exactly when Release applies.
+  let to: PublishedChatReleaseTo | null = null;
+  if (release) {
+    if (typeof releaseTo !== "string" || !RELEASE_TO.has(releaseTo)) return undefined;
+    to = releaseTo as PublishedChatReleaseTo;
+  } else if (releaseTo !== null) return undefined;
+  if (typeof since !== "number" || !Number.isFinite(since)) return undefined;
+  if (typeof stale !== "boolean") return undefined;
+  return {
+    owner: holder,
+    heldBy: heldBy as PublishedChatHeldBy,
+    release,
+    releaseTo: to,
+    assign,
+    since,
+    stale,
+  };
+}
+
+function sameChatOwner(
+  a: PublishedChatMessageOwner | undefined,
+  b: PublishedChatMessageOwner,
+): boolean {
+  if (a === undefined) return false;
+  if (
+    a.heldBy !== b.heldBy ||
+    a.release !== b.release ||
+    a.releaseTo !== b.releaseTo ||
+    a.assign !== b.assign ||
+    a.since !== b.since ||
+    a.stale !== b.stale
+  )
+    return false;
+  if (a.owner === null || b.owner === null) return a.owner === b.owner;
+  return a.owner.label === b.owner.label && a.owner.displayKind === b.owner.displayKind;
+}
+
+/**
+ * Each unanswered message's published facts under `Y_MAP_OWNERSHIP_CHAT`
+ * (#2358 PR 5d), by chat key (the message's id), keeping only the entries of
+ * a shape this client knows; an empty map when the key is absent (ownership
+ * off: a dark server never writes it) or not an object. Returns `prev` itself
+ * when nothing changed, so a republish that changed nothing re-renders
+ * nothing. Read-only: the client never writes the key (#2358 PR 5e).
+ */
+export function readChatOwners(
+  v: unknown,
+  prev: ReadonlyMap<string, PublishedChatMessageOwner>,
+): ReadonlyMap<string, PublishedChatMessageOwner> {
+  const next = new Map<string, PublishedChatMessageOwner>();
+  if (isRecord(v)) {
+    for (const [key, raw] of Object.entries(v)) {
+      const facts = readChatOwner(raw);
+      if (facts) next.set(key, facts);
+    }
+  }
+  if (next.size !== prev.size) return next;
+  for (const [key, facts] of next) {
+    if (!sameChatOwner(prev.get(key), facts)) return next;
+  }
+  return prev;
+}
+
+/**
+ * How long the oldest stale chat message with no controlling badge has gone
+ * without a final answer since its last change of owner, in ms, or null when
+ * none is stale (#2358 PR 5e; ownership design §10.2: "The stale flag, counted
+ * from the message's last change of owner, only drives the stall banner").
+ * The same set as the summary's `chatStale`: a message that follows its open
+ * document is that document's badge's, so it is left out. The server decides
+ * `stale` (and only for a message written in its run); this only measures it.
+ */
+export function chatStaleWaitMs(
+  owners: ReadonlyMap<string, PublishedChatMessageOwner>,
+  now: number,
+): number | null {
+  let oldest: number | null = null;
+  for (const facts of owners.values()) {
+    if (!facts.stale || facts.heldBy === "document") continue;
+    if (oldest === null || facts.since < oldest) oldest = facts.since;
+  }
+  return oldest === null ? null : Math.max(0, now - oldest);
 }
 
 /** Field-wise equality, so a republish that changed nothing keeps identity. */
@@ -374,7 +488,12 @@ export const NO_AI_BIND_FAILED_TEXT =
 export const NO_AI_TEXT = "No AI will answer";
 
 export type ComposerLine =
-  | { readonly kind: "to"; readonly text: string }
+  /**
+   * `remedy: "start"` (#2358 PR 5e): some chat message is stale and Start can
+   * help, so the line offers Start beside whoever it names (ownership design
+   * §10.2; Bryan, 2026-11-24, "Yes (Recommended)").
+   */
+  | { readonly kind: "to"; readonly text: string; readonly remedy?: "start" }
   | { readonly kind: "none"; readonly text: string; readonly remedy: "start" | "settings" };
 
 function tandemLine(summary: OwnershipSummary | null): ComposerLine | null {
@@ -418,6 +537,53 @@ const FIRST_TO_CHECK_IN: ComposerLine = { kind: "to", text: "→ the first sessi
 export function composerLine(
   active: PublishedOwnerFields | undefined,
   summary: OwnershipSummary | null,
+  chatOwners?: ReadonlyMap<string, PublishedChatMessageOwner>,
+): ComposerLine | null {
+  const line = whoAnswers(active, summary);
+  // #2358 PR 5e (ownership design §10.2: the stale flag "drives ... the
+  // composer's Start offer (where Start can help)"; Bryan, 2026-11-24, "Yes
+  // (Recommended)", asked as "where Tandem's Claude could answer"): a stale
+  // chat message with no controlling badge, and Tandem's Claude could answer
+  // it, so the line offers 5b's Start. A "no AI" line already carries its own
+  // remedy. Not while Tandem's Claude is already running: Start cannot help
+  // then (the same test as the not-present offer). With the per-message facts
+  // (`chatOwners`, which App passes), not when every such stale message is
+  // held per message by another session: a per-message owner wins over
+  // presence (ownership design §7.1), so a started Tandem's Claude could not answer it.
+  if (
+    line?.kind === "to" &&
+    summary?.chatStale === true &&
+    summary.tandemStartable &&
+    !summary.tandemRunning &&
+    (chatOwners === undefined || startCouldAnswerStaleChat(chatOwners))
+  ) {
+    return { ...line, remedy: "start" };
+  }
+  return line;
+}
+
+/**
+ * Whether some stale message with no controlling badge (the summary's
+ * `chatStale` set, as {@link chatStaleWaitMs} reads it) is one a started
+ * Tandem's Claude could answer: not held per message by another session.
+ */
+function startCouldAnswerStaleChat(
+  chatOwners: ReadonlyMap<string, PublishedChatMessageOwner>,
+): boolean {
+  for (const facts of chatOwners.values()) {
+    if (!facts.stale || facts.heldBy === "document") continue;
+    const heldByAnother =
+      facts.heldBy === "message" &&
+      facts.owner !== null &&
+      facts.owner.displayKind !== "Tandem's Claude";
+    if (!heldByAnother) return true;
+  }
+  return false;
+}
+
+function whoAnswers(
+  active: PublishedOwnerFields | undefined,
+  summary: OwnershipSummary | null,
 ): ComposerLine | null {
   if (active) {
     const { owner, stale } = active;
@@ -447,6 +613,84 @@ export function composerLine(
   }
   if (summary.otherAiAttached) return FIRST_TO_CHECK_IN;
   return willStart(summary) ?? noAi(summary);
+}
+
+// ---------------------------------------------------------------------------
+// #2358 PR 5e: a chat message's controls (ownership design §10.2, "Chat with
+// no controlling badge"; Bryan, 2026-11-24, "A line per message
+// (Recommended)").
+
+/**
+ * A message Release's label, saying where it goes (Bryan, 2026-11-24, "Yes,
+ * say where (Recommended)"): the document Release's two destinations, as the
+ * native menu words them, and (decided here) the third a message has, its
+ * open document held by another session.
+ */
+export const MESSAGE_RELEASE_TEXT: Record<PublishedChatReleaseTo, string> = {
+  "tandem-claude": "Release — Back to Tandem's Claude",
+  unassigned: "Release — Unassigned",
+  document: "Release — Back to its document",
+};
+
+export interface MessageControlView {
+  /** Who holds the message: "terminal owner-k7qx", "Tandem's Claude" or "Unassigned". */
+  readonly holder: string;
+  /** Release's label, or null when Release does not apply. */
+  readonly release: string | null;
+  /** Assign applies ("Assign…" opens the owners list). */
+  readonly assign: boolean;
+}
+
+/**
+ * The control line under one unanswered message, or null when none is shown.
+ * Only for a message whose facts offer Assign or Release (never one that
+ * follows its open document: its document's badge has its controls), at any
+ * age, and, like the badge, only when it says something: the message has a
+ * per-message owner, nobody holds it, or another session is attached; always
+ * with no summary (stdio mode, or no launcher). No facts (ownership off, or an
+ * answered message) is always null.
+ */
+export function messageControlView(
+  facts: PublishedChatMessageOwner | undefined,
+  summary: OwnershipSummary | null,
+): MessageControlView | null {
+  if (!facts || (!facts.assign && !facts.release)) return null;
+  const saysSomething =
+    summary === null ||
+    summary.otherAiAttached ||
+    facts.heldBy === "message" ||
+    facts.owner === null;
+  if (!saysSomething) return null;
+  return {
+    holder: facts.owner === null ? UNASSIGNED_TEXT : holderName(facts.owner),
+    // The reader keeps `releaseTo` exactly where `release` holds.
+    release: facts.releaseTo === null ? null : MESSAGE_RELEASE_TEXT[facts.releaseTo],
+    assign: facts.assign,
+  };
+}
+
+/**
+ * A message control's refusal, in words (`POST /api/ownership`'s message
+ * answers, ADR-054's 5a-2 amendment): the four message answers in Bryan's
+ * copy (2026-11-24, "Accept (Recommended)"), a vanished session as for a
+ * document, and (decided here) a message-worded fallback.
+ */
+export function messageOwnershipErrorText(code: string | null): string {
+  switch (code) {
+    case "unknown-message":
+      return "This message was removed";
+    case "follows-document":
+      return "This message follows its document — use the document's tab";
+    case "answered":
+      return "This message was already answered";
+    case "not-controllable":
+      return "A local model is handling this message";
+    case "owner-detached":
+    case "unknown-owner":
+      return ownershipErrorText(code);
+    default:
+      return "Couldn't change who answers this message — try again";
+  }
 }
 
 /** A control's refusal, in words (ownership design §10.1's answers). */

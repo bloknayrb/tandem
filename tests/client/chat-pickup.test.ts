@@ -174,3 +174,50 @@ describe("chatPickup: superseded acknowledgements (#2358, the posts PR, R3.7)", 
     ).toEqual({ kind: "working" });
   });
 });
+
+// #2358 PR 5e (ownership design §6.5; Bryan, 2026-11-24, "Both (Recommended)"):
+// the row counts from the message's published `since` (its last change of
+// owner), for its waiting time and for its cut-off alike.
+describe("chatPickup: the published clock (#2358 PR 5e)", () => {
+  const clock = (id: string, since: number) => new Map([[id, { since: T0 + since }]]);
+
+  it("counts the waiting time from `since`, so a re-owed message is not instantly stalled", () => {
+    const msgs = [user("a", 0)];
+    const now = T0 + 9 * 60_000;
+    expect(isPickupStalled(chatPickup(msgs, now))).toBe(true);
+    const pickup = chatPickup(msgs, now, null, clock("a", 8 * 60_000));
+    expect(pickup).toEqual({ kind: "waiting", waitedMs: 60_000 });
+    expect(isPickupStalled(pickup)).toBe(false);
+  });
+
+  it("cuts off at PICKUP_MAX_AGE_MS from `since`, not from the arrival", () => {
+    const msgs = [user("a", 0)];
+    const now = T0 + PICKUP_MAX_AGE_MS + 60_000;
+    expect(chatPickup(msgs, now)).toBeNull();
+    expect(chatPickup(msgs, now, null, clock("a", 2 * 60_000))).toEqual({
+      kind: "waiting",
+      waitedMs: PICKUP_MAX_AGE_MS - 60_000,
+    });
+    expect(chatPickup(msgs, now, null, clock("a", 0))).toBeNull();
+  });
+
+  it("the cut-off from `since` covers the received and working states too", () => {
+    const now = T0 + PICKUP_MAX_AGE_MS + 60_000;
+    expect(chatPickup([user("a", 0, true)], now)).toBeNull();
+    expect(chatPickup([user("a", 0, true)], now, null, clock("a", 5 * 60_000))).toEqual({
+      kind: "received",
+    });
+    const working = [user("a", 0), claude("ack", 1_000, { replyTo: "a", inProgress: true })];
+    expect(chatPickup(working, now)).toBeNull();
+    expect(chatPickup(working, now, null, clock("a", 5 * 60_000))).toEqual({ kind: "working" });
+  });
+
+  it("a clock for another message, or none (ownership off), counts from the timestamp as before", () => {
+    const msgs = [user("a", 0), user("b", 1_000)];
+    const now = T0 + 5 * 60_000;
+    const before = chatPickup(msgs, now);
+    expect(chatPickup(msgs, now, null, clock("a", 4 * 60_000))).toEqual(before);
+    expect(chatPickup(msgs, now, null, new Map())).toEqual(before);
+    expect(before).toEqual({ kind: "waiting", waitedMs: 5 * 60_000 - 1_000 });
+  });
+});

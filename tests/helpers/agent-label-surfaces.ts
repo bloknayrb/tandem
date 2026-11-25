@@ -100,6 +100,9 @@ export async function chatByline(
       noticeAnnouncement: "",
       ownerLine: null,
       ownerLineTakeBack: null,
+      pickupClock: new Map(),
+      messageOwners: new Map(),
+      ownershipSummary: null,
       onOwnerLineRemedy: () => {},
     },
   });

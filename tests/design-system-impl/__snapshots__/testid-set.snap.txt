@@ -66,6 +66,13 @@ chat-composer-input
 chat-greeting-late
 chat-greeting-late-action
 chat-greeting-late-take-back
+chat-message-owner-announcer
+chat-message-owner-assign-{*}
+chat-message-owner-choice-{*}
+chat-message-owner-error-{*}
+chat-message-owner-menu
+chat-message-owner-release-{*}
+chat-message-owner-{*}
 chat-messages
 chat-notice-live
 chat-notice-{*}
