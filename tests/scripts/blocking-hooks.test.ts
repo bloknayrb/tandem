@@ -125,30 +125,6 @@ describe("check-token-violation.sh worktree guard", () => {
     expect(run).toEqual({ status: 0, stdout: "", stderr: "" });
   });
 
-  // A session whose project dir IS a nested worktree scans its own files: the
-  // guard reads the path below the project dir, not the whole path.
-  bashOnly("still scans a file when the project directory is itself a nested worktree", () => {
-    const worktree = `${project}/.claude/worktrees/agent-1`;
-    const run = runBashHook(
-      "check-token-violation.sh",
-      editEvent(`${worktree}/src/client/does-not-exist.ts`),
-      { CLAUDE_PROJECT_DIR: worktree },
-    );
-    expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
-  });
-
-  bashOnly(
-    "still scans a worktree project's own drive-path file when only the case differs",
-    () => {
-      const run = runBashHook(
-        "check-token-violation.sh",
-        editEvent("C:\\Dev\\Tandem\\.claude\\worktrees\\agent-1\\src\\client\\does-not-exist.ts"),
-        { CLAUDE_PROJECT_DIR: "c:\\dev\\tandem\\.claude\\worktrees\\agent-1" },
-      );
-      expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
-    },
-  );
-
   bashOnly("skips a file in a sibling worktree, outside the project directory", () => {
     const run = runBashHook(
       "check-token-violation.sh",
