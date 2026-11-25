@@ -236,17 +236,77 @@ test("E5: saving the working directory surfaces the success toast", async ({ pag
   const toast = page.locator("[data-testid='toast-container']");
   await expect(toast).toBeVisible({ timeout: 5_000 });
   await expect(toast).toContainText("Working directory saved.");
+  // #2489: the always-mounted announcer speaks it, not a role on the card the
+  // `{#each}` inserted together with its text.
+  const announcer = page.locator("[data-testid='toast-announcer-polite']");
+  await expect(announcer).toHaveText("Working directory saved.");
+  await expect(toast.locator("[role='status'], [role='alert']")).toHaveCount(0);
 
   // #2257: the toast must paint ABOVE the still-open modal's scrim, not as a
   // washed-out ghost beneath it. Probe the card (pointer-events: auto), not the
   // stack (pointer-events: none, which elementFromPoint skips), under poll
   // because the card slides in.
   await expect(page.locator(MODAL)).toBeVisible();
-  await expect.poll(() => ownsItsPixels(toast.getByRole("status").first())).toBe(true);
+  await expect
+    .poll(() => ownsItsPixels(toast.locator(":scope > [data-toast-key]").first()))
+    .toBe(true);
   // And now that it is clickable over the modal, dismissing it must not count
   // as a click outside Settings.
   await toast.locator("[data-testid^='toast-dismiss-']").first().click();
   await expect(toast).toHaveCount(0);
+  await expect(page.locator(MODAL)).toBeVisible();
+  // The toast is gone, so its sentence leaves the announcer, which stays mounted.
+  await expect(announcer).toHaveText("");
+});
+
+// #2489: closing a toast from the keyboard must not strand focus on <body>.
+// With no other toast left, focus goes back to where it was before it entered
+// the stack.
+test("dismissing a focused toast from the keyboard returns focus to where it came from", async ({
+  page,
+}) => {
+  await page.route("**/api/integrations", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ integrations: [{ kind: "claude-code" }] }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.route("**/api/launcher/working-directory", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, workingDirectory: null }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await openEditor(page);
+  await openSettingsModal(page);
+  const tab = page.locator("[data-testid='settings-modal-tab-claude-code']");
+  await tab.click();
+  await expect(page.locator("[data-testid='settings-modal-working-directory']")).toBeVisible({
+    timeout: 5_000,
+  });
+  await page.locator("[data-testid='settings-modal-working-directory-save']").click();
+  const toast = page.locator("[data-testid='toast-container']");
+  await expect(toast).toContainText("Working directory saved.", { timeout: 5_000 });
+
+  await tab.focus();
+  const dismiss = toast.locator("[data-testid^='toast-dismiss-']").first();
+  await dismiss.focus();
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(toast).toHaveCount(0);
+  await expect(tab).toBeFocused();
   await expect(page.locator(MODAL)).toBeVisible();
 });
 

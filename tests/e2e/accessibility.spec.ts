@@ -38,8 +38,8 @@ import {
 // Scanning the whole document and subtracting known noise fails loudly when a
 // new surface appears; an allowlist fails quietly when one escapes it.
 //
-// `utils/portal.ts` exists but has zero call sites, and every other overlay is
-// rendered inline in `App.svelte` (several carry comments saying so explicitly,
+// There is no portal helper (the unused `utils/portal.ts` was deleted, #1825),
+// and every other overlay is rendered inline in `App.svelte` (several carry comments saying so explicitly,
 // left behind by past un-portaling refactors). The slash menu is the only
 // out-of-root surface today — but that is a fact that can change, which is the
 // argument for not re-introducing the allowlist.

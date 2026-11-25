@@ -274,7 +274,7 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
           "owns the message stamps it read, so it leaves waiting; if no final answer follows (the run " +
           "dies or gives up), nothing starts or wakes Claude for it, and after a server restart it is " +
           "carried over and never re-owed. The user notices and sends the message again. (The same " +
-          "route's acknowledgement from a non-owner is PR 4's channel-reply row.)",
+          "route's acknowledgement from a non-owner was the channel-reply row, closed by PR 4b's permit.)",
         closedBy:
           "A design for acknowledged-but-unanswered chat after 0.32 (#2484), then its change with a test.",
         acceptedFor:

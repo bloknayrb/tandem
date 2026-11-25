@@ -83,23 +83,6 @@ tauri-plugin-ui-inspector = { version = "0.1", optional = true }
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
-# Start-at-login (#1236). Wrapped in app-defined commands (src/autostart.rs)
-# rather than exposed via its JS API, so no `autostart:default` capability
-# grant and no @tauri-apps/plugin-autostart npm dependency are needed.
-#
-# Held below 2.7: 2.7 moves to `auto-launch` 0.6, whose Windows `enable()`
-# defaults to `WindowsEnableMode::Dynamic` — it writes the machine-wide
-# `HKLM\...\Run` value whenever the process is elevated (Run as administrator,
-# or any launch with UAC off) and falls back to HKCU only on access-denied. The
-# plugin's `Builder` exposes no way to select `CurrentUser`. Because
-# `refresh_registration` calls `enable()` on every launch, one elevated launch
-# would plant an all-users Run entry pointing at this user's per-user install;
-# a later non-elevated `disable()` ignores the HKLM access-denied, `is_enabled()`
-# keeps reading HKLM as on (the toggle sticks with `readback-mismatch`), and the
-# uninstall scrub only deletes HKCU. Lift the hold (here and in
-# .github/dependabot.yml) only once Tandem can pin the Windows mode to
-# CurrentUser — and then make `uninstall_scrub.rs` cover whatever it writes.
-tauri-plugin-autostart = ">=2, <2.7"
 # Chat-reply notifications (#2168). Driven from app-defined commands
 # (src/notifications.rs), not the plugin's JS API, so the click handler can
 # call `show_main_window_for_user`. 2.6 is the floor: it is the first release
@@ -142,6 +125,25 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSUserNotification",
 ] }
 
+# Start-at-login (#1236) on macOS and Linux ONLY. Wrapped in app-defined
+# commands (src/autostart.rs) rather than exposed via its JS API, so no
+# `autostart:default` capability grant and no @tauri-apps/plugin-autostart npm
+# dependency are needed.
+#
+# Not a Windows dependency at all (#2160): from 2.7 the plugin uses
+# `auto-launch` 0.6, whose Windows `enable()` defaults to
+# `WindowsEnableMode::Dynamic` and writes the machine-wide `HKLM\...\Run` value
+# whenever the process is elevated, falling back to HKCU only on access-denied,
+# with no `Builder` knob to choose. On Windows, src/autostart_win.rs writes
+# Tandem's own HKCU-only registration instead, and leaving the crate out of the
+# Windows graph is what makes any Windows use of it a compile error rather than
+# a review catch. `tests/build/autostart-windows-scope.test.ts` pins this
+# section's cfg. When bumping it, re-check that `uninstall_scrub.rs`'s
+# `autostart_entry_path` still names the file `auto-launch` writes on macOS and
+# Linux.
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))'.dependencies]
+tauri-plugin-autostart = "2"
+
 # Windows-only DWM bindings: force rounded window corners (DWMWCP_ROUND) so
 # snapping/maximizing keeps the floating-chrome rounded surface, and suppress
 # the borderless-window outline (DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE). See #984.
@@ -151,6 +153,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 # undocumented, ordinal-only uxtheme.dll "preferred app mode" exports
 # (`win_app_mode.rs`) and read the High Contrast accessibility flag that
 # gates them.
+# Registry (#2160): Tandem's own HKCU-only start-at-login registration
+# (`autostart_win.rs`), in place of tauri-plugin-autostart on Windows.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -158,6 +162,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",

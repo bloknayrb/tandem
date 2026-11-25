@@ -4,6 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
+import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
   type Annotation,
   type ChatMessage,
@@ -1393,8 +1394,9 @@ const actionExecutor = mountActionExecutor({
   // `opts` lets a non-launcher caller (the executor's failure funnel) classify
   // its toast correctly instead of inheriting `type: "launcher"`, and supply a
   // deterministic id. The default id is millisecond-keyed and ToastContainer
-  // keys its `{#each}` on it, so two toasts pushed in the same millisecond are
-  // an `each_key_duplicate` throw.
+  // keys its `{#each}` on it when the toast has no `dedupKey` (`toastKey`), so
+  // two such toasts pushed in the same millisecond are an `each_key_duplicate`
+  // throw.
   notify: (severity, message, opts) => {
     notifications.push({
       id: opts?.id ?? `launcher-${Date.now()}`,
@@ -2816,10 +2818,10 @@ const marginReplies = createAnnotationReplies({
 const heldCount = $derived.by(() => {
   let n = 0;
   for (const a of visibleAnnotations) {
-    if (a.heldInSolo === true) n++;
+    if (isHeldInSoloMarker(a.heldInSolo)) n++;
     if (a.type === "comment") {
       const replies = marginReplies.byId.get(a.id);
-      if (replies) for (const r of replies) if (r.heldInSolo === true) n++;
+      if (replies) for (const r of replies) if (isHeldInSoloMarker(r.heldInSolo)) n++;
     }
   }
   return n;
@@ -3397,7 +3399,11 @@ function dismissModelPicker() {
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
     />
 
-    <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+    <ToastContainer
+      toasts={notifications.toasts}
+      announced={notifications.announced}
+      onDismiss={notifications.dismiss}
+    />
 
     <ActivityTray
       items={notifications.activity}

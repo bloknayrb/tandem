@@ -5,6 +5,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { MODELS_SCHEMA_VERSION } from "../../src/shared/models/contract";
 import type { ToolResponse } from "../../src/shared/types";
 import {
+  ALERT_TOAST_CARDS,
   cleanupAllOpenDocuments,
   expectOnlyAllowanceNotices,
   McpTestClient,
@@ -285,9 +286,7 @@ test("a failed run names its cause", async ({ page }) => {
   await sendChat(page, "this one fails");
   await expect.poll(() => requestsCarrying("this one fails").length).toBeGreaterThan(0);
 
-  const alerts = page
-    .locator("[data-testid='toast-container'] [role='alert']")
-    .filter({ hasText: RUN_FAILURE_NOT_FOUND });
+  const alerts = page.locator(ALERT_TOAST_CARDS).filter({ hasText: RUN_FAILURE_NOT_FOUND });
   await expect(alerts).toHaveCount(1);
   // Exactly the text, not a substring of something longer.
   await expect(alerts.locator(".msg")).toHaveText(RUN_FAILURE_NOT_FOUND);

@@ -134,7 +134,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Accessibility:** #2489 (focus is lost when a focused toast closes, and new toasts may not be announced).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run; its pre-live Worker fixes merged in #2344, and the remaining U-checks re-run on master's Worker before the live deploy; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
+- **CI and tests:** #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 
@@ -231,10 +231,10 @@ rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 - CHANGELOG `[1.0.0]` section finalized.
 - Every redesign artboard is either shipped or deferred with a reason.
 - Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
-- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.
-  - **Rehearsal build.** Rehearsing needs a way to point a build at a staged manifest. The smoke checklist assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is a compiled const.
+- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. **Written; not rehearsed** (#2280): [bad-release-runbook.md](bad-release-runbook.md).
+  - **Rehearsal build.** Exists: `npm run build:tauri:staging` makes a staging build whose updater reads a manifest you name, baked in at build time through a Tauri `--config` overlay. Shipped builds still have no runtime override, as decided 2026-10-22. It covers the public route only; the licensed route needs a staging Worker that does not exist yet.
+  - **Rehearsal.** Needs Bryan with a test machine and the npm login; the steps are in the runbook. It uses a separate staging repository, so the real pointer never moves.
   - **Desktop.** The license update Worker is meant to proxy the same `releases/latest/download/latest.json` (its `wrangler.toml` holds a placeholder until it is deployed), and it adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
-  - **npm.** `npm dist-tag` and/or `npm deprecate`.
   - **ADR-043.** This doesn't conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback.
 
 ## After v1.0

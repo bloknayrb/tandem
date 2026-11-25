@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -152,27 +152,48 @@ describe("check-token-violation.sh worktree guard", () => {
     expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
 
+  // A session whose project directory is itself a nested worktree scans its
+  // own edits: the worktree test reads only the path below the project dir.
+  const worktreeProject = `${project}/.claude/worktrees/agent-1`;
+
+  bashOnly("scans a file inside a project directory that is itself a nested worktree", () => {
+    const run = runBashHook(
+      "check-token-violation.sh",
+      editEvent(`${worktreeProject}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: worktreeProject },
+    );
+    expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
+  });
+
+  bashOnly("still skips a different nested worktree from a worktree project directory", () => {
+    const run = runBashHook(
+      "check-token-violation.sh",
+      editEvent(`${project}/.claude/worktrees/agent-2/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: worktreeProject },
+    );
+    expect(run).toEqual({ status: 0, stdout: "", stderr: "" });
+  });
+
+  bashOnly("scans a worktree project's drive-path file when only the case differs", () => {
+    const run = runBashHook(
+      "check-token-violation.sh",
+      editEvent("C:\\Dev\\Tandem\\.claude\\worktrees\\agent-1\\src\\client\\does-not-exist.ts"),
+      { CLAUDE_PROJECT_DIR: "c:\\dev\\tandem\\.claude\\worktrees\\agent-1" },
+    );
+    expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
+  });
+
   bashOnly("still runs the scanner for a file inside the project", () => {
-    // The guard skips every path under `.claude/worktrees/`, so when this
-    // checkout IS such a worktree, ROOT itself would read as skipped. Reach
-    // the same checkout through a symlink outside that directory instead.
-    let project = ROOT;
-    let linkDir: string | undefined;
-    if (ROOT.replace(/\\/g, "/").includes("/.claude/worktrees/")) {
-      linkDir = mkdtempSync(path.join(os.tmpdir(), "tandem-hook-root-"));
-      project = path.join(linkDir, "tandem");
-      symlinkSync(ROOT, project, "dir");
-    }
-    try {
-      const run = runBashHook(
-        "check-token-violation.sh",
-        editEvent(`${project}/src/client/does-not-exist.ts`),
-        { CLAUDE_PROJECT_DIR: project },
-      );
-      expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
-    } finally {
-      if (linkDir) rmSync(linkDir, { recursive: true, force: true });
-    }
+    // `project`, not ROOT: the guard skips any path with a `.claude/worktrees/`
+    // segment, so a ROOT that is itself a worktree checkout (where workflow
+    // agents run this suite before pushing) would read as skipped. The scanner
+    // still runs from ROOT and reports the missing file on stderr.
+    const run = runBashHook(
+      "check-token-violation.sh",
+      editEvent(`${project}/src/client/does-not-exist.ts`),
+      { CLAUDE_PROJECT_DIR: project },
+    );
+    expect(run.stderr, "the guard returned before the scanner ran").not.toBe("");
   });
 });
 

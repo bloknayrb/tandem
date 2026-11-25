@@ -87,8 +87,9 @@ export interface ActionNotifyOptions {
   /** Coalesce repeats of the same failure onto one row. */
   dedupKey?: string;
   /** Stable toast id. Without one App mints `launcher-${Date.now()}`, and
-   * ToastContainer keys its `{#each}` on the id — two toasts in the same
-   * millisecond are an `each_key_duplicate` throw. */
+   * ToastContainer keys its `{#each}` on the id when a toast has no
+   * `dedupKey` (`toastKey`) — two such toasts in the same millisecond are an
+   * `each_key_duplicate` throw. */
   id?: string;
 }
 

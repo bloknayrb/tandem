@@ -3,6 +3,7 @@ import { hideFromAI, readLiveMode, readModeState } from "../../src/server/mode.j
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_MODE, Y_MAP_USER_AWARENESS } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
+import { isHeldInSoloMarker } from "../../src/shared/sanitize.js";
 
 // WS-A2 Phase 1: `src/server/mode.ts` is the server-authoritative source for
 // "what mode are we in, and should the AI see this record?" — the single seam
@@ -88,5 +89,32 @@ describe("hideFromAI truth table", () => {
     expect(hideFromAI(unheldUserRec, "indeterminate")).toBe(false);
     expect(hideFromAI(userRec, "indeterminate")).toBe(false); // marker absent → surfaces
     expect(hideFromAI(claudeRec, "indeterminate")).toBe(false);
+  });
+
+  // #2481: replies reach `hideFromAI` unsanitized, so the indeterminate branch
+  // must fail CLOSED on any marker that is not literally `false` or absent —
+  // the same rule `replyPrivacyAllows` applies to `private` (#2460).
+  it.each([
+    ['the string "true"', "true"],
+    ['the string "false"', "false"],
+    ["1", 1],
+    ["0", 0],
+    ["null", null],
+    ["an object", {}],
+  ])("indeterminate: a non-boolean marker (%s) holds", (_label, marker) => {
+    expect(hideFromAI({ author: "user", heldInSolo: marker }, "indeterminate")).toBe(true);
+    // The marker never matters outside indeterminate.
+    expect(hideFromAI({ author: "user", heldInSolo: marker }, "tandem")).toBe(false);
+    expect(hideFromAI({ author: "claude", heldInSolo: marker }, "solo")).toBe(false);
+  });
+});
+
+describe("isHeldInSoloMarker (#2481)", () => {
+  it("is false only for literally `false` or absent", () => {
+    expect(isHeldInSoloMarker(undefined)).toBe(false);
+    expect(isHeldInSoloMarker(false)).toBe(false);
+    for (const v of [true, "true", "false", "", 0, 1, null, {}, []]) {
+      expect(isHeldInSoloMarker(v)).toBe(true);
+    }
   });
 });

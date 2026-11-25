@@ -306,6 +306,7 @@ describe("flag off: today's behaviour, and nothing created", () => {
       carriedOver: [],
       chatAnswerers: [],
       repliers: [],
+      messageLosses: [],
     });
     const text = logs.join("\n");
     expect(text).toContain(
