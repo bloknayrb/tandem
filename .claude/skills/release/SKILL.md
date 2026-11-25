@@ -289,6 +289,11 @@ other six.
 
 ## Important
 
+- **A published release turns out broken?** Follow
+  [`docs/bad-release-runbook.md`](../../../docs/bad-release-runbook.md): move the
+  desktop `latest` pointer and the npm dist-tag back, point the plugin ref back
+  if step 9 already ran, then fix forward with a higher version.
+
 - CLAUDE.md carries no version stamp; edit its **Status** section only if a
   flag flip, a dark system, a v1.0 blocker or the MCP tool counts changed in
   this release.

@@ -128,6 +128,7 @@ const EMPTY_SNAPSHOT = {
   carriedOver: [],
   chatAnswerers: [],
   repliers: [],
+  messageLosses: [],
 };
 
 describe("tools/list while dark", () => {
@@ -177,6 +178,10 @@ describe("tools/list while dark", () => {
       '"a chat post of yours claimed it"',
       // #2358 PR 3b-2b4c: a loss to Tandem's Claude.
       `"Tandem's Claude took it back"`,
+      // #2358 PR 5a: Release and Assign.
+      '"it was released"',
+      '"it was assigned to another session"',
+      '"it was assigned to this session"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }
