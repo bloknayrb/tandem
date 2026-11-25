@@ -145,8 +145,8 @@ jobs:
           # .gitattributes cannot mark a source file binary (-diff) to hide it.
           # Real binaries still show as "Binary files differ". No textconv or
           # external diff drivers, which a PR could also name.
-          git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \
-            --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
+          git -C pr -c core.quotePath=false --attr-source="origin/$DEFAULT_BRANCH" diff \
+            --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff
           # Git also calls any file with a NUL byte binary, whatever the
           # attributes, so a source file could hide its change that way. List
           # every path shown as binary; the prompt has the model Read the ones

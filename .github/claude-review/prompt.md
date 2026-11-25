@@ -36,6 +36,6 @@ Verify a specialist's finding against the code yourself before you include it.
 Return only the JSON the schema asks for:
 
 - `summary`: two to five sentences on what the PR does and your overall verdict.
-- `findings`: one entry per defect. `path` is the repo-relative path as it appears in the diff. `line` is the line number in the new version of the file: take it from the number printed at the start of the diff line, or from Read's own line numbers, **never** from a line's position within `pr.diff`. Pick a line the diff shows where possible, so the finding is posted on it. `severity` is `important` for a real defect and `nit` for a minor one. `body` says what is wrong, why it matters, and the failure scenario.
+- `findings`: one entry per defect. `path` is the repo-relative path as it appears in the diff. `line` is the line number in the new version of the file: take it from the number printed at the start of the diff line, or from Read's line numbers when you Read the source file itself, **never** from a line's position within `pr.diff` (Read's numbers on `pr.diff` are exactly those positions). Pick a line the diff shows where possible, so the finding is posted on it. `severity` is `important` for a real defect and `nit` for a minor one. `body` says what is wrong, why it matters, and the failure scenario.
 
 An empty `findings` list is a valid answer when the change is sound.

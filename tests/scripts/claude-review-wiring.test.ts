@@ -267,8 +267,8 @@ describe("workspace", () => {
   it("diffs with the default branch's attributes, without textconv or external diff drivers", () => {
     const prep = stepNamed("Prepare review inputs");
     expect(prep.run).toContain(
-      'git -C pr --attr-source="origin/$DEFAULT_BRANCH" diff --no-textconv --no-ext-diff \\\n' +
-        '  --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff',
+      'git -C pr -c core.quotePath=false --attr-source="origin/$DEFAULT_BRANCH" diff \\\n' +
+        '  --no-textconv --no-ext-diff --merge-base "origin/$BASE_REF" "$HEAD_SHA" > inputs/pr.diff',
     );
     expect(prep.run).not.toContain("--text");
     expect(prep.env?.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
@@ -303,6 +303,8 @@ describe("workspace", () => {
     const prompt = readFileSync(path.join(ROOT, ".github/claude-review/prompt.md"), "utf8");
     expect(prompt).toContain("**line number in the new version of the file**");
     expect(prompt).toContain("**never** from a line's position within `pr.diff`");
+    // Read's own numbers on pr.diff are positions in pr.diff, the #2557 failure.
+    expect(prompt).toContain("Read's line numbers when you Read the source file itself");
   });
 
   it("keeps the step order the controls depend on", () => {
