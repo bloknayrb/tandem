@@ -47,8 +47,9 @@ interface Props {
   initialError?: string | null;
   /**
    * Where focus goes back when this popover closes: the badge that opened it,
-   * or, opened from the native menu, whatever held focus then. Skipped when it
-   * has left the DOM.
+   * or, opened from the native menu, whatever held focus then. When it has
+   * left the DOM (a Release whose republish hid the badge), the document's tab
+   * takes focus instead, if it is still there.
    */
   returnFocus?: HTMLElement | null;
   onclose: () => void;
@@ -105,15 +106,23 @@ function firstRow(): HTMLButtonElement | null {
  * popover has left the DOM and any press has moved focus, and only when focus
  * then sits nowhere (it was inside the popover, or a press landed on something
  * that takes no focus): a press on the editor or another control keeps it.
+ * An opener that has left the DOM by then (a successful Release whose
+ * republish hid the badge) falls back to the document's tab, so focus does
+ * not stay on `<body>`.
  */
 function dismiss() {
-  // Read before `onclose`: closing clears the parent's state the prop reads from.
+  // Read before `onclose`: closing clears the parent's state the props read from.
   const target = returnFocus;
+  const tabId = documentId;
   onclose();
   if (!target) return;
   setTimeout(() => {
     const active = document.activeElement;
-    if (target.isConnected && (active === null || active === document.body)) target.focus();
+    if (active !== null && active !== document.body) return;
+    const next = target.isConnected
+      ? target
+      : document.querySelector<HTMLElement>(`[data-testid="tab-${CSS.escape(tabId)}"][role="tab"]`);
+    next?.focus();
   }, 0);
 }
 
@@ -155,6 +164,9 @@ $effect(() =>
 
 $effect(() => {
   const onKey = (e: KeyboardEvent) => {
+    // Another handler already took this Escape (the command palette's capture
+    // listener closes itself and preventDefaults), or an IME is composing.
+    if (e.defaultPrevented || e.isComposing) return;
     if (e.key === "Escape") dismiss();
   };
   document.addEventListener("keydown", onKey);

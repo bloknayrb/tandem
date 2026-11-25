@@ -90,12 +90,16 @@ beforeEach(() => {
   (Element.prototype as any).getAnimations = () => [];
 });
 
-afterEach(() => {
+afterEach(async () => {
   // Unmount, not only clear the body: a mounted palette or popover keeps its
   // window and document listeners, which would see the next test's events.
   cleanup();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
+  // Let a closed popover's deferred focus hand-back run against this empty
+  // body: left pending, it would fire in the next test and, its badge gone,
+  // fall back to that test's tab of the same id.
+  await new Promise((r) => setTimeout(r, 0));
 });
 
 function jsonResponse(status: number, body: unknown) {
@@ -393,6 +397,43 @@ describe("the owner badge and its popover", () => {
     });
     await settle();
     expect(r.getByTestId("tab-owner-badge")).toBeTruthy();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+  });
+
+  it("leaves an Escape another handler already took open (the palette's capture listener)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = renderHeld();
+    await fireEvent.click(r.getByTestId("tab-owner-badge"));
+    await settle();
+    // The command palette closes itself on Escape from a capture-phase window
+    // listener and preventDefaults; this stands in for it.
+    const take = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.preventDefault();
+    };
+    window.addEventListener("keydown", take, { capture: true });
+    try {
+      await fireEvent.keyDown(document, { key: "Escape", cancelable: true });
+      await settle();
+      expect(r.getByTestId("tab-owner-menu")).toBeTruthy();
+    } finally {
+      window.removeEventListener("keydown", take, { capture: true });
+    }
+    // Control: the same Escape, not taken, closes it.
+    await fireEvent.keyDown(document, { key: "Escape", cancelable: true });
+    await settle();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+  });
+
+  it("leaves an Escape that cancels an IME composition open", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: [] }));
+    const r = renderHeld();
+    await fireEvent.click(r.getByTestId("tab-owner-badge"));
+    await settle();
+    await fireEvent.keyDown(document, { key: "Escape", isComposing: true });
+    await settle();
+    expect(r.getByTestId("tab-owner-menu")).toBeTruthy();
+    await fireEvent.keyDown(document, { key: "Escape", isComposing: false });
+    await settle();
     expect(r.queryByTestId("tab-owner-menu")).toBeNull();
   });
 
@@ -857,7 +898,7 @@ describe("every Start lists what it takes back: the chat rows and the palette", 
 /**
  * The popover is a dialog (role="dialog"), so it takes focus when it opens and
  * gives it back to its opener when it closes (Escape, an outside press, or a
- * successful action), if the opener is still in the DOM.
+ * successful action), or to its tab when the opener has left the DOM.
  */
 describe("the owner popover's focus", () => {
   const held: PublishedOwnerFields = {
@@ -992,6 +1033,41 @@ describe("the owner popover's focus", () => {
     await nextTask();
     expect(r.queryByTestId("tab-owner-menu")).toBeNull();
     expect(document.activeElement).toBe(input);
+  });
+
+  it("falls back to the tab when a successful Release's republish hid the badge", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/ownership/owners")) return jsonResponse(200, { data: [] });
+      if (init?.method === "POST") return jsonResponse(200, { data: { changed: true } });
+      throw new Error(`unexpected ${url}`);
+    });
+    // No other AI attached: once the document is unowned, the badge goes.
+    const summary: OwnershipSummary = { ...SUMMARY, otherAiAttached: false };
+    const tabs = [makeTab("a")];
+    const r = render(DocumentTabs, {
+      props: {
+        ...stripProps(tabs),
+        ownerFields: new Map([["a", held]]),
+        ownershipSummary: summary,
+      },
+    });
+    await fireEvent.click(r.getByTestId("tab-owner-badge"));
+    await settle();
+    await fireEvent.click(r.getByTestId("tab-owner-release"));
+    await settle();
+    expect(r.queryByTestId("tab-owner-menu")).toBeNull();
+    // The server's republish lands before the deferred hand-back runs.
+    await r.rerender({
+      ...stripProps(tabs),
+      ownerFields: new Map([["a", { owner: null, stale: null, hint: null, waitingSince: null }]]),
+      ownershipSummary: summary,
+    });
+    await settle();
+    expect(r.queryByTestId("tab-owner-badge")).toBeNull();
+    await nextTask();
+    const pill = r.container.querySelector('[data-testid="tab-a"][role="tab"]');
+    expect(pill).toBeTruthy();
+    expect(document.activeElement).toBe(pill);
   });
 
   it("does not reach for a badge that has left the DOM", async () => {
