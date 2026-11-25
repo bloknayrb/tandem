@@ -41,10 +41,13 @@ const TOKEN = "sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
  * The `result` events of the 13 measured `/code-review high` runs (CLI
  * 2.1.332, locked down like CI, 2026-11-25), keyed by corpus id. Only the
  * result is kept: the full streams carry the measuring machine's paths.
+ * CLEAN is a probe run on the same CLI over a one-word typo fix, the only
+ * real output of the CLI's "no issues" line.
  */
-const FIXTURES = JSON.parse(
+type Fixture = { subtype: string; is_error: boolean; num_turns: number; result: string };
+const { CLEAN, ...FIXTURES } = JSON.parse(
   readFileSync(path.join(ROOT, "tests/scripts/fixtures/claude-review-results.json"), "utf8"),
-) as Record<string, { subtype: string; is_error: boolean; num_turns: number; result: string }>;
+) as Record<string, Fixture>;
 
 const stream = (...events: unknown[]) => events.map((e) => JSON.stringify(e)).join("\n");
 const ok = (result: string) => ({
@@ -136,6 +139,21 @@ describe("classify: recognising a review", () => {
     expect(isRecognisedReview(NO_ISSUES)).toBe(true);
     expect(isRecognisedReview("Code review found no issues.")).toBe(true);
     expect(NO_ISSUES_RE.test("I'd say Code review found no issues. maybe")).toBe(false);
+    expect(NO_ISSUES_RE.test("Code review found no issues. Also see below.")).toBe(false);
+  });
+
+  it("posts the real clean-review output, recognised by the no-issues line alone", () => {
+    expect(CLEAN?.subtype).toBe("success");
+    const text = CLEAN?.result ?? "";
+    expect(REVIEW_ITEM_RE.test(text)).toBe(false);
+    expect(NO_ISSUES_RE.test(text)).toBe(true);
+    expect(
+      classify({
+        streamText: stream({ type: "result", ...CLEAN }),
+        reviewOutcome: "success",
+        token: TOKEN,
+      }),
+    ).toEqual({ outcome: "posted", text });
   });
 
   it.each([

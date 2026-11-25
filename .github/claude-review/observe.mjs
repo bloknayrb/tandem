@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
  * tool_use carries, and this log is public. Skill is listed so a call to it
  * (which the lockdown should make impossible) shows by name.
  */
-export const KNOWN_TOOLS = new Set(["Read", "Grep", "Glob", "Agent", "Task", "Skill", "StructuredOutput"]);
+export const KNOWN_TOOLS = new Set(["Read", "Grep", "Glob", "Agent", "Task", "Skill"]);
 
 /** Pure summary of a stream-json transcript. Task calls are keyed "task:<name>". */
 export function summarize(streamText) {
