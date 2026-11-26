@@ -98,6 +98,7 @@ import { readLauncherSettings, SettingsNewerError, updateLauncherSettings } from
 import {
   LicenseRefusedError,
   type RespawnResult,
+  RunFileGuardError,
   resolveRouteCwd,
   type Supervisor,
 } from "./supervisor.js";
@@ -1211,8 +1212,11 @@ function sendUnexpected(res: Response, err: unknown, label: string): void {
     if (!res.headersSent) sendUnlicensed(res, err.refusal);
     return;
   }
-  // Full error (stack, etc.) stays server-side; the wire gets a bounded message.
-  console.error(`[Launcher routes] ${label}:`, err);
+  // The run files' read-back refused the spawn: `spawnOnce` logged its one
+  // line (the file's kind, never its contents) and scheduled the restart.
+  // Full error (stack, etc.) stays server-side for anything else; the wire
+  // gets a bounded message either way.
+  if (!(err instanceof RunFileGuardError)) console.error(`[Launcher routes] ${label}:`, err);
   if (res.headersSent) return;
   const detail = err instanceof Error ? err.message : String(err);
   // The missing-reaper throw is the one well-known, user-actionable failure.

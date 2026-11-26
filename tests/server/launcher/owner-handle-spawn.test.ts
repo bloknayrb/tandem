@@ -28,6 +28,7 @@ import {
   childEnv,
   createSupervisor as createRealSupervisor,
   LicenseRefusedError,
+  RunFileGuardError,
   type Supervisor,
 } from "../../../src/server/launcher/supervisor.js";
 import type { AiRefusal } from "../../../src/server/license/ai-refusal.js";
@@ -897,6 +898,117 @@ describe("teardown on every exit path (R4)", () => {
       ).not.toBeNull();
     },
   );
+});
+
+/**
+ * The run files' read-back before the spawn (smoke S1, Claude Code 2.1.332 on
+ * Linux: a truncated `--settings` file is ignored silently, so the plugin's
+ * Tandem toolset loads beside the launcher's; Bryan, 2026-11-26, "Guard it
+ * before the flip (Recommended)"). The hold damages the first spawn's files
+ * after the write and before the spawn; the crash restart's are left alone.
+ */
+describe("the run files are read back before the spawn (S1)", () => {
+  const GUARD_LINE = (kind: string) =>
+    `[Launcher] Not spawning: the run ${kind} is missing or does not read back as written`;
+
+  /** Damage the first spawn's file of `kind` (`"mcp"` or `"settings"`). */
+  function damageOnce(kind: "mcp" | "settings", how: "delete" | "truncate" | "none") {
+    let calls = 0;
+    return async () => {
+      calls += 1;
+      if (calls > 1 || how === "none") return;
+      const name = runFilesOnDisk().find((n) => n.startsWith(`tandem-run-${kind}-`));
+      if (!name) throw new Error(`no ${kind} run file to damage`);
+      const file = path.join(launcherDir(), name);
+      if (how === "delete") {
+        fs.unlinkSync(file);
+        return;
+      }
+      const text = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(file, text.slice(0, Math.floor(text.length / 2)));
+    };
+  }
+
+  /**
+   * Boot (`start()`, the `startInternal` path): the first spawn is refused with
+   * exactly one launcher line and no child, its files are deleted and its handle
+   * ended, `spawn-failed` with a restart pending; the restart then spawns a
+   * child whose run files read whole.
+   */
+  async function refusedThenRestarted(
+    kind: "mcp" | "settings",
+    how: "delete" | "truncate",
+    label: string,
+  ) {
+    const logs = captureErrors();
+    const sup = makeSupervisor({
+      runFileWriteHold: damageOnce(kind, how),
+      restartBackoffsMs: [400],
+    });
+    await sup.start();
+    expect(records("spawn-")).toEqual([]);
+    // Its handle ended with the refusal (`discard` is synchronous).
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    expect(sup.status()).toMatchObject({
+      running: false,
+      lastError: "spawn-failed",
+      restartPending: true,
+    });
+    const launcherLines = logs().filter(
+      (l) => l.includes("Not spawning") || l.includes("Spawn failed"),
+    );
+    expect(launcherLines).toEqual([GUARD_LINE(label)]);
+    // Never the file's contents: no handle, no path.
+    expect(logs().join("\n")).not.toMatch(/th_[A-Za-z0-9_-]{32}|tandem-run-/);
+    await waitFor(() => runFilesOnDisk().length === 0, "the refused spawn's files deleted");
+
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the restart's spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    const run = await waitFor(() => runRecordFor(rec.pid), "the restart's run files");
+    expect(run.mcp?.ok).toBe(true);
+    expect(run.settings?.ok).toBe(true);
+  }
+
+  it("a missing settings file refuses the spawn, then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "delete", "settings file");
+  });
+
+  it("a truncated settings file refuses the spawn, then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "truncate", "settings file");
+  });
+
+  it("a truncated MCP config refuses the spawn, then the restart spawns", async () => {
+    await refusedThenRestarted("mcp", "truncate", "MCP config");
+  });
+
+  it("a valid pair spawns at once, with both flags, and no guard line", async () => {
+    const logs = captureErrors();
+    const sup = makeSupervisor({ runFileWriteHold: damageOnce("settings", "none") });
+    await sup.start();
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    const run = await waitFor(() => runRecordFor(rec.pid), "the run files");
+    expect(run.settings?.ok).toBe(true);
+    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([]);
+  });
+
+  it("a user start (startFresh) throws the guard's error; its route logs nothing more", async () => {
+    const logs = captureErrors();
+    const sup = makeSupervisor({
+      runFileWriteHold: damageOnce("settings", "truncate"),
+      restartBackoffsMs: [60_000],
+    });
+    await expect(sup.startFresh(spawnDir)).rejects.toBeInstanceOf(RunFileGuardError);
+    expect(records("spawn-")).toEqual([]);
+    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([GUARD_LINE("settings file")]);
+    expect(sup.status()).toMatchObject({ lastError: "spawn-failed", restartPending: true });
+  });
 });
 
 describe("the remaining R4.4 exit paths", () => {

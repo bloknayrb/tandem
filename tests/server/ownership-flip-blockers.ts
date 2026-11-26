@@ -13,7 +13,8 @@
  * same PR. A row is never closed by editing its text; the sanctioned edits
  * to a standing row are adding `acceptedFor`, which records a pick of Bryan's
  * and does not close it, and recording a partial measurement in its `gap`,
- * which closes nothing (the CTRL pending row's Chromium result). The flip PR may set the literal only once every
+ * which closes nothing (the CTRL pending row's Chromium result; the Linux
+ * results on the PR 3a assumptions, resumes and project settings `env` rows). The flip PR may set the literal only once every
  * remaining row carries `acceptedFor`.
  *
  * **An accepted row** stays in the list, still open, and does not stop the
@@ -167,7 +168,26 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "macOS, Linux and the bundled Node; whether a not-signed-in child's bridge binds before " +
       "its refusal. The `--settings` re-read (Claude Code reading a run file again after it " +
       "starts) is also one of #2439's void conditions (`docs/security.md`), so the result " +
-      "decides #2439 too.",
+      "decides #2439 too. Measured on Linux (2026-11-26, Claude Code 2.1.332, through " +
+      "Tandem's own launcher; results on #2358, issuecomment-7202149262): `--settings` " +
+      "disables both tagged plugin keys and the user's own entry (`init` lists only the " +
+      "launcher's `tandem`, and none of their bridges starts); a project-scope `.mcp.json` " +
+      "`tandem` entry loses to the launcher's; a missing run file recovers (Claude Code " +
+      "exits, the resume-failure path clears the saved session and the restart writes fresh " +
+      "files and binds), in four or five log lines rather than one, which Bryan accepted on " +
+      "2026-11-26 ('Yes, accept the recovery (Recommended)', picked from options), though " +
+      "because it takes the resume-failure path a missing file still drops a resumed " +
+      "conversation; a truncated MCP config fails closed; a truncated settings file FAILED " +
+      "OPEN (ignored with no error, the plugin's toolset loaded beside the launcher's and a " +
+      "second terminal owner registered under the same Claude session), so the launcher now " +
+      "reads both files back before each spawn and refuses the spawn when either is missing " +
+      "or not what was written (Bryan's 'Guard it before the flip (Recommended)'; " +
+      "`runFileReadsBack`), which cannot see a file changed between that check and Claude " +
+      "Code's read about half a second later; and no run file was re-read after start in 16 " +
+      "spawns (#2439's void condition not observed, on Linux). Still unmeasured: Windows " +
+      "(and so #2439's re-read there, and whether an antivirus holding a new run file makes " +
+      "the read-back refuse every spawn until the breaker trips), macOS, the desktop build and the AppImage's bundled " +
+      "Node, and whether a not-signed-in child's bridge binds before its refusal.",
     closedBy:
       "A further smoke measuring them, or Bryan's acceptance of each; whoever closes it " +
       "checks #2439's acceptance against the re-read result.",
@@ -179,7 +199,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "bridge; not measured for `settings.local.json`, the other keys the run config sets or " +
       "clears (`TANDEM_OWNER_HANDLE`, `TANDEM_OWNER_HANDLE_URL`, " +
       "`CLAUDE_PLUGIN_OPTION_SERVER_URL`, `NODE_OPTIONS`, `NODE_DEBUG`), the launcher's own " +
-      "invocation, or hook timing under `-p` before the first bind.",
+      "invocation, or hook timing under `-p` before the first bind. Measured on Linux " +
+      "(2026-11-26, Claude Code 2.1.332, through Tandem's own launcher; results on #2358, " +
+      "issuecomment-7202149262): each of those six keys set to a wrong value in the " +
+      "project's `.claude/settings.local.json`, one at a time, and the child bound in 6 of 6, " +
+      "the bridge's environment holding the launcher's values each time; a control run " +
+      "handed all six wrong values to an entry with no `env`, so an entry's `env` wins key " +
+      "by key. Still unmeasured: hook timing under `-p` before the first bind, Windows, " +
+      "macOS, the desktop build and the AppImage.",
     closedBy:
       "The remaining cases measured with Tandem's value winning in each, or a guard that " +
       "refuses the run files on such a file; a measurement showing a project value wins does " +
@@ -196,7 +223,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
-      "resume across a server restart, a resume after a crash.",
+      "resume across a server restart, a resume after a crash. Measured on Linux " +
+      "(2026-11-26, Claude Code 2.1.332, through Tandem's own launcher; results on #2358, " +
+      "issuecomment-7202149262): all three bound and Tandem's Claude took back its documents " +
+      "(a stale resume cleared the session and started fresh; a server restart resumed the " +
+      "same session and took back both restored documents; a crash, SIGKILL 35 s in, resumed " +
+      "and still held them). It found a bug on master, flag on or off: the reaper reports a " +
+      "signal death as 128+n while `shouldClearSession` expects a null code, so a Restart " +
+      "(143) or crash (137) within `RESUME_CONFIRM_MS` of a resumed run clears the saved " +
+      "session and drops the conversation (binding and documents unaffected); its fix is a " +
+      "separate PR against master (Bryan's 'Separate PR, new branch', picked from options, " +
+      "2026-11-26). Kept open for Windows, macOS, the desktop build and the AppImage.",
     closedBy: "A smoke run of each, or Bryan's acceptance.",
   },
   {

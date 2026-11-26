@@ -15,6 +15,8 @@ import {
   readHostileSettingsKeys,
   realRunFileAcl,
   resetVerifiedLauncherDirsForTests,
+  runFileReadsBack,
+  runFileText,
   SETTINGS_READ_MAX_BYTES,
   SETTINGS_READ_MAX_KEYS,
   sweepRunFiles,
@@ -257,6 +259,84 @@ describe("writing the run files (R1.6)", () => {
     circular.self = circular;
     await expect(writeRunFile(dir, "mcp", circular, NO_ACL)).rejects.toBeInstanceOf(RunFileError);
     expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
+
+/**
+ * The pre-spawn read-back (smoke S1; Bryan's "Guard it before the flip
+ * (Recommended)", 2026-11-26). A pair written by `writeRunFile` as the
+ * supervisor writes it, then damaged the ways S1 measured. The spawn path's
+ * refusal and restart are in owner-handle-spawn.test.ts.
+ */
+describe("the run files' read-back before the spawn (S1)", () => {
+  async function writePair() {
+    const dir = path.join(root, "launcher");
+    await ensureLauncherDir(dir, { create: true, acl: NO_ACL });
+    const mcpValue = buildRunMcpConfig({
+      nodePath: "/usr/bin/node",
+      bridgeScript: "/opt/tandem/bridge.js",
+      baseUrl: "http://127.0.0.1:3479",
+      handle: `th_${"A".repeat(32)}`,
+    });
+    const settingsValue = buildRunSettings([ALWAYS_DISABLED_PLUGIN_KEY, "tandem@other"]);
+    return {
+      mcp: { file: await writeRunFile(dir, "mcp", mcpValue, NO_ACL), text: runFileText(mcpValue) },
+      settings: {
+        file: await writeRunFile(dir, "settings", settingsValue, NO_ACL),
+        text: runFileText(settingsValue),
+      },
+    };
+  }
+  /** Truncated mid-file, as S1 did it: no longer parses. */
+  function truncate(file: string) {
+    const text = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, text.slice(0, Math.floor(text.length / 2)));
+    expect(() => JSON.parse(fs.readFileSync(file, "utf8"))).toThrow();
+  }
+
+  it("a valid pair reads back, and what is on disk is exactly the text written", async () => {
+    const pair = await writePair();
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(true);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(true);
+    expect(fs.readFileSync(pair.settings.file, "utf8")).toBe(pair.settings.text);
+  });
+
+  it("a missing settings file is refused", async () => {
+    const pair = await writePair();
+    fs.unlinkSync(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(true);
+  });
+
+  it("a truncated settings file is refused", async () => {
+    const pair = await writePair();
+    truncate(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+  });
+
+  it("a truncated MCP config is refused", async () => {
+    const pair = await writePair();
+    truncate(pair.mcp.file);
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(false);
+  });
+
+  it("a file of the right length that parses but holds other values is refused", async () => {
+    const pair = await writePair();
+    // Re-enables a plugin key, at the same length, and still parses.
+    const other = pair.settings.text.replace("false", "true ");
+    expect(other.length).toBe(pair.settings.text.length);
+    expect(() => JSON.parse(other)).not.toThrow();
+    fs.writeFileSync(pair.settings.file, other);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+  });
+
+  it.runIf(POSIX)("a link at the name is refused, even to the right text (POSIX)", async () => {
+    const pair = await writePair();
+    const elsewhere = path.join(root, "elsewhere.json");
+    fs.writeFileSync(elsewhere, pair.settings.text);
+    fs.unlinkSync(pair.settings.file);
+    fs.symlinkSync(elsewhere, pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
   });
 });
 

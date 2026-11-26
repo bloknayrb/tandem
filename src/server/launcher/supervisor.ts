@@ -81,6 +81,8 @@ import {
   type RunFileAcl,
   RunFileError,
   realRunFileAcl,
+  runFileReadsBack,
+  runFileText,
   sweepRunFiles,
   writeRunFile,
 } from "./run-files.js";
@@ -450,8 +452,20 @@ interface SpawnRun {
   readonly bind: SpawnBind;
   readonly mcpConfigPath: string;
   readonly settingsPath: string;
+  /** What each file was written to hold, for the pre-spawn read-back. */
+  readonly mcpConfigText: string;
+  readonly settingsText: string;
   readonly args: readonly string[];
   discard(): void;
+}
+
+/** A spawn refused by the pre-spawn read-back of its run files (`spawnOnce`).
+ * Its message names the file's kind, never its path or contents. */
+export class RunFileGuardError extends Error {
+  constructor(readonly kind: "MCP config" | "settings file") {
+    super(`the run ${kind} is missing or does not read back as written`);
+    this.name = "RunFileGuardError";
+  }
 }
 
 /** Why a spawn was torn down (#2358 PR 3b-1, Terms). The first set wins. */
@@ -3174,6 +3188,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         bind,
         mcpConfigPath,
         settingsPath,
+        mcpConfigText: runFileText(mcpValue),
+        settingsText: runFileText(settingsValue),
         args: ["--mcp-config", mcpConfigPath, "--settings", settingsPath],
         discard,
       };
@@ -3252,7 +3268,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     run: SpawnRun | null = null,
   ): Promise<ChildProcess> {
     // A throw before `spawn()` returns ends this spawn's run state (R4.4):
-    // "already running", a missing reaper, a synchronous spawn throw.
+    // "already running", a missing reaper, the run files' read-back, a
+    // synchronous spawn throw.
     if (child) {
       run?.discard();
       throw new Error("Supervisor already running — call stop() first");
@@ -3275,6 +3292,36 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const claudeArgs = buildClaudeArgs(plan, run ?? undefined);
 
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
+
+    // The run files' read-back (smoke S1; Bryan, 2026-11-26, "Guard it before
+    // the flip (Recommended)"): Claude Code silently ignores a `--settings`
+    // file it cannot parse, so the plugin's Tandem toolset would load beside
+    // the launcher's. Synchronous and as late as it can be, with no `await`
+    // from here to `spawn()`. It cannot see a file changed after this point
+    // and before Claude Code reads it, about half a second after start
+    // (`runFileReadsBack`'s TOCTOU paragraph). A refusal is one line naming
+    // the kind, then the crash path the long-lived "error" handler below takes
+    // for a failed spawn: `spawn-failed` and a restart under the breaker,
+    // unless a stop is under way. The throw ends this spawn's run state like
+    // any other throw before `spawn()` (R4.4).
+    if (run) {
+      const bad: RunFileGuardError["kind"] | null = !runFileReadsBack(
+        run.mcpConfigPath,
+        run.mcpConfigText,
+      )
+        ? "MCP config"
+        : !runFileReadsBack(run.settingsPath, run.settingsText)
+          ? "settings file"
+          : null;
+      if (bad !== null) {
+        run.discard();
+        const err = new RunFileGuardError(bad);
+        console.error(`[Launcher] Not spawning: ${err.message}`);
+        setLastError("spawn-failed");
+        if (!stopRequested) scheduleRestart();
+        throw err;
+      }
+    }
 
     console.error(
       `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${sessionIdForLog(plan.sessionId)} resuming=${plan.resuming}`,
@@ -4555,6 +4602,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run);
       armBackoffReset(spawned);
     } catch (err) {
+      // The run files' read-back has logged its one line and taken the crash
+      // path already (`spawnOnce`).
+      if (err instanceof RunFileGuardError) return;
       console.error("[Launcher] Spawn failed:", err);
       // A synchronous `spawn()` throw sets no code anywhere else (#2145), so a
       // boot or crash-restart start would read as a clean stop. Same idiom as
@@ -5369,7 +5419,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return;
     }
     if (child === null && lastError === undefined) setLastError("spawn-failed");
-    console.error(`[Launcher] ${label}:`, err);
+    // The run files' read-back has logged its one line already (`spawnOnce`).
+    if (!(err instanceof RunFileGuardError)) console.error(`[Launcher] ${label}:`, err);
   }
 
   async function refreshConfigured(): Promise<void> {

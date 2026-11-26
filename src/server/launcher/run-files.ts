@@ -21,12 +21,17 @@
  * behaviour. Deleted at the spawn's first bind (the MCP config, probe 11),
  * at its teardown, and by the boot sweep (R4.2, R1.9).
  *
+ * Read back before the spawn (`runFileReadsBack`, called by `spawnOnce`): a
+ * file that is missing or does not hold what was written refuses that spawn,
+ * which then takes the crash-restart path (smoke S1: Claude Code silently
+ * ignores a `--settings` file it cannot parse).
+ *
  * This module imports no flag; the supervisor calls it only while ownership
  * is on (Ruling I).
  */
 
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, lstatSync, readFileSync } from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -404,6 +409,17 @@ export async function ensureLauncherDir(
  * exclusive create follows a dangling link and there is no `O_NOFOLLOW`, so the
  * window between the `lstat` and the create remains (a residual). Returns the
  * file's path; on failure, deletes what this call created and throws.
+ *
+ * **Already atomic for its one reader** (checked 2026-11-26 for Bryan's "write
+ * both run files atomically"): the name is random and reaches Claude Code only
+ * in the spawn's argv, after this call has written the whole text and closed
+ * the handle; a failed write unlinks the file and throws, so no spawn is given
+ * it, and a crash mid-write leaves a name nobody was given, for the boot sweep.
+ * A temp-and-rename (`atomicWrite`, `atomicWriteConfigFile`) adds nothing for
+ * that reader and would lose what R1.6 needs: those helpers neither refuse a
+ * name already present nor re-read a new file's ACL while it is still empty,
+ * `atomicWriteConfigFile`'s cross-device fallback writes in place, and a temp
+ * name is one the strict sweep pattern does not match.
  */
 export async function writeRunFile(
   dir: string,
@@ -449,7 +465,7 @@ export async function writeRunFile(
         throw new RunFileError(`${kind}-acl`);
       }
     }
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await handle.writeFile(runFileText(value), "utf8");
     await handle.close();
     handle = undefined;
     return file;
@@ -458,6 +474,56 @@ export async function writeRunFile(
     if (created) await fsp.unlink(file).catch(() => {});
     if (err instanceof RunFileError) throw err;
     throw new RunFileError(`${kind}-write`, errCode(err));
+  }
+}
+
+/** A run file's whole text: what `writeRunFile` writes, and so what
+ * {@link runFileReadsBack} expects to find. */
+export function runFileText(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * The pre-spawn read-back (#2358, smoke S1 on Linux, Claude Code 2.1.332;
+ * Bryan's pick of 2026-11-26, "Guard it before the flip (Recommended)"). True
+ * only when `file` is a regular file, not a link, whose whole content is
+ * exactly `expected`. A missing, emptied or truncated file fails (a truncated
+ * one does not parse), and so does any other content than what was written.
+ * Never throws, never logs, never returns what it read.
+ *
+ * Why it exists: Claude Code IGNORES a `--settings` file it cannot parse, with
+ * no error, so the plugin's Tandem toolset loads beside the launcher's and a
+ * second owner registers under the same Claude session: fail-open. A bad MCP
+ * config already fails closed ("MCP config is not a valid JSON").
+ *
+ * **Synchronous on purpose**, so its caller (`spawnOnce`) adds no `await`
+ * between the post-write re-checks (R1.8) and `spawn()`.
+ *
+ * **What it cannot close (TOCTOU).** Claude Code reads the files after it
+ * starts, not when this runs: S1's strace saw the reads within about 0.5 s of
+ * start, and the settings file stays on disk until the spawn's teardown. A
+ * file changed in that gap is not seen here. So this catches a file already
+ * missing or damaged before the spawn (a failing disk, a cleanup tool, an
+ * antivirus quarantine), not a writer racing Claude Code's read; such a writer
+ * needs write access to `launcher/`, which is the user's own processes, or on
+ * Windows #2439's and #2441's cases (docs/security.md).
+ *
+ * The open is non-blocking: a FIFO swapped in between the `lstat` and the
+ * read would otherwise block this synchronous read, and with it the server's
+ * event loop, until a writer came (`O_NOFOLLOW` refuses a link, not a FIFO).
+ * Non-blocking, such a read returns nothing or `EAGAIN`, and either fails the
+ * comparison. Both flags are absent on Windows, where the `lstat` alone
+ * refuses a link.
+ */
+export function runFileReadsBack(file: string, expected: string): boolean {
+  try {
+    const st = lstatSync(file);
+    if (!st.isFile() || st.size !== Buffer.byteLength(expected, "utf8")) return false;
+    const flag =
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+    return readFileSync(file, { encoding: "utf8", flag }) === expected;
+  } catch {
+    return false;
   }
 }
 
