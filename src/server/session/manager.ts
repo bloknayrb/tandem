@@ -569,6 +569,12 @@ export function decodeSessionToScratchDoc(session: SessionData): Y.Doc {
   const scratch = new Y.Doc();
   const state = Buffer.from(session.ydocState, "base64");
   Y.applyUpdate(scratch, new Uint8Array(state));
+  // #2360 (#2574 review): the fallback clone copies these rows into the live
+  // doc, so it takes `restoreYDoc`'s rule: an unmarked (or, dark, any) file's
+  // `answers` / `inProgress` are stripped before they can be cloned in.
+  if (!(clientWritesUndoneGrant() && session.threadFieldsTrusted === true)) {
+    stripThreadFields(scratch);
+  }
   return scratch;
 }
 

@@ -30,7 +30,9 @@ import {
 } from "../../src/server/annotations/schema.js";
 import { loadAndMerge, resetForTesting as resetSync } from "../../src/server/annotations/sync.js";
 import {
+  carryThreadFieldsTrustOnRename,
   copyThreadFieldsTrust,
+  threadFieldsTrusted,
   threadFieldsTrustedForDoc,
 } from "../../src/server/annotations/thread-answers-trust.js";
 import {
@@ -61,6 +63,7 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry, documentItemKey } from "../../src/server/mcp/inbox-cursor.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import {
+  decodeSessionToScratchDoc,
   deleteSession,
   loadCtrlSession,
   loadSession,
@@ -1079,6 +1082,66 @@ describe("rows already on disk (#2360 §3)", () => {
       expect(Object.keys(doc.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as object)).not.toContain(
         "answers",
       );
+    } finally {
+      await deleteSession(filePath);
+    }
+  });
+
+  it("a rename carries trust only from a marked, trusted old envelope (#2574 review)", async () => {
+    setChatClientWritesUndone(() => true);
+    const { hash: oldHash } = await load(envelope({ threadAnswersTrusted: true }, [forged]));
+    expect(threadFieldsTrusted(oldHash)).toBe(true);
+    // Marked and trusted: the new hash is trusted, so the RMW snapshot
+    // carries the marker and the re-wire's load keeps the rows.
+    expect(carryThreadFieldsTrustOnRename(oldHash, `new-${run}`, true)).toBe(true);
+    expect(threadFieldsTrusted(`new-${run}`)).toBe(true);
+    // An unmarked old envelope (fold 0 could bring its rows in) moves nothing,
+    // and a stale trust on the new hash is dropped.
+    expect(carryThreadFieldsTrustOnRename(oldHash, `new-${run}`, false)).toBe(false);
+    expect(threadFieldsTrusted(`new-${run}`)).toBe(false);
+    // An old hash this process never trusted moves nothing.
+    expect(carryThreadFieldsTrustOnRename(`never-${run}`, `new2-${run}`, true)).toBe(false);
+    expect(threadFieldsTrusted(`new2-${run}`)).toBe(false);
+    // Dark, nothing is trusted.
+    setChatClientWritesUndone(() => false);
+    expect(carryThreadFieldsTrustOnRename(oldHash, `new3-${run}`, true)).toBe(false);
+  });
+
+  it("the rename carries trust before its RMW snapshot (pinned from source)", () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "src/server/mcp/document-service.ts"),
+      "utf8",
+    );
+    const carry = src.indexOf("carryThreadFieldsTrustOnRename(oldHash, newHash, oldFileMarked);");
+    expect(carry).toBeGreaterThan(src.indexOf("mergeEnvelopeForward(doc, oldFile, newHash);"));
+    expect(carry).toBeLessThan(src.indexOf("// RMW step 1: write the NEW envelope"));
+    expect(src).toContain("oldFileMarked = oldFile.meta.threadAnswersTrusted === true;");
+  });
+
+  it("the corrupt-winner fallback strips an unmarked session's fields before the clone (#2574 review)", async () => {
+    const filePath = path.join(os.tmpdir(), `tandem-thread-fallback-${run++}.md`);
+    const save = async (lit: boolean) => {
+      setChatClientWritesUndone(() => lit);
+      const doc = new Y.Doc();
+      doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("fr", forged);
+      await saveSession(filePath, "md", doc);
+    };
+    const decode = async (lit: boolean) => {
+      setChatClientWritesUndone(() => lit);
+      const session = await loadSession(filePath);
+      const scratch = decodeSessionToScratchDoc(session as NonNullable<typeof session>);
+      try {
+        return scratch.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as Record<string, unknown>;
+      } finally {
+        scratch.destroy();
+      }
+    };
+    try {
+      await save(false);
+      expect(Object.keys(await decode(true))).not.toContain("answers");
+      await save(true);
+      expect((await decode(true)).answers).toEqual(["c:0"]);
+      expect(Object.keys(await decode(false))).not.toContain("answers");
     } finally {
       await deleteSession(filePath);
     }

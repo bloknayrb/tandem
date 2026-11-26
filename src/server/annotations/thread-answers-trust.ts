@@ -96,6 +96,29 @@ export function copyThreadFieldsTrust(oldDoc: Y.Doc, newDoc: Y.Doc): void {
 }
 
 /**
+ * Carry a document's trust across a rename (#2574 review): the rename writes
+ * the new envelope from the live Y.Doc under `newHash`, then re-wires with
+ * `loadAndMerge(newHash)`. Without this, that write carries no marker and the
+ * re-wire's load strips, and persists the strip of, every legitimate field.
+ *
+ * Trust moves only when this process trusts `oldHash` AND the old envelope on
+ * disk carried the marker (`oldFileMarked`). The rename folds the old
+ * envelope's rows into the live doc before the write (fold 0), so those rows
+ * must be ones a trusted load vouched for; otherwise `newHash` stays untrusted
+ * and the re-wire's load strips them all, fold-0 rows included. Fails safe.
+ */
+export function carryThreadFieldsTrustOnRename(
+  oldHash: string,
+  newHash: string,
+  oldFileMarked: boolean,
+): boolean {
+  trusted.delete(newHash);
+  if (!(oldFileMarked && threadFieldsTrusted(oldHash))) return false;
+  trusted.add(newHash);
+  return true;
+}
+
+/**
  * Remove `answers` and `inProgress` from every reply row that carries either,
  * in ONE `withInternal` transaction, bumping each changed row's `rev`. Returns
  * how many rows changed; none opens no transaction.
