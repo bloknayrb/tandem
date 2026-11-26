@@ -38,9 +38,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  * The `ownership-flag-on` job and the `check` bundle probe (#2358, ADR-054;
  * ownership design §12). ADR-051: the job does the work; this test, inside
  * `check`, pins the job's shape and the inputs it reads, so disarming it means
- * editing something a required check reads. The job itself is required too
- * while ownership is dark (in branch protection since 2026-11-08), so its
- * guarantees are enforced twice until the flip.
+ * editing something a required check reads. The job itself was required too
+ * while ownership was dark (in branch protection since 2026-11-08). Since the
+ * flip (ADR-054's flip amendment) `check` builds and tests ownership-on itself,
+ * so the job duplicates it; it is pinned unchanged until branch protection
+ * drops it, a change made by hand.
  *
  * ADR-051's rules, as applied here:
  * 1. npm scripts the job runs are pinned by exact equality (`test`,
@@ -83,7 +85,6 @@ const usesStep = (prefix: string) =>
 const checkTestRun = checkStep((s) => s.name === "Test", "Test").run;
 
 const PROBE_ON = "node scripts/ci/ownership-bundle-probe.mjs --expect on";
-const PROBE_OFF = "node scripts/ci/ownership-bundle-probe.mjs --expect off";
 
 describe("the ownership-flag-on job (ADR-051)", () => {
   it("exists, under exactly that key, with nothing that can skip, rename or soften it", () => {
@@ -165,7 +166,7 @@ describe("the ownership-flag-on job (ADR-051)", () => {
   });
 });
 
-describe("check never runs flag-on, and proves the release bundle ignores the variable", () => {
+describe("check sets no variable, and proves the release bundle is ownership-on by its define", () => {
   it("TANDEM_OWNERSHIP appears in no check-job env and on no other check step", () => {
     expect(check.env).toBeUndefined();
     for (const step of check.steps) {
@@ -175,14 +176,20 @@ describe("check never runs flag-on, and proves the release bundle ignores the va
   });
 
   it("the probe step is pinned whole, immediately after Build", () => {
-    const i = check.steps.findIndex((s) => s.run === PROBE_OFF);
-    expect(i, "check no longer runs the --expect off probe").toBeGreaterThan(0);
+    // Since the flip (ADR-054's flip amendment): `--expect on` gives the
+    // child no TANDEM_OWNERSHIP, so only the release build's define can turn
+    // it on. Before it, this step ran `--expect off` with the variable set.
+    const i = check.steps.findIndex((s) => s.run === PROBE_ON);
+    expect(i, "check no longer runs the --expect on probe").toBeGreaterThan(0);
     expect(check.steps[i - 1]).toEqual({ name: "Build", run: "npm run build" });
     expect(check.steps[i]).toEqual({
-      name: "Release bundle ignores TANDEM_OWNERSHIP",
-      run: PROBE_OFF,
+      name: "Release bundle is ownership-on",
+      run: PROBE_ON,
       "timeout-minutes": 2,
     });
+    expect(
+      check.steps.some((s) => typeof s.run === "string" && s.run.includes("--expect off")),
+    ).toBe(false);
   });
 });
 

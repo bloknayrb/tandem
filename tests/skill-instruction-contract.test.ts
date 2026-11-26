@@ -186,7 +186,13 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // answered threads leaving the inbox, and the NOT_OWNED fallback; the in-thread "I'm on it"
   // and the answer tracking are keyed on the tool's schema listing `inProgress`, which a dark
   // server's does not. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*43$/m);
+  // 44 is the multi-session ownership flip (#2358, ADR-054's flip amendment): INSIDE the wake
+  // section, the `/api/events?filter=wake` paragraph says an id-less `ownership-changed` frame
+  // means "call tandem_checkInbox" (every wake assertion below was re-read; none keys on that
+  // paragraph). Outside it: Multi-Document's default poll covers what is yours to answer, the
+  // NO_DOCUMENT bullet's no-document sentence, and three Error Recovery bullets (NOT_DOC_OWNER,
+  // DOCUMENT_BUSY, and an output-schema failure after an update: restart or reconnect).
+  expect(skill).toMatch(/^version:\s*44$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -576,7 +582,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "43", bodyHash: "99f5ee247a4d" });
+    ).toEqual({ version: "44", bodyHash: "844b267c226e" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

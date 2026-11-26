@@ -39,7 +39,15 @@
  * not merged*, closed by its own `closedBy`, the switch PR (the shipped
  * skill, `docs/mcp-tools.md` and the local model's tool description), which
  * lands immediately before the flip, in the same release (Bryan's Q1, "Gate
- * it, skill last (Recommended)").
+ * it, skill last (Recommended)"). And the flip PR's three (ADR-054's flip
+ * amendment), each by its own `closedBy`: *the skill's wake-frame line*
+ * (skills/tandem/SKILL.md, version 44, says an id-less `ownership-changed`
+ * frame on `/api/events` means "call tandem_checkInbox"); *tandem_checkInbox's
+ * description and the skill text* (the lit description, `documentId` inputs,
+ * summary sentences and the skill's Multi-Document and `NO_DOCUMENT` text,
+ * with `docs/mcp-tools.md`'s section rewritten); and *output schemas across
+ * the flip* (the remedy decided there: a documented restart or reconnect, in
+ * the skill's Error Recovery, the CHANGELOG and docs/troubleshooting.md).
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -58,17 +66,6 @@ export interface FlipBlocker {
 }
 
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
-  {
-    gap:
-      "The shipped skill (skills/tandem/SKILL.md) says wake frames on /api/events carry an id, " +
-      "a type and a timestamp. With ownership on, the stream also sends PR 4a's id-less " +
-      "`event: ownership-changed` / `data: {}` nudge, which the skill does not mention, so a " +
-      "session watching ?filter=wake as the skill describes is not told what it means.",
-    closedBy:
-      'A SKILL.md line saying an ownership-changed frame also means "call tandem_checkInbox", ' +
-      "with its frontmatter version bumped, landed with or before the flip (it reaches users, so " +
-      "not while dark).",
-  },
   {
     gap:
       "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
@@ -91,35 +88,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The CTRL row's measurement, run in document rooms too (reconnect, offline edits, two " +
       "tabs, a long paste), showing no pending data after a tab's update; or a guard narrowed " +
       "to updates that touch the replies map.",
-  },
-  {
-    gap:
-      "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
-      "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
-      "another session's polls never hide its items from you' (with inbox scope, only the " +
-      "document's holder reads it); 'each item repeats on every poll until you pass a cursor from " +
-      "a response that held it' (after a handover an acknowledged item is handed again, " +
-      "unmarked; and since the notice-rule PR an accept or dismiss notice is not repeated once " +
-      "its document has left the holder that was handed it, even to that holder's own retry " +
-      "with an old cursor, so 'Items repeat until acknowledged ... recovered by polling again " +
-      "with the same cursor' is false for it); 'Omit `documentId` to cover every open document'; and the summary's 'The cursor " +
-      "was not recognised ... returns everything not yet acknowledged' (only what is in scope). " +
-      "The `documentId` input: 'Omit it to poll every open document'. skills/tandem/SKILL.md: " +
-      "'polls every open document', and its contract that a summary with no document read means " +
-      "nothing is open (flag-on, it can mean nothing open is yours to answer). docs/mcp-tools.md's " +
-      "tandem_checkInbox section says the same things; it carries a 'ships dark' paragraph listing " +
-      "what changes flag-on, and the flip PR rewrites the section. Since the chat owners PR " +
-      "also: tandem_checkInbox's '`chatMessages` spans every document', 'each item repeats on " +
-      "every poll until you pass a cursor from a response that held it' and 'a chat message you " +
-      "answered with tandem_reply `replyTo` is not repeated' (chat is scoped by owner); " +
-      "CHAT_ACK_DIRECTIVE (said to every poll that hands chat, though a refused reply is now " +
-      "possible); and tandem_reply's `documentId` input 'defaults to active document' (a reply " +
-      "to a message is stamped with the message's document; since the posts PR, a post with no " +
-      "`documentId` from a session that does not hold the active document is stamped with no " +
-      "document, and one from a session that may not post doc-less is refused `post`).",
-    closedBy:
-      "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
-      "changes at the flip together with the plugin ref bump.",
   },
   {
     gap:
@@ -178,18 +146,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     acceptedFor:
       "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
       "(PR 5's controls are the remedy); tracked as #2358.",
-  },
-  {
-    gap:
-      "Output schemas across the flip: an MCP client caches tool output schemas from tools/list, " +
-      "and the stdio bridge's re-initialize after a 404 never lists again, so a session (Claude " +
-      "Desktop through the bridge, say) that lives across the upgrade from a dark build to the " +
-      "flipped one keeps tandem_checkInbox's and tandem_status's dark schemas, which have no " +
-      "`ownership` / `owner` field, and its SDK rejects every response that carries one " +
-      "(additionalProperties: false).",
-    closedBy:
-      "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
-      "the bridge's replay, or a documented restart), decided there.",
   },
   {
     gap:

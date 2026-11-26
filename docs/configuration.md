@@ -68,7 +68,7 @@ None of these is for everyday use. The first three do nothing in a release build
 | Variable | Default | Description |
 |---|---|---|
 | `TANDEM_DOCX` | unset | Set to `1` to turn `.docx` support on in `tsx`/`vitest` runs. A release build ignores it: `.docx` [ships dark](glossary.md#ships-dark), fixed by the `DOCX_ENABLED` build define. |
-| `TANDEM_OWNERSHIP` | unset | Set to `1` to turn multi-session document ownership on in `tsx`/`vitest` runs. A release build ignores it; the feature ships dark. |
+| `TANDEM_OWNERSHIP` | unset | Only in `tsx`/`vitest` runs: `1` turns multi-session document ownership on and any other value turns it off; unset, it follows the release literal, which is on since the flip (ADR-054). A release build ignores it. |
 | `TANDEM_CLIENT_CONFIG_HOME` | a scratch folder | A stand-in home folder for the Claude Code and Claude Desktop configs a server run from source reads and writes, so development never touches your real `~/.claude.json`. Ignored by a release build, which always uses your real home. Replaces the `client-config-home/` folder in [app data](data-locations.md#app-data-directory). |
 | `TANDEM_FORCE_V1_WALKTHROUGH` | unset | **From the next release.** Set to `1` to show the one-time v1.0 setup walkthrough on a build that is not v1.0, so a release candidate can be smoke-tested. Unlike the three above, a release build honours it. It can only switch the walkthrough on; `TANDEM_DISABLE_FIRST_RUN_WIZARD=1` wins. |
 | `TANDEM_LICENSE_RETRY_MS` | `30000` | How often the stdio bridge retries while Tandem refuses its AI for want of a licence. A test seam; floored at 1 second. |

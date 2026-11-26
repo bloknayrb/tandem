@@ -11,17 +11,21 @@ import {
 } from "./ownership-flip-blockers.js";
 
 /**
- * The ownership flag ships dark (#2358, ADR-054; ownership design §12).
+ * The ownership flag (#2358, ADR-054; ownership design §12). It shipped dark
+ * and is on since the flip (ADR-054's flip amendment).
  *
- * - Release builds never carry it on: the literal is `false`, declared once.
+ * - Release builds carry it on: the literal is `true`, declared once, and it
+ *   cannot be `true` while a flip-blocker row is open and not accepted.
  * - A shell export cannot make a half-on build: `tsup.config.ts` derives the
  *   define from that literal and reads no environment at all, and the
  *   identifier `ownership-flag.ts` reads is the key tsup injects.
- * - The default test run is flag-off: no vitest `test.env` and no setup file
- *   sets `TANDEM_OWNERSHIP` (this file is the one owner of that fact).
+ * - The default test run follows the literal: no vitest `test.env` and no
+ *   setup file sets `TANDEM_OWNERSHIP` (this file is the one owner of that
+ *   fact), so an unset variable gives the literal and a test that pins the
+ *   dark path stubs it `""`.
  *
  * What it cannot see is the built artifact; `scripts/ci/ownership-bundle-probe.mjs`
- * checks that, in `check` (off) and in `ownership-flag-on` (on).
+ * checks that, in `check` and in `ownership-flag-on` (both on since the flip).
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -34,7 +38,17 @@ afterEach(() => {
 });
 
 describe("ownershipEnabled() without a build define (tsx, vitest)", () => {
-  it("is on only for exactly TANDEM_OWNERSHIP=1, read on every call", () => {
+  it("follows the release literal while the variable is unset, read on every call", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", undefined);
+    expect(process.env.TANDEM_OWNERSHIP).toBeUndefined();
+    expect(ownershipEnabled()).toBe(OWNERSHIP_ENABLED);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(ownershipEnabled()).toBe(false);
+    vi.stubEnv("TANDEM_OWNERSHIP", undefined);
+    expect(ownershipEnabled()).toBe(OWNERSHIP_ENABLED);
+  });
+
+  it("a set variable decides: on only for exactly TANDEM_OWNERSHIP=1, read on every call", () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     expect(ownershipEnabled()).toBe(false);
     vi.stubEnv("TANDEM_OWNERSHIP", "1");
@@ -47,18 +61,18 @@ describe("ownershipEnabled() without a build define (tsx, vitest)", () => {
 });
 
 describe("the release literal", () => {
-  // The flip-blocker check below is redundant with this pin until the flip PR
-  // edits it: while this says `false`, that check passes whatever the list
-  // holds. It bites at the moment someone changes this line.
-  it("is false", () => {
-    expect(OWNERSHIP_ENABLED).toBe(false);
+  // The flip (ADR-054's flip amendment). Setting it back to false is its own
+  // reviewed release: the shipped skill describes the lit server, and the
+  // CHANGELOG guard below turns red on an un-flip on purpose.
+  it("is true", () => {
+    expect(OWNERSHIP_ENABLED).toBe(true);
   });
 
   it("is declared exactly once, as a top-level boolean literal", () => {
     // Anchored and counted, so a commented-out or duplicated copy cannot answer.
     const src = stripLineComments(read("src/shared/constants.ts"));
     const matches = [...src.matchAll(/^export const OWNERSHIP_ENABLED\s*=\s*(true|false)\s*;/gm)];
-    expect(matches.map((m) => m[1])).toEqual(["false"]);
+    expect(matches.map((m) => m[1])).toEqual(["true"]);
   });
 });
 
@@ -99,11 +113,12 @@ describe("tsup.config.ts derives the define from the literal, and from nothing e
   });
 });
 
-describe("the default test run is flag-off", () => {
+describe("the default test run follows the release literal", () => {
   it("no vitest config and no setup file sets TANDEM_OWNERSHIP", () => {
-    // The root `test.env` beats the shell, so a key there would make every run
-    // flag-on and the ownership-flag-on job's anchor meaningless; a per-project
-    // `test.env` or a setup file could drop it from that job instead.
+    // The root `test.env` beats the shell, so a key there would pin every run
+    // to one side whatever the literal says, and a shell's
+    // `TANDEM_OWNERSHIP=` could no longer run the suite dark; a per-project
+    // `test.env` or a setup file could do the same to one project.
     const setupDir = path.join(ROOT, "tests/setup");
     const files = [
       "vitest.config.ts",
@@ -315,9 +330,10 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   });
 
   it("the source literal and the real list pass it", () => {
-    // The imported source literal, never `ownershipEnabled()`: the
-    // ownership-flag-on job turns the runtime flag on with the literal still
-    // `false`, and must stay green.
+    // The imported source literal, never `ownershipEnabled()`: a test run
+    // stubbing the variable must not change what this checks. Since the flip
+    // the literal is `true`, so this fails while any row is open and not
+    // accepted: that failure is the gate (ADR-054's flip amendment).
     expect(flipBlockerViolations(OWNERSHIP_ENABLED, OWNERSHIP_FLIP_BLOCKERS)).toEqual([]);
   });
 
