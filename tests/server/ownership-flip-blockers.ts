@@ -10,9 +10,10 @@
  * The plan's flip row (`docs/plans/2358-ownership.md`, PR 6) points here.
  *
  * **To close a row:** land what `closedBy` names, then delete the row in that
- * same PR. A row is never closed by editing its text; the one sanctioned edit
- * to a standing row is adding `acceptedFor`, which records a pick of Bryan's
- * and does not close it. The flip PR may set the literal only once every
+ * same PR. A row is never closed by editing its text; the sanctioned edits
+ * to a standing row are adding `acceptedFor`, which records a pick of Bryan's
+ * and does not close it, and recording a partial measurement in its `gap`,
+ * which closes nothing (the CTRL pending row's Chromium result). The flip PR may set the literal only once every
  * remaining row carries `acceptedFor`.
  *
  * **An accepted row** stays in the list, still open, and does not stop the
@@ -48,6 +49,11 @@
  * with `docs/mcp-tools.md`'s section rewritten); and *output schemas across
  * the flip* (the remedy decided there: a documented restart or reconnect, in
  * the skill's Error Recovery, the CHANGELOG and docs/troubleshooting.md).
+ * And *#2360 PR A's document-room pending guard* (2026-11-26): smoke S8 in
+ * Chromium saw the guard drop a real paste after a forced reconnect, and the
+ * tab stopped syncing, so Bryan picked "Drop the doc-room guard
+ * (Recommended)"; the guard was removed, which closes the row's premise, and
+ * what that leaves is `docs/security.md` #2576's widened bound.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -72,22 +78,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
       "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
-      "dropped silently.",
+      "dropped silently. Measured in Chromium only (smoke S8, 2026-11-26, results on " +
+      "#2358): no pending CTRL data in hundreds of transactions. WebView2 (the Windows " +
+      "desktop build) and WKWebView (macOS) are still to measure, on Bryan's hardware.",
     closedBy:
       "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
       "pending data after a tab's update, or a narrower drop.",
-  },
-  {
-    gap:
-      "#2360 PR A drops update data a browser tab left pending in a DOCUMENT room " +
-      "(`makeDocumentPendingGuard`, `events/observers/reply-client-undo.ts`), so a struct aimed " +
-      "at the server's next clock cannot land under a server origin past the replies-map undo. " +
-      "It widens the CTRL row's unmeasured premise (a real tab never leaves anything pending) to " +
-      "document rooms, where a wrong premise drops the user's typing silently, not a chat row.",
-    closedBy:
-      "The CTRL row's measurement, run in document rooms too (reconnect, offline edits, two " +
-      "tabs, a long paste), showing no pending data after a tab's update; or a guard narrowed " +
-      "to updates that touch the replies map.",
   },
   {
     gap:

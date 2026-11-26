@@ -39,10 +39,11 @@ below still stand before v1.0 either way.
    flip PR (PR 6)** sets `OWNERSHIP_ENABLED = true`, ships skill 44 and the lit
    `tandem_checkInbox` text, and closes the three flip-blocker rows that named it (ADR-054's
    flip amendment). It cannot merge yet, by design: `tests/server/ownership-flip-blockers.ts`
-   holds 17 rows, 8 accepted and **9 open**, and `tests/server/ownership-flag.test.ts` is red
-   while any is open with the literal `true`. The nine are the
+   holds 16 rows, 8 accepted and **8 open**, and `tests/server/ownership-flag.test.ts` is red
+   while any is open with the literal `true`. The eight are the
    [consolidated hardware smoke](plans/2358-ownership.md#consolidated-pre-flip-hardware-smoke)'s
-   S1 to S8 (S8 covers two rows): each closes when Bryan records its result on #2358 (and,
+   S1 to S8 (S8's document-room row closed on 2026-11-26, when Bryan dropped that guard; its
+   CTRL row is measured in Chromium only): each closes when Bryan records its result on #2358 (and,
    where its row says so, the change lands) or accepts it. Also Bryan's: dropping
    `ownership-flag-on` from branch protection's required checks, and the plan's manual check,
    which runs after both flips, before that release.

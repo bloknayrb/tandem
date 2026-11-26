@@ -13,7 +13,7 @@
  *
  * #2360 PR A reads the same predicate, which is "ownership on" once wired,
  * for its document-room twins and its local-model gate: the replies-map undo
- * and pending guard (`events/observers/reply-client-undo.ts`), the load
+ * (`events/observers/reply-client-undo.ts`), the load
  * sweeps (`annotations/thread-answers-trust.ts`, `session/manager.ts`'s CTRL
  * strip), and whether the local model may reply in a user's comment thread
  * (`local-model/tools.ts`). None of them may import the flag module.

@@ -861,7 +861,8 @@ describe("the local model's reply_to_annotation (#2360, Q2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The undo of client writes and the pending guard.
+// The undo of client writes, and pending structs (no document-room guard since
+// 2026-11-26; `docs/security.md` #2576).
 
 describe("a client connection's change to the replies map (#2360 §3)", () => {
   const CONNECTION = { socketId: "tab-1" };
@@ -961,26 +962,110 @@ describe("a client connection's change to the replies map (#2360 §3)", () => {
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).has("forged")).toBe(true);
   });
 
-  it.each([true, false])(
-    "pending structs from a client are dropped only when undone (%s)",
-    (undone) => {
-      setChatClientWritesUndone(() => undone);
-      const ydoc = roomWith(`pending-${undone}`);
-      const tab = new Y.Doc();
-      Y.applyUpdate(tab, Y.encodeStateAsUpdate(ydoc));
-      const vector = Y.encodeStateVector(tab);
-      tab.getMap("scratch").set("k1", 1);
-      const mid = Y.encodeStateVector(tab);
-      tab.getMap("scratch").set("k2", 2);
-      void vector;
-      // Only the second update reaches the server: it depends on the first.
-      const second = Y.encodeStateAsUpdate(tab, mid);
-      Y.applyUpdate(ydoc, second, CONNECTION);
-      const pending = (ydoc.store as { pendingStructs: unknown }).pendingStructs;
-      if (undone) expect(pending).toBeNull();
-      else expect(pending).not.toBeNull();
-    },
-  );
+  // Pending structs (Bryan, 2026-11-26: no guard in document rooms;
+  // `docs/security.md` #2576). A tab that knows the server's next clock writes
+  // over the item the server will write there, and sends only its own struct:
+  // the room keeps it pending (it names an item the room does not hold yet),
+  // and the server's own write fills the gap without integrating it, because
+  // Yjs retries pending data only inside a later `applyUpdate`.
+  const pendingStructs = (ydoc: Y.Doc) =>
+    (ydoc.store as { pendingStructs: unknown }).pendingStructs;
+
+  function aimAtServersNextWrite(ydoc: Y.Doc, key: string): void {
+    // The tab's view of the server after its next write: the same client id,
+    // one more struct (a reply row is one item, so one clock).
+    // (Set after the apply: Yjs renews a doc's id when a remote update
+    // advances it.)
+    const future = new Y.Doc();
+    Y.applyUpdate(future, Y.encodeStateAsUpdate(ydoc));
+    future.clientID = ydoc.clientID;
+    future.getMap(Y_MAP_ANNOTATION_REPLIES).set(key, row(key, { answers: [] }));
+    const tab = new Y.Doc();
+    Y.applyUpdate(tab, Y.encodeStateAsUpdate(future));
+    tab.getMap(Y_MAP_ANNOTATION_REPLIES).set(key, row(key, { answers: ["c:0"], rev: 99 }));
+    // Only the tab's own struct reaches the room.
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(tab, Y.encodeStateVector(future)), CONNECTION);
+  }
+
+  /** The server's real next write: Claude's reply row, answering nothing. */
+  const serverReply = (key: string) => row(key, { text: "real", answers: [] });
+  const serverWrites = (ydoc: Y.Doc, key: string) =>
+    withInternal(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set(key, serverReply(key)));
+
+  it("a client struct left pending is kept, not dropped, and a server write does not integrate it", () => {
+    const ydoc = roomWith("pending-kept");
+    aimAtServersNextWrite(ydoc, "next");
+    expect(pendingStructs(ydoc), "no document-room guard drops it").not.toBeNull();
+    serverWrites(ydoc, "next");
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("next")).toEqual(serverReply("next"));
+    expect(pendingStructs(ydoc), "a local write never retries pending data").not.toBeNull();
+  });
+
+  it("live: the next client update integrates it under its Connection origin, and the undo puts the server's row back", () => {
+    const ydoc = roomWith("pending-live");
+    aimAtServersNextWrite(ydoc, "next");
+    serverWrites(ydoc, "next");
+    // Any later update from a tab (here, an unrelated one) retries the pending
+    // data inside its own transaction.
+    const other = new Y.Doc();
+    Y.applyUpdate(other, Y.encodeStateAsUpdate(ydoc));
+    const sv = Y.encodeStateVector(other);
+    other.getMap("scratch").set("k", 1);
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(other, sv), CONNECTION);
+    expect(pendingStructs(ydoc)).toBeNull();
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("next")).toEqual(serverReply("next"));
+    expect(events.filter((e) => e.type === "annotation:reply")).toEqual([]);
+  });
+
+  it("the residual: a lit session file written while it is pending lands the forged row at restore, past the undo and the sweep", async () => {
+    const ydoc = roomWith("pending-session");
+    aimAtServersNextWrite(ydoc, "next");
+    serverWrites(ydoc, "next");
+    const filePath = path.join(os.tmpdir(), `tandem-pending-session-${run++}.md`);
+    try {
+      // `encodeStateAsUpdate` carries the pending struct into the file.
+      await saveSession(filePath, "md", ydoc);
+      const session = await loadSession(filePath);
+      expect(session?.threadFieldsTrusted).toBe(true);
+      const restored = new Y.Doc();
+      restoreYDoc(restored, session as NonNullable<typeof session>);
+      const landed = restored.getMap(Y_MAP_ANNOTATION_REPLIES).get("next") as Record<
+        string,
+        unknown
+      >;
+      expect(landed.answers, "the tab's forged mark, under no origin").toEqual(["c:0"]);
+      expect(landed.rev).toBe(99);
+      expect(pendingStructs(restored)).toBeNull();
+    } finally {
+      await deleteSession(filePath);
+    }
+  });
+
+  it("the residual's delete half: a pending delete of the server's next row removes it at restore", async () => {
+    const ydoc = roomWith("pending-delete");
+    const future = new Y.Doc();
+    Y.applyUpdate(future, Y.encodeStateAsUpdate(ydoc));
+    future.clientID = ydoc.clientID;
+    future.getMap(Y_MAP_ANNOTATION_REPLIES).set("next", row("next", { answers: [] }));
+    const tab = new Y.Doc();
+    Y.applyUpdate(tab, Y.encodeStateAsUpdate(future));
+    const sv = Y.encodeStateVector(tab);
+    tab.getMap(Y_MAP_ANNOTATION_REPLIES).delete("next");
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(tab, sv), CONNECTION);
+    expect((ydoc.store as { pendingDs: unknown }).pendingDs).not.toBeNull();
+    serverWrites(ydoc, "next");
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get("next")).toEqual(serverReply("next"));
+    const filePath = path.join(os.tmpdir(), `tandem-pending-delete-${run++}.md`);
+    try {
+      await saveSession(filePath, "md", ydoc);
+      const session = await loadSession(filePath);
+      const restored = new Y.Doc();
+      restoreYDoc(restored, session as NonNullable<typeof session>);
+      expect(restored.getMap(Y_MAP_ANNOTATION_REPLIES).has("next")).toBe(false);
+    } finally {
+      await deleteSession(filePath);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
