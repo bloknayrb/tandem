@@ -680,6 +680,24 @@ describe("R1.4 site (b): fault kills torn down by a Start or an Off before their
     expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual([]);
   });
 
+  it("the same fault kill relayed by the Linux reaper as code 143 is a signal death, not the #1169 shape: judged at site (a), once", async () => {
+    // The reaper forwards the kill's SIGTERM and exits 128 + 15, so the code is
+    // not null. `shouldClearSession` reads it as a signal death (#2358), which
+    // is how a null code (macOS, Windows) was already judged.
+    const h = makeSupervisor();
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    h.emit(annotationEvent());
+    c2.holdExit = true;
+    c2.stdin.emit("error", EPIPE());
+    await until(() => c2.killed, "the fault kill");
+    c2.releaseExit(143);
+    await settle();
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual(["failed:torn-down-unbound"]);
+    expect(failedLines()).toBe(1);
+  });
+
   it("a fault-killed spawn whose bridge binds during the kill's grace: ever bound, no run start, not judged", async () => {
     const h = makeSupervisor();
     await h.sup.startFresh(cwdDir);

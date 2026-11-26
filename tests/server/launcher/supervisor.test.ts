@@ -597,6 +597,27 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     // User stopped Claude cleanly before the window elapsed — session is valid.
     expect(shouldClearSession({ resuming: true, code: 0, resumeConfirmed: false })).toBe(false);
   });
+
+  // #2358 (comment 7202149262): the reaper survives a Restart on Linux and
+  // relays Claude's signal death as `128 + signum`, so `code` is NOT null.
+  it.each([
+    [143, "SIGTERM — a Restart, forwarded by the reaper"],
+    [137, "SIGKILL — a crash, or the reaper's grace escalation"],
+    [130, "SIGINT"],
+    [129, "SIGHUP"],
+    [192, "128 + 64, the highest Linux signal"],
+  ])("does NOT clear on a reaper-relayed signal death (code %i, %s)", (code) => {
+    expect(shouldClearSession({ resuming: true, code, resumeConfirmed: false })).toBe(false);
+  });
+
+  it.each([
+    [1, 'a doomed --resume ("No conversation found")'],
+    [127, "the reaper's exec failure"],
+    [128, "128 + 0 is no signal"],
+    [193, "above 128 + SIGRTMAX, so no signal could produce it"],
+  ])("still clears on a non-signal exit (code %i, %s)", (code) => {
+    expect(shouldClearSession({ resuming: true, code, resumeConfirmed: false })).toBe(true);
+  });
 });
 
 describe("buildClaudeArgs — CLI argument vector (#1267)", () => {

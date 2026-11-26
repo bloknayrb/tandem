@@ -1202,6 +1202,82 @@ describe("a killed child whose exit lands after a relaunch replaced it", () => {
   });
 });
 
+// --- A resumed run that dies by a signal inside the confirm window ---------------
+
+describe("a resumed run killed inside the resume-confirm window keeps its saved session", () => {
+  // #2358 (comment 7202149262), measured on Linux: the reaper does not die on
+  // a Restart's SIGTERM, it forwards it and relays Claude's death as
+  // `128 + signum` — 143 for SIGTERM, 137 for SIGKILL. `shouldClearSession`
+  // read only `code === null` as a signal, so a Restart or crash within
+  // `RESUME_CONFIRM_MS` of a resume unlinked `launcher-session.json` and the
+  // next spawn started a fresh conversation.
+
+  const sessionFile = () => path.join(baseDir, "launcher-session.json");
+  const savedId = () =>
+    (JSON.parse(fs.readFileSync(sessionFile(), "utf8")) as { sessionId: string }).sessionId;
+  /** The Claude argv of the n-th spawn (1-based): the reaper's argv after
+   * `<parent_pid> <claude>`. */
+  const claudeArgs = (n: number) => (vi.mocked(spawn).mock.calls[n - 1][1] as string[]).slice(2);
+
+  /** Child 1 runs fresh (writing the saved session) and is stopped; a new
+   * supervisor's start then RESUMES it as child 2, unconfirmed. */
+  async function resumedChild(): Promise<{ sup: Supervisor; child2: FakeChild; id: string }> {
+    const first = makeSupervisor().sup;
+    await first.startFresh(cwdDir);
+    await first.stop();
+    const id = savedId();
+
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(claudeArgs(2)).toEqual(expect.arrayContaining(["--resume", id]));
+    expect(sup.status()).toMatchObject({ running: true, resuming: true });
+    return { sup, child2, id };
+  }
+
+  it("a crash relayed as SIGKILL (code 137) restarts into the same conversation", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 137);
+
+    await nthChild(3);
+    expect(fs.existsSync(sessionFile())).toBe(true);
+    expect(savedId()).toBe(id);
+    expect(claudeArgs(3)).toEqual(expect.arrayContaining(["--resume", id]));
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a Restart whose SIGTERM the reaper relays as code 143 resumes the same conversation", async () => {
+    const { sup, child2, id } = await resumedChild();
+    // The real Linux reaper: SIGTERM is forwarded, Claude dies by it, and the
+    // reaper EXITS with 143 rather than dying by the signal itself.
+    child2.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child2.kills.push(sig);
+      child2.killed = true;
+      setImmediate(() => exitChild(child2, 143));
+      return true;
+    };
+
+    await sup.relaunch(cwdDir);
+    await nthChild(3);
+    expect(child2.kills).toEqual(["SIGTERM"]);
+    expect(fs.existsSync(sessionFile())).toBe(true);
+    expect(savedId()).toBe(id);
+    expect(claudeArgs(3)).toEqual(expect.arrayContaining(["--resume", id]));
+  });
+
+  // The control: the exit the gate exists for still clears, so the two cases
+  // above discriminate a gate that never clears from one that reads signals.
+  it("a doomed resume (exit 1) still clears the saved session and goes fresh", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(claudeArgs(3)).not.toContain("--resume");
+    expect(claudeArgs(3)).not.toContain(id);
+  });
+});
+
 // --- #2125 --------------------------------------------------------------------
 
 /** Routes every `integrations.json` read to `handler`, which receives the read's

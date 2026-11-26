@@ -1047,10 +1047,46 @@ export type SupervisorStatus =
     };
 
 /**
+ * Did the process `exit` reported as `code` die by a signal?
+ *
+ * Two shapes, because the process Node sees is the reaper, not Claude:
+ *   - `code === null`: the reaper ITSELF died by a signal (Node then sets
+ *     `signal`). That is macOS's reaper on a Restart (it installs no SIGTERM
+ *     handler), `stopInternal`'s SIGKILL escalation on any OS, and every
+ *     `kill()` on Windows, where Node's `TerminateProcess` reports
+ *     `code = null, signal = "SIGTERM"`.
+ *   - `128 < code <= 192`: the reaper survived and relayed CLAUDE's signal
+ *     death in the shell's `128 + signum` form (`reaper/src/linux.rs` and
+ *     `macos.rs`, `WaitStatus::Signaled` → `128 + sig`; measured on Linux:
+ *     143 for a Restart's forwarded SIGTERM, 137 for SIGKILL, #2358). 192 is
+ *     128 + 64, Linux's SIGRTMAX, so a code above it cannot be a signal.
+ *
+ * The range cannot swallow the one exit this gate exists for: a doomed
+ * `--resume` ("No conversation found") exits 1. A Claude that chose a code
+ * in 129–192 itself would be read as a signal death too. That costs nothing
+ * here: the only exit this gate needs to see is the doomed resume's 1, and a
+ * JavaScript runtime (Node's documented exit codes stop at 14) uses `> 128`
+ * for signal deaths, so a high code is a death, never a missing conversation.
+ * The cost of a misread is one more `--resume` attempt, not a lost
+ * conversation. Windows has no signals:
+ * a Restart there is the `null` shape above, and the reaper relays Claude's
+ * `GetExitCodeProcess` truncated to a byte, so a code in the range can only
+ * be the low byte of a crash status (STATUS_INTEGER_DIVIDE_BY_ZERO,
+ * 0xC0000094, relays as 148). That is a crash, not a failed resume, and keeps
+ * the session for the same reason a crash does on Linux; a doomed resume
+ * there still exits 1 and clears it.
+ */
+function isSignalDeath(code: number | null): boolean {
+  return code === null || (code > 128 && code <= 128 + 64);
+}
+
+/**
  * Pure decision: should the saved session be cleared after a spawn exits?
- * Exported for unit testing — all three parameters must be satisfied:
+ * Exported for unit testing — all three conditions must hold:
  *   - we were attempting a resume (`resuming`)
- *   - the process exited with an error code (not a signal kill — code is null on SIGTERM)
+ *   - the process exited with a non-zero code that is not a signal death
+ *     (`isSignalDeath`: a Restart or a crash says nothing about whether the
+ *     conversation exists, so it must not cost the user the conversation)
  *   - the spawn never ran long enough to be considered successfully resumed
  */
 export function shouldClearSession(opts: {
@@ -1058,7 +1094,7 @@ export function shouldClearSession(opts: {
   code: number | null;
   resumeConfirmed: boolean;
 }): boolean {
-  return opts.resuming && opts.code !== null && opts.code !== 0 && !opts.resumeConfirmed;
+  return opts.resuming && opts.code !== 0 && !isSignalDeath(opts.code) && !opts.resumeConfirmed;
 }
 
 /** Contents of `launcher-session.json`. */
@@ -2154,7 +2190,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * it a turn, whether or not any wake is owed.
    *
    * Needed because Check again is a relaunch, and the trip's SIGTERM keeps the
-   * saved session (`shouldClearSession` needs an exit code), so the relaunch
+   * saved session (`shouldClearSession` ignores a signal death: `code` null, or
+   * the reaper's relayed `128 + signum`, 143 on Linux), so the relaunch
    * RESUMES — and a resumed spawn writes no turn, while the CLI is silent until
    * it gets one. Without this, Check again could never learn the user has since
    * signed in.
@@ -4002,8 +4039,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
 
         // If the resume failed before being confirmed, drop the stale session so
-        // the next restart goes fresh. Guard code !== null to avoid clearing on
-        // signal kills (SIGTERM/SIGKILL set code=null, signal="SIGTERM"/"SIGKILL").
+        // the next restart goes fresh. A signal death never clears it — neither
+        // the reaper's own (`code` null) nor Claude's as the reaper relays it
+        // (`128 + signum`, e.g. 143 on a Restart): see `isSignalDeath`.
         // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
         // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
         // was set (5 s), so the session was never cleared (issue #1169).
@@ -4015,7 +4053,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Judging site (a) (#2358 PR 3b-1, R1.4): here, with the exit code in
       // hand. The #1169 shape (a resumed, unconfirmed spawn exiting non-zero)
       // is never judged; its record is torn down now, so no later release
-      // judges it either.
+      // judges it either. "Non-zero" here is `shouldClearSession`'s, so a
+      // signal death (`isSignalDeath`: `code` null, or a relayed 129–192 such
+      // as a fault kill's 143 on Linux) is NOT the #1169 shape and is judged.
       if (
         record !== null &&
         judgeable(record) &&
