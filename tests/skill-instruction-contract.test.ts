@@ -574,7 +574,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "43", bodyHash: "3a0d2fcab8ac" });
+    ).toEqual({ version: "43", bodyHash: "ae9993925ecb" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -780,7 +780,15 @@ describe("shipped Tandem skill instruction contract", () => {
     // The refusals that stay, and the fallback for a server that keeps NOT_OWNED.
     expect(p).toMatch(/ANNOTATION_RESOLVED/);
     expect(p).toMatch(/INVALID_ARGUMENT/);
-    expect(p).toMatch(/If it refuses a user's comment with `NOT_OWNED`/);
+    // Keyed to a user-authored comment, so a legacy imported comment's NOT_OWNED does not
+    // read as "this Tandem takes no thread replies".
+    expect(p).toMatch(
+      /If it refuses a comment the user wrote \(`author: "user"`\) with `NOT_OWNED`/,
+    );
+    // A new reply re-opens with only that reply; a chat question about a Solo-held comment
+    // is still answered in chat.
+    expect(p).toMatch(/only the new reply, arrives again/);
+    expect(p).toMatch(/unless the user asked about it in chat; then answer in chat/);
     // A Solo-held comment's NOT_FOUND is held, never answered with a fresh comment.
     expect(p).toMatch(/`NOT_FOUND`: hold your answer until the mode is back to Tandem/);
     // The selections paragraph no longer sends a comment's answer to chat.

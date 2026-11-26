@@ -728,6 +728,14 @@ describe("answers, flag on (#2360 §3)", () => {
     expect(out.message).not.toContain("tandem_reply");
     const tool = (await client.listTools()).tools.find((t) => t.name === "tandem_annotationReply");
     expect(tool?.description).not.toContain("tandem_reply");
+    // PR C review: a user's highlight is NOT_OWNED (above); a highlight Claude
+    // authored passes the author arm and is refused not-repliable.
+    expect(tool?.description).toContain(
+      "An imported record or a user's highlight returns NOT_OWNED",
+    );
+    expect(tool?.description).toContain(
+      "Private notes, private comments and a highlight Claude authored return INVALID_ARGUMENT",
+    );
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toContain("inProgress");
   });
 
@@ -767,6 +775,14 @@ describe("dark (#2360): master's behaviour, byte for byte", () => {
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
     const tool = (await client.listTools()).tools.find((t) => t.name === "tandem_annotationReply");
     expect(tool?.description).toContain("answer it in chat with tandem_reply");
+    // Byte for byte (PR C review edited only the lit text).
+    expect(tool?.description).toBe(
+      "Reply in the thread of a pending annotation Claude authored (ANNOTATION_RESOLVED once it is " +
+        "accepted or dismissed). A user-authored or imported record — including a promoted note or " +
+        "imported comment, which is stored as a user comment — returns NOT_OWNED; answer it in chat with " +
+        "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments return " +
+        "INVALID_ARGUMENT.",
+    );
     expect(Object.keys(tool?.inputSchema.properties ?? {})).not.toContain("inProgress");
   });
 
