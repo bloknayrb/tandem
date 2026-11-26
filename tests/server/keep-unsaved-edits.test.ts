@@ -691,3 +691,50 @@ describe("second cloud review (d2de584)", () => {
     expect(newest.name).toBe(first?.name);
   });
 });
+
+describe("third cloud review (829de9c)", () => {
+  it("a restore refused because the edits cannot be kept writes and prunes no disk snapshot", async () => {
+    const filePath = path.join(tmpDir, "refuse-first.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("refuse-first.md", "good\n", "edits\n");
+    await fs.writeFile(filePath, "external\n");
+    const before = await listDocBackups(filePath, resolveAppDataDir());
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const spy = vi
+      .spyOn(store, "snapshotUnsavedEdits")
+      .mockResolvedValue({ outcome: "skipped-size-cap" });
+    try {
+      await expect(
+        restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true }),
+      ).rejects.toMatchObject({ code: "BACKUP_FAILED" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await listDocBackups(filePath, resolveAppDataDir())).toEqual(before);
+  });
+
+  it("a restore whose write fails reports no kept backup: nothing was discarded", async () => {
+    const filePath = path.join(tmpDir, "write-fails.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id, doc } = await openWithUnsavedEdits("write-fails.md", "good\n", "edits\n");
+    const io = await import("../../src/server/file-io/index.js");
+    const spy = vi.spyOn(io, "atomicWrite").mockRejectedValue(new Error("EBUSY"));
+    try {
+      const err = await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true }).then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err?.message).toBe("EBUSY");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(extractText(doc)).toContain("edits");
+    expect(pushNotificationMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "unsaved-edits-kept" }),
+    );
+  });
+});

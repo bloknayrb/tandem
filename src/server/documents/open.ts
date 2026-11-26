@@ -546,6 +546,8 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
           await persistEnvelopeNow(existingId, doc, resolved);
         }
       } catch (err) {
+        // Before the swap nothing was discarded: rethrow as is.
+        if (!swap?.fired) throw err;
         // A failure after the swap: the edits typed during the awaits were read
         // at the swap but not yet kept, and they are gone from the document now.
         const kept =

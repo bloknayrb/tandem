@@ -1878,6 +1878,10 @@ export async function closeDocumentById(
   // re-read at, so edits typed between this await and the teardown are not
   // kept — milliseconds, accepted in ADR-057.
   let unsavedEditsKept: KeptBackup | undefined;
+  // Set when the backup was skipped because the session would be kept: the
+  // close below then keeps it whatever its own later probe says, so a file
+  // made writable in between cannot leave the edits with neither (ADR-057).
+  let backupSkippedForKeptSession = false;
   if (opts?.keepUnsavedEdits) {
     const closingDocForBackup = getOrCreateDocument(safeId);
     const sessionWillBeKept =
@@ -1885,6 +1889,7 @@ export async function closeDocumentById(
       (isDirty(safeId) &&
         (hasReadOnlyFileEpisode(safeId) ||
           (docState.source === "file" && !(await isWritableOnDisk(docState.filePath)))));
+    backupSkippedForKeptSession = sessionWillBeKept;
     if (!sessionWillBeKept) {
       try {
         const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
@@ -1950,7 +1955,8 @@ export async function closeDocumentById(
     isDirty(safeId) &&
     (hasReadOnlyFileEpisode(safeId) ||
       (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
-  const keepSession = conflictAtClose !== undefined || readOnlyBlockedAtClose;
+  const keepSession =
+    conflictAtClose !== undefined || readOnlyBlockedAtClose || backupSkippedForKeptSession;
   if (keepSession) {
     try {
       await saveSession(docState.filePath, docState.format, closingDoc, {

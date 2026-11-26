@@ -132,6 +132,8 @@ export interface SwapCapture {
   /** `liveDoc`: the document the swap is replacing, as the swapping code holds it. */
   capture(liveDoc: Y.Doc): void;
   readonly text: string | null;
+  /** True once the swap ran `capture`: from then on the old content is gone. */
+  readonly fired: boolean;
 }
 
 /**
@@ -141,8 +143,10 @@ export interface SwapCapture {
  */
 export function captureAtSwap(id: string, docState: DocFacts): SwapCapture {
   let text: string | null = null;
+  let fired = false;
   return {
     capture(liveDoc) {
+      fired = true;
       try {
         text = unsavedEditsOf(id, liveDoc, docState);
       } catch (err) {
@@ -153,6 +157,9 @@ export function captureAtSwap(id: string, docState: DocFacts): SwapCapture {
     },
     get text() {
       return text;
+    },
+    get fired() {
+      return fired;
     },
   };
 }

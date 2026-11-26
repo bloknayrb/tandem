@@ -374,7 +374,15 @@ export async function listDocBackups(
       // Raced away (concurrent prune/sweep) — skip the entry.
     }
   }
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  // Equal mtimes (coarse filesystem clocks: a restore writes its disk and its
+  // unsaved snapshot milliseconds apart) put the unsaved kind first, so "the
+  // most recent backup" is the kept edits rather than a coin flip on uuid8.
+  out.sort(
+    (a, b) =>
+      b.mtimeMs - a.mtimeMs ||
+      Number(b.kind === "unsaved") - Number(a.kind === "unsaved") ||
+      b.name.localeCompare(a.name),
+  );
   return out.map(({ name, timestamp, size, kind }) => ({ name, timestamp, size, kind }));
 }
 
@@ -541,6 +549,9 @@ export async function snapshotBeforeFirstWrite(
     if (identical !== null) {
       snapshottedPaths.add(pathKey);
       if (!pinnedFirstSnapshot.has(pathKey)) pinnedFirstSnapshot.set(pathKey, identical);
+      // A restore's match may be an older copy: touch it, so the copy of what
+      // this restore overwrites is not the next one the prune removes.
+      if (opts.ignoreRunGate && identical !== newest) await touchBestEffort(subdir, identical);
       return "skipped-identical";
     }
 
@@ -621,6 +632,35 @@ export async function snapshotBeforeFirstWrite(
     }
     return "failed";
   }
+}
+
+/**
+ * Set a snapshot's mtime to now (or `when`). Best-effort: the bytes are kept
+ * either way, so a refused touch (antivirus, a read-only attribute) is logged
+ * and never turns a kept backup into a failure.
+ */
+async function touchBestEffort(subdir: string, name: string, when = new Date()): Promise<void> {
+  try {
+    await fs.utimes(path.join(subdir, name), when, when);
+  } catch (err) {
+    console.error("[DocBackup] could not refresh the time of %s (continuing):", name, err);
+  }
+}
+
+/**
+ * Mark an `unsaved` snapshot as the newest backup of `filePath`: a restore
+ * keeps the edits BEFORE its disk snapshot (so a refusal comes before anything
+ * is written or pruned), then calls this, so "restore the most recent backup"
+ * still returns the edits (ADR-057). Best-effort, never throws.
+ */
+export async function markSnapshotNewest(
+  filePath: string,
+  appDataDir: string,
+  name: string,
+): Promise<void> {
+  const resolved = docBackupSnapshotPath(filePath, appDataDir, name);
+  if (resolved === null) return;
+  await touchBestEffort(path.dirname(resolved), path.basename(resolved));
 }
 
 /**
@@ -776,7 +816,7 @@ export async function snapshotUnsavedEdits(
       // snapshot a restore just wrote, so "restore the most recent backup"
       // still returns them, and last in line for the prune.
       const now = new Date();
-      await fs.utimes(path.join(subdir, identical), now, now);
+      await touchBestEffort(subdir, identical, now);
       return { outcome: "skipped-identical", name: identical, timestamp: now.toISOString() };
     }
 

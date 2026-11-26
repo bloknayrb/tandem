@@ -48,6 +48,7 @@ import { generateNotificationId } from "../../shared/utils.js";
 import {
   docBackupSnapshotPath,
   docxSidecarBackupPath,
+  markSnapshotNewest,
   snapshotBeforeFirstWrite,
 } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
@@ -431,11 +432,18 @@ export async function restoreDocumentFromBackup(
   }
 
   const keepEdits = opts?.keepUnsavedEdits === true;
-  // ADR-057: read the unsaved edits first, so edits the serializer cannot
-  // write refuse (`BACKUP_FAILED`) before the disk snapshot below writes and
-  // prunes anything.
+  // ADR-057: keep the unsaved edits this restore would discard FIRST, so every
+  // refusal (`BACKUP_FAILED`: the serializer, a failed write, the size cap)
+  // comes before anything is written or pruned — the disk snapshot below
+  // included. Edits typed during the awaits below are read again at the
+  // reload's swap.
   const restoreDoc = getOrCreateDocument(id);
   const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
+  const incoming = typeof content === "string" ? content : undefined;
+  const keptBefore =
+    editsBefore !== null
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
+      : undefined;
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
   // is itself reversible (first overwrite per path per run; never throws — a
@@ -450,20 +458,17 @@ export async function restoreDocumentFromBackup(
     documentId: id,
     ignoreRunGate: keepEdits,
   });
-
-  // Keep the unsaved edits this restore would discard, before the file is
-  // written — a failed backup throws here with the file unchanged. AFTER the
-  // disk snapshot, so the edits are the newest snapshot and the palette's
-  // "restore the most recent backup" brings them back. Edits typed during the
-  // awaits below are read again at the reload's swap.
-  const incoming = typeof content === "string" ? content : undefined;
-  const keptBefore =
-    editsBefore !== null
-      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
-      : undefined;
+  // The edits were kept before that disk snapshot; make them the newest backup
+  // again, so the palette's "restore the most recent backup" brings them back.
+  if (keptBefore) {
+    await markSnapshotNewest(existing.filePath, appDataDir, keptBefore.name);
+    keptBefore.timestamp = new Date().toISOString();
+  }
   const swap = keepEdits ? captureAtSwap(id, existing) : undefined;
-  // From here the file is written before anything can fail, so a kept backup
-  // is reported whatever the outcome.
+  // Whether anything the edits lived in has changed yet: the file once the
+  // write lands, the document once the swap runs. A failure before either
+  // discards nothing, so it reports no backup.
+  let fileWritten = false;
   try {
     // #1310: validate BEFORE the write, not during the reload below.
     //
@@ -493,6 +498,7 @@ export async function restoreDocumentFromBackup(
       } else {
         await atomicWrite(existing.filePath, content as string);
       }
+      fileWritten = true;
       // Content backstop for the watcher: the restore write's own `change`-event
       // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
       // The direct reloadFromDisk below does the intended re-anchor; this stops the
@@ -522,6 +528,9 @@ export async function restoreDocumentFromBackup(
       );
     }
   } catch (err) {
+    // Nothing changed yet (the write itself failed): rethrow as is, without
+    // telling anyone their edits may be gone.
+    if (!fileWritten && !swap?.fired) throw err;
     // A failure after the swap: edits typed during the awaits were read at the
     // swap but not yet kept, and they are gone from the document now.
     const kept =

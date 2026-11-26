@@ -326,6 +326,33 @@ describe("doc-backup", () => {
     });
   });
 
+  describe("listing order on equal mtimes (ADR-057)", () => {
+    it("puts the unsaved kind first when a disk and an unsaved snapshot share an mtime", async () => {
+      writeFileSync(docPath, "disk\n");
+      await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      const u = await snapshotUnsavedEdits(docPath, "edits\n", { appDataDir });
+      if (u.outcome !== "written") throw new Error("unreachable");
+      const same = new Date(Date.now() - 5000);
+      for (const s of allSnapshots()) {
+        utimesSync(join(docBackupsRoot(appDataDir), s.subdir, s.name), same, same);
+      }
+
+      const listed = await listDocBackups(docPath, appDataDir);
+      expect(listed[0]).toMatchObject({ name: u.name, kind: "unsaved" });
+    });
+
+    it("a refused mtime refresh never turns kept edits into a failure", async () => {
+      await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+      const spy = vi.spyOn(fs, "utimes").mockRejectedValue(new Error("EPERM"));
+      try {
+        const again = await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+        expect(again.outcome).toBe("skipped-identical");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   describe("prune order", () => {
     it("prunes by mtime, not by name, when snapshots share a timestamp segment", async () => {
       // Three same-second snapshots whose uuid8 order is the reverse of their age:
