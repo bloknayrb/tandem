@@ -6,6 +6,11 @@ const SERVICE: &str = "tandem";
 const ENTRY_NAME: &str = "auth-token";
 const TOKEN_FILE_NAME: &str = "auth-token";
 
+/// Every keyring fallback line starts with this, and the release smoke
+/// checklist greps it; `keyring_fallback_lines_match_the_smoke_checklist`
+/// pins both halves.
+const KEYRING_LOG_PREFIX: &str = "[tandem] keyring";
+
 /// Resolve the env-paths-equivalent data directory for the token file.
 /// Mirrors the Node.js `envPaths("tandem", { suffix: "" }).data` path:
 ///   Windows: %LOCALAPPDATA%\tandem\Data
@@ -68,8 +73,16 @@ fn generate_token() -> String {
 ///
 /// Priority:
 ///   1. Keyring (native secure storage — Windows Credential Manager / macOS Keychain)
-///   2. Env-paths file (fallback for Linux CI or locked-down environments)
+///   2. Env-paths file: the npm install's token, adopted as-is, or this
+///      app's own fallback file from a run with no usable keyring
 ///   3. Generate, persist to keyring or file, return.
+///
+/// An adopted file token is deliberately never copied into the keyring, so
+/// the machine keeps one token, the one `tandem rotate-token` rewrites (why:
+/// docs/security.md, "Auth tokens"). Every keyring fallback below logs
+/// [`KEYRING_LOG_PREFIX`] at `warn!`, the release log floor, which is how the
+/// smoke row "Credentials survive a restart (#1761)" tells an adopted token
+/// apart from a keyring failing on this launch.
 pub fn get_or_create_token() -> Result<String, String> {
     // `Entry::new` fails when the platform credential store could not be
     // initialised at all (keyring 4's one-time `set_credential_store()`).
@@ -79,13 +92,19 @@ pub fn get_or_create_token() -> Result<String, String> {
     match Entry::new(SERVICE, ENTRY_NAME) {
         Ok(entry) => token_with_keyring(&entry),
         Err(e) => {
-            let status = match Entry::store_status() {
-                Ok(()) => "credential store reports available".to_string(),
-                Err(s) => s.to_string(),
-            };
-            eprintln!(
-                "[tandem] keyring unavailable ({e}; credential store: {status}) — using the token file"
-            );
+            // The store is initialised once per process, so this failure
+            // repeats on every call (sidecar spawn, `best_effort_token`, the
+            // Cowork commands); one line per launch is what the smoke row needs.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                let status = match Entry::store_status() {
+                    Ok(()) => "credential store reports available".to_string(),
+                    Err(s) => s.to_string(),
+                };
+                log::warn!(
+                    "{KEYRING_LOG_PREFIX} unavailable ({e}; credential store: {status}) — using the token file"
+                );
+            });
             token_from_file_or_generate()
         }
     }
@@ -101,7 +120,11 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
             // token not yet stored — fall through to file or generate
         }
         Err(e) => {
-            eprintln!("[tandem] keyring read failed (falling through to file): {e}");
+            // Once per process, like "unavailable": this runs on every call.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                log::warn!("{KEYRING_LOG_PREFIX} read failed (falling through to file): {e}");
+            });
         }
     }
 
@@ -114,7 +137,8 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
     let token = generate_token();
 
     // Try keyring first; fall back to file if unavailable.
-    if entry.set_password(&token).is_err() {
+    if let Err(e) = entry.set_password(&token) {
+        log::warn!("{KEYRING_LOG_PREFIX} write failed (writing the token file instead): {e}");
         write_to_file(&token)?;
     }
 
@@ -197,5 +221,49 @@ mod tests {
             read_back.expect("the second Entry must read the secret the first one wrote"),
             secret
         );
+    }
+
+    /// The smoke row tells "the npm install minted the token" (no keychain
+    /// entry, by design) apart from "the keyring failed" only by grepping
+    /// `tandem.log` for the prefix. That works only while every fallback line
+    /// carries it at `warn!` (an `info!` or `eprintln!` never reaches the
+    /// release log) and the checklist names the same literal.
+    #[test]
+    fn keyring_fallback_lines_match_the_smoke_checklist() {
+        let src = include_str!("token_store.rs");
+        // Production code only, with comment lines dropped.
+        let prod: String = src
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('/'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let checklist = include_str!("../../docs/release-smoke-checklist.md");
+
+        assert!(
+            checklist.contains(&format!("`{KEYRING_LOG_PREFIX}`")),
+            "release-smoke-checklist.md must grep for `{KEYRING_LOG_PREFIX}`"
+        );
+        assert!(!prod.contains("eprintln!"), "keyring fallbacks must log with log::warn!, which reaches tandem.log");
+        // Pair each `warn!` with its own format string: counting the two
+        // separately would pass a prefixed `info!` beside an unrelated `warn!`.
+        let warn_args: Vec<&str> = prod.split("log::warn!(").skip(1).collect();
+        assert_eq!(warn_args.len(), 3, "three keyring fallbacks: unavailable, read failed, write failed");
+        for args in &warn_args {
+            assert!(
+                args.trim_start().starts_with("\"{KEYRING_LOG_PREFIX}"),
+                "every keyring warn! must start with KEYRING_LOG_PREFIX: {}",
+                args.lines().next().unwrap_or("")
+            );
+        }
+        let prefixed = prod.matches("\"{KEYRING_LOG_PREFIX}").count();
+        assert_eq!(prefixed, warn_args.len(), "KEYRING_LOG_PREFIX only on those warn! lines");
+        // `{e:?}` prints a keyring error's payload, and `BadEncoding` carries
+        // the stored secret's bytes; these lines reach a file that persists.
+        for line in prod.lines().filter(|l| l.contains("{KEYRING_LOG_PREFIX}")) {
+            assert!(!line.contains(":?}"), "keyring lines must use Display, not Debug: {line}");
+        }
     }
 }

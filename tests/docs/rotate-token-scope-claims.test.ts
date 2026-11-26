@@ -8,8 +8,10 @@ import { describe, expect, it } from "vitest";
  * token file.
  *
  * `src/cli/rotate-token.ts` rewrites exactly one thing: the `auth-token` file
- * at the npm install's location (`getTokenFilePath`). It never touches the
- * desktop app's token, which lives in the OS keychain, and it refuses to run
+ * at the npm install's location (`getTokenFilePath`). It never touches a
+ * keychain-held desktop token (a desktop that adopted the file reads the
+ * rotated file at its next launch),
+ * and it refuses to run
  * at all when the token arrives through the environment (as it does for the
  * desktop sidecar). An unscoped "rotate-token replaces it" reads as a way to
  * retire a leaked desktop token, and it is not: the glossary said exactly
