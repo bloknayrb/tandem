@@ -1210,9 +1210,11 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
   // `128 + signum` — 143 for SIGTERM, 137 for SIGKILL. `shouldClearSession`
   // read only `code === null` as a signal, so a Restart or crash within
   // `RESUME_CONFIRM_MS` of a resume unlinked `launcher-session.json` and the
-  // next spawn started a fresh conversation. A kill the supervisor sent keeps
-  // the session every time; a crash keeps it for ONE more resume, so a
-  // session that kills Claude on every load cannot loop forever.
+  // next spawn started a fresh conversation. An intentional kill of ours
+  // (Restart, stop, Off, the sign-in kill) keeps the session every time; a
+  // crash — including one a stdin-gone or receipt fault kill follows — keeps it
+  // for ONE more resume, so a session that kills Claude on every load cannot
+  // loop forever.
 
   const sessionFile = () => path.join(baseDir, "launcher-session.json");
   const savedId = () =>
@@ -1241,18 +1243,18 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
    * supervisor's start then RESUMES it as child 2, unconfirmed. */
   async function resumedChild(
     extra: ExtraOpts = {},
-  ): Promise<{ sup: Supervisor; child2: FakeChild; id: string }> {
+  ): Promise<{ sup: Supervisor; emit: (e: TandemEvent) => void; child2: FakeChild; id: string }> {
     const first = makeSupervisor().sup;
     await first.startFresh(cwdDir);
     await first.stop();
     const id = savedId();
 
-    const { sup } = makeSupervisor(extra);
+    const { sup, emit } = makeSupervisor(extra);
     await sup.start();
     const child2 = await nthChild(2);
     resumes(2, id);
     expect(sup.status()).toMatchObject({ running: true, resuming: true });
-    return { sup, child2, id };
+    return { sup, emit, child2, id };
   }
 
   it("a Restart relayed as 143 keeps the session, every time", async () => {
@@ -1286,16 +1288,36 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
   });
 
   it("our own kill between two crashes neither clears nor resets the allowance", async () => {
+    // A stop and a plain `start()` (as at boot): our kill, but not a user's
+    // Start or Restart, which would reset the allowance on purpose.
     onSpawn = relayKillsAs143;
     const { sup, child2, id } = await resumedChild();
     exitChild(child2, 137); // crash 1: kept
-    await nthChild(3);
-    await sup.relaunch(cwdDir); // our 143: kept
+    const child3 = await nthChild(3);
+    await sup.stop(); // our 143: kept
+    expect(child3.kills).toEqual(["SIGTERM"]);
+    resumes(3, id);
+    await sup.start();
     const child4 = await nthChild(4);
     resumes(4, id);
     exitChild(child4, 137); // crash 2: cleared
     await nthChild(5);
     expect(isFresh(5)).toBe(true);
+  });
+
+  it("the sign-in kill is ours: after a crash it does not clear the session", async () => {
+    onSpawn = relayKillsAs143;
+    const { sup, child2, id } = await resumedChild();
+    exitChild(child2, 137); // crash 1: kept, the allowance used
+    const child3 = await nthChild(3);
+    pushJson(child3, INIT);
+    pushJson(child3, NOT_SIGNED_IN); // the sign-in trip kills it; relayed 143
+    await waitFor(() => sup.status().lastError === "needs-login", "the sign-in trip");
+    await waitFor(() => child3.exitCode !== null, "child 3's exit");
+    await settle();
+    expect(child3.kills).toEqual(["SIGTERM"]);
+    expect(savedId()).toBe(id);
+    expect(logText()).not.toContain("clearing saved session");
   });
 
   it("a confirmed resume resets the allowance", async () => {
@@ -1331,6 +1353,87 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
     expect(resumedSpawns).toBe(2);
     await sleep(50);
     expect(children).toHaveLength(freshIndex);
+  });
+
+  /** A reaper whose Claude is already dying: our kill is recorded, and the
+   * exit is the test's to deliver (with whatever code the reaper relays). */
+  function holdKill(child: FakeChild): void {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      return true;
+    };
+  }
+
+  /** `holdKill` on the resumed spawns only, so a fresh successor still stops
+   * at teardown. (The spawn mock records its call before running `onSpawn`.) */
+  function holdKillWhenResumed(child: FakeChild, index: number): void {
+    if (!isFresh(index + 1)) holdKill(child);
+  }
+
+  /** The OOM killer ends Claude mid-turn: the owed write fails with EPIPE, the
+   * stdin-gone handler fault-kills the reaper, and the reaper relays 137. */
+  async function oomWhileWriting(child: FakeChild): Promise<void> {
+    await waitFor(() => held(child).length > 0, "a turn written to the child");
+    failWrite(child);
+    await waitFor(() => child.killed, "the stdin-gone kill");
+    exitChild(child, 137);
+  }
+
+  it("a crash that the stdin-gone kill follows is not our kill: kept once, then cleared", async () => {
+    onSpawn = holdKillWhenResumed;
+    const { emit, child2, id } = await resumedChild();
+    emit(annotationEvent()); // a wake is written to the resumed child
+    await oomWhileWriting(child2);
+    expect(child2.kills).toEqual(["SIGTERM"]);
+
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    await oomWhileWriting(child3); // the owed wake is written to child 3 too
+
+    await nthChild(4);
+    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("a session that crashes Claude on every load, through the delivery kill, ends within two resumes", async () => {
+    onSpawn = holdKillWhenResumed;
+    const { emit } = await resumedChild();
+    emit(annotationEvent());
+    let n = 2;
+    while (!isFresh(n) && n < 8) {
+      await oomWhileWriting(children[n - 1]);
+      n++;
+      await nthChild(n);
+    }
+    expect(n).toBe(4); // spawns 2 and 3 resumed; spawn 4 is fresh
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it.each([
+    [
+      "Off, then Start",
+      async (sup: Supervisor) => {
+        await sup.updateSettings({ startMode: "off" });
+        await sup.updateSettings({ startMode: "on-click" });
+        await sup.startByUser();
+      },
+    ],
+    ["Restart", (sup: Supervisor) => sup.relaunch(cwdDir).then(() => undefined)],
+  ])("a user's %s forgets an earlier crash: a later unrelated crash is kept", async (_l, act) => {
+    const { sup, child2, id } = await resumedChild();
+    exitChild(child2, 137); // crash 1: kept, the allowance used
+    await nthChild(3); // the automatic retry
+    resumes(3, id);
+
+    await act(sup); // before child 3 confirms
+    const next = await nthChild(4);
+    resumes(4, id);
+    exitChild(next, 137); // an unrelated crash
+    await nthChild(5);
+    resumes(5, id);
+    expect(logText()).not.toContain("clearing saved session");
   });
 
   // The control: the exit the gate exists for still clears at once.

@@ -577,7 +577,7 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
   const base = {
     resuming: true,
     resumeConfirmed: false,
-    killedBySupervisor: false,
+    commandedKill: false,
     priorUncommandedDeaths: 0,
   };
 
@@ -621,7 +621,7 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
         shouldClearSession({
           ...base,
           code,
-          killedBySupervisor: true,
+          commandedKill: true,
           priorUncommandedDeaths: prior,
         }),
       ).toBe(false);
@@ -651,9 +651,9 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
   ])(
     "a relayed death that is not our signal counts as a crash though we sent a kill (code %i, %s)",
     (code) => {
-      expect(shouldClearSession({ ...base, code, killedBySupervisor: true })).toBe(false);
+      expect(shouldClearSession({ ...base, code, commandedKill: true })).toBe(false);
       expect(
-        shouldClearSession({ ...base, code, killedBySupervisor: true, priorUncommandedDeaths: 1 }),
+        shouldClearSession({ ...base, code, commandedKill: true, priorUncommandedDeaths: 1 }),
       ).toBe(true);
     },
   );
@@ -665,7 +665,7 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     [193, "above 128 + SIGRTMAX, so no signal could produce it"],
   ])("clears at once on a non-signal exit (code %i, %s), even if we sent a kill", (code) => {
     expect(shouldClearSession({ ...base, code })).toBe(true);
-    expect(shouldClearSession({ ...base, code, killedBySupervisor: true })).toBe(true);
+    expect(shouldClearSession({ ...base, code, commandedKill: true })).toBe(true);
   });
 });
 
