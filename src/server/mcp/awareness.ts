@@ -570,8 +570,9 @@ export function handOverDocumentInbox(documentId: string): void {
 /**
  * This server run's start, as the waiting rule's `writtenSince` (#2358, the
  * restart row; Bryan's pick "Written since boot"): set when this module loads,
- * which is at boot. Read only by the two waiting reads below, which only the
- * ownership module's seams ask (flag on).
+ * which is at boot. Read only by the two waiting reads below and by the chat
+ * side's `message` member (#2358 PR 5d), which only the ownership module's
+ * seams ask (flag on).
  */
 let waitingWrittenSince = Date.now();
 
@@ -2577,10 +2578,19 @@ export const ownershipChatSide = Object.freeze({
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user") return undefined;
     const documentId = chatDocumentOf(msg);
+    const timestamp =
+      typeof msg.timestamp === "number" && Number.isFinite(msg.timestamp)
+        ? msg.timestamp
+        : undefined;
     return {
       ...(documentId !== undefined ? { documentId } : {}),
       documentOpen: documentId !== undefined && getOpenDocs().has(documentId),
       localPeriod: isLocalPeriodChat(key),
+      // #2358 PR 5d: the published pickup and stall clock. Only a flag-on
+      // ownership decision calls this member.
+      ...(timestamp !== undefined
+        ? { timestamp, writtenThisRun: timestamp >= waitingWrittenSince }
+        : {}),
     };
   },
   /**

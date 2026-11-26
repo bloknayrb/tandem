@@ -151,50 +151,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Flag on, the stall banner as built in 3b-2e2 (hidden while Tandem's Claude is started or " +
-      "woken after the oldest waiting message, then 'Claude hasn't picked this up for N minutes. " +
-      "Your message is still waiting.', no dismiss) has not been reviewed by Bryan against keyed " +
-      "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
-      "banner up while another session polls and is never handed that document's item, and a " +
-      "turn of Tandem's Claude written after the message hides it even when the message is " +
-      "another session's.",
-    closedBy: "Bryan's review of the built banner (3b-2e2).",
-  },
-  {
-    gap:
-      "The pickup and stall clock still counts from the message's arrival, not its last change " +
-      "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
-      "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
-      "session started from that offer is not handed it while another session holds the " +
-      "document (the chat owners PR, R8.1, R8.3).",
-    closedBy: "PR 5 (the clock carried to the client).",
-  },
-  {
-    gap:
-      "The published state (#2358 PR 5a-3) leaves chat out, by Bryan's pick 'Defer to 5d " +
-      "(Recommended)' (2026-11-23): the CTRL_ROOM composer summary carries no 'chat waiting' " +
-      "or 'chat stale' for a message with no controlling badge (doc-less, on a closed " +
-      "document, or owned per message), and a document's waiting time (its stale flag, its " +
-      "hints and waitingSince) counts user comments and thread replies only, never chat that " +
-      "follows the document, so a badge can read as nothing waiting while a chat message on " +
-      "that document waits (design §10.2).",
-    closedBy:
-      "PR 5d (the pickup and stall clock from a message's last change of owner, design §6.5), " +
-      "publishing chat waiting and chat stale in the summary and counting a document's chat in " +
-      "its waiting time.",
-  },
-  {
-    gap:
-      "The user's controls exist only on the server (#2358 PR 5a, 5a-2: POST /api/ownership for " +
-      "a document and for a chat message): nothing in the editor reaches them yet, so a stuck " +
-      "claim, a live acknowledger that never answers, or chat a tab close left with its closing " +
-      "holder can be moved only by a local process calling the route.",
-    closedBy:
-      "PR 5b (the badge's Release and Assign, the Assign popover, the pickup row's Assign and " +
-      "Release of a message, the native menu's leaves).",
-  },
-  {
-    gap:
       "A document claimed by a poll whose items its holder then never answers: the holder keeps " +
       "it, and no other session is handed its items until a lapse, a close or a take moves it " +
       "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does). " +
@@ -274,47 +230,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
       "resume across a server restart, a resume after a crash.",
     closedBy: "A smoke run of each, or Bryan's acceptance.",
-  },
-  {
-    gap:
-      "Flag-on suites that drive ownership but read no delivery-round state run with the " +
-      "delivery-round seam unwired, so their polls run master's one global round, which no " +
-      "flag-on server runs: ownership-chat, ownership-posts and ownership-change-notices mock " +
-      "delivery-state.js with a pass-through that makes resolveDeliveryRound throw on demand; " +
-      "health-route injects its own getDeliveryState; and the same holds for every other " +
-      "suite that polls the inbox without wiring the seam (every suite runs flag-on in the " +
-      "ownership-on job). The set, over-approximated (a file that only names the tool is in " +
-      "it) and possibly incomplete (a suite that polls through a helper without naming the " +
-      "tool is missed): the test files that name tandem_checkInbox and name neither setDeliveryRoundSeam " +
-      "nor registerTestCallerRecord, i.e. grep -rlE 'tandem_checkInbox' tests --include=*.test.ts " +
-      "| xargs grep -LE 'setDeliveryRoundSeam|registerTestCallerRecord' (38 files when this row " +
-      "was written). A change that makes their polls open or close a keyed round wrongly is " +
-      "not seen there, although every tandem_checkInbox poll reaches the round (its " +
-      "resolveDeliveryRound call in awareness.ts).",
-    closedBy:
-      "Wiring the suites of that set that poll the inbox, each with a live check, or a test " +
-      "that drives their paths keyed.",
-  },
-  {
-    gap:
-      "#2439: on Windows the launcher folder's owner and access-list checks run once per server " +
-      "process (verifiedWindowsDirs, src/server/launcher/run-files.ts), so an entry new files do " +
-      "not inherit, added after the first check, is not seen again in that process. Bryan accepted " +
-      "it on 2026-11-17 for the dark state (docs/security.md, Accepted (bounded)); the acceptance " +
-      "is re-decided when OWNERSHIP_ENABLED flips.",
-    closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
-  },
-  {
-    gap:
-      "The restart question's other-owner half: the mode-unknown observer re-asks only " +
-      "Tandem's Claude's start-or-wake (mode-known) when the mode first reads Tandem after " +
-      "reading unknown. A session other than Tandem's Claude holding a document gets no " +
-      "`ownership` frame and no push wake for a user comment made while the mode was unknown " +
-      "(pushEvent's Solo gate dropped it); it sees the comment only at its next " +
-      "tandem_checkInbox, which stays authoritative.",
-    closedBy:
-      "A re-ask for other owners when the mode becomes known (the `ownership` frame, or a " +
-      "push-stream nudge), with a test, or Bryan's acceptance of the gap.",
   },
   {
     gap:
@@ -426,16 +341,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
       "ADR; if it does not, 3b-2b2's re-ask, with a test.",
-  },
-  {
-    gap:
-      "A lapsed holder whose deferred move has not run leaves a closed document's chat with no " +
-      "owner (`assignClosedDocumentChat`: `to` is undefined, the chat is re-owed). Once the " +
-      "document is closed and Tandem's Claude is present the message is its by standing, with " +
-      "no `messageOwnerChanged`, so nothing forwards for it.",
-    closedBy:
-      "3b-2b2's standby arm, or a test showing the next poll or start covers it and an Accepted " +
-      "line.",
   },
 ];
 

@@ -138,6 +138,7 @@ import {
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
+  listDocumentsOwnershipOutputShape,
   statusOutputShape,
   statusOwnershipShape,
 } from "./output-schemas.js";
@@ -148,6 +149,7 @@ import {
   noOwnerRefusal,
   ownedOpen,
   ownedWrite,
+  ownerLabelFor,
   ownershipOn,
   rangeDecidedByArguments,
   switchRefusal,
@@ -1918,21 +1920,29 @@ export function registerDocumentTools(server: McpServer): void {
     ),
   );
 
+  const listOwnerLabels = ownershipOn();
   server.registerTool(
     "tandem_listDocuments",
     {
       annotations: READ_ONLY_TOOL,
       description: "List all open documents with their IDs, file paths, and formats.",
       inputSchema: {},
-      outputSchema: listDocumentsOutputShape,
+      // Each document's owner label (#2358 PR 5c; ownership design §5.7) is
+      // declared and sent only at a flag-on registration, so a dark
+      // `tools/list` and every dark output stay exactly as before.
+      outputSchema: listOwnerLabels ? listDocumentsOwnershipOutputShape : listDocumentsOutputShape,
     },
     withStructuredErrors(
-      withErrorBoundary("tandem_listDocuments", async () => {
+      withErrorBoundary("tandem_listDocuments", async (_args, caller) => {
         return mcpStructured({
-          documents: Array.from(openDocs.values()).map((d) => ({
-            ...toDocListEntry(d),
-            isActive: d.id === getActiveDocId(),
-          })),
+          documents: Array.from(openDocs.values()).map((d) => {
+            const owner = listOwnerLabels ? ownerLabelFor(caller, d.id) : undefined;
+            return {
+              ...toDocListEntry(d),
+              isActive: d.id === getActiveDocId(),
+              ...(owner !== undefined ? { owner } : {}),
+            };
+          }),
           activeDocumentId: getActiveDocId(),
           count: docCount(),
         });
@@ -1940,6 +1950,11 @@ export function registerDocumentTools(server: McpServer): void {
     ),
   );
 
+  // The same owner label as `tandem_listDocuments`' entries (#2358 PR 5c,
+  // Bryan 2026-11-24), decided at registration as that tool's is, so a dark
+  // registration's output stays exactly as before. The tool declares no
+  // output schema, so `tools/list` is unchanged either way.
+  const switchOwnerLabel = ownershipOn();
   server.tool(
     "tandem_switchDocument",
     "Switch the active document. Tools will operate on this document by default." +
@@ -1956,9 +1971,13 @@ export function registerDocumentTools(server: McpServer): void {
       const refused = switchRefusal(caller, "tandem_switchDocument", documentId);
       if (refused) return refused;
       activateDocument(documentId);
+      // Read after the switch, which never claims: the caller's own label, or
+      // null, since another holder was refused above.
+      const owner = switchOwnerLabel ? ownerLabelFor(caller, documentId) : undefined;
       return mcpSuccess({
         activeDocumentId: documentId,
         ...toDocListEntry(openDocs.get(documentId)!),
+        ...(owner !== undefined ? { owner } : {}),
       });
     }),
   );

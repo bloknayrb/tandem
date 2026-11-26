@@ -161,6 +161,14 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
   `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
   (the primary action keeps `palette-item-new-scratchpad`)
+- Document ownership (#2358 PR 5b, ownership design §10.2; nothing renders
+  while ownership ships dark, since a dark server publishes no owner fields):
+  `tab-owner-badge` (inside a tab pill, shown only when it says something;
+  `data-stale` / `data-hint` carry the published state), its popover
+  `tab-owner-menu`, and in it `tab-owner-release`, `tab-owner-assign-{*}`
+  (keyed by the session's label), `tab-owner-start` and `tab-owner-error`
+  (visible, `aria-hidden`); the strip's always-mounted `tab-owner-announcer`
+  speaks a refusal (#1431, #2489)
 
 ### Saved sessions (file-open dialog)
 - `sessions-section`, `sessions-toggle` (the disclosure),
@@ -261,16 +269,32 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `data-notice` carries its kind), and `chat-notice-live` (its own persistent
   live region)
 - `chat-tandem-claude-toggle` — Start / Turn off for Tandem's Claude in the chat panel header (#2195; `data-action` is `start` or `turn-off`)
+- `chat-tandem-claude-take-back` — below the header, while its control is Start and ownership is on: the documents a Start would take back (#2358 PR 5b, ownership design §10.2)
 - `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
 - `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
 - `chat-tandem-claude-resume-remedy` — that row's remedy button
+- `chat-tandem-claude-resume-take-back` — beside that remedy, when it is Start and ownership is on: the documents a Start would take back (#2358 PR 5b, ownership design §10.2)
 - `chat-greeting-late` — "Tandem's Claude hasn't said hello" note, when the one-time greeting did not reach the chat (#2197; `data-action` is `relaunch` or the stopped launcher's `AiChip`); below the resume row, replaces the pickup row
 - `chat-greeting-late-action` — that note's button
+- `chat-greeting-late-take-back` — beside that button, when it is Start and ownership is on: the documents a Start would take back (#2358 PR 5b)
 - `chat-claude-code-offer` — offer to set up Tandem's own Claude (#2199), with
   `chat-claude-code-offer-setup` (opens the wizard at its offer) and
   `chat-claude-code-offer-dismiss` ("Not now", until the next server launch); only when the
   launcher has no Claude Code setup and nothing is pushed to, on an empty chat or a message waiting
   past the stall threshold
+- `chat-owner-line` — who answers a message sent now (#2358 PR 5b, ownership
+  design §10.2; `data-kind` is `to` or `none`), with `chat-owner-line-action`
+  (Start or Open Settings, `data-remedy`) when no AI will answer, or Start when
+  a chat message is stale and Start can help (#2358 PR 5e); nothing while
+  ownership ships dark
+- `chat-message-owner-{*}` — the control line under an unanswered user message,
+  keyed by message id (#2358 PR 5e, ownership design §10.2): who holds it, with
+  `chat-message-owner-release-{*}` (Release, saying where it goes) and
+  `chat-message-owner-assign-{*}` ("Assign…", which opens `chat-message-owner-menu`
+  listing `chat-message-owner-choice-{*}`, keyed by the session's label), and
+  `chat-message-owner-error-{*}` for a refusal (visible only; spoken by
+  `chat-message-owner-announcer`, the chat panel's always-mounted announcer,
+  mounted from the first published facts); nothing while ownership ships dark
 
 ### Banners
 - `banner-stack` — the measured wrapper around the five top-of-shell banners
@@ -309,7 +333,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   scroll region)
 - `error-boundary-{recover,reload}-btn` (resolved from constants)
 - `command-palette`, `palette-{input,empty}`, `palette-item-{*}`,
-  `palette-item-new-scratchpad`
+  `palette-item-new-scratchpad`, `palette-item-detail-{*}` (a command's second line; #2358 PR 5b: `launcher-start`'s take-back sentence while ownership is on)
 - `onboarding-tutorial` (the checklist strip), `tutorial-dismiss-btn` (its ×), `tutorial-next-btn` (the Done button, shown once every item is ticked — #1711), `tutorial-item-{review,ask,edit}` (each with `data-done`)
 
 ### Settings — popover (REMOVED 2026-07-21 — consolidated into the modal below; testids deleted)

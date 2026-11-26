@@ -23,6 +23,10 @@ export const TAB_CONTEXT_MENU_ACTION_IDS = [
   "ctx:tab:copyPath",
   "ctx:tab:reveal",
   "ctx:tab:toggleSourceView",
+  // #2358 PR 5b (ownership design §10.1, §10.2): emitted only while the
+  // document's entry carries owner fields, so a dark build never sees them.
+  "ctx:tab:release",
+  "ctx:tab:assign",
 ] as const;
 
 export type TabContextMenuActionId = (typeof TAB_CONTEXT_MENU_ACTION_IDS)[number];
@@ -55,7 +59,30 @@ export interface TabContextMenuRequest {
   canToggleSourceView: boolean;
   /** True selects the fixed Return to Formatted Editor label. */
   sourceViewActive: boolean;
+  /**
+   * #2358 PR 5b: the Release leaf is present (omitted, not disabled, when
+   * false: ownership off, or Release would change nothing).
+   */
+  ownerRelease: boolean;
+  /** Selects Release's fixed "back to Tandem's Claude" label over "unassigned". */
+  ownerReleaseToTandem: boolean;
+  /** The Assign leaf (it opens the badge's popover) is present. */
+  ownerAssign: boolean;
 }
+
+/** The ownership half of the request, computed by the caller from the published state. */
+export interface TabOwnerMenuGates {
+  release: boolean;
+  releaseToTandem: boolean;
+  assign: boolean;
+}
+
+/** Ownership off: no leaf. */
+export const NO_OWNER_MENU: TabOwnerMenuGates = {
+  release: false,
+  releaseToTandem: false,
+  assign: false,
+};
 
 /** Minimal tab shape the context computation needs. */
 export interface TabRef {
@@ -87,6 +114,7 @@ export function buildTabMenuContext(
   tabs: readonly TabRef[],
   tabId: string,
   sourceViewActive = false,
+  owner: TabOwnerMenuGates = NO_OWNER_MENU,
 ): TabContextMenuRequest {
   const idx = tabs.findIndex((t) => t.id === tabId);
   const tab = idx >= 0 ? tabs[idx] : undefined;
@@ -103,6 +131,9 @@ export function buildTabMenuContext(
     hasPath: !!tab && hasRealPath(tab.filePath),
     canToggleSourceView: writable && tab?.format === "md",
     sourceViewActive: !!tab && sourceViewActive,
+    ownerRelease: !!tab && owner.release,
+    ownerReleaseToTandem: !!tab && owner.release && owner.releaseToTandem,
+    ownerAssign: !!tab && owner.assign,
   };
 }
 

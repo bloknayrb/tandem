@@ -465,6 +465,16 @@ export const Y_MAP_ACTIVITY = "activity";
  * server state (ownership design §10.3). A dark server never writes it.
  */
 export const Y_MAP_OWNERSHIP_SUMMARY = "ownershipSummary";
+/**
+ * CTRL_ROOM's per-message ownership facts (#2358 PR 5d; ownership design
+ * §6.5, §10.2), a `PublishedChatOwners` (`shared/ownership-published.ts`):
+ * each unanswered user chat message's holder, how it holds it, whether
+ * Release and Assign apply, and its pickup and stall clock. Written only by a
+ * flag-on server (both transports), under `withInternal`, from
+ * `src/server/ownership-publish.ts`; a client write to it is restored from
+ * server state (ownership design §10.3). A dark server never writes it.
+ */
+export const Y_MAP_OWNERSHIP_CHAT = "ownershipChat";
 // Y.Map sub-keys: awareness (Claude focus)
 export const Y_MAP_CLAUDE = "claude";
 // Y.Map sub-keys: documentMeta

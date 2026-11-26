@@ -75,6 +75,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { ownershipOn } from "../../src/server/mcp/owned-op.js";
 import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";
 import {
   __resetLocalPeriodForTests,
@@ -83,7 +84,7 @@ import {
 } from "../../src/server/models/local-period.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
 import { anchoredRange } from "../../src/server/positions.js";
-import { resetOwnershipForTests } from "../../src/server/sessions/ownership.js";
+import { resetOwnershipForTests, setDocOwner } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -96,7 +97,11 @@ import { sanitizeAnnotation } from "../../src/shared/sanitize.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+import {
+  ownershipTestDispatch,
+  registerTestCallerRecord,
+  TEST_OWNER_ID,
+} from "../helpers/ownership-caller.js";
 import { off } from "../helpers/positions.js";
 
 // Flag on, a poll reads only what its caller's record holds or may claim.
@@ -1110,6 +1115,38 @@ describe("G5: the stripped keys stay undeclared and unsent", () => {
     const replies = item.replies as Item[];
     expect(replies.map((r) => r.id)).toEqual(["reply-carrier"]);
     for (const k of REPLY_STRIPPED) expect(k in replies[0], `reply ${k} sent`).toBe(false);
+  });
+});
+
+describe("G6: the owner label is declared exactly when it is sent (#2358 PR 5c)", () => {
+  it("every top-level key is declared, and `owner` is both declared and sent only flag on", async () => {
+    const o = await openDoc();
+    browserWrite(o.doc, Y_MAP_ANNOTATIONS, "labelled", userComment(o.doc, "labelled"));
+    // The test caller holds the document, so flag on the label is an object
+    // and its shape is checked (flag off `setDocOwner` records nothing).
+    setDocOwner(o.documentId, { ownerId: TEST_OWNER_ID, kind: "opened" }, "take", TEST_OWNER_ID);
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "tandem_getAnnotations");
+    const declared = new Set(
+      Object.keys((tool?.outputSchema as { properties: Record<string, unknown> }).properties),
+    );
+
+    const structured = (await getAnnotations(o.documentId)) as Record<string, unknown>;
+
+    // This file's server follows the shipped flag (CI's `ownership-flag-on`
+    // job runs it flag on): ownership design §5.7's label rides only there.
+    expect(declared.has("owner"), "owner is declared").toBe(ownershipOn());
+    expect("owner" in structured, "owner is sent").toBe(ownershipOn());
+    for (const k of Object.keys(structured)) expect(declared.has(k), k).toBe(true);
+    if (ownershipOn()) {
+      // The caller's own label, naming no owner id.
+      const owner = structured.owner as Record<string, unknown> | null;
+      expect(owner, "the holder is labelled").not.toBeNull();
+      expect(Object.keys(owner ?? {}).sort()).toEqual(["displayKind", "kind", "label", "you"]);
+      expect(owner?.you).toBe(true);
+      expect(owner?.kind).toBe("opened");
+      expect(JSON.stringify(owner)).not.toContain(TEST_OWNER_ID);
+    }
   });
 });
 

@@ -51,11 +51,12 @@ import {
   resolveAnnotationStore,
   type YDocStore,
 } from "./document-store.js";
-import { getAnnotationsOutputShapeFor } from "./output-schemas.js";
+import { getAnnotationsOutputShapeFor, getAnnotationsOwnershipShape } from "./output-schemas.js";
 import {
   heldAmong,
   noClaim,
   ownedWrite,
+  ownerLabelFor,
   ownershipOn,
   rangeDecidedByArguments,
   type ToolCaller,
@@ -478,7 +479,15 @@ export function registerAnnotationTools(server: McpServer): void {
   // `byLocalModel`. The SAME object is advertised and strip-parsed, so the
   // lit field is never stripped by a schema that does not declare it.
   const localModelMark = honourLocalPeriodRecords();
-  const getAnnotationsOutputShape = getAnnotationsOutputShapeFor(localModelMark);
+  // The owner label (#2358 PR 5c; ownership design §5.7), decided once per
+  // registration like the mark: a dark registration neither declares nor
+  // sends `owner`, so its `tools/list` and every output stay as before. The
+  // label is declared on the same object the strip parses, so it survives.
+  const ownerLabels = ownershipOn();
+  const getAnnotationsOutputShape = {
+    ...getAnnotationsOutputShapeFor(localModelMark),
+    ...(ownerLabels ? getAnnotationsOwnershipShape : {}),
+  };
   const getAnnotationsOutputSchema = z.object(getAnnotationsOutputShape);
   // Mark a record or reply written by the local model. The author term is
   // required: a stamp on a user's or imported record must never mark it.
@@ -611,7 +620,8 @@ export function registerAnnotationTools(server: McpServer): void {
       outputSchema: getAnnotationsOutputShape,
     },
     withStructuredErrors(
-      withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
+      withErrorBoundary("tandem_getAnnotations", async (args, caller) => {
+        const { author, type, status, documentId } = args;
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
@@ -663,11 +673,17 @@ export function registerAnnotationTools(server: McpServer): void {
           };
         });
 
+        // The document's owner label (ownership design §5.7). Read after
+        // every filter: it is about the document, never about a record, so
+        // no note or Solo-held record bears on it. Undefined while ownership
+        // is off, so no key is sent then.
+        const owner = ownerLabels ? ownerLabelFor(caller, store.documentId) : undefined;
         const payload = {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
           ...(privateExcluded > 0 ? { privateExcluded } : {}),
+          ...(owner !== undefined ? { owner } : {}),
         };
         // #2465: send only the advertised shape. Records and replies arrive
         // here as stored, so a key the schema does not declare (a stale

@@ -98,6 +98,12 @@ export async function chatByline(
       localPickup: null,
       localPeriod: opts.localPeriod ?? false,
       noticeAnnouncement: "",
+      ownerLine: null,
+      ownerLineTakeBack: null,
+      pickupClock: new Map(),
+      messageOwners: new Map(),
+      ownershipSummary: null,
+      onOwnerLineRemedy: () => {},
     },
   });
   await tick();

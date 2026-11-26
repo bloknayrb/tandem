@@ -154,6 +154,7 @@ import {
   startCommentReveal,
   toCommentAnswerItem,
 } from "./notifications/comment-attention";
+import { chatStaleWaitMs, composerLine, takeBackNames, takeBackText } from "./ownership/owner-view";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -322,6 +323,24 @@ const pendingUpdateBanner = createPendingUpdateBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
+
+// #2358 PR 5b: the composer's "who answers" line (ownership design §10.2),
+// from the active document's published owner fields, or from the summary with
+// no tab. Null while ownership is off: a dark server publishes neither.
+const ownerComposerLine = $derived(
+  composerLine(
+    yjsSync.activeTabId === null ? undefined : yjsSync.ownerFields.get(yjsSync.activeTabId),
+    yjsSync.ownershipSummary,
+    yjsSync.chatOwners,
+  ),
+);
+const ownerTakeBackText = $derived(
+  takeBackText(
+    takeBackNames(
+      yjsSync.tabs.map((t) => ({ fileName: t.fileName, fields: yjsSync.ownerFields.get(t.id) })),
+    ),
+  ),
+);
 
 // #1123 part B, R1.2: the switch's own notices are a trigger to re-read who
 // answers chat. Called from the stream's message handler (an event handler).
@@ -508,6 +527,25 @@ let settingsModalOpen = $state(false);
 
 const firstRun = createFirstRunNeeded();
 
+// #2358 PR 5e: stale chat drives the stall banner beside the delivery round
+// (ownership design §10.2; Bryan, 2026-11-24, "Yes, wire it (Recommended)").
+// The clock ticks only while a published message reads stale, so a dark build
+// (no facts) never arms it; `Math.max` with `Date.now()` keeps a stopped tick
+// from under-counting when the facts change.
+let chatStaleNow = $state(Date.now());
+const chatStaleClockNeeded = $derived(chatStaleWaitMs(yjsSync.chatOwners, 0) !== null);
+$effect(() => {
+  if (!chatStaleClockNeeded) return;
+  chatStaleNow = Date.now();
+  const timer = setInterval(() => {
+    chatStaleNow = Date.now();
+  }, 30_000);
+  return () => clearInterval(timer);
+});
+const chatStaleMs = $derived(
+  chatStaleWaitMs(yjsSync.chatOwners, Math.max(chatStaleNow, Date.now())),
+);
+
 // AI-readiness (#1018/#1022): keys on launcher status, not the doc-sync "Synced"
 // dot. Gate on the monotonic `firstRun.settled` (set true once, never reset) so
 // a `refetch()` during a server blip can't bounce the chip back to "booting".
@@ -517,6 +555,7 @@ const aiReadiness = createAiReadiness({
   soloMode: () => modeState.tandemMode === "solo",
   aiNotice: () => licenseStore.ui.aiNotice,
   refreshLicence: () => licenseStore.refresh(),
+  chatStaleMs: () => chatStaleMs,
 });
 
 // #1282 working-folder drift. Fed the SAME derivation the relaunch action uses,
@@ -859,6 +898,18 @@ const tandemClaudeControl = $derived<"start" | "turn-off" | null>(
         chatResumeState.view === null
       ? "start"
       : null,
+);
+
+// #2358 PR 5b: the palette's "Start Tandem's Claude" says what it takes back
+// (design §10.2; Bryan, 2026-11-24, "Yes, all Starts (Recommended)"). The
+// palette's commands are static, so the entry stays listed while Tandem's
+// Claude runs; the sentence shows only while a Start would start it. Empty
+// while ownership is off (no sentence), so the palette renders as before.
+const NO_PALETTE_DETAILS: ReadonlyMap<string, string> = new Map();
+const paletteDetails = $derived<ReadonlyMap<string, string>>(
+  ownerTakeBackText !== null && !aiReadiness.launcherRunning
+    ? new Map([["launcher-start", ownerTakeBackText]])
+    : NO_PALETTE_DETAILS,
 );
 
 /** The "hasn't said hello" note's action (#2197): restart a Claude that is
@@ -1339,6 +1390,12 @@ let nextSettingsTabId = $state<string | null>(null);
 
 function openModelsSettings() {
   if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.models;
+  openSettingsModalWithAck();
+}
+
+/** Settings → Claude Code (#2358 PR 5b): the composer line's "No AI will answer" pointer. */
+function openClaudeCodeSettings() {
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.claudeCode;
   openSettingsModalWithAck();
 }
 
@@ -3251,6 +3308,13 @@ function dismissModelPicker() {
             localPickup={localPickupInputs}
             localPeriod={localPeriodNow}
             noticeAnnouncement={chatNoticeAnnouncement}
+            ownerLine={ownerComposerLine}
+            ownerLineTakeBack={ownerTakeBackText}
+            onOwnerLineRemedy={(remedy) =>
+              remedy === "start" ? startClaude() : openClaudeCodeSettings()}
+            pickupClock={yjsSync.chatOwners}
+            messageOwners={yjsSync.chatOwners}
+            ownershipSummary={yjsSync.ownershipSummary}
           />
           <PanelSlot
             kind="side"
@@ -3314,6 +3378,7 @@ function dismissModelPicker() {
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       onStartClaude={startClaude}
+      startTakeBack={ownerTakeBackText}
       onOpenLicenseSettings={openLicenseSettings}
       aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
@@ -3400,6 +3465,7 @@ function dismissModelPicker() {
       {editor}
       annotations={visibleAnnotations}
       onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
+      actionDetails={paletteDetails}
     />
 
     <ToastContainer
@@ -3484,6 +3550,9 @@ function dismissModelPicker() {
     renameTrigger={renameTabTrigger}
     closedTabTop={closedTabStack.top}
     onReopenClosed={documentWorkspace.reopenClosedTab}
+    ownerFields={yjsSync.ownerFields}
+    ownershipSummary={yjsSync.ownershipSummary}
+    onStartTandemClaude={startClaude}
   />
 {/snippet}
 

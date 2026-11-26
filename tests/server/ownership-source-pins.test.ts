@@ -1150,8 +1150,13 @@ describe("the message forward (#2358 PR 3b-2b1c-b)", () => {
   it("R6's three sites and the user's: the release loop passes the key, dropChatOwners the key and its caller, setMessageOwner nothing, the controls the key and byUser", () => {
     const calls = [...text.matchAll(/\bmessageOwnerChanged\(([^)]*)\)/g)].map((m) => m[1]);
     // The definition's parameter list, then the three sites, then the
-    // user's controls (#2358 PR 5a-2, `wakeForMovedMessages`).
-    expect(calls).toHaveLength(5);
+    // user's controls (#2358 PR 5a-2, `wakeForMovedMessages`), then a lapsed
+    // holder's close (#2358, the closed document's chat row), a departure as
+    // the release loop's.
+    expect(calls).toHaveLength(6);
+    expect(fnBody("forwardClosedChatAfterUntrack")).toContain(
+      "for (const key of keys) if (messageOwnerChanged({ key })) forwarded = true;",
+    );
     expect(fnBody("wakeForMovedMessages")).toContain(
       "if (messageOwnerChanged({ key, byUser: true })) forwarded = true;",
     );
@@ -1568,9 +1573,15 @@ describe("the ownership frame's sink (#2358 PR 3b-2d)", () => {
     expect(text.match(/\bownershipFrameSink\s*=(?!=)/g)).toHaveLength(2);
     expect(text.match(/\bownershipFrameSink\(\)/g)).toHaveLength(1);
     expect(text).toContain("runOutsideMcpContext(() => ownershipFrameSink());");
-    // Step 5, a release of per-message owners, the end of presence, and the
-    // messages the user's control moved (#2358 PR 5a-2, `wakeForMovedMessages`).
-    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(4);
+    // Step 5, a release of per-message owners, the end of presence, the
+    // messages the user's control moved (#2358 PR 5a-2, `wakeForMovedMessages`),
+    // a lapsed holder's close (`forwardClosedChatAfterUntrack`), and the first
+    // Tandem mode after an unknown one (the restart question's other-owner
+    // half), which asks only when work waits for another session or nobody.
+    expect(text.match(/\bsendOwnershipFrame\(\);/g)).toHaveLength(6);
+    expect(text).toMatch(
+      /export function noteModeObserved\([\s\S]*?modeKnownAsked = true;[\s\S]*?const waiting = otherOwnersWorkWaiting\(\);\s*if \(waiting === undefined\) return;\s*sendOwnershipFrame\(\);\s*openOwedRounds\(waiting\.documents, waiting\.keys\);\s*\}\);\s*\}/,
+    );
   });
 });
 

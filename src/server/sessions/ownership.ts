@@ -74,6 +74,10 @@ import {
   type NotPresentReason,
   OWNERSHIP_STALE_AFTER_MS,
   type OwnershipSummary,
+  type PublishedChatHeldBy,
+  type PublishedChatMessageOwner,
+  type PublishedChatOwners,
+  type PublishedChatReleaseTo,
   type PublishedOwnerFields,
 } from "../../shared/ownership-published.js";
 import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-registry.js";
@@ -527,6 +531,50 @@ const chatAnswerer = new Map<string, string>();
 const replierByRow = new Map<string, string>();
 
 /**
+ * Each unanswered user chat message's pickup and stall clock (#2358 PR 5d;
+ * ownership design §6.5: "counts from the message's last change of owner
+ * (its arrival, if it never had one)"), keyed by chat key. `since` is the
+ * clock's start; `holder` the last holder the clock saw since it started
+ * (ownership design §7.1's table, as {@link messageControl} reads it: an
+ * owner id), or null when it has seen nobody hold the message since then.
+ *
+ * **Observed, not stamped at each writer.** A message's holder is derived
+ * (its per-message owner, its document's holder, Tandem's Claude by
+ * presence), and every change of any of those asks a republish (step 4, the
+ * presence and grace hooks, {@link requestChatPublish}). The republish reads
+ * the holder ({@link chatPublishState}) and restarts the clock where a
+ * holder is there and differs from the last one the clock saw (a first
+ * claim, or a move from one holder to another), so one definition covers
+ * every path that changes a holder. A change to nobody restarts nothing on
+ * its own and keeps the last holder, so holder, nobody, the same holder
+ * restarts nothing: a user's reopen of a closed document reads its message
+ * with nobody holding the document before the open's default rule gives it
+ * back to the same holder, and two restarts there would show a stalled
+ * message as fresh. A real handover to nobody (a Release, an Assign, a
+ * lapse) restarts through {@link reOweChat}. A message first seen starts at
+ * its own timestamp. A
+ * chat handover ({@link reOweChat}: ownership design §6.5 steps 1 and 2)
+ * restarts the clock at once whatever the holder becomes, and leaves
+ * `holder` undefined so the next look adopts the new holder without a second
+ * restart: a handover to the same holder (the self re-owe at a run start,
+ * 3b-2b4b) is a new hand-out too, and §6.5 asks that a handover never show an
+ * old message as instantly stalled.
+ *
+ * Server memory only, lost at restart (every message then starts at its own
+ * timestamp). Pruned at each look to the unanswered messages, so bounded by
+ * chat rows. Empty while ownership is off: every writer is reached only flag
+ * on.
+ */
+const messageClock = new Map<string, { since: number; holder: string | null | undefined }>();
+/**
+ * The chat waiting time each open document's published entry was last built
+ * with ({@link publishedOwnerFields}), so a change of chat alone republishes
+ * only the entries whose chat changed ({@link chatDocumentsToRefresh}). Only
+ * documents with chat waiting have an entry. Empty while ownership is off.
+ */
+const chatWaitingPublished = new Map<string, number>();
+
+/**
  * A lapsed record whose re-owe failed (R0.7 of the posts PR): how many retries
  * it has had, and the pending retry's timer. Kept apart from the grace, so a
  * retry is never armed through `armGrace` (which runs the detached cap, which
@@ -555,6 +603,17 @@ export interface ChatMessageFacts {
   readonly documentOpen: boolean;
   /** #1123 A2's local-period chat: no owner, never claimable (Ruling 9). */
   readonly localPeriod: boolean;
+  /**
+   * The row's own timestamp (its arrival), when it carries one (#2358 PR 5d:
+   * the pickup and stall clock of a message that never changed owner).
+   */
+  readonly timestamp?: number;
+  /**
+   * The row was written in this server run (the waiting rule's restart row,
+   * Bryan's "Written since boot"; #2358 PR 5d). Absent reads as false: a row
+   * not known to be this run's never raises a published flag.
+   */
+  readonly writtenThisRun?: boolean;
 }
 
 /**
@@ -630,6 +689,7 @@ let startOrWakeSink: (
 let requestWakeSink: () => void = () => {};
 let ownershipFrameSink: () => void = () => {};
 let publishSink: (documentIds?: readonly string[]) => void = () => {};
+let chatPublishSink: () => void = () => {};
 let launcherFactsSource: () => LauncherFacts | null | undefined = () => undefined;
 let oldestWaitingProbe: (documentId: string) => number | null = () => null;
 let roundOpener:
@@ -1330,6 +1390,9 @@ function deleteRecord(record: OwnerRecord): void {
     if (ownerId === record.ownerId) replierByRow.delete(rowKey);
   }
   releaseMessageOwners(record.ownerId, () => true);
+  // #2358 PR 5d: chat that followed a document this record held now reads
+  // unowned, so its published facts change.
+  requestChatPublish();
 }
 
 /** Forget a record's pending re-owe retry and its count. */
@@ -1434,6 +1497,11 @@ function reOweChat(keys: readonly string[]): boolean {
   try {
     chatFaultForTests?.("re-owe");
     chatSide.reOwe(keys);
+    // #2358 PR 5d: a handover restarts the message's pickup and stall clock
+    // (ownership design §6.5), whoever holds it next.
+    const now = Date.now();
+    for (const key of keys) messageClock.set(key, { since: now, holder: undefined });
+    requestChatPublish();
     return true;
   } catch {
     logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
@@ -1457,6 +1525,8 @@ function reOweChat(keys: readonly string[]): boolean {
  * Claude is not. Returns whether it was forwarded.
  */
 function messageOwnerChanged(change?: { key: string; caller?: string; byUser?: true }): boolean {
+  // #2358 PR 5d: the published facts and the clock read the new owner.
+  requestChatPublish();
   const admit = (): boolean =>
     change !== undefined &&
     change.caller !== TANDEM_OWNER_ID &&
@@ -1536,6 +1606,7 @@ export function forgetChatMessageOwners(keys: Iterable<string>): void {
       chatAnswerer.delete(key);
       carriedOver.delete(key);
       replierByRow.delete(key);
+      messageClock.delete(key);
     }
   });
 }
@@ -2097,14 +2168,18 @@ function frameOwedAtDocumentChange(
  * that chat's standing names the new holder, or the document's claim. Each
  * half in its own catch, read as false with one fixed, rate-limited line.
  */
-function workWaitingOnDocument(documentId: string, ownerId: string | undefined): boolean {
+function workWaitingOnDocument(
+  documentId: string,
+  ownerId: string | undefined,
+  owed?: readonly string[],
+): boolean {
   try {
     if (waitingProbe(documentId, ownerId ?? "")) return true;
   } catch {
     logLimited("frame-waiting", FRAME_WAITING_FAILED);
   }
   try {
-    for (const key of chatSide.owedToFreshReader()) {
+    for (const key of owed ?? chatSide.owedToFreshReader()) {
       if (carriedOver.has(key)) continue;
       const facts = chatSide.message(key);
       if (facts === undefined || facts.documentId !== documentId) continue;
@@ -2456,8 +2531,10 @@ let modeKnownAsked = false;
  * the two do not both forward a change from a Solo the room saw (a window
  * that toggled before its CTRL_ROOM sync writes only `tandem`, then posts the
  * release, so both forward; the supervisor's pass joins or repeats the ask).
- * At most once per server run. Flag
- * off: nothing, and nothing recorded. Total, since it runs inside a
+ * At most once per server run. The same first Tandem reading also sends the
+ * `ownership` frame when work waits for another session or for nobody
+ * ({@link otherOwnersWorkWaiting}), the restart question's other-owner half.
+ * Flag off: nothing, and nothing recorded. Total, since it runs inside a
  * `CTRL_ROOM` transaction's observer.
  */
 export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): void {
@@ -2487,6 +2564,60 @@ export function noteModeObserved(state: "solo" | "tandem" | "indeterminate"): vo
   } catch {
     logLimited("forward-failed", FORWARD_FAILED);
   }
+  // The other-owner half (#2358, the flip-blocker row "The restart question's
+  // other-owner half"): a comment made while the mode was unknown was dropped
+  // by `pushEvent`'s Solo gate for every session, so sessions other than
+  // Tandem's Claude are told too, by step 5's frame and only when work waits
+  // for one of them. Its own catches; `total` for anything else.
+  total("modeKnownFrame", undefined, () => {
+    const waiting = otherOwnersWorkWaiting();
+    if (waiting === undefined) return;
+    sendOwnershipFrame();
+    // Rounds open wherever a wake was sent for the work (`openOwedRounds`'
+    // contract), so /health and the stall banner see a session that never
+    // polls after it.
+    openOwedRounds(waiting.documents, waiting.keys);
+  });
+}
+
+/**
+ * Whether work waits for a session other than Tandem's Claude, or for nobody
+ * (#2358, the restart question's other-owner half), read when the mode first
+ * reads Tandem after reading unknown: an open document Tandem's Claude does not
+ * hold (another record holds it, or nobody does) with work waiting on it, by
+ * step 5's check ({@link workWaitingOnDocument}: the waiting probe after every
+ * privacy gate, then the chat that follows it), or a user chat message a fresh
+ * reader would be handed that is now another record's or claimable
+ * ({@link frameOwedForMessages}, the release's check). Unscoped as the frame
+ * is (ownership design §9.4): it says whether to wake, not whom. Answers the
+ * documents with work waiting and, when the chat half frames, the owed chat,
+ * for the delivery rounds the frame opens; undefined when nothing waits. The
+ * owed chat is read once for every document. The open documents and the chat
+ * side are each read in their own catch: nothing, one fixed line.
+ */
+function otherOwnersWorkWaiting(): { documents: string[]; keys: readonly string[] } | undefined {
+  let documents: string[] = [];
+  try {
+    documents = [...openDocumentIds()];
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  // Read once: each document's check walks the same owed chat.
+  let owed: readonly string[] = [];
+  try {
+    owed = chatSide.owedToFreshReader();
+  } catch {
+    logLimited("frame-waiting", FRAME_WAITING_FAILED);
+  }
+  const waitingDocuments: string[] = [];
+  for (const documentId of documents) {
+    const holder = readEntry(documentId)?.ownerId;
+    if (holder === TANDEM_OWNER_ID) continue;
+    if (workWaitingOnDocument(documentId, holder, owed)) waitingDocuments.push(documentId);
+  }
+  const keys = owed.length > 0 && frameOwedForMessages(owed) ? owed : [];
+  if (waitingDocuments.length === 0 && keys.length === 0) return undefined;
+  return { documents: waitingDocuments, keys };
 }
 
 /**
@@ -2621,7 +2752,9 @@ export function onDocumentClosed(documentId: string, filePath?: string): void {
  * "close": the holder at the close if its record exists and has not lapsed;
  * if the document was unowned, Tandem's Claude while present; otherwise
  * nobody (a lapsed holder's messages are then owned as closed-document
- * messages are, so none is left with a record nothing will arm or delete).
+ * messages are, so none is left with a record nothing will arm or delete;
+ * they are re-owed, and their new standing is told once the document is
+ * untracked: {@link forwardClosedChatAfterUntrack}).
  * An existing per-message owner is never overwritten. Never throws.
  */
 function assignClosedDocumentChat(documentId: string, heldBy: string | undefined): void {
@@ -2639,12 +2772,16 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
       // record is gone: the chat that followed the document leaves that
       // record here, and the deferred move never runs once the entry is gone,
       // so this is the message's change of owner away from a record (R6.1).
-      // Re-owe it, or a message the holder had read would be owed to nobody.
+      // Re-owe it, or a message the holder had read would be owed to nobody,
+      // and tell its new standing once the document is untracked.
       if (heldBy !== undefined) {
         const keys = chatSide
           .messagesOn(documentId)
           .filter((key) => !ownerByMessage.has(key) && !carriedOver.has(key));
-        if (keys.length > 0) chatSide.reOwe(keys);
+        // Through `reOweChat`, as every other handover: it also restarts each
+        // message's pickup and stall clock (ownership design §6.5) and asks
+        // a chat republish. A failed re-owe tells nothing.
+        if (keys.length > 0 && reOweChat(keys)) forwardClosedChatAfterUntrack(keys);
       }
       return;
     }
@@ -2655,6 +2792,39 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
   } catch {
     logLimited("chat-close-failed", CHAT_CLOSE_FAILED);
   }
+}
+
+/**
+ * The wake for chat a lapsed holder's close re-owed with no owner (#2358, the
+ * flip-blocker row "A lapsed holder whose deferred move has not run leaves a
+ * closed document's chat with no owner"). Once the document is closed such a
+ * message stands as a closed document's does (ownership design §7.1): Tandem's
+ * Claude's while it is present, otherwise claimable per message. That is a
+ * change of owner away from a record, so it is told as the release loop tells
+ * one ({@link releaseMessageOwners}): each key through the message forward as
+ * a departure (`messageOwnerChanged`, whose admit asks that no other session
+ * is connected and that the message waits for Tandem's Claude), the
+ * `ownership` frame once when a released message is now another record's or
+ * claimable ({@link frameOwedForMessages}), and the delivery rounds of what
+ * either woke someone for. Deferred to a microtask: the close calls
+ * {@link onDocumentClosed} immediately before the registry untracks the
+ * document, with no await between, and until then the message still reads as
+ * following an open document nobody holds. Outside any MCP request context, in
+ * its own `total`, so the close stands whatever this does.
+ */
+function forwardClosedChatAfterUntrack(keys: readonly string[]): void {
+  runOutsideMcpContext(() =>
+    queueMicrotask(() => {
+      total("closedChatForward", undefined, () => {
+        if (!ownershipEnabled()) return;
+        let forwarded = false;
+        for (const key of keys) if (messageOwnerChanged({ key })) forwarded = true;
+        const framed = frameOwedForMessages(keys);
+        if (framed) sendOwnershipFrame();
+        if (forwarded || framed) openOwedRounds([], keys);
+      });
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -3038,16 +3208,25 @@ type MessageStanding =
   | { readonly kind: "with-document"; readonly documentId: string }
   | { readonly kind: "per-message" };
 
-function messageStanding(key: string, facts: ChatMessageFacts): MessageStanding {
+function messageStanding(
+  key: string,
+  facts: ChatMessageFacts,
+  afterRelease?: { readonly lost: string | undefined },
+): MessageStanding {
   if (facts.localPeriod) return { kind: "none" };
-  const own = ownerByMessage.get(key);
+  // `afterRelease` (#2358 PR 5e): the standing a Release would leave, read
+  // without the per-message owner and with the loss `applyMessageControl`
+  // then leaves (`lost`: the owner it records the loss against, or undefined
+  // for the stale backstop, which records none and so clears any), so the
+  // published destination is the route's.
+  const own = afterRelease === undefined ? ownerByMessage.get(key) : undefined;
   if (own && records.has(own.ownerId)) {
     return { kind: "owned", ownerId: own.ownerId, perMessage: true };
   }
   // A message's loss record (#2358 PR 5a-2; ownership design §10.2): where the
   // table would give the message back to the record it was released or
   // reassigned from, it is claimable per message by anyone else instead.
-  const lost = lossByMessage.get(key)?.ownerId;
+  const lost = afterRelease === undefined ? lossByMessage.get(key)?.ownerId : afterRelease.lost;
   if (facts.documentId !== undefined && facts.documentOpen) {
     const entry = readEntry(facts.documentId);
     if (entry) {
@@ -4142,6 +4321,46 @@ export function heldDocumentIds(ownerId: string): string[] {
   return held;
 }
 
+/**
+ * A document's holder as the read tools label it (#2358 PR 5c; ownership
+ * design §5.7): the published `owner` (label, display kind, kind) plus `you`,
+ * which says whether the holder is the calling record.
+ */
+export interface ToolOwnerLabel extends HolderView {
+  readonly kind: OwnershipKind;
+  readonly you: boolean;
+}
+
+/**
+ * The owner label `tandem_getAnnotations`, `tandem_listDocuments` and
+ * `tandem_switchDocument` carry for `documentId` (#2358 PR 5c; ownership
+ * design §5.7), or undefined while ownership is off, so a dark tool output
+ * gains no key. Null when nobody holds
+ * the document (an entry whose record is gone reads as unowned, `readEntry`'s
+ * rule, as the published fields do). `you` is the holder's owner id compared
+ * with the caller's, never a guess from the label; a caller with no owner id
+ * is never `you`. Never an owner id, handle or session id (ownership design
+ * §10.3). A reader: it writes nothing, and never throws (a failure reads as
+ * unowned, as `publishedOwnerFields` does).
+ */
+export function toolOwnerLabel(
+  documentId: string,
+  callerId: string | undefined,
+): ToolOwnerLabel | null | undefined {
+  if (!ownershipEnabled()) return undefined;
+  return total("toolOwnerLabel", null as ToolOwnerLabel | null, () => {
+    const entry = readEntry(documentId);
+    if (entry === undefined) return null;
+    const record = records.get(entry.ownerId) as OwnerRecord;
+    return {
+      label: record.label,
+      displayKind: displayKindOf(record),
+      kind: entry.kind,
+      you: callerId !== undefined && entry.ownerId === callerId,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The user's controls: Release and Assign of a document, and the owners list
 // (#2358 PR 5a; ownership design §10.1); Release and Assign of a chat message
@@ -4403,6 +4622,8 @@ function moveCloseDerivedChat(moved: { keys: string[]; changing: string[] }): vo
     ownerByMessage.delete(key);
     lossByMessage.delete(key);
   }
+  // #2358 PR 5d: each now follows its document (its published `heldBy`).
+  if (moved.keys.length > 0) requestChatPublish();
   wakeForMovedMessages(moved.changing);
 }
 
@@ -4495,16 +4716,12 @@ export function controlMessageOwner(
   if (facts.localPeriod) return "not-controllable";
   if (handledKeysOrNone().has(key)) return "answered";
   if (carriedOver.has(key)) return controlCarriedOver(key, action, ownerLabel);
-  const standing = messageStanding(key, facts);
-  const followsDocument =
-    facts.documentId !== undefined &&
-    facts.documentOpen &&
-    (standing.kind === "with-document" || (standing.kind === "owned" && !standing.perMessage));
-  if (followsDocument) return "follows-document";
-  const holder = standing.kind === "owned" ? standing.ownerId : undefined;
+  const control = messageControl(key, facts);
+  if (control.heldBy === "document") return "follows-document";
+  const holder = control.holder;
   if (action === "release") {
-    if (standing.kind === "owned" && standing.perMessage) {
-      applyMessageControl(key, undefined, { ownerId: standing.ownerId, cause: "released" });
+    if (control.perMessageOwner !== undefined) {
+      applyMessageControl(key, undefined, { ownerId: control.perMessageOwner, cause: "released" });
       return "changed";
     }
     // A per-message owner whose record is gone (the stale backstop, as a
@@ -4527,6 +4744,100 @@ export function controlMessageOwner(
     holder === undefined ? undefined : { ownerId: holder, cause: "assigned" },
   );
   return "changed";
+}
+
+/**
+ * How the user's controls see one unanswered, non-local-period user message
+ * (#2358 PR 5d; ownership design §7.1, §10.2): the one reading
+ * {@link controlMessageOwner} decides from and {@link chatPublishState}
+ * publishes, so the pickup row's Assign and Release (PR 5e) cannot be offered
+ * where the route would refuse them, or hidden where it would act.
+ *
+ * - `heldBy`: `message` (its own per-message owner), `document` (it follows
+ *   its open document: held by the document's holder or claimable with it;
+ *   the route answers `follows-document`), `presence` (doc-less or on a
+ *   closed document, Tandem's Claude's while present), `none` (claimable on
+ *   its own, or carried over from before a restart).
+ * - `holder`: the owner id that holds it now, if any.
+ * - `perMessageOwner`: its per-message owner, if any: Release applies.
+ *
+ * A carried-over message has no owner and is handed to nobody (the posts
+ * PR's R0.1), so it reads `none` whatever §7.1's table would say. Pure.
+ */
+function messageControl(
+  key: string,
+  facts: ChatMessageFacts,
+): {
+  heldBy: PublishedChatHeldBy;
+  holder?: string;
+  perMessageOwner?: string;
+  releaseTo?: PublishedChatReleaseTo;
+} {
+  if (carriedOver.has(key)) return { heldBy: "none" };
+  const standing = messageStanding(key, facts);
+  const followsDocument =
+    facts.documentId !== undefined &&
+    facts.documentOpen &&
+    (standing.kind === "with-document" || (standing.kind === "owned" && !standing.perMessage));
+  if (standing.kind !== "owned") return { heldBy: followsDocument ? "document" : "none" };
+  if (standing.perMessage) {
+    return {
+      heldBy: "message",
+      holder: standing.ownerId,
+      perMessageOwner: standing.ownerId,
+      releaseTo: releaseDestination(messageStanding(key, facts, { lost: standing.ownerId })),
+    };
+  }
+  return { heldBy: followsDocument ? "document" : "presence", holder: standing.ownerId };
+}
+
+/**
+ * Where a Release leaves a message (#2358 PR 5e; Bryan, 2026-11-24, "Yes, say
+ * where (Recommended)"), from the standing {@link messageStanding} reads with
+ * the per-message owner dropped and its loss recorded: Tandem's Claude
+ * holding it (by presence or by its document), another session's document it
+ * then follows, or nobody. Pure.
+ */
+function releaseDestination(after: MessageStanding): PublishedChatReleaseTo {
+  if (after.kind !== "owned") return "unassigned";
+  return after.ownerId === TANDEM_OWNER_ID ? "tandem-claude" : "document";
+}
+
+/**
+ * Whether Tandem's Claude, present, may take the message under `key` (#2358,
+ * the stale-chat Start flip-blocker row; ownership design §7.1, §10.2): what
+ * the poll's `chatScopeOf` would answer a present Tandem's Claude (it owns
+ * the message, or may take or claim it), read through the same
+ * {@link messageStanding} and {@link lostMessage}. The composer's Start that
+ * reads it is offered while Tandem's Claude is not running, and a Start is
+ * what makes it present; the answer does not depend on presence, because
+ * presence changes only whether a message with no per-message owner and no
+ * open document reads as Tandem's Claude's (`owned`) or as claimable per
+ * message, and both answer `!lostMessage` for Tandem's Claude here. So it is
+ * false for a message whose loss names Tandem's Claude (the user Released it
+ * from Tandem's Claude, or Assigned it away from it to a session that still
+ * holds it; a lapse of that session ends the loss, and so gives it back),
+ * for one another record holds per message or by its open document, for a
+ * carried-over message (no poll hands it to anyone) and for local-period
+ * chat. A message that follows an open document nobody holds answers from
+ * the message alone: the poll's document half (its snapshot's `may-claim`:
+ * an idle queue, no loss of the document) is transient and nothing
+ * republishes when it changes, and a Start's presence gives such a document
+ * to Tandem's Claude by the default rule ({@link noteTandemPresence}), which
+ * ends any loss of it. Pure.
+ */
+function tandemMayTakeMessage(key: string, facts: ChatMessageFacts): boolean {
+  if (carriedOver.has(key)) return false;
+  const standing = messageStanding(key, facts);
+  switch (standing.kind) {
+    case "none":
+      return false;
+    case "owned":
+      return standing.ownerId === TANDEM_OWNER_ID;
+    case "with-document":
+    case "per-message":
+      return !lostMessage(key, TANDEM_OWNER_ID);
+  }
 }
 
 /**
@@ -4587,6 +4898,9 @@ function applyMessageControl(
   else ownerByMessage.set(key, { ownerId: next, origin: "assign" });
   if (loss === undefined) lossByMessage.delete(key);
   else lossByMessage.set(key, loss);
+  // #2358 PR 5d: the published facts read the new owner (and the end of a
+  // carried-over status).
+  requestChatPublish();
   wakeForMovedMessages([key]);
 }
 
@@ -4927,9 +5241,32 @@ const PUBLISH_FAILED =
   "[ownership] the owner fields could not be republished; the next change or tick republishes them.";
 
 function requestPublish(documentIds?: readonly string[]): void {
+  chatStateMemo = undefined;
   try {
     if (documentIds === undefined) publishSink();
     else publishSink(documentIds);
+  } catch {
+    logLimited("publish-failed", PUBLISH_FAILED);
+  }
+}
+
+/**
+ * The chat republish (#2358 PR 5d). `src/server/index.ts` wires it to
+ * `requestOwnershipChatPublish` (`ownership-publish.ts`): the per-message
+ * facts, the summary and the entries of the documents whose chat waiting
+ * changed. Only stored; called by a flag-on change of a message's owner, its
+ * loss or its carried-over status, a chat handover and a deleted record.
+ */
+export function setOwnershipChatPublishSink(sink: () => void): void {
+  chatPublishSink = sink;
+}
+
+/** Ask the chat republish. Flag off it does nothing. Never throws. */
+function requestChatPublish(): void {
+  if (!ownershipEnabled()) return;
+  chatStateMemo = undefined;
+  try {
+    chatPublishSink();
   } catch {
     logLimited("publish-failed", PUBLISH_FAILED);
   }
@@ -4980,9 +5317,11 @@ function attachedRecordCouldClaim(documentId: string): boolean {
 /**
  * The owner fields of one open document's published entry (#2358 PR 5a-3;
  * ownership design §10.2), or undefined while ownership is off, so a dark
- * entry gains no key. A reader: it writes nothing (the waiting probe can log,
- * as `documentWaiting` can). Never throws: a failure reads as unowned with no
- * flag or hint.
+ * entry gains no key. A reader: it makes no Y.Doc write (the waiting probe can
+ * log, as `documentWaiting` can; since #2358 PR 5d it ticks the message
+ * clocks through the chat look and records the chat waiting time it built
+ * the entry with, both server memory). Never throws: a failure reads as
+ * unowned with no flag or hint.
  *
  * - `owner`: the holder's label, display kind and kind (an entry whose record
  *   is gone reads as unowned, `readEntry`'s rule); null when unowned.
@@ -4999,6 +5338,12 @@ function attachedRecordCouldClaim(documentId: string): boolean {
  *   document Tandem's Claude holds with an item waiting while its process is
  *   not running and no start is pending (never without a launcher).
  * - `waitingSince`: the oldest waiting item's time, only while a hint shows.
+ *
+ * "Waiting" is the oldest waiting comment or thread reply (the waiting
+ * rule's) or, since #2358 PR 5d, the oldest user chat message that follows
+ * the document and is owed to a fresh reader (ownership design §8.5's chat
+ * half), timed by its pickup and stall clock (its last change of owner), so a
+ * handover does not show it as long waiting at once.
  */
 export function publishedOwnerFields(
   documentId: string,
@@ -5008,7 +5353,14 @@ export function publishedOwnerFields(
   const none: PublishedOwnerFields = { owner: null, stale: null, hint: null, waitingSince: null };
   return total("publishedOwnerFields", none, () => {
     const entry = readEntry(documentId);
-    const waitingAt = oldestWaiting(documentId);
+    // #2358 PR 5d: chat that follows the document and waits (ownership
+    // design §8.5: owed to a fresh reader) counts from its clock.
+    const chatAt = chatPublishState(now).waitingByDocument.get(documentId);
+    if (chatAt === undefined) chatWaitingPublished.delete(documentId);
+    else chatWaitingPublished.set(documentId, chatAt);
+    const itemAt = oldestWaiting(documentId);
+    const waitingAt =
+      itemAt === null ? (chatAt ?? null) : chatAt === undefined ? itemAt : Math.min(itemAt, chatAt);
     const waitedLong = waitingAt !== null && now - waitingAt > OWNERSHIP_STALE_AFTER_MS;
     if (entry === undefined) {
       const hinted = waitingAt !== null && (waitedLong || !attachedRecordCouldClaim(documentId));
@@ -5072,14 +5424,229 @@ export function ownershipSummary(): OwnershipSummary | undefined {
         break;
       }
     }
+    const chat = chatPublishState(Date.now());
     return {
       tandemPresent: present,
       tandemRunning: facts.running,
       tandemStartable: facts.startable,
       notPresentReason: reason,
       otherAiAttached,
+      chatWaiting: chat.chatWaiting,
+      chatStale: chat.chatStale,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// The published chat state (#2358 PR 5d; ownership design §6.5, §10.2).
+
+/** One look at chat: what is published from it, built once per synchronous run. */
+interface ChatPublishState {
+  /** Every unanswered, non-local-period user message's facts, by chat key. */
+  readonly owners: PublishedChatOwners;
+  /**
+   * For each open document, the clock of the oldest user message that
+   * follows it and is owed to a fresh reader (ownership design §8.5).
+   */
+  readonly waitingByDocument: ReadonlyMap<string, number>;
+  /** The summary's "chat waiting" ({@link OwnershipSummary.chatWaiting}). */
+  readonly chatWaiting: boolean;
+  /** The summary's "chat stale" ({@link OwnershipSummary.chatStale}). */
+  readonly chatStale: boolean;
+}
+
+const NO_CHAT_STATE: ChatPublishState = Object.freeze({
+  owners: Object.freeze({}),
+  waitingByDocument: new Map<string, number>(),
+  chatWaiting: false,
+  chatStale: false,
+});
+
+/**
+ * The look of the current synchronous run. A republish reads it once per
+ * document entry and again for the summary and the facts, so it is built
+ * once and dropped one microtask later, at once when anything asks a
+ * republish (whose changes it may not have seen), and at the start of every
+ * republish ({@link freshChatLook}).
+ */
+let chatStateMemo: ChatPublishState | undefined;
+
+/**
+ * Drop the current look (#2358 PR 5d): `ownership-publish.ts` calls it at the
+ * start of each republish, so a republish never reads a look built before a
+ * chat write that asked it (that write's observer reaches the publisher,
+ * never this module).
+ */
+export function freshChatLook(): void {
+  chatStateMemo = undefined;
+}
+
+/**
+ * Look at chat for the published state (#2358 PR 5d), once per synchronous
+ * run ({@link chatStateMemo}; `now` is the first caller's). Ticks each
+ * message's clock ({@link messageClock}: the clock's only reader-side write,
+ * server memory only) and prunes the clocks of messages no longer
+ * unanswered. Never throws: a failure reads as no chat at all (`total`'s
+ * one rate-limited line).
+ *
+ * - **Which messages:** `unhandledKeys` (unanswered by the handled rule, not
+ *   local-period chat), each read through {@link messageControl}.
+ * - **The clock** (`since`): restarted when the message's holder differs from
+ *   the one the clock last saw; a message first seen starts at its own
+ *   timestamp (or now, with none, or when the timestamp is later than now:
+ *   the row's `timestamp` is a client-written field, and a clock that starts
+ *   in the future would never read stale).
+ * - **`stale`**: no final answer for more than {@link OWNERSHIP_STALE_AFTER_MS}
+ *   since `since`, and only for a message written in this server run (the
+ *   restart row, Bryan's "Same rule (Recommended)").
+ * - **Chat waiting and chat stale** (the summary): over the messages with no
+ *   controlling badge (`heldBy` other than `document`) written in this run.
+ * - **A document's chat waiting time:** over the messages that follow it and
+ *   are owed to a fresh reader (`owedToFreshReader`, which already applies the
+ *   restart row), the oldest clock.
+ */
+function chatPublishState(now: number): ChatPublishState {
+  if (!ownershipEnabled()) return NO_CHAT_STATE;
+  if (chatStateMemo !== undefined) return chatStateMemo;
+  const state = total("chatPublishState", undefined as ChatPublishState | undefined, () =>
+    lookAtChat(now),
+  );
+  if (state === undefined) return NO_CHAT_STATE;
+  chatStateMemo = state;
+  queueMicrotask(() => {
+    if (chatStateMemo === state) chatStateMemo = undefined;
+  });
+  return state;
+}
+
+function lookAtChat(now: number): ChatPublishState {
+  const keys = [...chatSide.unhandledKeys()].sort();
+  const owed = new Set(chatSide.owedToFreshReader());
+  const owners: Record<string, PublishedChatMessageOwner> = {};
+  const waitingByDocument = new Map<string, number>();
+  let chatWaiting = false;
+  let chatStale = false;
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const facts = chatSide.message(key);
+    if (facts === undefined || facts.localPeriod) continue;
+    seen.add(key);
+    const control = messageControl(key, facts);
+    const arrival = Math.min(facts.timestamp ?? now, now);
+    const since = tickMessageClock(key, control.holder ?? null, arrival, now);
+    const thisRun = facts.writtenThisRun === true;
+    const stale = thisRun && now - since > OWNERSHIP_STALE_AFTER_MS;
+    const record = control.holder === undefined ? undefined : records.get(control.holder);
+    const staleRelease =
+      control.perMessageOwner === undefined &&
+      control.heldBy !== "document" &&
+      !carriedOver.has(key) &&
+      ownerByMessage.has(key);
+    owners[key] = {
+      owner:
+        record === undefined ? null : { label: record.label, displayKind: displayKindOf(record) },
+      heldBy: control.heldBy,
+      // Exactly what `controlMessageOwner`'s Release acts on: a per-message
+      // owner, or one whose record is gone (its stale backstop drops it,
+      // since it holds nothing but would block every later take). The stale
+      // case records no loss, and so clears any the message had, so its
+      // destination is the standing read with no loss at all.
+      release: control.perMessageOwner !== undefined || staleRelease,
+      releaseTo:
+        control.releaseTo ??
+        (staleRelease
+          ? releaseDestination(messageStanding(key, facts, { lost: undefined }))
+          : null),
+      assign: control.heldBy !== "document",
+      tandemMayTake: tandemMayTakeMessage(key, facts),
+      since,
+      stale,
+    };
+    if (control.heldBy === "document") {
+      const documentId = facts.documentId as string;
+      if (!owed.has(key)) continue;
+      const earliest = waitingByDocument.get(documentId);
+      if (earliest === undefined || since < earliest) waitingByDocument.set(documentId, since);
+    } else if (thisRun) {
+      chatWaiting = true;
+      if (stale) chatStale = true;
+    }
+  }
+  for (const key of [...messageClock.keys()]) if (!seen.has(key)) messageClock.delete(key);
+  return { owners, waitingByDocument, chatWaiting, chatStale };
+}
+
+/**
+ * The clock's start for the message under `key` whose holder is `holder` now
+ * ({@link messageClock}): kept while the holder is the one last seen or
+ * nobody (which keeps the last holder seen), restarted at `now` when a holder
+ * is there and differs from the last one seen (null included: a first
+ * claim), adopted without a restart after a handover (which already
+ * restarted it), and `arrival` for a message first seen.
+ */
+function tickMessageClock(
+  key: string,
+  holder: string | null,
+  arrival: number,
+  now: number,
+): number {
+  const clock = messageClock.get(key);
+  if (clock === undefined) {
+    messageClock.set(key, { since: arrival, holder });
+    return arrival;
+  }
+  if (clock.holder === undefined) {
+    messageClock.set(key, { since: clock.since, holder });
+    return clock.since;
+  }
+  if (holder === null || holder === clock.holder) return clock.since;
+  messageClock.set(key, { since: now, holder });
+  return now;
+}
+
+/**
+ * Each unanswered user chat message's published ownership facts (#2358 PR
+ * 5d; ownership design §10.2), keyed by chat key, or undefined while
+ * ownership is off, so a dark server writes no key. Written by
+ * `ownership-publish.ts` under `Y_MAP_OWNERSHIP_CHAT`, in both transports
+ * (nothing in them needs the launcher). Never an owner id, an owner handle,
+ * a session id or a client's self-reported name (ownership design §10.3): a
+ * holder is its server-minted label and its display kind. A reader but for
+ * the clock ({@link chatPublishState}); never throws.
+ */
+export function publishedChatOwners(now: number = Date.now()): PublishedChatOwners | undefined {
+  if (!ownershipEnabled()) return undefined;
+  return chatPublishState(now).owners;
+}
+
+/**
+ * The open documents whose published entry was built with a chat waiting
+ * time other than the one chat gives now (#2358 PR 5d), so the chat
+ * republish rewrites only those entries (`writePublishedOpenDocs`' narrow
+ * form). Forgets a document that is no longer open. Empty flag off.
+ */
+export function chatDocumentsToRefresh(): string[] {
+  if (!ownershipEnabled()) return [];
+  return total("chatDocumentsToRefresh", [] as string[], () => {
+    const open = new Set(openDocumentIds());
+    const waiting = chatPublishState(Date.now()).waitingByDocument;
+    const changed: string[] = [];
+    for (const documentId of new Set([...chatWaitingPublished.keys(), ...waiting.keys()])) {
+      if (!open.has(documentId)) {
+        chatWaitingPublished.delete(documentId);
+        continue;
+      }
+      if (chatWaitingPublished.get(documentId) !== waiting.get(documentId)) {
+        changed.push(documentId);
+      }
+    }
+    return changed.sort();
+  });
+}
+
+/** Tests only: each message's clock, by chat key. */
+export function messageClocksForTests(): Array<[string, number]> {
+  return [...messageClock].map(([key, clock]) => [key, clock.since]);
 }
 
 // ---------------------------------------------------------------------------
@@ -5256,6 +5823,9 @@ export function resetOwnershipForTests(): void {
   ownerByMessage.clear();
   lossByMessage.clear();
   handedByRecord.clear();
+  messageClock.clear();
+  chatWaitingPublished.clear();
+  chatStateMemo = undefined;
   pendingClaims.clear();
   compositeObserver = undefined;
   noticeFaultForTests = undefined;
@@ -5283,6 +5853,7 @@ export function resetOwnershipForTests(): void {
   requestWakeSink = () => {};
   ownershipFrameSink = () => {};
   publishSink = () => {};
+  chatPublishSink = () => {};
   launcherFactsSource = () => undefined;
   oldestWaitingProbe = () => null;
   roundOpener = undefined;

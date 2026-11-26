@@ -49,6 +49,7 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import {
+  requestOwnershipChatPublish,
   requestOwnershipPublish,
   runOwnershipTickForTests,
   startOwnershipPublishing,
@@ -61,6 +62,7 @@ import {
   setDocOwner,
   setOldestWaitingProbe,
   setOpenDocumentIdsSource,
+  setOwnershipChatPublishSink,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipPublishSink,
@@ -76,8 +78,15 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const A = "claude:waiting-cost-a";
 const TANDEM = TANDEM_OWNER_ID;
@@ -127,6 +136,7 @@ function comment(ydoc: Y.Doc, id: string, author: "user" | "claude"): void {
 
 async function pollAs(owner: string, args: Record<string, unknown>): Promise<void> {
   callingAs = owner;
+  expectDeliveryRoundsLive();
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
   expect(parseResult(result).error, JSON.stringify(result).slice(0, 500)).toBe(false);
 }
@@ -375,5 +385,49 @@ describe("the check-in republish's cost (#2358 PR 5a-3; Bryan, 2026-11-24: 'Repu
       `the terminal's tandem_checkInbox with its check-in republish: median ${fmt(poll.median)} ms, max ${fmt(poll.max)} ms`,
     );
     expect(allDocs.max).toBeLessThan(LOOSE_BOUND_MS);
+  }, 120_000);
+});
+
+describe("the chat republish's cost (#2358 PR 5d)", () => {
+  it(`records the chat republish a new user message asks, over ${CHAT_ROWS} chat rows and ${DOCUMENTS + 1} published documents`, async () => {
+    // The lines of `src/server/index.ts` for the published state, the scan counted.
+    let scans = 0;
+    setOldestWaitingProbe((documentId) => {
+      scans += 1;
+      return oldestDocumentWaiting(documentId);
+    });
+    setOwnershipPublishSink(requestOwnershipPublish);
+    setOwnershipChatPublishSink(requestOwnershipChatPublish);
+    startOwnershipPublishing();
+    broadcastOpenDocs();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Each new doc-less user message asks one chat republish (the chat map's
+    // watch): every unanswered row's facts read once, and no document entry
+    // rebuilt, since no document's chat waiting changed.
+    const samples: number[] = [];
+    for (let run = 0; run < RUNS; run++) {
+      scans = 0;
+      const t0 = performance.now();
+      withInternal(ctrl(), () =>
+        chatMap().set(`cost-new-${run}`, {
+          id: `cost-new-${run}`,
+          author: "user",
+          text: `a new message ${run}`,
+          timestamp: clock++,
+          read: false,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      samples.push(performance.now() - t0);
+      expect(scans, "a doc-less message rebuilds no document entry").toBe(0);
+    }
+    const chat = stats(samples);
+    record(
+      `chat republish (${CHAT_ROWS + RUNS} unanswered rows): median ${fmt(chat.median)} ms, max ${fmt(chat.max)} ms`,
+    );
+    expect(chat.max).toBeLessThan(LOOSE_BOUND_MS);
   }, 120_000);
 });

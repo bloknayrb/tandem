@@ -21,9 +21,26 @@ interface Props {
   editor?: TiptapEditor | null;
   annotations?: Annotation[];
   onFocusAnnotation?: (id: string) => void;
+  /**
+   * A second line under a command's label, by action id, shown the way an
+   * annotation's snippet is. #2358 PR 5b: `launcher-start` carries the
+   * documents a Start would take back (design §10.2; Bryan, 2026-11-24, "Yes,
+   * all Starts (Recommended)"). Empty while ownership is off, so every command
+   * renders as before.
+   */
+  actionDetails?: ReadonlyMap<string, string>;
 }
 
-let { open, onClose, editor = null, annotations = [], onFocusAnnotation }: Props = $props();
+const NO_DETAILS: ReadonlyMap<string, string> = new Map();
+
+let {
+  open,
+  onClose,
+  editor = null,
+  annotations = [],
+  onFocusAnnotation,
+  actionDetails = NO_DETAILS,
+}: Props = $props();
 
 // ---------------------------------------------------------------------------
 // Query state
@@ -528,9 +545,22 @@ function handleBackdropClick(e: MouseEvent) {
               "
             >
               {#if result.kind === "action"}
-                <span style="font-size: var(--tandem-text-sm);">
-                  {@render highlighted(result.action.label, result.matchIndices)}
-                </span>
+                {@const detail = actionDetails.get(result.action.id)}
+                {#if detail}
+                  <span style="display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;">
+                    <span style="font-size: var(--tandem-text-sm);">
+                      {@render highlighted(result.action.label, result.matchIndices)}
+                    </span>
+                    <span
+                      data-testid={`palette-item-detail-${result.action.id}`}
+                      style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); overflow-wrap: anywhere;"
+                    >{detail}</span>
+                  </span>
+                {:else}
+                  <span style="font-size: var(--tandem-text-sm);">
+                    {@render highlighted(result.action.label, result.matchIndices)}
+                  </span>
+                {/if}
                 {#if result.action.shortcut}
                   <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-family: var(--tandem-font-mono);">
                     {result.action.shortcut}

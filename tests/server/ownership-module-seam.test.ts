@@ -182,6 +182,8 @@ describe("tests and the flag", () => {
     // PR 4b: the /api/channel-reply permit, flag on with a dark row.
     "tests/server/ownership-channel-reply.test.ts",
     "tests/server/ownership-chat-client-undo.test.ts",
+    // PR 5d: the published chat state flag on, with a dark row.
+    "tests/server/ownership-chat-published.test.ts",
     "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
@@ -212,6 +214,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-reowe-rounds.test.ts",
     "tests/server/ownership-take-back.test.ts",
+    // PR 5c: the owner labels on the two read tools, flag on with dark rows.
+    "tests/server/ownership-tool-labels.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
     "tests/server/ownership-waiting-chat.test.ts",
@@ -267,6 +271,8 @@ describe("tests and the flag", () => {
       // PR 4b: the /api/channel-reply permit, flag on, with a dark row.
       "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
+      // PR 5d: the published chat state, with a dark row that turns it off.
+      "tests/server/ownership-chat-published.test.ts",
       "tests/server/ownership-chat.test.ts",
       // PR 5a: the routes booted flag off, compared with an unknown path.
       "tests/server/ownership-control-route.test.ts",
@@ -300,6 +306,8 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      // PR 5c: the owner labels, with dark rows that build their server flag off.
+      "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",
@@ -334,6 +342,8 @@ describe("tests and the flag", () => {
       // PR 4b: the /api/channel-reply permit.
       "tests/server/ownership-channel-reply.test.ts",
       "tests/server/ownership-chat-client-undo.test.ts",
+      // PR 5d: the published chat state.
+      "tests/server/ownership-chat-published.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
@@ -365,6 +375,8 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      // PR 5c: the owner labels, with dark rows that build their server flag off.
+      "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
       "tests/server/ownership-waiting-chat.test.ts",

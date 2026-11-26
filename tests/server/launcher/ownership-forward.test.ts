@@ -123,9 +123,16 @@ import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../../src/shared/co
 import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { withBrowser, withInternal } from "../../../src/shared/origins.js";
 import { setCtrlMode } from "../../helpers/ctrl-mode.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../../helpers/delivery-round-seam.js";
 import { parseResult, setupMcpServer } from "../../helpers/mcp-harness.js";
 import { asTestCaller } from "../../helpers/ownership-caller.js";
 import { makeRes } from "../../helpers/route-recorder.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 // --- Copied from supervisor-presence.test.ts (Ruling J) -------------------------
 
@@ -1361,6 +1368,7 @@ describe("other cases (PR a)", () => {
     });
 
     async function as(owner: string, tool: string, args: Record<string, unknown> = {}) {
+      if (tool === "tandem_checkInbox") expectDeliveryRoundsLive();
       callingAs = owner;
       return parseResult(await client.callTool({ name: tool, arguments: args })) as {
         error: boolean;

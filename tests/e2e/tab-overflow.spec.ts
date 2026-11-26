@@ -282,6 +282,11 @@ async function measureTabStrip(page: Page) {
           pill: pillBox,
           name: box(name),
           close: box(pill.querySelector("button[aria-label^='Close']"))!,
+          // Whatever sits immediately left of the ×: the name span, or — with
+          // ownership on — the owner badge between them (#2358 PR 5b).
+          beforeClose: box(
+            pill.querySelector("button[aria-label^='Close']")?.previousElementSibling ?? null,
+          ),
           contentRight:
             pillBox.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
         };
@@ -409,10 +414,12 @@ test("adaptive mode: the close button is flush there too, with no slack to absor
   // name the floor clamps to TAB_FLOOR_PX and the name span (`flex-shrink: 1;
   // min-width: 0`) shrinks to fill and ellipsizes, so free space is ≤ 0.
   // Either way the × lands right after the name with the 6px column gap
-  // between them. 8 = 6 gap + 1 rounding + 1 subpixel.
+  // between them. 8 = 6 gap + 1 rounding + 1 subpixel. With ownership on the
+  // owner badge sits between the name and the ×, shrunk to its stub, so the
+  // gap is read from whatever is immediately left of the × (#2358 PR 5b).
   for (const tab of measured.tabs) {
     expect(
-      tab.close.left - tab.name!.right,
+      tab.close.left - tab.beforeClose!.right,
       `slack opened before the × on "${tab.label}"`,
     ).toBeLessThanOrEqual(8);
   }
@@ -587,7 +594,10 @@ test("adaptive mode: a newly-opened tab's enter transition targets its OWN adapt
   // THE assertion: the animation's own target, baked in at setup time, must be
   // this short tab's adaptive floor — well under the 142px uniform floor —
   // not 142px itself. (A regression here shows up as ~142 regardless of name.)
-  expect(targetWidth).toBeLessThan(120);
+  // 132 rather than tighter: with ownership on, the owner badge's 24px stub is
+  // part of this tab's own floor (~124px), and that is still its own floor
+  // (#2358 PR 5b).
+  expect(targetWidth).toBeLessThan(132);
   expect(targetWidth).toBeGreaterThan(40);
 
   // And once the transition (TAB_ENTER_MS=220ms) plus the adaptive-floor

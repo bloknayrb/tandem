@@ -46,7 +46,15 @@ export function measureTabFloor(wrapper: HTMLElement): number {
     parseFloat(cs.borderRightWidth) +
     Math.max(0, kids.length - 1) * (parseFloat(cs.columnGap) || 0);
   for (const k of kids) {
-    if (k !== name) chrome += k.getBoundingClientRect().width;
+    if (k === name) continue;
+    // The owner badge (#2358 PR 5b) gives up its width before the filename
+    // does, down to its CSS minimum, so it counts at that minimum. Counting
+    // its rendered label would put every tab carrying "Unassigned" at
+    // TAB_FLOOR_PX — adaptive mode turned silently uniform.
+    chrome +=
+      k.dataset.testid === "tab-owner-badge"
+        ? parseFloat(getComputedStyle(k).minWidth) || k.getBoundingClientRect().width
+        : k.getBoundingClientRect().width;
   }
 
   // `scrollWidth` is integer-rounded, so a name that exactly fits can still

@@ -50,6 +50,13 @@ import {
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { API_OWNERSHIP, API_OWNERSHIP_OWNERS } from "../../src/shared/api-paths.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import {
+  expectDeliveryRoundsLive,
+  useKeyedDeliveryRounds,
+} from "../helpers/delivery-round-seam.js";
+
+// The delivery-round seam as index.ts wires it: flag on, polls run keyed rounds.
+useKeyedDeliveryRounds();
 
 const MCP_ACCEPT = "application/json, text/event-stream";
 const CLAUDE = "7a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5b";
@@ -667,6 +674,7 @@ async function callToolRaw(
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<{ isError?: boolean; structuredContent?: Record<string, unknown>; content?: unknown }> {
+  if (name === "tandem_checkInbox") expectDeliveryRoundsLive();
   const res = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers: {
