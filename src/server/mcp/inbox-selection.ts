@@ -38,6 +38,8 @@
  *    (`shouldForwardExternally`). Indeterminate never counts (the reviewing
  *    session's ruling; "the restart question", whose re-ask is the
  *    mode-unknown observer, `noteModeObserved` in `sessions/ownership.ts`).
+ *  - **Handled (#2360 PR B, ownership on):** an item a final Claude reply's
+ *    `answers` lists (`isHandled`) is never handed out, so it never waits.
  *  - **Schema:** each item is built as a poll would build it, with an empty
  *    `textSnippet` (the text is not read), and must pass its bucket's schema,
  *    the poll's last gate (`admit`).
@@ -89,6 +91,15 @@ export interface DocumentWaitingInput {
    * `kind` for item `id` on this document at version `editedAt` or above.
    */
   readonly handedAtOrAbove: (kind: "a" | "r", id: string, editedAt: number) => boolean;
+  /**
+   * The handled filter (#2360 PR B; set only while ownership is on): whether
+   * a final Claude reply on the item's thread lists it — kind `"a"` for the
+   * user comment `id` at version `editedAt` (its `c:` key), kind `"r"` for the
+   * user reply `id` (version 0). A handled item never waits, exactly as the
+   * poll's collectors never hand it out (`awareness.ts`' `HandledThreadLedger`
+   * and `HandledReplyLedger`, the same answer). Unset, nothing is handled.
+   */
+  readonly isHandled?: (kind: "a" | "r", id: string, editedAt: number) => boolean;
   /** `models/local-period.ts`'s predicate. */
   readonly isLocalModelRecord: (record: unknown) => boolean;
   /**
@@ -125,6 +136,7 @@ function commentWaits(input: DocumentWaitingInput, ann: Annotation): boolean {
   if (writtenBefore(input.writtenSince, ann)) return false;
   const version = ann.editedAt ?? 0;
   if (input.handedAtOrAbove("a", ann.id, version)) return false;
+  if (input.isHandled?.("a", ann.id, version)) return false;
   // Settled: only an edit no acknowledged version accounts for reopens it.
   // The collector's test is `version > (newest acknowledged ?? 0)`; with no
   // acknowledged version at or above `version`, that is "some acknowledged
@@ -156,6 +168,7 @@ function replyWaits(
   if (reply.author !== "user") return false;
   if (writtenBefore(input.writtenSince, reply)) return false;
   if (input.handedAtOrAbove("r", reply.id, 0)) return false;
+  if (input.isHandled?.("r", reply.id, 0)) return false;
   return inboxUserReplySchema.safeParse({
     id: reply.id,
     annotationId: parent.id,

@@ -344,6 +344,18 @@ export interface OwnershipEntry {
   readonly since: number;
   /** The inbox registry's counter when the entry was made (`setOwnershipSeqSource`). */
   readonly sinceSeq: number;
+  /**
+   * The hold mark (#2360 PR B): the registry's counter when this record's
+   * CURRENT hold of the document began. Unlike `sinceSeq` it survives a
+   * rewrite that leaves the holder the same record (a change of kind: a
+   * `tandem_open` or a Release falling back to `default`; an Assign to the
+   * current holder is a no-op that never reaches `setDocOwner`), since
+   * nothing was handed to anyone else meanwhile; a change
+   * of holder (which runs a handover) starts it again at `sinceSeq`. Read only by a thread reply's `answers` (`owned-op.ts`'
+   * `callerHoldMark` and the poll's second step): an entry registered at or
+   * below it may have been handed to another reader.
+   */
+  readonly holdSinceSeq: number;
 }
 
 /**
@@ -543,6 +555,20 @@ export interface ThreadReplyWrite {
   readonly documentId: string;
   readonly annotationId: string;
   readonly seqAtAccept: number;
+}
+
+/**
+ * A remembered final thread reply as a poll's second step is handed it
+ * (#2360 PR B): with the caller's hold mark on its document now
+ * (`OwnershipEntry.holdSinceSeq`), or undefined when the caller does not hold it.
+ * The step lists only entries registered above the mark, as the first step
+ * does (`owned-op.ts`' `callerHoldMark`): an entry another reader
+ * acknowledged before the hold began (a claim of an unowned document is no
+ * handover, so it retires nothing) was never handed to this record, though a
+ * cursor's mark reads it as seen.
+ */
+export interface ThreadReplyWriteAtPoll extends ThreadReplyWrite {
+  readonly holdSinceSeq: number | undefined;
 }
 
 /** How many accepted final thread replies one record remembers (the oldest go first). */
@@ -1905,12 +1931,18 @@ export function setDocOwner(
     if (next === null) {
       ownerByDoc.delete(documentId);
     } else {
+      // The hold mark carries over exactly when step 1 runs no handover for
+      // this change (the same owner id before and after), so it moves with the
+      // registry: entries are retired only at a handover.
+      const prior = ownerByDoc.get(documentId);
+      const holdSinceSeq = prior?.ownerId === next.ownerId ? prior.holdSinceSeq : seq;
       if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
       ownerByDoc.set(documentId, {
         ownerId: next.ownerId,
         kind: next.kind,
         since: Date.now(),
         sinceSeq: seq,
+        holdSinceSeq,
       });
     }
     if (leavesRecord) handOver(documentId);
@@ -3478,12 +3510,15 @@ export interface InboxPollScope {
   /**
    * The second step of #2360's `answers` (the plan's §3), called by a cursor
    * poll right after it applied its acknowledgement: `settle` is given this
-   * caller's own accepted final thread replies (copies), appends to each what
-   * the poll confirmed, and returns the reply ids no later poll can add to,
+   * caller's own accepted final thread replies (copies, each with the
+   * caller's hold mark on its document now: {@link ThreadReplyWriteAtPoll}),
+   * appends to each what the poll confirmed, and returns the reply ids no later poll can add to,
    * which are forgotten. Nothing for a caller with no record, and while
    * ownership is off. Never throws.
    */
-  settleThreadReplies(settle: (writes: readonly ThreadReplyWrite[]) => readonly string[]): void;
+  settleThreadReplies(
+    settle: (writes: readonly ThreadReplyWriteAtPoll[]) => readonly string[],
+  ): void;
   /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
@@ -3749,7 +3784,17 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       const writes = threadRepliesByRecord.get(callerId);
       if (writes === undefined || writes.length === 0) return;
       total("settleThreadReplies", undefined, () => {
-        const done = new Set(settle(writes.map((w) => ({ ...w }))));
+        const done = new Set(
+          settle(
+            writes.map((w) => {
+              const entry = ownerByDoc.get(w.documentId);
+              return {
+                ...w,
+                holdSinceSeq: entry?.ownerId === callerId ? entry.holdSinceSeq : undefined,
+              };
+            }),
+          ),
+        );
         if (done.size === 0) return;
         const kept = writes.filter((w) => !done.has(w.replyId));
         if (kept.length > 0) threadRepliesByRecord.set(callerId, kept);
@@ -4270,6 +4315,15 @@ export const inboxOwnership = Object.freeze({
    */
   chatRule(): "settles" | "sweep" {
     return ownershipEnabled() ? "settles" : "sweep";
+  },
+  /**
+   * Whether the comment threads' handled filter applies (#2360 PR B): the
+   * waiting rule's half, for the one reader with no poll scope to ask. The
+   * same flag read a poll's `scoped` comes from (`begin`), so the poll and
+   * the waiting rule agree in every harness, wired or not.
+   */
+  threadHandledFilter(): boolean {
+    return ownershipEnabled();
   },
 });
 

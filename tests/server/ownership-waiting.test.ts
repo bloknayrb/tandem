@@ -35,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import * as Y from "yjs";
 import { z } from "zod";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
+import { setChatClientWritesUndone } from "../../src/server/chat-client-writes.js";
 import { setChatRowsDeletedListener } from "../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
@@ -85,6 +86,7 @@ import {
   setWaitingProbe,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
+  undoClientChatWrites,
 } from "../../src/server/sessions/ownership.js";
 import { getDocument, getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -1203,6 +1205,66 @@ describe("the agreement table: waiting answers as a fresh poll of Tandem's Claud
     const item = structured.userActions.find((a) => a.id === w.candidate);
     expect(item, "the candidate is in userActions").toBeDefined();
     expect("agentIdentity" in (item as object), "the undeclared key is not sent").toBe(false);
+  });
+});
+
+describe("the agreement table's handled worlds (#2360 PR B): waiting and a fresh poll agree on the handled filter", () => {
+  // The ownership predicate as `index.ts` wires it, so the waiting rule's
+  // gate (the fail-closed grant) and the poll's (a scoped poll) read the same.
+  beforeEach(() => setChatClientWritesUndone(undoClientChatWrites));
+  afterEach(() => setChatClientWritesUndone(undefined));
+
+  /**
+   * Tandem's Claude, holding D, is handed a user comment, acknowledges it and
+   * answers it in its thread (`inProgress` when asked); then the registry is
+   * emptied (as a restart empties it), so only the handled filter can keep
+   * the comment from waiting.
+   */
+  async function answeredWorld(inProgress = false): Promise<{ w: RowWorld; comment: string }> {
+    const w = await rowWorld();
+    const comment = userComment(w.d.ydoc, `${prefix}-c`);
+    await w.readers.r0.poll(w.d.id);
+    await w.readers.r0.poll(w.d.id);
+    const replied = await as(TANDEM, "tandem_annotationReply", {
+      annotationId: comment,
+      text: "answered here",
+      documentId: w.d.id,
+      ...(inProgress ? { inProgress: true } : {}),
+    });
+    expect(replied.error, JSON.stringify(replied)).toBe(false);
+    resetInbox();
+    return { w, comment };
+  }
+
+  /** Waiting, and a fresh poll of Tandem's Claude, for D: the two must agree. */
+  async function judge(w: RowWorld, expected: string[]): Promise<void> {
+    const waiting = documentWaiting(w.d.id);
+    expect(oldestDocumentWaiting(w.d.id) !== null, "the oldest waiting time").toBe(waiting);
+    const inbox = await reader(TANDEM).poll(w.d.id);
+    expect(handed(inbox), "the fresh poll").toEqual(expected);
+    expect(waiting, "waiting iff the fresh poll hands something").toBe(expected.length > 0);
+  }
+
+  it("handled: not waiting, and the fresh poll hands nothing", async () => {
+    const { w } = await answeredWorld();
+    await judge(w, []);
+  });
+
+  it("handled, then edited by the user: waiting, and the fresh poll hands the comment", async () => {
+    const { w, comment } = await answeredWorld();
+    patchRecord(w.d.ydoc, comment, { editedAt: clock++, content: "changed my mind" });
+    await judge(w, [comment]);
+  });
+
+  it("handled, then a new user reply: waiting, and the fresh poll hands only the reply", async () => {
+    const { w, comment } = await answeredWorld();
+    const reply = userReply(w.d.ydoc, comment);
+    await judge(w, [reply]);
+  });
+
+  it("an inProgress reply only: waiting, and the fresh poll hands the comment", async () => {
+    const { w, comment } = await answeredWorld(true);
+    await judge(w, [comment]);
   });
 });
 

@@ -1897,6 +1897,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   /** Start passes that reached the lock, flag on only: test diagnostics. */
   let startPasses = 0;
 
+  /**
+   * A follow-up that is start-worthy only through `threadAnswered` (#2360 PR
+   * B; Bryan's Q6, ownership on only: dark the field is never set) and that is
+   * not work for Tandem's Claude: its thread's answer may be another
+   * session's, on a document another session holds, where a start would be
+   * handed nothing. Such an event takes today's start arm only when the
+   * waiting decision (`tandemWorkWaiting`, synchronous) says Tandem's Claude
+   * has work; otherwise it falls through to start-or-wake, which decides the
+   * same way at its pass. A reply on Claude's own annotation and chat keep
+   * master's arm. Asked only of an event `isStartWorthy` passed, so a user
+   * reply whose parent is not Claude's here is one carrying `threadAnswered`.
+   */
+  function followUpNotOurs(event: TandemEvent): boolean {
+    return (
+      event.type === "annotation:reply" &&
+      event.payload.parentAuthor !== "claude" &&
+      !workIsWaiting()
+    );
+  }
+
   /** Is an AI other than Tandem's own last child live? */
   function anotherAiOn(): boolean {
     return otherAiAttached(ownChildSessionIds);
@@ -1921,7 +1941,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // breaker tripped under a running child either (a later crash would then
       // get no restart and no diagnosis). Start, which resets it, is the way.
       if (standby === undefined || breakerTripped) return;
-      if (!isStartWorthy(event) || anotherAiOn()) {
+      if (!isStartWorthy(event) || anotherAiOn() || followUpNotOurs(event)) {
         // The widened arm (#2358 PR 3b-2b2), flag on only: what today's rule
         // declines is handed to start-or-wake, which drops it at Off or a
         // licence refusal and starts or wakes only for work waiting for

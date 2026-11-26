@@ -28,7 +28,14 @@
  * uncovered half* (1c's review, 2026-11-11): the stdio bridge now sends
  * `notifications/cancelled` wherever it answers a forwarded request itself
  * (ADR-054 as amended 2026-11-23, Bryan's pick "Build it"; it ships live), so
- * its row was deleted in that change.
+ * its row was deleted in that change. And #2360 PR B's three (2026-11-26):
+ * *the handled filter for comment threads* and *answered work starts
+ * Tandem's Claude*, closed by PR B's handled filter and its tests (the
+ * second on Bryan's Q4 pick, "Accept for the flip (Recommended)", for what
+ * the filter cannot see), and *a forged pre-flip chat `replyTo`*, closed by
+ * its own `closedBy`: `docs/security.md`'s accepted (bounded) entry for
+ * client-written answer marks (Bryan's Q7, "Accepted, bounded
+ * (Recommended)").
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -80,29 +87,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The CTRL row's measurement, run in document rooms too (reconnect, offline edits, two " +
       "tabs, a long paste), showing no pending data after a tab's update; or a guard narrowed " +
       "to updates that touch the replies map.",
-  },
-  {
-    gap:
-      "A Claude chat row forged by a browser client while ownership is dark (the CTRL chat undo " +
-      "is flag-gated) and saved into the CTRL session keeps its `replyTo` across the flip: " +
-      "`settledChatIds` then reads it as a final reply, so the user message it names is handled " +
-      "and handed to no session. #2360 PR A strips forged `settles` and `superseded` on " +
-      "restore, but `replyTo` is legitimate data while dark and cannot be stripped.",
-    closedBy:
-      "#2360 PR B's docs/security.md entry, filed as accepted (bounded) under ownership design " +
-      "D4 (Bryan's Q7, 2026-11-26), naming this row (master's dark answeredChatIds already " +
-      "honours replyTo, so the flip adds no new harm); or a server-written provenance stamp on " +
-      "Claude chat rows that the handled rule requires.",
-  },
-  {
-    gap:
-      "The handled filter for comment threads (design §6.4's first two bullets), together with the " +
-      "stripping of client-written Claude replies: without the filter an answered comment or reply " +
-      "is re-owed by every handover (handover gap (c)); without the stripping a browser client " +
-      "could hide a comment from every inbox.",
-    closedBy:
-      "The PR that lets Claude reply on a user's comment thread (#2360), after its 'later reply' " +
-      "rule is reworked (as designed it would lose a user reply written during Solo).",
   },
   {
     gap:
@@ -343,19 +327,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
-  },
-  {
-    gap:
-      "Answered work starts Tandem's Claude (3b-2b1c). A handover retires the document's " +
-      "delivery entries and nothing yet tells answered from unanswered, so after any handover, " +
-      "at the next forward, every pending user comment, every settled one " +
-      "ever edited, and every user reply on a Claude-facing thread reads as waiting, and the " +
-      "forward starts or wakes Tandem's Claude for work the user did not ask for again; " +
-      "likewise after a restart once anything forwards. See the handled-filter and restart rows.",
-    closedBy:
-      "The handled filter (#2360), with a test where a lapse of a holder that answered " +
-      "everything in its threads starts nothing; for what it cannot see (answers in chat or by " +
-      "an edit, state lost at a restart), the restart row's closer or Bryan's answer.",
   },
   {
     gap:
