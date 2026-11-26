@@ -11,10 +11,13 @@ import {
   narrowReplyForChannel,
   replyPayload,
 } from "../../annotations/projection.js";
+import { threadHoldsFinalClaudeReply } from "../../annotations/thread-handled.js";
+import { clientWritesUndoneGrant } from "../../chat-client-writes.js";
 import { isLocalModelRecord, markWithheldForLocalPeriod } from "../../models/local-period.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
+import { wasRepairedByReplyUndo } from "./reply-client-undo.js";
 
 export function makeRepliesObserver(deps: {
   docName: string;
@@ -25,9 +28,23 @@ export function makeRepliesObserver(deps: {
   const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
+  /**
+   * Whether a reply follows a final Claude reply in its thread (#2360 PR B;
+   * Bryan's Q6): the payload's `threadAnswered`, which makes it start-worthy.
+   * Only a user's reply is ever projected (`narrowReplyForChannel`'s author
+   * check), so no author test here. Ownership on only (the fail-closed
+   * grant), checked first so a dark build reads no row and its payload is
+   * unchanged.
+   */
+  const followsClaudeAnswer = (parentKey: string): boolean =>
+    clientWritesUndoneGrant() && threadHoldsFinalClaudeReply(repliesMap.values(), parentKey);
+
   return makePerKeyChangeObserver<AnnotationReply>({
     map: repliesMap,
     pushEvent,
+    // #2360: a client write the reply undo repaired (it runs first, being
+    // registered first) derives nothing, so a forged add pushes no event.
+    shouldSkipTransaction: wasRepairedByReplyUndo,
     derive: ({ key, action, value: reply }) => {
       if (action !== "add") return undefined;
 
@@ -80,7 +97,10 @@ export function makeRepliesObserver(deps: {
         type: "annotation:reply",
         timestamp: Date.now(),
         documentId: docName,
-        payload: replyPayload(eligible, parent, key),
+        payload: {
+          ...replyPayload(eligible, parent, key),
+          ...(followsClaudeAnswer(parentKey) ? { threadAnswered: true as const } : {}),
+        },
       };
       // A reply on the local model's own annotation, or the local model's own
       // reply, is local-model activity (#1123 A2, R3.4): never pushed,

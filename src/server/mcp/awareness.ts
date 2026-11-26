@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { z } from "zod";
 import {
   CTRL_ROOM,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_CHAT_STREAM,
@@ -10,6 +11,7 @@ import {
 import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
+import { atMapKey } from "../../shared/sanitize.js";
 import { selectionFingerprint } from "../../shared/selection-fingerprint.js";
 import type {
   AgentIdentity,
@@ -20,14 +22,27 @@ import type {
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import type { ReconciledDoc } from "../annotations/key-identity.js";
-import { isClaudeFacing } from "../annotations/projection.js";
+import { isClaudeFacing, narrowForChannel } from "../annotations/projection.js";
+import { nextRev } from "../annotations/schema.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { queueSnapshot } from "../annotations/sync.js";
+import {
+  boundThreadAnswers,
+  commentEntryKey,
+  finiteOrNull,
+  isFinalClaudeThreadReply,
+  replyEntryKey,
+  settledKeysByThread,
+  settledThreadKeys,
+  visibleThreadEntries,
+} from "../annotations/thread-handled.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import {
   closeMessageDeliveryRound,
   recordInboxPoll,
   resolveDeliveryRound,
 } from "../events/delivery-state.js";
+import { getFileSyncContextForDoc } from "../events/file-sync-registry.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannelInDocument } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
@@ -63,6 +78,7 @@ import {
   type DeliveryRegistry,
   decodeCursor,
   deliveryRegistry,
+  documentItemKey,
   encodeCursor,
   type ReaderCursor,
   type RegistryEntry,
@@ -146,7 +162,7 @@ export const CHAT_ACK_DIRECTIVE = `The user sees nothing in chat until you reply
 
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
-  return `${documentId}:${itemId}`;
+  return documentItemKey(documentId, itemId);
 }
 
 /**
@@ -488,6 +504,114 @@ class SettledNoticeLedger implements InboxLedger {
 }
 
 /**
+ * The thread entries on one document that a final Claude reply's `answers`
+ * covers (#2360 PR B, the handled filter; `docs/plans/2360-thread-replies.md`
+ * §3 and §5): a user comment at its CURRENT version (`c:<editedAt>`), and a
+ * user reply (`r:<replyId>`), each listed by a final Claude reply on its own
+ * thread (`settledKeysByThread`). No clock is compared: an edit makes a new
+ * comment key, so it is no longer handled, and a new user reply has its own
+ * key; an in-progress acknowledgement, the local model's reply and a row
+ * written before #2360 settle nothing (`isFinalClaudeThreadReply`).
+ *
+ * Keyed as the inbox's ledgers are (`ledgerKey`), so the collectors' ledgers
+ * and the waiting rule read one answer. It is recomputed from persisted rows
+ * on every read and nothing in the registry depends on it: an entry the
+ * filter skips is retired as any unhanded entry is (`carryHeld`, the
+ * handover), so a handled mark that is later lost re-owes its item rather
+ * than leaving it read as delivered (a deliberate departure from the plan's
+ * "marked acknowledged", ADR-054's #2360 PR B amendment). It applies no gate of its
+ * own: it only ever withholds, and every record it names is still judged by
+ * the collectors' gates (author, type, audience, Solo, ADR-027) before
+ * anything is handed, so a record no collector would hand (a note, a private
+ * comment, Claude's own record, whose ledger key carries its status) gains
+ * nothing by being named here. The one exception is a key collision: a record
+ * whose bare key is a current Claude record's notice key (ids are
+ * client-written) is never handled, so no notice is hidden by it.
+ */
+interface HandledThreadKeys {
+  /** User comments handled at their current version: ledger key → that version, normalized as its key is (`finiteOrNull(editedAt) ?? 0`). */
+  readonly comments: ReadonlyMap<string, number>;
+  /** User replies handled, by ledger key. */
+  readonly replies: ReadonlySet<string>;
+}
+
+const NOTHING_HANDLED: HandledThreadKeys = Object.freeze({
+  comments: new Map<string, number>(),
+  replies: new Set<string>(),
+});
+
+/** {@link HandledThreadKeys} over records already read. Reads the replies map; writes nothing. */
+function handledThreadKeysAmong(
+  documentId: string,
+  annotations: readonly Annotation[],
+  ydoc: Y.Doc,
+): HandledThreadKeys {
+  const rows = [...ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).values()];
+  const settled = settledKeysByThread(rows);
+  if (settled.size === 0) return NOTHING_HANDLED;
+  const noticeKeys = new Set<string>();
+  for (const ann of annotations) {
+    if (ann.author === "claude") noticeKeys.add(inboxLedgerKey(documentId, ann));
+  }
+  const comments = new Map<string, number>();
+  for (const ann of annotations) {
+    if (!settled.get(ann.id)?.has(commentEntryKey(ann.editedAt))) continue;
+    const key = ledgerKey(documentId, ann.id);
+    if (!noticeKeys.has(key)) comments.set(key, finiteOrNull(ann.editedAt) ?? 0);
+  }
+  const replies = new Set<string>();
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const reply = row as Partial<AnnotationReply>;
+    if (typeof reply.id !== "string" || typeof reply.annotationId !== "string") continue;
+    if (settled.get(reply.annotationId)?.has(replyEntryKey(reply.id))) {
+      replies.add(ledgerKey(documentId, reply.id));
+    }
+  }
+  return { comments, replies };
+}
+
+/**
+ * The handled filter on the comment ledger (#2360 PR B; flag on only, the
+ * scoped poll wraps it): a handled user comment reads as already surfaced at
+ * its current version, so the collector excludes it — no hand-out, no stamp,
+ * no drop logged (exclusion, ownership design §6.2). `handled` is read at
+ * call time: the pass fills it once it has read the document's records.
+ */
+class HandledThreadLedger implements InboxLedger {
+  constructor(
+    private readonly inner: InboxLedger,
+    private readonly handled: () => HandledThreadKeys,
+  ) {}
+  get(key: string): number | undefined {
+    const own = this.inner.get(key);
+    const version = this.handled().comments.get(key);
+    if (version === undefined) return own;
+    return own === undefined || version > own ? version : own;
+  }
+  set(key: string, value: number): void {
+    this.inner.set(key, value);
+  }
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+}
+
+/** The handled filter on the reply ledger: a handled user reply reads as already surfaced. */
+class HandledReplyLedger implements ReplyLedger {
+  constructor(
+    private readonly inner: ReplyLedger,
+    private readonly handled: () => HandledThreadKeys,
+  ) {}
+  has(key: string): boolean {
+    return this.handled().replies.has(key) || this.inner.has(key);
+  }
+  add(key: string): unknown {
+    return this.inner.add(key);
+  }
+}
+
+/**
  * The inbox half of an ownership handover (#2358, ADR-054; ownership design
  * §6.3's rule): the document's ownership just left a record, so every user
  * comment and user thread reply any poll was handed there stops counting as
@@ -500,7 +624,12 @@ class SettledNoticeLedger implements InboxLedger {
  *
  * Accept and dismiss notices about Claude's own annotations keep their
  * entries and cursor-less keys ({@link currentNoticeKeys}); when in doubt a
- * key is forgotten, which costs one duplicate. The mark the ownership module
+ * key is forgotten, which costs one duplicate. A handled thread entry
+ * (#2360 PR B) is retired like any other: the handled filter, which reads
+ * persisted `answers` on every pass, keeps it from being handed out while it
+ * stays handled, and if its mark is ever lost (a load sweep strips an
+ * untrusted `answers`) the item is owed again rather than read as delivered
+ * for good. The mark the ownership module
  * writes right after this makes every kept notice settled (the notice rule,
  * {@link settleNotices}), so a kept cursor-less key with no live entry is
  * registered here first.
@@ -635,17 +764,46 @@ function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
   if (!doc || !ydoc) return null;
   const store = new YDocStore(ydoc, doc.filePath, doc.id);
   const reconciled = store.reconciled();
+  const annotations = store.listAnnotations();
   return {
     documentId,
-    annotations: structuredClone(store.listAnnotations()),
+    annotations: structuredClone(annotations),
     repliesOf: (annotation) => structuredClone(channelVisibleReplies(reconciled, annotation)),
     mode: readModeState(),
     handedAtOrAbove: (kind, id, editedAt) =>
       deliveryRegistry
         .versionsOf(kind, ledgerKey(documentId, id))
         .some((entry) => entry.acked && entry.editedAt >= editedAt),
+    // #2360 PR B, the handled filter: ownership on only, read through the
+    // same flag a poll's `scoped` comes from, so the two cannot disagree and a
+    // dark build counts exactly what it did.
+    ...(inboxOwnership.threadHandledFilter()
+      ? { isHandled: handledReader(documentId, annotations, ydoc) }
+      : {}),
     isLocalModelRecord,
     writtenSince: waitingWrittenSince,
+  };
+}
+
+/**
+ * The waiting rule's `isHandled` for one document (#2360 PR B): the collectors'
+ * answer ({@link handledThreadKeysAmong}), computed once on first ask, so the
+ * rule and a scoped poll agree on what is handled. (The poll applies it on
+ * `scope.scoped`, this on `inboxOwnership.threadHandledFilter()`: one flag
+ * read, the ownership module's.)
+ */
+function handledReader(
+  documentId: string,
+  annotations: readonly Annotation[],
+  ydoc: Y.Doc,
+): NonNullable<DocumentWaitingInput["isHandled"]> {
+  let handled: HandledThreadKeys | undefined;
+  return (kind, id, version) => {
+    handled ??= handledThreadKeysAmong(documentId, annotations, ydoc);
+    const key = ledgerKey(documentId, id);
+    return kind === "r"
+      ? handled.replies.has(key)
+      : handled.comments.get(key) === (finiteOrNull(version) ?? 0);
   };
 }
 
@@ -1702,11 +1860,6 @@ function carryHeld(
   return held;
 }
 
-/** A finite number, or null. `Number.isFinite`, not `typeof`: NaN is a number. */
-function finiteOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 /**
  * The span `[from, to)` of `text` a selection record names, or null unless it
  * is a non-empty span lying wholly inside `text`. Narrowed BEFORE hashing so
@@ -1965,15 +2118,29 @@ function collectInboxDocuments(
     // then 0) and never for a document that never changed hands.
     const settlement: NoticeSettlement = { versions: new Map(), ended: [] };
     const through = scope.settledThrough(id);
-    const ledgers: DocumentLedgers =
+    const noticeLedgers: DocumentLedgers =
       through > 0
         ? { ...baseLedgers, surfaced: new SettledNoticeLedger(baseLedgers.surfaced, settlement) }
         : baseLedgers;
+    // The handled filter (#2360 PR B; ownership on only): a thread entry a
+    // final Claude reply answered is excluded, read once the pass has the
+    // document's records.
+    let handled: HandledThreadKeys = NOTHING_HANDLED;
+    const readHandled = () => handled;
+    const ledgers: DocumentLedgers = scope.scoped
+      ? {
+          ...noticeLedgers,
+          surfaced: new HandledThreadLedger(noticeLedgers.surfaced, readHandled),
+          replySurfaced: new HandledReplyLedger(noticeLedgers.replySurfaced, readHandled),
+        }
+      : noticeLedgers;
     const onAnnotations =
-      through > 0
+      through > 0 || scope.scoped
         ? (all: Annotation[]) => {
             const ydoc = getDocument(id);
-            if (ydoc) settleNotices(id, through, all, ydoc, settlement);
+            if (!ydoc) return;
+            if (scope.scoped) handled = handledThreadKeysAmong(id, all, ydoc);
+            if (through > 0) settleNotices(id, through, all, ydoc, settlement);
           }
         : undefined;
     let inbox: ReturnType<typeof collectDocumentInbox>;
@@ -2914,6 +3081,14 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     }
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
+  // #2360's second step (the plan's §3), ownership on: this caller's accepted
+  // final thread replies gain what this acknowledgement confirmed and the
+  // registry had handed out before each reply. After the documents'
+  // acknowledgement above, in the same step, so a poll that fails later
+  // cannot lose it.
+  if (poll.scoped) {
+    poll.settleThreadReplies((writes) => settleThreadReplyRows(writes, reader, poll));
+  }
   if (reader.handOut !== undefined) {
     const confirmed = deliveryRegistry.confirmHandOut(reader.handOut);
     // Ownership on (the posts PR, R3.4 step 2, R3.8): the confirmed hand-out's
@@ -2949,6 +3124,122 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     if (!msg.read) keys.push(key);
   });
   stampUserChat(keys, "read");
+}
+
+/**
+ * The second step of #2360's `answers` (`docs/plans/2360-thread-replies.md`
+ * §3). For each accepted final thread reply of this caller (`writes`) on a
+ * document the caller HOLDS in this poll's snapshot: append to the reply's
+ * `answers` every entry of its thread that is visible now (the read path's
+ * gates, `visibleThreadEntries`), not already listed by a final Claude reply
+ * on the thread, and whose registry entry is live, acknowledged, seen by this
+ * cursor (`seenBy`: this acknowledgement confirmed it), was registered above
+ * the caller's hold mark (`holdSinceSeq`; PR B: a fresh cursor reads what
+ * ANY reader acknowledged as seen, so an entry another reader acknowledged
+ * while the document was unowned would otherwise pass) and was handed out at
+ * or below the reply's `seqAtAccept` (so an entry that arrived after the reply
+ * is never listed). Bounded like the write (`boundThreadAnswers`).
+ *
+ * A fresh cursor (null mark) acknowledges nothing and appends nothing. One
+ * `withInternal` write per document (Critical Rule 2: server bookkeeping on a
+ * server-only field; it derives no event), each changed row with a new `rev`,
+ * then a queued snapshot (`internal` is skipped by durable sync).
+ *
+ * Returns the reply ids no later poll can add to, for the ownership module to
+ * forget (review: otherwise every poll re-walks every remembered reply): one
+ * on a document the caller no longer holds or that is closed (a handover or a
+ * close retires the entries it could list), one whose row is gone or no longer
+ * a final Claude reply, and one this cursor has now seen past (`mark` at or
+ * above its `seqAtAccept`, with no held seq at or below it), since every entry
+ * it could list is then confirmed or never will be by this reader.
+ */
+function settleThreadReplyRows(
+  writes: Parameters<Parameters<PollScope["settleThreadReplies"]>[0]>[0],
+  reader: ReaderCursor,
+  poll: PollScope,
+): string[] {
+  const done: string[] = [];
+  const byDocument = new Map<string, (typeof writes)[number][]>();
+  for (const write of writes) {
+    const list = byDocument.get(write.documentId);
+    if (list) list.push(write);
+    else byDocument.set(write.documentId, [write]);
+  }
+  const mode = readModeState();
+  for (const [documentId, documentWrites] of byDocument) {
+    const doc = getCurrentDoc(documentId);
+    const ydoc = getDocument(documentId);
+    if (!doc || !ydoc || poll.scopeOf(documentId) !== "holds") {
+      for (const write of documentWrites) done.push(write.replyId);
+      continue;
+    }
+    const view = viewOf(reader, documentId);
+    if (view.mark === null) continue;
+    const mark = view.mark;
+    const seenPast = (write: { seqAtAccept: number }) =>
+      mark >= write.seqAtAccept && ![...view.held].some((seq) => seq <= write.seqAtAccept);
+    const reconciled = new YDocStore(ydoc, doc.filePath, doc.id).reconciled();
+    const annotations = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const replies = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const updates = new Map<string, AnnotationReply>();
+    /** Keys this pass already added, per thread, so two replies never list one key. */
+    const addedOn = new Map<string, Set<string>>();
+    for (const write of documentWrites) {
+      const row = updates.get(write.replyId) ?? replies.get(write.replyId);
+      if (
+        !isFinalClaudeThreadReply(row) ||
+        (row as AnnotationReply).annotationId !== write.annotationId
+      ) {
+        done.push(write.replyId);
+        continue;
+      }
+      if (seenPast(write)) done.push(write.replyId);
+      const current = row as AnnotationReply;
+      const narrowed = narrowForChannel(annotations.get(write.annotationId));
+      if (narrowed === null) continue;
+      const parent = atMapKey(write.annotationId, narrowed);
+      const settled = settledThreadKeys(replies.values(), write.annotationId);
+      const added = addedOn.get(write.annotationId) ?? new Set<string>();
+      const fresh: string[] = [];
+      const since = write.holdSinceSeq;
+      // Not held now (a re-entrant change since the snapshot): list nothing.
+      if (since === undefined) continue;
+      for (const entry of visibleThreadEntries(
+        parent,
+        channelVisibleReplies(reconciled, parent),
+        mode,
+      )) {
+        if (settled.has(entry.key) || added.has(entry.key)) continue;
+        const confirmed = deliveryRegistry
+          .versionsOf(entry.kind, ledgerKey(documentId, entry.id))
+          .some(
+            (e) =>
+              e.acked &&
+              e.editedAt >= entry.version &&
+              e.seq > since &&
+              e.seq <= write.seqAtAccept &&
+              seenBy(view, e),
+          );
+        if (confirmed) fresh.push(entry.key);
+      }
+      if (fresh.length === 0) continue;
+      const listed = current.answers ?? [];
+      const answers = boundThreadAnswers([...listed, ...fresh]);
+      if (answers.length === listed.length) continue;
+      for (const key of answers.slice(listed.length)) added.add(key);
+      addedOn.set(write.annotationId, added);
+      // `nextRev(current)`: a real bump, so the appended row beats the file's
+      // older copy at the next merge (`pickWinner`); `nextRev()` is `rev: 1`.
+      updates.set(write.replyId, { ...current, answers, rev: nextRev(current) });
+    }
+    if (updates.size === 0) continue;
+    withInternal(ydoc, () => {
+      for (const [key, value] of updates) replies.set(key, value);
+    });
+    const ctx = getFileSyncContextForDoc(ydoc);
+    if (ctx) queueSnapshot(ctx);
+  }
+  return done;
 }
 
 /**

@@ -344,6 +344,18 @@ export interface OwnershipEntry {
   readonly since: number;
   /** The inbox registry's counter when the entry was made (`setOwnershipSeqSource`). */
   readonly sinceSeq: number;
+  /**
+   * The hold mark (#2360 PR B): the registry's counter when this record's
+   * CURRENT hold of the document began. Unlike `sinceSeq` it survives a
+   * rewrite that leaves the holder the same record (a change of kind: a
+   * `tandem_open` or a Release falling back to `default`; an Assign to the
+   * current holder is a no-op that never reaches `setDocOwner`), since
+   * nothing was handed to anyone else meanwhile; a change
+   * of holder (which runs a handover) starts it again at `sinceSeq`. Read only by a thread reply's `answers` (`owned-op.ts`'
+   * `callerHoldMark` and the poll's second step): an entry registered at or
+   * below it may have been handed to another reader.
+   */
+  readonly holdSinceSeq: number;
 }
 
 /**
@@ -529,6 +541,47 @@ const chatAnswerer = new Map<string, string>();
  * chat rows. Empty while ownership is off.
  */
 const replierByRow = new Map<string, string>();
+
+/**
+ * One accepted final thread reply (#2360, the second step of
+ * `docs/plans/2360-thread-replies.md` §3): its row, where it is, and the
+ * delivery registry's counter when it was accepted (`seqSource`). A later
+ * acknowledging poll by the same record appends to its `answers` the thread
+ * entries that poll confirms and the registry had handed out at or below
+ * `seqAtAccept` (`awareness.ts`, `settleThreadReplyRows`).
+ */
+export interface ThreadReplyWrite {
+  readonly replyId: string;
+  readonly documentId: string;
+  readonly annotationId: string;
+  readonly seqAtAccept: number;
+}
+
+/**
+ * A remembered final thread reply as a poll's second step is handed it
+ * (#2360 PR B): with the caller's hold mark on its document now
+ * (`OwnershipEntry.holdSinceSeq`), or undefined when the caller does not hold it.
+ * The step lists only entries registered above the mark, as the first step
+ * does (`owned-op.ts`' `callerHoldMark`): an entry another reader
+ * acknowledged before the hold began (a claim of an unowned document is no
+ * handover, so it retires nothing) was never handed to this record, though a
+ * cursor's mark reads it as seen.
+ */
+export interface ThreadReplyWriteAtPoll extends ThreadReplyWrite {
+  readonly holdSinceSeq: number | undefined;
+}
+
+/** How many accepted final thread replies one record remembers (the oldest go first). */
+export const MAX_THREAD_REPLY_WRITES = 256;
+
+/**
+ * Each record's accepted final thread replies (#2360), oldest first, at most
+ * {@link MAX_THREAD_REPLY_WRITES}. **Server memory only**: lost at restart,
+ * which fails safe (the second step does not run and the entry is owed
+ * again). Dropped with the record (`deleteRecord`), so a record created again
+ * under the same owner id inherits none. Empty while ownership is off.
+ */
+const threadRepliesByRecord = new Map<string, ThreadReplyWrite[]>();
 
 /**
  * Each unanswered user chat message's pickup and stall clock (#2358 PR 5d;
@@ -1389,6 +1442,7 @@ function deleteRecord(record: OwnerRecord): void {
   for (const [rowKey, ownerId] of [...replierByRow]) {
     if (ownerId === record.ownerId) replierByRow.delete(rowKey);
   }
+  threadRepliesByRecord.delete(record.ownerId);
   releaseMessageOwners(record.ownerId, () => true);
   // #2358 PR 5d: chat that followed a document this record held now reads
   // unowned, so its published facts change.
@@ -1877,12 +1931,18 @@ export function setDocOwner(
     if (next === null) {
       ownerByDoc.delete(documentId);
     } else {
+      // The hold mark carries over exactly when step 1 runs no handover for
+      // this change (the same owner id before and after), so it moves with the
+      // registry: entries are retired only at a handover.
+      const prior = ownerByDoc.get(documentId);
+      const holdSinceSeq = prior?.ownerId === next.ownerId ? prior.holdSinceSeq : seq;
       if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
       ownerByDoc.set(documentId, {
         ownerId: next.ownerId,
         kind: next.kind,
         since: Date.now(),
         sinceSeq: seq,
+        holdSinceSeq,
       });
     }
     if (leavesRecord) handOver(documentId);
@@ -3448,6 +3508,18 @@ export interface InboxPollScope {
     settle: (rows: readonly string[], owns: (key: string) => boolean) => readonly string[],
   ): void;
   /**
+   * The second step of #2360's `answers` (the plan's §3), called by a cursor
+   * poll right after it applied its acknowledgement: `settle` is given this
+   * caller's own accepted final thread replies (copies, each with the
+   * caller's hold mark on its document now: {@link ThreadReplyWriteAtPoll}),
+   * appends to each what the poll confirmed, and returns the reply ids no later poll can add to,
+   * which are forgotten. Nothing for a caller with no record, and while
+   * ownership is off. Never throws.
+   */
+  settleThreadReplies(
+    settle: (writes: readonly ThreadReplyWriteAtPoll[]) => readonly string[],
+  ): void;
+  /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
    * handover has run on it this server run. A notice whose registry entry is
@@ -3516,6 +3588,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   commitChat: () => {},
   dropChatOwners: () => {},
   settleHandOut: () => {},
+  settleThreadReplies: () => {},
   settledThrough: () => 0,
   changes: () => [],
   drainChanges: () => ({ notices: [] }),
@@ -3704,6 +3777,28 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         for (const key of settle(rows, (key) => ownsMessage(key, callerId))) {
           setChatAnswerer(key, callerId);
         }
+      });
+    },
+    settleThreadReplies: (settle) => {
+      if (callerId === undefined || !records.has(callerId)) return;
+      const writes = threadRepliesByRecord.get(callerId);
+      if (writes === undefined || writes.length === 0) return;
+      total("settleThreadReplies", undefined, () => {
+        const done = new Set(
+          settle(
+            writes.map((w) => {
+              const entry = ownerByDoc.get(w.documentId);
+              return {
+                ...w,
+                holdSinceSeq: entry?.ownerId === callerId ? entry.holdSinceSeq : undefined,
+              };
+            }),
+          ),
+        );
+        if (done.size === 0) return;
+        const kept = writes.filter((w) => !done.has(w.replyId));
+        if (kept.length > 0) threadRepliesByRecord.set(callerId, kept);
+        else threadRepliesByRecord.delete(callerId);
       });
     },
     settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,
@@ -4220,6 +4315,15 @@ export const inboxOwnership = Object.freeze({
    */
   chatRule(): "settles" | "sweep" {
     return ownershipEnabled() ? "settles" : "sweep";
+  },
+  /**
+   * Whether the comment threads' handled filter applies (#2360 PR B): the
+   * waiting rule's half, for the one reader with no poll scope to ask. The
+   * same flag read a poll's `scoped` comes from (`begin`), so the poll and
+   * the waiting rule agree in every harness, wired or not.
+   */
+  threadHandledFilter(): boolean {
+    return ownershipEnabled();
   },
 });
 
@@ -5173,6 +5277,35 @@ export function recordAnswerer(
   if (!answererByItem.has(key)) answererByItem.set(key, callerId);
 }
 
+/**
+ * Remember that `callerId` wrote the accepted final thread reply `replyId`
+ * (#2360; `owned-op.ts`' `noteFinalThreadReply`), with the registry's counter
+ * now. Only with ownership on and for a caller with a record; past
+ * {@link MAX_THREAD_REPLY_WRITES} the oldest is forgotten (its second step then
+ * does not run, which fails safe). Never throws.
+ */
+export function recordThreadReplyWriter(
+  callerId: string,
+  documentId: string,
+  annotationId: string,
+  replyId: string,
+): void {
+  if (!ownershipEnabled() || !records.has(callerId)) return;
+  total("recordThreadReplyWriter", undefined, () => {
+    const writes = threadRepliesByRecord.get(callerId) ?? [];
+    writes.push({ replyId, documentId, annotationId, seqAtAccept: seqSource() });
+    if (writes.length > MAX_THREAD_REPLY_WRITES) {
+      writes.splice(0, writes.length - MAX_THREAD_REPLY_WRITES);
+    }
+    threadRepliesByRecord.set(callerId, writes);
+  });
+}
+
+/** A record's remembered final thread replies, as copies (tests). */
+export function threadReplyWritesForTests(callerId: string): ThreadReplyWrite[] {
+  return (threadRepliesByRecord.get(callerId) ?? []).map((w) => ({ ...w }));
+}
+
 /** Forget a removed annotation's answerers. */
 export function forgetThreadAnswerers(documentId: string, annotationId: string): void {
   const prefix = answererKey(documentId, annotationId, "");
@@ -5815,6 +5948,7 @@ export function resetOwnershipForTests(): void {
   carriedOver.clear();
   chatAnswerer.clear();
   replierByRow.clear();
+  threadRepliesByRecord.clear();
   recordHoldsStateCalls = 0;
   ownerByDoc.clear();
   handoverSeq.clear();

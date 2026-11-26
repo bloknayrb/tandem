@@ -29,6 +29,8 @@ import {
   isStoreReadOnly,
   removeOldName,
 } from "../annotations/store.js";
+import { stripThreadFields } from "../annotations/thread-answers-trust.js";
+import { clientWritesUndoneGrant } from "../chat-client-writes.js";
 import { noteChatRowsDeleted } from "../chat-row-deletions.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { dropMessageDeliveryRounds } from "../events/delivery-state.js";
@@ -225,6 +227,8 @@ export async function saveSession(
     // Conditional spread, not `readOnly`, so a writable document's record stays
     // byte-identical to the shape it had before this field existed.
     ...(readOnly ? { readOnly: true } : {}),
+    // #2360 (ships dark): only a lit build marks the file; see `restoreYDoc`.
+    ...(clientWritesUndoneGrant() ? { threadFieldsTrusted: true as const } : {}),
   };
 
   await atomicWrite(sessionPathFor(filePath), JSON.stringify(data), SESSION_FILE_WRITE);
@@ -540,6 +544,13 @@ export function narrowConflict(value: unknown): ExternalConflictState | undefine
 export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
   const state = Buffer.from(session.ydocState, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+  // #2360 PR A review: the session half of the load sweep. A reply row's
+  // `answers` / `inProgress` restored from a file no lit build marked are
+  // stripped here, so the envelope's marker cannot vouch for them later. Dark
+  // no legitimate row carries them: a file holding none opens no transaction.
+  if (!(clientWritesUndoneGrant() && session.threadFieldsTrusted === true)) {
+    stripThreadFields(doc);
+  }
 }
 
 /**
@@ -558,6 +569,12 @@ export function decodeSessionToScratchDoc(session: SessionData): Y.Doc {
   const scratch = new Y.Doc();
   const state = Buffer.from(session.ydocState, "base64");
   Y.applyUpdate(scratch, new Uint8Array(state));
+  // #2360 (#2574 review): the fallback clone copies these rows into the live
+  // doc, so it takes `restoreYDoc`'s rule: an unmarked (or, dark, any) file's
+  // `answers` / `inProgress` are stripped before they can be cloned in.
+  if (!(clientWritesUndoneGrant() && session.threadFieldsTrusted === true)) {
+    stripThreadFields(scratch);
+  }
   return scratch;
 }
 
@@ -975,6 +992,11 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     ydocState,
     lastAccessed: Date.now(),
     ...(localPeriod ? { localPeriod } : {}),
+    // #2360 (ships dark): the chat side of the load sweep. Only a lit build
+    // marks the file, and only a lit build's CTRL doc undoes client writes, so
+    // a marked file's `settles` / `superseded` were written by the server.
+    // Dark, absent: the file is byte-identical to before.
+    ...(clientWritesUndoneGrant() ? { chatSettlesTrusted: true } : {}),
   };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
   await atomicWrite(sessionPath, JSON.stringify(data), SESSION_FILE_WRITE);
@@ -1048,6 +1070,7 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
 /** Load the CTRL_ROOM session if it exists */
 export async function loadCtrlSession(): Promise<string | null> {
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
+  ctrlChatSettlesTrustedOnDisk = false;
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content);
@@ -1055,6 +1078,8 @@ export async function loadCtrlSession(): Promise<string | null> {
     // the rows, so a restored row is never classed afresh. Ignored with the
     // flag off (a dark build rewrites the file without it, R2.5).
     loadLocalPeriodRecord(data?.localPeriod);
+    // #2360: read before the caller restores the rows (`restoreCtrlDoc`).
+    ctrlChatSettlesTrustedOnDisk = data?.chatSettlesTrusted === true;
     return data.ydocState ?? null;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -1086,9 +1111,56 @@ export async function loadCtrlSession(): Promise<string | null> {
 export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   const state = Buffer.from(base64State, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+  // #2360 PR A review: FIRST after the apply, so a throw in a later step can
+  // never leave forged `settles` / `superseded` in place for the next lit
+  // persist to mark trusted.
+  stripUntrustedChatSettles(doc);
   foldChatStream(doc);
   clearChatDelivered(doc);
   dropPublishedOwnership(doc);
+}
+
+/**
+ * Whether the CTRL session file last read (`loadCtrlSession`) was marked
+ * `chatSettlesTrusted` (#2360). Reset by every read; false when no file.
+ */
+let ctrlChatSettlesTrustedOnDisk = false;
+
+/**
+ * The chat half of #2360's load sweep (`docs/plans/2360-thread-replies.md` §3,
+ * "Chat has the same gap"). `settles` and `superseded` are server-only and
+ * written only with ownership on, but the CTRL chat undo is flag-gated too, so
+ * while dark a client could save a Claude row carrying them into the session,
+ * and it would count at the first lit boot. So on restore both are stripped
+ * from every row, unless ownership is on AND the file was marked by a lit
+ * build. Dark, no legitimate row carries them: a file holding none opens no
+ * transaction and changes nothing. (`replyTo` cannot be stripped, being
+ * legitimate data dark; it is a flip-blocker row.)
+ */
+function stripUntrustedChatSettles(doc: Y.Doc): void {
+  if (clientWritesUndoneGrant() && ctrlChatSettlesTrustedOnDisk) return;
+  const chatMap = doc.getMap(Y_MAP_CHAT);
+  const stale: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    if (Object.hasOwn(value, "settles") || Object.hasOwn(value, "superseded")) stale.push(key);
+  });
+  if (stale.length === 0) return;
+  withInternal(doc, () => {
+    for (const key of stale) {
+      const {
+        settles: _settles,
+        superseded: _superseded,
+        ...rest
+      } = chatMap.get(key) as ChatMessage;
+      chatMap.set(key, rest);
+    }
+  });
+}
+
+/** Forget the last CTRL file's trust mark (tests). */
+export function resetCtrlChatSettlesTrustForTests(): void {
+  ctrlChatSettlesTrustedOnDisk = false;
 }
 
 /**

@@ -22,6 +22,7 @@
 import { CTRL_ROOM } from "../../shared/constants.js";
 import { isUploadPath } from "../../shared/paths.js";
 import { copyAliasLedger } from "../annotations/key-identity.js";
+import { copyThreadFieldsTrust } from "../annotations/thread-answers-trust.js";
 import { copyArbiterHistory } from "../annotations/write-arbiter.js";
 import { setDirtyMirrorEligibility } from "../documents/dirty.js";
 import { getOpenDocs, isDirtyMirrorEligible } from "../documents/registry.js";
@@ -61,6 +62,10 @@ export function createHocuspocusLifecycle(): HocuspocusLifecycle {
       if (oldDoc) {
         copyAliasLedger(oldDoc, newDoc);
         copyArbiterHistory(oldDoc, newDoc);
+        // #2360 PR A review: the swapped-in doc holds the same rows, so it
+        // keeps the old one's thread-field trust (a later content reload
+        // clears the file-sync context before it re-attaches).
+        copyThreadFieldsTrust(oldDoc, newDoc);
       }
       const openDoc = getOpenDocs().get(docName);
       const uploadDoc = openDoc ? isUploadPath(openDoc.filePath) : false;

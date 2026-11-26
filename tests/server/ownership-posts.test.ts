@@ -29,6 +29,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
+import { setChatClientWritesUndone } from "../../src/server/chat-client-writes.js";
 import { setChatRowsDeletedListener } from "../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
@@ -80,6 +81,7 @@ import {
   setTransportView,
   TANDEM_OWNER_ID,
   type TransportViewEntry,
+  undoClientChatWrites,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_CHAT } from "../../src/shared/constants.js";
@@ -339,6 +341,10 @@ function wireSeams(): void {
   setOwnershipInboxHandover(handOverDocumentInbox);
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
+  // #2360 PR A: the CTRL session's `chatSettlesTrusted` mark is written, and
+  // honoured at restore, only where this seam answers "ownership on", as
+  // `index.ts` wires it.
+  setChatClientWritesUndone(undoClientChatWrites);
 }
 
 async function startTools(): Promise<void> {
@@ -428,6 +434,7 @@ afterEach(async () => {
   setChatCommitFaultForTests(undefined);
   setChatOwnershipFaultForTests(undefined);
   setChatRowsDeletedListener(undefined);
+  setChatClientWritesUndone(undefined);
   for (const [id, doc] of [...getOpenDocs()]) {
     unwatchFile(doc.filePath);
     removeDoc(id);

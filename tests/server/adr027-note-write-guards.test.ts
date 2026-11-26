@@ -308,7 +308,10 @@ describe("the four write guards agree on audience (#1803)", () => {
       kind: "invalid-suggestion-target",
       annotationType: "highlight",
     });
-    expect(lifecycle().reply("h1", "hello", { kind: "none" }, noRelay).kind).toBe("not-repliable");
+    expect(
+      lifecycle().reply("h1", "hello", { kind: "none" }, "own", { kind: "untracked" }, noRelay)
+        .kind,
+    ).toBe("not-repliable");
   });
 
   it("refuses a user's private HIGHLIGHT on resolve and remove (#1803 residual)", () => {
@@ -352,7 +355,9 @@ describe("the four write guards agree on audience (#1803)", () => {
       kind: "invalid-note",
     });
     expect(store.removeAnnotation("fu")).toStrictEqual({ kind: "invalid-note" });
-    expect(lifecycle().reply("fu", "x", { kind: "none" }, noRelay)).toStrictEqual({
+    expect(
+      lifecycle().reply("fu", "x", { kind: "none" }, "own", { kind: "untracked" }, noRelay),
+    ).toStrictEqual({
       kind: "invalid-note",
     });
 
@@ -366,7 +371,9 @@ describe("the four write guards agree on audience (#1803)", () => {
       kind: "invalid-note",
     });
     expect(store.removeAnnotation("fc")).toStrictEqual({ kind: "invalid-note" });
-    expect(lifecycle().reply("fc", "x", { kind: "none" }, noRelay)).toStrictEqual({
+    expect(
+      lifecycle().reply("fc", "x", { kind: "none" }, "own", { kind: "untracked" }, noRelay),
+    ).toStrictEqual({
       kind: "invalid-note",
     });
   });

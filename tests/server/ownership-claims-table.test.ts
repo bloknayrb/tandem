@@ -875,6 +875,9 @@ const ANNOTATION_MARKS = [
   "INVALID_ARGUMENT",
   "INVALID_ARGUMENT",
   "INVALID_ARGUMENT",
+  // #2360 PR A: an `inProgress` reply with `suggestedText`, refused by its
+  // arguments before the queue.
+  "INVALID_ARGUMENT",
   "<mcpError>",
 ];
 

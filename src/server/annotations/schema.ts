@@ -14,6 +14,7 @@
  */
 
 import { z } from "zod";
+import { THREAD_ANSWER_KEY_MAX, THREAD_ANSWERS_MAX } from "../../shared/constants.js";
 import { isHeldInSoloMarker } from "../../shared/sanitize.js";
 import {
   AgentIdentitySchema,
@@ -199,6 +200,18 @@ export const AnnotationReplyRecordSchemaV1 = z
     // `normalizeReply` apply the same per-field cap the reply seam enforces at
     // write, so nothing accepted at write is silently dropped at load (#1295 L3).
     suggestedText: z.string().max(REPLY_TEXT_MAX).optional(),
+    // #2360 (ships dark): a final Claude reply's `answers` and an in-progress
+    // reply's marker. Declared with the SAME bounds the reply seam applies at
+    // write (`THREAD_ANSWER_KEY_MAX`, `THREAD_ANSWERS_MAX`), so a row accepted
+    // live survives `normalizeReply` (#1295 L3). A value outside them (only a
+    // forged one can be) is dropped by `.catch`, never the reply: the entries it
+    // would have settled are owed again, which fails safe.
+    answers: z
+      .array(z.string().max(THREAD_ANSWER_KEY_MAX))
+      .max(THREAD_ANSWERS_MAX)
+      .optional()
+      .catch(undefined),
+    inProgress: z.boolean().optional().catch(undefined),
   })
   .passthrough();
 
@@ -234,6 +247,11 @@ const MetaSchema = z
     // older envelopes, whose rows may carry another record's id: `loadAndMerge`
     // routes those through the old-format assignment pass instead.
     keyIdentity: z.literal(KEY_IDENTITY_FORMAT).optional(),
+    // Additive (#2360, ships dark). `true` marks an envelope whose reply rows'
+    // `answers` / `inProgress` were all written by the server with ownership
+    // on (`thread-answers-trust.ts`). Server-only: it is not in the Y.Doc, so
+    // no client can set it. Absent, a load strips both fields from every row.
+    threadAnswersTrusted: z.literal(true).optional().catch(undefined),
   })
   .passthrough();
 

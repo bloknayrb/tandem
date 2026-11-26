@@ -115,7 +115,7 @@ import {
   generateNotificationId,
   generateReplyId,
 } from "../../shared/utils.js";
-import { readModeState } from "../mode.js";
+import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 // #1626: the reply seam screens a suggestion-bearing reply against the PARENT's
 // live span. No cycle — `positions.ts` reaches only `shared/*` and
@@ -123,6 +123,7 @@ import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshRange } from "../positions.js";
 import { isClaudeFacing } from "./projection.js";
 import { nextRev, REPLY_TEXT_MAX } from "./schema.js";
+import { boundThreadAnswers, settledThreadKeys, type ThreadEntry } from "./thread-handled.js";
 
 // ---------------------------------------------------------------------------
 // Result variants
@@ -396,6 +397,50 @@ export function describeSuggestionRangeRefusal(cause: SuggestionRangeCause): str
  * capability, and widening the user's entry is the #1000 asymmetry in reverse.
  */
 export type ReplySuggestion = { kind: "none" } | { kind: "replacement"; suggestedText: string };
+
+/**
+ * Which parents a Claude-side reply may land on (#2360). **A required
+ * discriminant, and the seam reads no flag**: the MCP handler and the local
+ * model each pass `ownershipOn() ? "claude-facing-comment" : "own"`, so the
+ * permission ships dark with ownership and this file gains no flag import
+ * (`tests/server/ownership-module-seam.test.ts`).
+ *
+ * - `"own"`: a parent Claude authored (#1770, master's rule).
+ * - `"claude-facing-comment"`: also a USER-authored `comment` that passed the
+ *   ADR-027 guard, i.e. a Claude-facing (outbound) comment, promoted notes and
+ *   promoted Word comments included. Every other author (`"import"`) and type
+ *   keeps `not-owned`, and a user comment the Solo hold hides answers
+ *   `not-found`, as a read does (Bryan's Q5, 2026-11-26).
+ */
+export type ReplyParents = "own" | "claude-facing-comment";
+
+/**
+ * How a reply is tracked for the thread handled rule (#2360;
+ * `thread-handled.ts`). Required, for the same reason as {@link ReplyParents}.
+ *
+ * - `untracked`: no `answers`, no `inProgress` (every flag-off call, and the
+ *   local model always: its replies settle nothing, Bryan's Q2).
+ * - `in-progress`: an "I'm on it", stored with `inProgress: true`; it settles
+ *   nothing.
+ * - `final`: stored with `answers`, computed HERE, after both guards, from the
+ *   sanitized parent: the entries `visibleEntries` returns for it (the read
+ *   path's gates), less those an earlier final Claude reply on the thread
+ *   already lists, kept only where `handed` says the registry holds a live
+ *   acknowledged entry for it that was handed to this owner. The two
+ *   callbacks are the caller's because the seam may not import the read path
+ *   or the registry.
+ */
+export type ReplyTracking =
+  | { kind: "untracked" }
+  | { kind: "in-progress" }
+  | {
+      kind: "final";
+      visibleEntries: (parent: Annotation) => readonly ThreadEntry[];
+      handed: (entry: ThreadEntry) => boolean;
+    };
+
+/** The thread fields a reply row is written with (#2360). */
+type ReplyThreadFields = { answers: readonly string[] } | { inProgress: true } | undefined;
 
 /** The wire codes a reply refusal can carry. Closed. */
 export type ReplyRefusalCode =
@@ -786,6 +831,8 @@ export interface AnnotationLifecycle {
     annotationId: string,
     text: string,
     suggestion: ReplySuggestion,
+    parents: ReplyParents,
+    tracking: ReplyTracking,
     onLossy: OnLossy,
     agentIdentity?: AgentIdentity,
   ): ClaudeReplyResult;
@@ -846,8 +893,17 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
     accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
     dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
     remove: (id, onLossy) => removeForClaude(id, ydoc, map, onLossy),
-    reply: (annotationId, text, suggestion, onLossy, agentIdentity) =>
-      replyForClaude(ydoc, annotationId, text, suggestion, onLossy, agentIdentity),
+    reply: (annotationId, text, suggestion, parents, tracking, onLossy, agentIdentity) =>
+      replyForClaude(
+        ydoc,
+        annotationId,
+        text,
+        suggestion,
+        parents,
+        tracking,
+        onLossy,
+        agentIdentity,
+      ),
   };
 }
 
@@ -1409,6 +1465,7 @@ function writeReply(
   actor: "browser" | "mcp",
   agentIdentity?: AgentIdentity,
   suggestedText?: string,
+  thread?: ReplyThreadFields,
 ): ReplyResult {
   // #1295 L3: bound the text at the model layer rather than at one caller. All
   // three production callers left it unbounded while the DURABLE schema caps it
@@ -1482,6 +1539,14 @@ function writeReply(
     // `replyForClaude`, which screens that range first; `addUserReply` passes
     // nothing, so the key is omitted entirely on the user path.
     ...(suggestedText !== undefined ? { suggestedText } : {}),
+    // #2360 (ships dark): only `replyForClaude` passes these, and only with
+    // ownership on. Bounded here, at the single record builder, by the same
+    // constants the durable schema reads.
+    ...(thread === undefined
+      ? {}
+      : "inProgress" in thread
+        ? { inProgress: true }
+        : { answers: boundThreadAnswers(thread.answers) }),
   };
 
   const wrap = actor === "mcp" ? withMcp : withBrowser;
@@ -1608,10 +1673,13 @@ function replyForClaude(
   annotationId: string,
   text: string,
   suggestion: ReplySuggestion,
+  parents: ReplyParents,
+  tracking: ReplyTracking,
   onLossy: OnLossy,
   agentIdentity?: AgentIdentity,
 ): ClaudeReplyResult {
   const raw = ydoc.getMap(Y_MAP_ANNOTATIONS).get(annotationId) as RawAnnotation | undefined;
+  let thread: ReplyThreadFields;
   if (raw) {
     const ann = sanitizeAnnotation(raw, onLossy);
     // **Scoped to the parents this rule is actually about, and the hazard is
@@ -1640,8 +1708,21 @@ function replyForClaude(
     // A consequence worth stating: `promotedAnnotation` writes `author: "user"`,
     // so a promoted note or imported Word comment is NOT repliable by Claude.
     // The replacement is `tandem_reply` (chat) or a fresh `tandem_comment`.
+    //
+    // #2360 (ships dark): with `parents: "claude-facing-comment"` a USER
+    // `comment` is repliable too. Only here, after the privacy guard, so it is
+    // reached only by a Claude-facing (outbound) comment; `"import"` and every
+    // other type keep `not-owned`, so a user highlight still answers it.
     if (ann.author !== "claude") {
-      return { kind: "not-owned", author: ann.author };
+      const relaxed =
+        parents === "claude-facing-comment" && ann.author === "user" && ann.type === "comment";
+      if (!relaxed) return { kind: "not-owned", author: ann.author };
+      // Bryan's Q5 (2026-11-26): a user comment the Solo hold hides answers
+      // `not-found`, the answer a read gives; a read filter is not a write
+      // guard (#1680). On this arm only, so `readModeState()` stays off the
+      // Claude-authored path (`writeReply`'s ordering note) and every flag-off
+      // call is unchanged.
+      if (hideFromAI(ann, readModeState())) return { kind: "not-found", id: annotationId };
     }
     // #1626 + Critical Rule 6 (#1766): a stored `suggestedText` is a rewrite
     // DEFERRED to Accept, and both consumers replace the parent's flat span
@@ -1671,6 +1752,12 @@ function replyForClaude(
       const cause = screenSuggestionSpan(ann, ydoc);
       if (cause) return { kind: "invalid-suggestion-range", cause };
     }
+    // #2360: the thread fields, after both guards and from the sanitized
+    // parent, for a record `writeReply` will write (a highlight or a resolved
+    // parent is refused there and lists nothing).
+    if (ann.type === "comment" && ann.status === "pending") {
+      thread = threadFieldsFor(ydoc, ann, annotationId, tracking);
+    }
   }
   // A missing record falls through to `writeReply`, which answers `not-found` —
   // the guard has nothing to protect when there is no parent, and duplicating
@@ -1684,7 +1771,40 @@ function replyForClaude(
     "mcp",
     agentIdentity,
     suggestion.kind === "replacement" ? suggestion.suggestedText : undefined,
+    thread,
   );
+}
+
+/**
+ * The thread fields for a reply on `parent` (#2360). `final`: the entries the
+ * caller's `visibleEntries` returns, less every key an earlier final Claude
+ * reply on this thread already lists (read from the stored rows, under the
+ * parent's MAP key), kept only where `handed` holds. Bounded by `writeReply`.
+ */
+function threadFieldsFor(
+  ydoc: Y.Doc,
+  parent: Annotation,
+  annotationId: string,
+  tracking: ReplyTracking,
+): ReplyThreadFields {
+  switch (tracking.kind) {
+    case "untracked":
+      return undefined;
+    case "in-progress":
+      return { inProgress: true };
+    case "final": {
+      const settled = settledThreadKeys(
+        ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).values(),
+        annotationId,
+      );
+      const answers: string[] = [];
+      for (const entry of tracking.visibleEntries(atMapKey(annotationId, parent))) {
+        if (settled.has(entry.key) || answers.includes(entry.key)) continue;
+        if (tracking.handed(entry)) answers.push(entry.key);
+      }
+      return { answers };
+    }
+  }
 }
 
 function removeForClaude(

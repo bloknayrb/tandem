@@ -52,6 +52,10 @@ export interface PerKeyObserverDeps<T> {
    *  callers compose with `shouldSkipDurableSync` or supply a one-off
    *  origin filter without forcing array literals at every call site. */
   shouldSkip?: (origin: unknown) => boolean;
+  /** Optional skip by transaction rather than origin (#2360: the replies
+   *  observer skips a transaction the reply undo already repaired, so a
+   *  forged add derives nothing). */
+  shouldSkipTransaction?: (txn: Y.Transaction) => boolean;
 }
 
 /**
@@ -65,11 +69,12 @@ export interface PerKeyObserverDeps<T> {
  * `shouldSkip` predicate is OR'd on top for callers that need to widen.
  */
 export function makePerKeyChangeObserver<T>(deps: PerKeyObserverDeps<T>): () => void {
-  const { map, derive, pushEvent, shouldSkip } = deps;
+  const { map, derive, pushEvent, shouldSkip, shouldSkipTransaction } = deps;
 
   const onChange = (event: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
     if (shouldSkipChannel(txn.origin)) return;
     if (shouldSkip?.(txn.origin)) return;
+    if (shouldSkipTransaction?.(txn)) return;
 
     for (const [key, change] of event.changes.keys) {
       const action = change.action;

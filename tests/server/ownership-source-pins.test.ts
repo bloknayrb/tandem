@@ -723,6 +723,14 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     beforeBothBranches("  setChatClientWritesUndone(undoClientChatWrites);");
     const wired = index.indexOf("  setChatClientWritesUndone(undoClientChatWrites);");
     expect(wired).toBeLessThan(index.indexOf("startHocuspocus(wsPort)"));
+    // #2360: the boot restore reads it (the CTRL `settles` strip and the
+    // envelope trust), so it is wired before either restore runs.
+    const ctrlRestore = index.indexOf("await restoreCtrlSession()");
+    const docRestore = index.indexOf("await restoreOpenDocuments(");
+    expect(ctrlRestore).toBeGreaterThan(-1);
+    expect(docRestore).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(ctrlRestore);
+    expect(wired).toBeLessThan(docRestore);
     expect(filesNaming(/\bsetChatClientWritesUndone\(/)).toEqual([
       "src/server/chat-client-writes.ts",
       "src/server/index.ts",

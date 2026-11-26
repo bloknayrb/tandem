@@ -97,6 +97,8 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
       annId,
       "too late",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     // `dismissed`, not just "some non-pending status" — the accepted case above
@@ -155,7 +157,14 @@ describe("event emission on reply", () => {
     });
 
     // Claude reply — MCP_ORIGIN, observer filters these out
-    createAnnotationLifecycle(ydoc).reply(annId, "claude says hi", { kind: "none" }, noRelay);
+    createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude says hi",
+      { kind: "none" },
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
     // The transaction IS tagged with MCP_ORIGIN, so the real event queue would skip it
     expect(mcpEvents).toHaveLength(1);
     expect(mcpEvents[0].origin).toBe(MCP_ORIGIN);
@@ -225,6 +234,8 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
       annId,
       "claude reply",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     assertReplyOk(result);
@@ -276,7 +287,14 @@ describe("collectRepliesForAnnotation", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
 
     addUserReply(ydoc, annId, "first", noRelay);
-    createAnnotationLifecycle(ydoc).reply(annId, "second", { kind: "none" }, noRelay);
+    createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "second",
+      { kind: "none" },
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
     addUserReply(ydoc, annId, "third", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -306,7 +324,14 @@ describe("tandem_removeAnnotation cleans up replies", () => {
 
     // Add replies to the annotation
     addUserReply(ydoc, annId, "reply 1", noRelay);
-    createAnnotationLifecycle(ydoc).reply(annId, "reply 2", { kind: "none" }, noRelay);
+    createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "reply 2",
+      { kind: "none" },
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
@@ -382,7 +407,14 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const id = seedParent(ydoc, { author: "user", audience: "outbound" });
 
     expect(
-      createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        id,
+        "hi",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({
       kind: "not-owned",
       author: "user",
@@ -394,9 +426,16 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-import", "Hello world");
     const id = seedParent(ydoc, { author: "import" }, "note");
 
-    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay).kind).toBe(
-      "invalid-note",
-    );
+    expect(
+      createAnnotationLifecycle(ydoc).reply(
+        id,
+        "hi",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ).kind,
+    ).toBe("invalid-note");
   });
 
   it("answers not-owned for a USER highlight, never not-repliable", () => {
@@ -406,7 +445,14 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const id = seedParent(ydoc, { author: "import", audience: "outbound" }, "highlight");
 
     expect(
-      createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        id,
+        "hi",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({
       kind: "not-owned",
       author: "import",
@@ -417,7 +463,16 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-claude", "Hello world");
     const id = seedParent(ydoc, {});
 
-    assertReplyOk(createAnnotationLifecycle(ydoc).reply(id, "on it", { kind: "none" }, noRelay));
+    assertReplyOk(
+      createAnnotationLifecycle(ydoc).reply(
+        id,
+        "on it",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
+    );
   });
 
   it("the browser's own path is deliberately unguarded on the same record", () => {
@@ -451,6 +506,8 @@ describe("#1626: a reply's replacement proposal", () => {
       annId,
       "how about this",
       { kind: "replacement", suggestedText: "Goodbye" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     assertReplyOk(result);
@@ -467,7 +524,14 @@ describe("#1626: a reply's replacement proposal", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent");
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "plain", { kind: "none" }, noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "plain",
+      { kind: "none" },
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as object;
@@ -515,6 +579,8 @@ describe("#1626: a reply's replacement proposal", () => {
         annId,
         "how about this",
         { kind: "replacement", suggestedText: "Goodbye" },
+        "own",
+        { kind: "untracked" },
         noRelay,
       ),
     );

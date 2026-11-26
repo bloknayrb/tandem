@@ -185,11 +185,15 @@ describe("annotation create seam — who may mint", () => {
       "MintExtras",
       "RemoveRecordResult",
       "RemoveResult",
+      // #2360 PR A: the reply seam's two required discriminants, named by
+      // `YDocStore.addReply`, the MCP handler and the local model.
+      "ReplyParents",
       "ReplyRefusalCode",
       "ReplyResult",
       // #1626: the reply seam's required suggestion discriminant. Exported because
       // `YDocStore.addReply` and the MCP handler both name the arm.
       "ReplySuggestion",
+      "ReplyTracking",
       // #1626 review: why a suggestion's range screen refused. Exported because
       // the refusal is rendered in two places — `describeReplyWriteRefusal` here
       // and the `tandem_editAnnotation` switch in `mcp/annotations.ts` — and a
