@@ -92,13 +92,19 @@ pub fn get_or_create_token() -> Result<String, String> {
     match Entry::new(SERVICE, ENTRY_NAME) {
         Ok(entry) => token_with_keyring(&entry),
         Err(e) => {
-            let status = match Entry::store_status() {
-                Ok(()) => "credential store reports available".to_string(),
-                Err(s) => s.to_string(),
-            };
-            log::warn!(
-                "{KEYRING_LOG_PREFIX} unavailable ({e}; credential store: {status}) — using the token file"
-            );
+            // The store is initialised once per process, so this failure
+            // repeats on every call (sidecar spawn, `best_effort_token`, the
+            // Cowork commands); one line per launch is what the smoke row needs.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                let status = match Entry::store_status() {
+                    Ok(()) => "credential store reports available".to_string(),
+                    Err(s) => s.to_string(),
+                };
+                log::warn!(
+                    "{KEYRING_LOG_PREFIX} unavailable ({e}; credential store: {status}) — using the token file"
+                );
+            });
             token_from_file_or_generate()
         }
     }
@@ -237,10 +243,19 @@ mod tests {
             "release-smoke-checklist.md must grep for `{KEYRING_LOG_PREFIX}`"
         );
         assert!(!prod.contains("eprintln!"), "keyring fallbacks must log with log::warn!, which reaches tandem.log");
-        let warns = prod.matches("log::warn!(").count();
+        // Pair each `warn!` with its own format string: counting the two
+        // separately would pass a prefixed `info!` beside an unrelated `warn!`.
+        let warn_args: Vec<&str> = prod.split("log::warn!(").skip(1).collect();
+        assert_eq!(warn_args.len(), 3, "three keyring fallbacks: unavailable, read failed, write failed");
+        for args in &warn_args {
+            assert!(
+                args.trim_start().starts_with("\"{KEYRING_LOG_PREFIX}"),
+                "every keyring warn! must start with KEYRING_LOG_PREFIX: {}",
+                args.lines().next().unwrap_or("")
+            );
+        }
         let prefixed = prod.matches("\"{KEYRING_LOG_PREFIX}").count();
-        assert_eq!(warns, 3, "three keyring fallbacks: unavailable, read failed, write failed");
-        assert_eq!(prefixed, warns, "every fallback line must start with KEYRING_LOG_PREFIX");
+        assert_eq!(prefixed, warn_args.len(), "KEYRING_LOG_PREFIX only on those warn! lines");
         // `{e:?}` prints a keyring error's payload, and `BadEncoding` carries
         // the stored secret's bytes; these lines reach a file that persists.
         for line in prod.lines().filter(|l| l.contains("{KEYRING_LOG_PREFIX}")) {
