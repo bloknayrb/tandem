@@ -314,6 +314,11 @@ function exportableReplies(
     // imported comment) never exports, and an `author:"import"` reply lacking
     // the corroborating `importAuthor` is treated as untrusted (fail closed).
     if (reply.private === true && !isImportReply(reply)) return;
+    // #2360: an in-progress Claude reply ("I'm on it") is bookkeeping, not an
+    // answer. Written into the user's file it is noise, and with no answer
+    // after it, it would stand as Claude's last word. Only a lit build writes
+    // one (ownership), so a dark export is unchanged.
+    if (reply.inProgress === true) return;
     if (typeof reply.id !== "string") return;
     if (typeof reply.text !== "string" || reply.text.length === 0) return;
     out.push(reply);

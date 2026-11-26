@@ -71,7 +71,14 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
     const ydoc = setupDoc("rsh-interior", FIXTURE);
     const parent = seedParent(ydoc, 4, 9);
 
-    const result = createAnnotationLifecycle(ydoc).reply(parent, "how about", REPLACEMENT, noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      parent,
+      "how about",
+      REPLACEMENT,
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
 
     expect(result).toStrictEqual({ kind: "invalid-suggestion-range", cause: "heading" });
     // Refused means refused: nothing was written.
@@ -89,6 +96,8 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
       parent,
       "a plain reply",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
 
@@ -109,7 +118,14 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
       textSnapshotTruncated: true,
     });
 
-    const result = createAnnotationLifecycle(ydoc).reply(parent, "refined", REPLACEMENT, noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      parent,
+      "refined",
+      REPLACEMENT,
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
 
     assertReplyOk(result);
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as {
@@ -145,7 +161,14 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
     const paragraph = ydoc.getXmlFragment("default").get(0) as Y.XmlElement;
     withInternal(ydoc, () => getOrCreateXmlText(paragraph).insert(0, "xxxx"));
 
-    const result = createAnnotationLifecycle(ydoc).reply(parent, "refined", REPLACEMENT, noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      parent,
+      "refined",
+      REPLACEMENT,
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
 
     assertReplyOk(result);
     expect(replyCount(ydoc)).toBe(1);
@@ -176,7 +199,14 @@ describe("#1626: a refusal on an unresolvable parent does not blame a heading", 
     // the stored [13, 17) against a document that is now 4 characters long.
     withInternal(ydoc, () => ydoc.getXmlFragment("default").delete(1, 2));
 
-    const result = createAnnotationLifecycle(ydoc).reply(parent, "refined", REPLACEMENT, noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      parent,
+      "refined",
+      REPLACEMENT,
+      "own",
+      { kind: "untracked" },
+      noRelay,
+    );
 
     expect(result).toStrictEqual({ kind: "invalid-suggestion-range", cause: "unresolvable" });
     expect(replyCount(ydoc)).toBe(0);

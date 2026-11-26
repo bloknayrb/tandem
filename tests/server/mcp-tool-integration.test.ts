@@ -1009,12 +1009,12 @@ describe("MCP tool integration — author authority (#1770)", () => {
    * code would return an unhandled-result `undefined` through the SDK and read
    * as a transport fault rather than a refusal.
    */
-  function seedUserComment(docId: string, id: string): void {
+  function seedUserComment(docId: string, id: string, author = "user"): void {
     const ydoc = setupDoc(docId, "Hello world test content");
     withInternal(ydoc, () => {
       ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
         id,
-        author: "user",
+        author,
         type: "comment",
         audience: "outbound",
         range: { from: 0, to: 5 },
@@ -1045,8 +1045,11 @@ describe("MCP tool integration — author authority (#1770)", () => {
     expect(stored?.content).toBe("the user's own comment");
   });
 
-  it("tandem_annotationReply refuses a user-authored annotation with NOT_OWNED", async () => {
-    seedUserComment("mcp-owner-reply", "u_reply");
+  // An imported comment: refused in both jobs. A USER's shared comment takes
+  // Claude's reply once ownership is on (#2360, ships dark), so that case is
+  // `ownership-thread-replies.test.ts`', both ways.
+  it("tandem_annotationReply refuses an imported annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-reply", "u_reply", "import");
 
     const parsed = parseResult(
       await client.callTool({

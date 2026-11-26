@@ -531,6 +531,33 @@ const chatAnswerer = new Map<string, string>();
 const replierByRow = new Map<string, string>();
 
 /**
+ * One accepted final thread reply (#2360, the second step of
+ * `docs/plans/2360-thread-replies.md` §3): its row, where it is, and the
+ * delivery registry's counter when it was accepted (`seqSource`). A later
+ * acknowledging poll by the same record appends to its `answers` the thread
+ * entries that poll confirms and the registry had handed out at or below
+ * `seqAtAccept` (`awareness.ts`, `settleThreadReplyRows`).
+ */
+export interface ThreadReplyWrite {
+  readonly replyId: string;
+  readonly documentId: string;
+  readonly annotationId: string;
+  readonly seqAtAccept: number;
+}
+
+/** How many accepted final thread replies one record remembers (the oldest go first). */
+export const MAX_THREAD_REPLY_WRITES = 256;
+
+/**
+ * Each record's accepted final thread replies (#2360), oldest first, at most
+ * {@link MAX_THREAD_REPLY_WRITES}. **Server memory only**: lost at restart,
+ * which fails safe (the second step does not run and the entry is owed
+ * again). Dropped with the record (`deleteRecord`), so a record created again
+ * under the same owner id inherits none. Empty while ownership is off.
+ */
+const threadRepliesByRecord = new Map<string, ThreadReplyWrite[]>();
+
+/**
  * Each unanswered user chat message's pickup and stall clock (#2358 PR 5d;
  * ownership design §6.5: "counts from the message's last change of owner
  * (its arrival, if it never had one)"), keyed by chat key. `since` is the
@@ -1389,6 +1416,7 @@ function deleteRecord(record: OwnerRecord): void {
   for (const [rowKey, ownerId] of [...replierByRow]) {
     if (ownerId === record.ownerId) replierByRow.delete(rowKey);
   }
+  threadRepliesByRecord.delete(record.ownerId);
   releaseMessageOwners(record.ownerId, () => true);
   // #2358 PR 5d: chat that followed a document this record held now reads
   // unowned, so its published facts change.
@@ -3448,6 +3476,15 @@ export interface InboxPollScope {
     settle: (rows: readonly string[], owns: (key: string) => boolean) => readonly string[],
   ): void;
   /**
+   * The second step of #2360's `answers` (the plan's §3), called by a cursor
+   * poll right after it applied its acknowledgement: `settle` is given this
+   * caller's own accepted final thread replies (copies), appends to each what
+   * the poll confirmed, and returns the reply ids no later poll can add to,
+   * which are forgotten. Nothing for a caller with no record, and while
+   * ownership is off. Never throws.
+   */
+  settleThreadReplies(settle: (writes: readonly ThreadReplyWrite[]) => readonly string[]): void;
+  /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
    * handover has run on it this server run. A notice whose registry entry is
@@ -3516,6 +3553,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   commitChat: () => {},
   dropChatOwners: () => {},
   settleHandOut: () => {},
+  settleThreadReplies: () => {},
   settledThrough: () => 0,
   changes: () => [],
   drainChanges: () => ({ notices: [] }),
@@ -3704,6 +3742,18 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         for (const key of settle(rows, (key) => ownsMessage(key, callerId))) {
           setChatAnswerer(key, callerId);
         }
+      });
+    },
+    settleThreadReplies: (settle) => {
+      if (callerId === undefined || !records.has(callerId)) return;
+      const writes = threadRepliesByRecord.get(callerId);
+      if (writes === undefined || writes.length === 0) return;
+      total("settleThreadReplies", undefined, () => {
+        const done = new Set(settle(writes.map((w) => ({ ...w }))));
+        if (done.size === 0) return;
+        const kept = writes.filter((w) => !done.has(w.replyId));
+        if (kept.length > 0) threadRepliesByRecord.set(callerId, kept);
+        else threadRepliesByRecord.delete(callerId);
       });
     },
     settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,
@@ -5173,6 +5223,35 @@ export function recordAnswerer(
   if (!answererByItem.has(key)) answererByItem.set(key, callerId);
 }
 
+/**
+ * Remember that `callerId` wrote the accepted final thread reply `replyId`
+ * (#2360; `owned-op.ts`' `noteFinalThreadReply`), with the registry's counter
+ * now. Only with ownership on and for a caller with a record; past
+ * {@link MAX_THREAD_REPLY_WRITES} the oldest is forgotten (its second step then
+ * does not run, which fails safe). Never throws.
+ */
+export function recordThreadReplyWriter(
+  callerId: string,
+  documentId: string,
+  annotationId: string,
+  replyId: string,
+): void {
+  if (!ownershipEnabled() || !records.has(callerId)) return;
+  total("recordThreadReplyWriter", undefined, () => {
+    const writes = threadRepliesByRecord.get(callerId) ?? [];
+    writes.push({ replyId, documentId, annotationId, seqAtAccept: seqSource() });
+    if (writes.length > MAX_THREAD_REPLY_WRITES) {
+      writes.splice(0, writes.length - MAX_THREAD_REPLY_WRITES);
+    }
+    threadRepliesByRecord.set(callerId, writes);
+  });
+}
+
+/** A record's remembered final thread replies, as copies (tests). */
+export function threadReplyWritesForTests(callerId: string): ThreadReplyWrite[] {
+  return (threadRepliesByRecord.get(callerId) ?? []).map((w) => ({ ...w }));
+}
+
 /** Forget a removed annotation's answerers. */
 export function forgetThreadAnswerers(documentId: string, annotationId: string): void {
   const prefix = answererKey(documentId, annotationId, "");
@@ -5815,6 +5894,7 @@ export function resetOwnershipForTests(): void {
   carriedOver.clear();
   chatAnswerer.clear();
   replierByRow.clear();
+  threadRepliesByRecord.clear();
   recordHoldsStateCalls = 0;
   ownerByDoc.clear();
   handoverSeq.clear();

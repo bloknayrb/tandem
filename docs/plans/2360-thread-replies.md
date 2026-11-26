@@ -216,8 +216,10 @@ design D4 (coordination, not security). It is not a security boundary, and it go
   - `parents: "own" | "claude-facing-comment"`. The MCP path passes
     `ownershipOn() ? "claude-facing-comment" : "own"`. **Rev 3 (Q2, Bryan: "Yes, settles
     nothing"):** the local model (`local-model/tools.ts`, `reply_to_annotation`) passes the same
-    expression, read through `mcp/owned-op.ts`'s `ownershipOn()` (no new importer of the flag
-    module). It is **the same gate**: the local model can reply inside a user's Claude-facing
+    choice, read through `chat-client-writes.ts`' `clientWritesUndoneGrant()`, the fail-closed
+    read of the ownership predicate `index.ts` wires at boot (as built in PR A: `owned-op.ts` is
+    pinned to tool files by `ownership-api-no-context.test.ts`, and the local model is not a flag
+    importer; unwired or throwing, it answers `"own"`). It is **the same gate**: the local model can reply inside a user's Claude-facing
     comment thread exactly when Claude can, with the same privacy refusals and the same Solo
     refusal (Q5), and never while the flag is off.
   - `tracking: "untracked" | "final" | "in-progress"`. The seam computes `answers` itself for

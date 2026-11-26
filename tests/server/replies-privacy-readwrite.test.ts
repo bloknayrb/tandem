@@ -85,6 +85,8 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
       annId,
       "claude probe",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     // `invalid-note`, an arm ONLY the ADR-027 guard produces. Under the old
@@ -118,6 +120,8 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
       annId,
       "claude probe",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     expect(result).toStrictEqual({ kind: "invalid-note" });
@@ -143,6 +147,8 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
       annId,
       "claude probe",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     expect(result).toStrictEqual({ kind: "invalid-note" });
@@ -163,6 +169,8 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
       annId,
       "claude probe",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     expect(result.kind).toBe("ok");
@@ -198,6 +206,8 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
       annId,
       "claude probe",
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
     expect(result).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
@@ -410,7 +420,14 @@ describe("#1626: the suggestion screen runs AFTER the ADR-027 / #1770 guards", (
     const annId = createAnnotation(map, ydoc, "note", rangeOf(4, 9, ydoc), "private note");
 
     expect(
-      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        annId,
+        "proposal",
+        REPLACEMENT,
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({ kind: "invalid-note" });
   });
 
@@ -425,7 +442,14 @@ describe("#1626: the suggestion screen runs AFTER the ADR-027 / #1770 guards", (
     );
 
     expect(
-      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        annId,
+        "proposal",
+        REPLACEMENT,
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({ kind: "not-owned", author: "import" });
   });
 
@@ -440,7 +464,14 @@ describe("#1626: the suggestion screen runs AFTER the ADR-027 / #1770 guards", (
     ydoc.transact(() => map.set(annId, { ...ann, audience: "outbound" } as Annotation), MCP_ORIGIN);
 
     expect(
-      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        annId,
+        "proposal",
+        REPLACEMENT,
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
   });
 });

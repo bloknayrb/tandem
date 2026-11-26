@@ -871,6 +871,14 @@ tandem_annotationReply({
   with `tandem_reply` (chat) or a fresh `tandem_comment`. A user-authored parent
   returns `NOT_OWNED`. The user's own replies inside Claude's thread are
   unaffected, as is the user replying in their own note thread (#1000).
+- **Ships dark (#2360, behind `OWNERSHIP_ENABLED`; ADR-054's 2026-11-26 amendment).** With
+  ownership on, Claude may also reply inside a user's shared (outbound) comment thread, promoted
+  notes and promoted Word comments included; an imported record and a highlight still return
+  `NOT_OWNED`, whose message then no longer names `tandem_reply`; a user comment the Solo hold
+  hides returns `NOT_FOUND`, as a read does. The tool gains an `inProgress` boolean for an
+  acknowledgement that answers nothing (no `suggestedText` with it), and a final reply records,
+  server-side only, which thread entries it answers. None of this reaches the description or the
+  schema while ownership is off, and the skill does not mention it until the flip (PR C).
 - Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.

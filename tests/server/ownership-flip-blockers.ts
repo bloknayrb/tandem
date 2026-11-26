@@ -71,6 +71,29 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
+      "#2360 PR A drops update data a browser tab left pending in a DOCUMENT room " +
+      "(`makeDocumentPendingGuard`, `events/observers/reply-client-undo.ts`), so a struct aimed " +
+      "at the server's next clock cannot land under a server origin past the replies-map undo. " +
+      "It widens the CTRL row's unmeasured premise (a real tab never leaves anything pending) to " +
+      "document rooms, where a wrong premise drops the user's typing silently, not a chat row.",
+    closedBy:
+      "The CTRL row's measurement, run in document rooms too (reconnect, offline edits, two " +
+      "tabs, a long paste), showing no pending data after a tab's update; or a guard narrowed " +
+      "to updates that touch the replies map.",
+  },
+  {
+    gap:
+      "A Claude chat row forged by a browser client while ownership is dark (the CTRL chat undo " +
+      "is flag-gated) and saved into the CTRL session keeps its `replyTo` across the flip: " +
+      "`settledChatIds` then reads it as a final reply, so the user message it names is handled " +
+      "and handed to no session. #2360 PR A strips forged `settles` and `superseded` on " +
+      "restore, but `replyTo` is legitimate data while dark and cannot be stripped.",
+    closedBy:
+      "A server-written provenance stamp on Claude chat rows that the handled rule requires, or " +
+      "Bryan's decision to accept it for the flip.",
+  },
+  {
+    gap:
       "The handled filter for comment threads (design §6.4's first two bullets), together with the " +
       "stripping of client-written Claude replies: without the filter an answered comment or reply " +
       "is re-owed by every handover (handover gap (c)); without the stripping a browser client " +

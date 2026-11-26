@@ -238,7 +238,7 @@ describe("YDocStore.removeAnnotation parity", () => {
     const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
 
     const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
-    store.addReply(id, "a reply", { kind: "none" });
+    store.addReply(id, "a reply", { kind: "none" }, "own", { kind: "untracked" });
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
 
     const result = store.removeAnnotation(id);
@@ -265,7 +265,7 @@ describe("YDocStore replies parity", () => {
     const store = new YDocStore(ydoc, FILE_PATH, "rep-1");
     const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
-    const r = store.addReply(id, "agreed", { kind: "none" });
+    const r = store.addReply(id, "agreed", { kind: "none" }, "own", { kind: "untracked" });
     expect(r.kind).toBe("ok");
 
     const replies = store.listReplies(id);
@@ -290,7 +290,7 @@ describe("YDocStore replies parity", () => {
     ydoc.on("afterTransaction", (tr) => {
       origin = tr.origin;
     });
-    const r = store.addReply(id, "agreed", { kind: "none" });
+    const r = store.addReply(id, "agreed", { kind: "none" }, "own", { kind: "untracked" });
     expect(r.kind).toBe("ok");
     expect(origin).toBe(MCP_ORIGIN);
   });
@@ -301,7 +301,7 @@ describe("YDocStore replies parity", () => {
     const id = mint(ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
-    const r = store.addReply(id, "nope", { kind: "none" });
+    const r = store.addReply(id, "nope", { kind: "none" }, "own", { kind: "untracked" });
     // The ARM, not a wire code: the store now returns the lifecycle's own
     // union, and `not-repliable` is what a highlight parent produces. The
     // INVALID_ARGUMENT it maps to is asserted where that mapping lives, in

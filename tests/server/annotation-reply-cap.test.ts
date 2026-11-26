@@ -155,6 +155,8 @@ describe("the reply seam — write-time length bound on suggestedText (#1626)", 
       "a1",
       "x".repeat(REPLY_TEXT_MAX),
       { kind: "replacement", suggestedText: "y".repeat(REPLY_TEXT_MAX) },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
 
@@ -171,6 +173,8 @@ describe("the reply seam — write-time length bound on suggestedText (#1626)", 
       "a1",
       "short",
       { kind: "replacement", suggestedText: "y".repeat(REPLY_TEXT_MAX + 1) },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
 
@@ -189,6 +193,8 @@ describe("the reply seam — write-time length bound on suggestedText (#1626)", 
       "a1",
       "x".repeat(REPLY_TEXT_MAX + 1),
       { kind: "none" },
+      "own",
+      { kind: "untracked" },
       noRelay,
     );
 

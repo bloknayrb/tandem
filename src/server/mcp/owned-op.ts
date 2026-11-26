@@ -62,6 +62,7 @@ import {
   otherHolderOf,
   type PendingClaim,
   recordAnswerer,
+  recordThreadReplyWriter,
   settleWriteClaim,
   type ToolOwnerLabel,
   takeDocument,
@@ -210,8 +211,12 @@ export interface OwnedWriteSpec {
   /**
    * `tandem_annotationReply`: the thread item this reply would answer
    * (ownership design §5.5), or null when the thread has none the caller can see.
+   * `inProgress` (#2360, Bryan's Q3): an "I'm on it" is still refused on an item
+   * another record answered, but it records no answerer.
    */
-  answers?: (documentId: string) => { annotationId: string; item: string } | null;
+  answers?: (
+    documentId: string,
+  ) => { annotationId: string; item: string; inProgress?: boolean } | null;
 }
 
 /**
@@ -292,7 +297,7 @@ export function ownedWrite(
         // ends up holding the document (it closed meanwhile, its record is
         // gone), and a failure recording one must not skip the other.
         try {
-          if (answering && !isErrorEnvelope(result)) {
+          if (answering && !answering.inProgress && !isErrorEnvelope(result)) {
             recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
           }
         } catch {
@@ -547,6 +552,36 @@ export function ownerLabelFor(
  */
 export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
   return inboxScopeOf(documentId, caller.ownerId);
+}
+
+/**
+ * Whether the caller holds `documentId` now (#2360, condition (c) of the
+ * plan's §3): a reply lists an entry only on a document its writer holds,
+ * because a handover retires the previous holder's registry entries and only
+ * the holder reads a held document, so every live entry there was handed to
+ * the caller. False while ownership is off, for a caller with no owner id,
+ * and while a claim of an unowned document is still pending (it is applied at
+ * the body's outcome, so a session that claims after a lapse lists nothing).
+ */
+export function callerHolds(caller: ToolCaller, documentId: string): boolean {
+  if (!ownershipEnabled() || caller.ownerId === undefined) return false;
+  return heldDocumentIds(caller.ownerId).includes(documentId);
+}
+
+/**
+ * Record that the caller wrote the final thread reply `replyId` on
+ * `annotationId` (#2360, the second step of the plan's §3): its next
+ * acknowledging poll appends what that poll confirms. Nothing while ownership
+ * is off or for a caller with no owner id. Never throws: the reply is written.
+ */
+export function noteFinalThreadReply(
+  caller: ToolCaller,
+  documentId: string,
+  annotationId: string,
+  replyId: string,
+): void {
+  if (!ownershipEnabled() || caller.ownerId === undefined) return;
+  recordThreadReplyWriter(caller.ownerId, documentId, annotationId, replyId);
 }
 
 /**

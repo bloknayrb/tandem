@@ -213,6 +213,21 @@ export interface AnnotationReply {
    * Critical Rule 6's interior term. `addUserReply` deliberately cannot set it.
    */
   suggestedText?: string;
+  /**
+   * #2360 (ships dark behind `OWNERSHIP_ENABLED`): on a FINAL Claude reply, the
+   * thread entries it answers — `c:<editedAt>` for the user's comment at that
+   * version, `r:<replyId>` for a user reply. Server-only: computed in the reply
+   * seam from what was visible to, handed to and acknowledged by the replying
+   * owner, and appended by that owner's next acknowledging poll. A client's
+   * change to the replies map is undone, and rows loaded from disk are stripped
+   * unless the envelope is trusted. Never sent to Claude, never exported.
+   */
+  answers?: string[];
+  /**
+   * #2360 (ships dark): an "I'm on it" Claude reply. It settles nothing, sets no
+   * answerer and is not written into a `.docx`. Server-only, like `answers`.
+   */
+  inProgress?: boolean;
 }
 
 // --- Annotation types ---

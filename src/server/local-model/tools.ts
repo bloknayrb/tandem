@@ -46,6 +46,7 @@ import {
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { REPLY_TEXT_MAX } from "../annotations/schema.js";
+import { clientWritesUndoneGrant } from "../chat-client-writes.js";
 import { captureSnapshot } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
@@ -525,6 +526,17 @@ export function dispatch(
         // optional would let this producer acquire the eventual-rewrite
         // capability silently, with no compile error to notice it.
         { kind: "none" },
+        // #2360, Bryan's Q2 (2026-11-26, "Yes, settles nothing"): the same
+        // gate as Claude's permission, so with ownership on the local model may
+        // reply inside a user's Claude-facing comment thread (the seam keeps
+        // every privacy refusal and the Solo one), and while dark it keeps
+        // NOT_OWNED. Always untracked: its replies carry no `answers` and
+        // settle nothing. The flag is read through `chat-client-writes.ts`, the
+        // ownership predicate `index.ts` wires at boot (`owned-op.ts` is for
+        // tool files only, and this file is not a flag importer); unwired, it
+        // answers "own", which grants nothing.
+        clientWritesUndoneGrant() ? "claude-facing-comment" : "own",
+        { kind: "untracked" },
         (event) => relaySanitizationEvent(undefined, event),
         ctx.agentIdentity,
       );

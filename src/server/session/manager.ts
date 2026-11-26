@@ -29,6 +29,7 @@ import {
   isStoreReadOnly,
   removeOldName,
 } from "../annotations/store.js";
+import { clientWritesUndoneGrant } from "../chat-client-writes.js";
 import { noteChatRowsDeleted } from "../chat-row-deletions.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { dropMessageDeliveryRounds } from "../events/delivery-state.js";
@@ -975,6 +976,11 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     ydocState,
     lastAccessed: Date.now(),
     ...(localPeriod ? { localPeriod } : {}),
+    // #2360 (ships dark): the chat side of the load sweep. Only a lit build
+    // marks the file, and only a lit build's CTRL doc undoes client writes, so
+    // a marked file's `settles` / `superseded` were written by the server.
+    // Dark, absent: the file is byte-identical to before.
+    ...(clientWritesUndoneGrant() ? { chatSettlesTrusted: true } : {}),
   };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
   await atomicWrite(sessionPath, JSON.stringify(data), SESSION_FILE_WRITE);
@@ -1048,6 +1054,7 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
 /** Load the CTRL_ROOM session if it exists */
 export async function loadCtrlSession(): Promise<string | null> {
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
+  ctrlChatSettlesTrustedOnDisk = false;
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content);
@@ -1055,6 +1062,8 @@ export async function loadCtrlSession(): Promise<string | null> {
     // the rows, so a restored row is never classed afresh. Ignored with the
     // flag off (a dark build rewrites the file without it, R2.5).
     loadLocalPeriodRecord(data?.localPeriod);
+    // #2360: read before the caller restores the rows (`restoreCtrlDoc`).
+    ctrlChatSettlesTrustedOnDisk = data?.chatSettlesTrusted === true;
     return data.ydocState ?? null;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -1089,6 +1098,50 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   foldChatStream(doc);
   clearChatDelivered(doc);
   dropPublishedOwnership(doc);
+  stripUntrustedChatSettles(doc);
+}
+
+/**
+ * Whether the CTRL session file last read (`loadCtrlSession`) was marked
+ * `chatSettlesTrusted` (#2360). Reset by every read; false when no file.
+ */
+let ctrlChatSettlesTrustedOnDisk = false;
+
+/**
+ * The chat half of #2360's load sweep (`docs/plans/2360-thread-replies.md` §3,
+ * "Chat has the same gap"). `settles` and `superseded` are server-only and
+ * written only with ownership on, but the CTRL chat undo is flag-gated too, so
+ * while dark a client could save a Claude row carrying them into the session,
+ * and it would count at the first lit boot. So on restore both are stripped
+ * from every row, unless ownership is on AND the file was marked by a lit
+ * build. Dark, no legitimate row carries them: a file holding none opens no
+ * transaction and changes nothing. (`replyTo` cannot be stripped, being
+ * legitimate data dark; it is a flip-blocker row.)
+ */
+function stripUntrustedChatSettles(doc: Y.Doc): void {
+  if (clientWritesUndoneGrant() && ctrlChatSettlesTrustedOnDisk) return;
+  const chatMap = doc.getMap(Y_MAP_CHAT);
+  const stale: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    if (Object.hasOwn(value, "settles") || Object.hasOwn(value, "superseded")) stale.push(key);
+  });
+  if (stale.length === 0) return;
+  withInternal(doc, () => {
+    for (const key of stale) {
+      const {
+        settles: _settles,
+        superseded: _superseded,
+        ...rest
+      } = chatMap.get(key) as ChatMessage;
+      chatMap.set(key, rest);
+    }
+  });
+}
+
+/** Forget the last CTRL file's trust mark (tests). */
+export function resetCtrlChatSettlesTrustForTests(): void {
+  ctrlChatSettlesTrustedOnDisk = false;
 }
 
 /**

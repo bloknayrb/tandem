@@ -55,8 +55,9 @@ below still stand before v1.0 either way.
      being closed or accepted by Bryan. At the end of 2026-11-23 that file held 34 rows: 8
      accepted, **26 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check
      on a real Claude Code or Claude Desktop session, a smoke run, or a decision of
-     Bryan's (#2439 among them). The plan's manual check runs after both flips, before
-     that release.
+     Bryan's. #2439 was decided on 2026-11-25 ("Keep it accepted (Recommended)") and its row
+     closed, and the stall-banner row closed on Bryan's review the same day. The plan's manual
+     check runs after both flips, before that release.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key.
