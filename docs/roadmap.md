@@ -48,9 +48,9 @@ below still stand before v1.0 either way.
    - **PR 5**: controls (routes, badge, popover, native menu, Assign and Release), the
      labels on `tandem_getAnnotations` and `tandem_listDocuments`, the pickup and stall
      clock, and the owners entry in `docs/security.md`.
-   - **#2360's switch** (Claude replying inside a user's comment thread) with the handled
-     filter. Its "later reply" rule needs rework first. It merges right before the flip
-     and ships in the same release.
+   - **#2360** (Claude replying inside a user's comment thread): the permission (PR A) and
+     the handled filter (PR B) ship dark; the switch (PR C: the skill, the tool docs and the
+     local model's tool text) merges right before the flip and ships in the same release.
    - **PR 6, the flip.** It waits on every row of `tests/server/ownership-flip-blockers.ts`
      being closed or accepted by Bryan. At the end of 2026-11-23 that file held 34 rows: 8
      accepted, **26 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check

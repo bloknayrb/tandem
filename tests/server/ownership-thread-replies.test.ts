@@ -52,7 +52,11 @@ import {
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { prepareExportComments } from "../../src/server/file-io/docx-comment-export.js";
-import { dispatch as localDispatch } from "../../src/server/local-model/tools.js";
+import {
+  dispatch as localDispatch,
+  replyToAnnotationDescription,
+  TOOLS,
+} from "../../src/server/local-model/tools.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   handOverDocumentInbox,
@@ -1332,5 +1336,63 @@ describe("the reply event and the .docx export (#2360)", () => {
     const exported = JSON.stringify(prepareExportComments(ydoc));
     expect(exported).toContain("the answer");
     expect(exported).not.toContain("on it");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2360 PR C, the switch: the model-facing and shipped text.
+
+describe("the local model's reply_to_annotation description (#2360 PR C)", () => {
+  /** The text before #2360, byte for byte: what every dark build must send. */
+  const DARK =
+    "Reply to a pending comment thread you or another AI authored, by its annotation id. Comments written by the user cannot be replied to (NOT_OWNED, or INVALID_ARGUMENT for a private one); leave a new comment_on_quote instead.";
+
+  /** What the model is sent: the tool's entry, serialized as a request body serializes it. */
+  const sent = () =>
+    JSON.parse(JSON.stringify(TOOLS.find((t) => t.name === "reply_to_annotation"))) as {
+      description: string;
+    };
+
+  it.each([
+    ["flag off, wired", "", true],
+    ["flag off, unwired", "", false],
+    ["flag on, unwired (fails closed)", "1", false],
+  ])("%s: byte-identical to the text before #2360", (_name, flag, wired) => {
+    vi.stubEnv("TANDEM_OWNERSHIP", flag);
+    setChatClientWritesUndone(wired ? undoClientChatWrites : undefined);
+    expect(replyToAnnotationDescription()).toBe(DARK);
+    expect(sent().description).toBe(DARK);
+  });
+
+  it("flag on, wired: it no longer says the user's comments are refused", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    setChatClientWritesUndone(undoClientChatWrites);
+    const text = sent().description;
+    expect(text).toBe(replyToAnnotationDescription());
+    expect(text).not.toBe(DARK);
+    expect(text).not.toMatch(/written by the user cannot/);
+    expect(text).toMatch(/one the user wrote and shared with you/);
+    // The refusals that stay are still named.
+    expect(text).toMatch(/INVALID_ARGUMENT/);
+    expect(text).toMatch(/NOT_OWNED/);
+  });
+});
+
+describe("the switch's shipped text (#2360 PR C)", () => {
+  it("row S is gone from the flip blockers", async () => {
+    const { OWNERSHIP_FLIP_BLOCKERS } = await import("./ownership-flip-blockers.js");
+    expect(
+      OWNERSHIP_FLIP_BLOCKERS.some((r) => r.gap.startsWith("#2360's switch has not merged")),
+    ).toBe(false);
+  });
+
+  it("docs/mcp-tools.md describes the tool as live, inProgress included", () => {
+    const doc = fs.readFileSync(path.join(process.cwd(), "docs/mcp-tools.md"), "utf8");
+    const start = doc.indexOf("### tandem_annotationReply");
+    expect(start).toBeGreaterThan(-1);
+    const section = doc.slice(start, doc.indexOf("\n### ", start + 1));
+    expect(section).not.toMatch(/Ships dark \(#2360/);
+    expect(section).toMatch(/\| `inProgress` \| boolean \| no \|/);
+    expect(section).toMatch(/one the user shared with Claude/);
   });
 });
