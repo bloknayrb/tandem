@@ -615,6 +615,10 @@ the parent record; forged pre-flip chat `replyTo` rows).
   - a reply on a document not open at a Solo release that keeps a stale `heldInSolo` marker
     (`mode-release.ts:106`). It is never listed, so it fails safe. Check whether opening the
     document clears the marker.
+- **PR B, Q6 as reviewed (2026-11-26, #2577).** The follow-up starts Tandem's Claude only when it
+  is work for Tandem's Claude (the supervisor's waiting decision); on a document another session
+  holds, it falls through to start-or-wake and starts nothing. ADR-054's #2360 PR B amendment
+  records it.
 - **PR B departure (2026-11-26, from its code review).** §5's "a live registry entry for it is
   marked acknowledged" and the handover's "and not handled" are not built: a handled item's entry
   is retired like any other, so a handled mark that is later lost (the load sweep on an untrusted

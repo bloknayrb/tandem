@@ -559,7 +559,7 @@ describe("answers, flag on (#2360 §3)", () => {
     // and acknowledged while it was unowned (here put in the registry by
     // hand) stays live. B claims by writing (its first reply lists nothing:
     // condition (c)); its next reply lists nothing either, because the entry
-    // sits at or below B's hold mark (`sinceSeq`): B was never handed it.
+    // sits at or below B's hold mark (`holdSinceSeq`): B was never handed it.
     // Before PR B this listed `c:0` (the "KNOWN GAP" pin).
     const ydoc = fixture("d");
     seed(ydoc, "c1");
@@ -567,7 +567,7 @@ describe("answers, flag on (#2360 §3)", () => {
     deliveryRegistry.markAcked(entry);
     expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual([]);
     expect(getDocOwner(docOf("d"))?.ownerId).toBe(B);
-    expect(entry.seq).toBeLessThanOrEqual(getDocOwner(docOf("d"))?.sinceSeq as number);
+    expect(entry.seq).toBeLessThanOrEqual(getDocOwner(docOf("d"))?.holdSinceSeq as number);
     expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual([]);
   });
 

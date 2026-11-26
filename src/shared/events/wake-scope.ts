@@ -48,7 +48,10 @@ export function isWakeWorthy(event: TandemEvent): boolean {
  * talking TO Claude — a chat message, the user's reply on a thread Claude
  * started, or (#2360 PR B, Bryan's Q6; set only while ownership is on) the
  * user's follow-up in their own comment thread once Claude has answered there
- * (`threadAnswered`). A new comment, a reply on the user's own highlight or an imported
+ * (`threadAnswered`). That last arm is only a candidate: the supervisor's
+ * standby watch starts for it only when the follow-up is work for Tandem's
+ * Claude (its waiting decision), never for a thread another session holds. A
+ * new comment, a reply on the user's own highlight or an imported
  * Word comment, and accept/dismiss are not, so they wait for the next start
  * (they are still owed to it as wakes; see the supervisor's gap watch).
  *

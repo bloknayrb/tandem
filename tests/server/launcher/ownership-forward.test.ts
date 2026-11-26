@@ -52,6 +52,12 @@ import { addUserReply } from "../../../src/server/annotations/lifecycle.js";
 import { setChatClientWritesUndone } from "../../../src/server/chat-client-writes.js";
 import { setChatRowsDeletedListener } from "../../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc } from "../../../src/server/documents/registry-testing.js";
+import {
+  attachObservers,
+  resetForTesting as resetEventQueue,
+  subscribe as subscribeEvents,
+  unsubscribe as unsubscribeEvents,
+} from "../../../src/server/events/queue.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
@@ -1508,6 +1514,89 @@ describe("other cases (PR a)", () => {
       const c2 = await childN(2);
       await settle();
       expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    });
+
+    describe("Q6: a follow-up in an answered thread starts Claude only when it is work for Tandem's Claude (#2360 PR B review)", () => {
+      /**
+       * The real reply observer feeding the standby watch: the document's
+       * observers are attached (before the answer, since the attach-time load
+       * sweep strips `answers` from rows already there), and the queue's
+       * events reach the supervisor through `h.emit`. At each annotation:reply
+       * the waiting decision (`tandemWorkWaiting`, what the watch asks) is
+       * read too, to show the new reply is already in the map when the event
+       * fires (Yjs runs observers after the
+       * transaction's changes are integrated; the fan-out is synchronous).
+       */
+      function wire(h: ReturnType<typeof makeSupervisor>, d: Doc) {
+        attachObservers(d.id, d.ydoc);
+        const seen: Array<{ threadAnswered: boolean; waiting: boolean }> = [];
+        const cb = (event: TandemEvent) => {
+          if (event.type === "annotation:reply") {
+            seen.push({
+              threadAnswered: event.payload.threadAnswered === true,
+              waiting: tandemWorkWaiting(),
+            });
+          }
+          h.emit(event);
+        };
+        subscribeEvents(cb, "internal");
+        return { seen, off: () => unsubscribeEvents(cb) };
+      }
+
+      afterEach(() => resetEventQueue());
+
+      it("D held by another record, which answered there: the follow-up starts nothing", async () => {
+        const h = await idleWithClient();
+        const { d, c } = worldA();
+        const w = wire(h, d);
+        await answerInThread(A, d, c);
+        const before = passes(h);
+        expect(addUserReply(d.ydoc, c, "a follow-up", () => {}).kind).toBe("ok");
+        w.off();
+        expect(w.seen).toEqual([{ threadAnswered: true, waiting: false }]);
+        await lockBarrier(h);
+        expect(children).toHaveLength(1);
+        expect(logText()).not.toContain("A message arrived while Claude was stopped");
+        expect(getDocOwner(d.id)?.ownerId).toBe(A);
+        // It fell through to start-or-wake, whose pass found nothing waiting.
+        expect(passes(h)).toBeGreaterThanOrEqual(before);
+      });
+
+      it("D held by Tandem's Claude, which answered there: the follow-up starts it", async () => {
+        const h = await idleWithClient();
+        const d = mkDoc("d");
+        applyUserOpenDefault(d.id);
+        expect(getDocOwner(d.id)).toMatchObject({ ownerId: TANDEM, kind: "default" });
+        const c = comment(d.ydoc, key("c1"));
+        const w = wire(h, d);
+        await answerInThread(TANDEM, d, c);
+        expect(addUserReply(d.ydoc, c, "a follow-up", () => {}).kind).toBe("ok");
+        w.off();
+        expect(w.seen).toEqual([{ threadAnswered: true, waiting: true }]);
+        await lockBarrier(h);
+        await childN(2);
+        await settle();
+        expect(children).toHaveLength(2);
+        // Today's start arm (the message start), not start-or-wake's pass.
+        expect(logText()).toContain("A message arrived while Claude was stopped");
+      });
+
+      it("a reply on Claude's own annotation keeps master's arm, even with nothing waiting", async () => {
+        const h = await idleWithClient();
+        const { d } = worldA(false);
+        const mine = comment(d.ydoc, key("mine"), { author: "claude" });
+        const w = wire(h, d);
+        // A final Claude reply already in the thread, so `threadAnswered` is
+        // set too: the parent's author alone keeps master's arm.
+        await answerInThread(A, d, mine);
+        expect(addUserReply(d.ydoc, mine, "a reply in Claude's thread", () => {}).kind).toBe("ok");
+        w.off();
+        expect(w.seen).toEqual([{ threadAnswered: true, waiting: false }]);
+        await lockBarrier(h);
+        await childN(2);
+        expect(children).toHaveLength(2);
+        expect(logText()).toContain("A message arrived while Claude was stopped");
+      });
     });
   });
 });

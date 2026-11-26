@@ -482,7 +482,7 @@ export function documentItemKey(documentId: string, itemId: string): string {
  * `id` on `documentId` at version `version` or above, registered above
  * `aboveSeq` (#2360, condition (b) of the plan's §3): the read
  * `documentWaiting`'s `handedAtOrAbove` makes, narrowed to entries newer than
- * the caller's hold mark (its ownership entry's `sinceSeq`, passed in), so an
+ * the caller's hold mark (its ownership entry's `holdSinceSeq`, passed in), so an
  * entry some other reader acknowledged before the caller's hold began never
  * counts as the caller's (PR B, closing PR A's known gap). Asked only about user
  * comments (`"a"`, version `editedAt`) and user replies (`"r"`, version 0),

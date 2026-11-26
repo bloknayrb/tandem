@@ -4315,6 +4315,15 @@ export const inboxOwnership = Object.freeze({
   chatRule(): "settles" | "sweep" {
     return ownershipEnabled() ? "settles" : "sweep";
   },
+  /**
+   * Whether the comment threads' handled filter applies (#2360 PR B): the
+   * waiting rule's half, for the one reader with no poll scope to ask. The
+   * same flag read a poll's `scoped` comes from (`begin`), so the poll and
+   * the waiting rule agree in every harness, wired or not.
+   */
+  threadHandledFilter(): boolean {
+    return ownershipEnabled();
+  },
 });
 
 /**

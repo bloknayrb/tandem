@@ -36,7 +36,6 @@ import {
   settledThreadKeys,
   visibleThreadEntries,
 } from "../annotations/thread-handled.js";
-import { clientWritesUndoneGrant } from "../chat-client-writes.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import {
   closeMessageDeliveryRound,
@@ -775,9 +774,10 @@ function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
       deliveryRegistry
         .versionsOf(kind, ledgerKey(documentId, id))
         .some((entry) => entry.acked && entry.editedAt >= editedAt),
-    // #2360 PR B, the handled filter: ownership on only (the fail-closed read
-    // the reply undo uses), so a dark build counts exactly what it did.
-    ...(clientWritesUndoneGrant()
+    // #2360 PR B, the handled filter: ownership on only, read through the
+    // same flag a poll's `scoped` comes from, so the two cannot disagree and a
+    // dark build counts exactly what it did.
+    ...(inboxOwnership.threadHandledFilter()
       ? { isHandled: handledReader(documentId, annotations, ydoc) }
       : {}),
     isLocalModelRecord,
@@ -789,8 +789,8 @@ function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
  * The waiting rule's `isHandled` for one document (#2360 PR B): the collectors'
  * answer ({@link handledThreadKeysAmong}), computed once on first ask, so the
  * rule and a scoped poll agree on what is handled. (The poll applies it on
- * `scope.scoped`, this on the wired ownership predicate; both are ownership
- * on in a booted server, and the waiting rule is reached only then.)
+ * `scope.scoped`, this on `inboxOwnership.threadHandledFilter()`: one flag
+ * read, the ownership module's.)
  */
 function handledReader(
   documentId: string,
