@@ -409,6 +409,18 @@ describe("the handled filter, flag on (#2360 PR B; row H)", () => {
     expect(handed(await reader(A).poll())).toEqual([]);
   });
 
+  it("a non-finite editedAt never reaches either side: the poll and the waiting rule agree", async () => {
+    // The hardening in `handledThreadKeysAmong` / `handledReader` (versions
+    // normalized as keys are) is defensive: such a comment is refused before
+    // either side reads a version, so neither hands it nor counts it waiting.
+    for (const editedAt of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const ydoc = fixture(`nf${String(editedAt)}`);
+      seed(ydoc, "c1", { editedAt });
+      expect(documentWaiting(docOf(`nf${String(editedAt)}`)), String(editedAt)).toBe(false);
+    }
+    expect(handed(await reader(B).poll()).filter((id) => id === "c1")).toEqual([]);
+  });
+
   it("a user comment whose key collides with a Claude notice's never hides the notice", async () => {
     const ydoc = fixture("d");
     seed(ydoc, "k#accepted");

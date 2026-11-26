@@ -344,6 +344,17 @@ export interface OwnershipEntry {
   readonly since: number;
   /** The inbox registry's counter when the entry was made (`setOwnershipSeqSource`). */
   readonly sinceSeq: number;
+  /**
+   * The hold mark (#2360 PR B): the registry's counter when this record's
+   * CURRENT hold of the document began. Unlike `sinceSeq` it survives a
+   * rewrite that leaves the holder the same record (a change of kind: a
+   * `tandem_open`, a same-holder Assign, a Release falling back to
+   * `default`), since nothing was handed to anyone else meanwhile; a change
+   * of holder (which runs a handover) starts it again at `sinceSeq`. Read only by a thread reply's `answers` (`owned-op.ts`'
+   * `callerHoldMark` and the poll's second step): an entry registered at or
+   * below it may have been handed to another reader.
+   */
+  readonly holdSinceSeq: number;
 }
 
 /**
@@ -548,7 +559,7 @@ export interface ThreadReplyWrite {
 /**
  * A remembered final thread reply as a poll's second step is handed it
  * (#2360 PR B): with the caller's hold mark on its document now
- * (`OwnershipEntry.sinceSeq`), or undefined when the caller does not hold it.
+ * (`OwnershipEntry.holdSinceSeq`), or undefined when the caller does not hold it.
  * The step lists only entries registered above the mark, as the first step
  * does (`owned-op.ts`' `callerHoldMark`): an entry another reader
  * acknowledged before the hold began (a claim of an unowned document is no
@@ -1919,12 +1930,18 @@ export function setDocOwner(
     if (next === null) {
       ownerByDoc.delete(documentId);
     } else {
+      // The hold mark carries over exactly when step 1 runs no handover for
+      // this change (the same owner id before and after), so it moves with the
+      // registry: entries are retired only at a handover.
+      const prior = ownerByDoc.get(documentId);
+      const holdSinceSeq = prior?.ownerId === next.ownerId ? prior.holdSinceSeq : seq;
       if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
       ownerByDoc.set(documentId, {
         ownerId: next.ownerId,
         kind: next.kind,
         since: Date.now(),
         sinceSeq: seq,
+        holdSinceSeq,
       });
     }
     if (leavesRecord) handOver(documentId);
@@ -3772,7 +3789,7 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
               const entry = ownerByDoc.get(w.documentId);
               return {
                 ...w,
-                holdSinceSeq: entry?.ownerId === callerId ? entry.sinceSeq : undefined,
+                holdSinceSeq: entry?.ownerId === callerId ? entry.holdSinceSeq : undefined,
               };
             }),
           ),

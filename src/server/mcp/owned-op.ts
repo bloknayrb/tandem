@@ -557,9 +557,10 @@ export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
 
 /**
  * The caller's hold mark on `documentId` (#2360, conditions (b) and (c) of the
- * plan's §3): the delivery registry's counter when the caller's ownership
- * entry was written (`OwnershipEntry.sinceSeq`; for a claim made by an inbox
- * poll, the counter before that poll's pass), or undefined when the caller
+ * plan's §3): the delivery registry's counter when the caller's current hold
+ * began (`OwnershipEntry.holdSinceSeq`: kept across a same-holder rewrite of
+ * the entry; for a claim made by an inbox poll, the counter before that
+ * poll's pass), or undefined when the caller
  * does not hold the document now. A reply lists an entry only on a document
  * its writer holds, and only an entry registered ABOVE this mark: a handover
  * retires the previous holder's registry entries and only the holder reads a
@@ -575,7 +576,7 @@ export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
 export function callerHoldMark(caller: ToolCaller, documentId: string): number | undefined {
   if (!ownershipEnabled() || caller.ownerId === undefined) return undefined;
   if (!heldDocumentIds(caller.ownerId).includes(documentId)) return undefined;
-  return getDocOwner(documentId)?.sinceSeq;
+  return getDocOwner(documentId)?.holdSinceSeq;
 }
 
 /**

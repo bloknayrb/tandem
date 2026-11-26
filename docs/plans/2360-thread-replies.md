@@ -604,7 +604,7 @@ the parent record; forged pre-flip chat `replyTo` rows).
 - **svelte-migration-reviewer:** only if Q3(a) changes how `inProgress` thread rows render.
 - **Closed in PR B (2026-11-26): PR A's known gap.** Condition (b) accepted any reader's
   acknowledgement once the caller held. PR B counts only registry entries registered above the
-  caller's hold mark (`OwnershipEntry.sinceSeq`) in both steps; ADR-054's #2360 PR B amendment
+  caller's hold mark (`OwnershipEntry.holdSinceSeq`, kept across a same-holder rewrite) in both steps; ADR-054's #2360 PR B amendment
   records why that was chosen over retiring entries at a claim.
 - **Residuals for the ADR:**
   - answers in chat or by an edit;
@@ -614,9 +614,7 @@ the parent record; forged pre-flip chat `replyTo` rows).
   - a parent-record rewrite or `editedAt` rewind by a client (D4; security.md);
   - a reply on a document not open at a Solo release that keeps a stale `heldInSolo` marker
     (`mode-release.ts:106`). It is never listed, so it fails safe. Check whether opening the
-    document clears the marker;
-  - (PR B) a same-holder change of kind rewrites the hold mark, so an entry handed before it is
-    not listed by a later reply (owed again: fails safe).
+    document clears the marker.
 - **PR B departure (2026-11-26, from its code review).** §5's "a live registry entry for it is
   marked acknowledged" and the handover's "and not handled" are not built: a handled item's entry
   is retired like any other, so a handled mark that is later lost (the load sweep on an untrusted

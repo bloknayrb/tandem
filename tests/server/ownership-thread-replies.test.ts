@@ -588,6 +588,38 @@ describe("answers, flag on (#2360 §3)", () => {
     expect(replyRow(ydoc, first)?.answers).toEqual([]);
   });
 
+  it("the hold mark survives a same-holder rewrite of the entry (a change of kind): both steps still list", async () => {
+    // A holds D, is handed and acknowledges the comment, then its own entry
+    // is rewritten with another kind (as `tandem_open`, a same-holder Assign
+    // or a Release to default do): `sinceSeq` moves, the hold mark does not.
+    const ydoc = fixture("d");
+    seed(ydoc, "c1");
+    const r = reader(A);
+    await r.poll();
+    await r.poll();
+    const before = getDocOwner(docOf("d"));
+    expect(before?.ownerId).toBe(A);
+    deliveryRegistry.assign("a", docOf("d"), documentItemKey(docOf("d"), "unrelated"), 0);
+    setDocOwner(docOf("d"), { ownerId: A, kind: "opened" }, "take", A);
+    const after = getDocOwner(docOf("d"));
+    expect(after?.sinceSeq).toBeGreaterThan(before?.sinceSeq as number);
+    expect(after?.holdSinceSeq).toBe(before?.holdSinceSeq);
+    expect(replyRow(ydoc, await answer(A, "d"))?.answers).toEqual(["c:0"]);
+  });
+
+  it("the second step after a same-holder rewrite still appends what the hold was handed", async () => {
+    const ydoc = fixture("d");
+    seed(ydoc, "c1");
+    const r = reader(A);
+    await r.poll(); // handed, not yet acknowledged
+    deliveryRegistry.assign("a", docOf("d"), documentItemKey(docOf("d"), "unrelated"), 0);
+    setDocOwner(docOf("d"), { ownerId: A, kind: "opened" }, "take", A);
+    const id = await answer(A, "d");
+    expect(replyRow(ydoc, id)?.answers).toEqual([]);
+    await r.poll(); // acknowledges: the second step appends
+    expect(replyRow(ydoc, id)?.answers).toEqual(["c:0"]);
+  });
+
   it("condition (c): a caller that does not hold the document lists nothing, even a live acknowledged entry", async () => {
     // A live, acknowledged entry on an UNOWNED document (put in the registry
     // by hand: a handover would have retired it). B's write claims the

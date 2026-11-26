@@ -530,7 +530,7 @@ class SettledNoticeLedger implements InboxLedger {
  * client-written) is never handled, so no notice is hidden by it.
  */
 interface HandledThreadKeys {
-  /** User comments handled at their current version: ledger key → that version (`editedAt ?? 0`). */
+  /** User comments handled at their current version: ledger key → that version, normalized as its key is (`finiteOrNull(editedAt) ?? 0`). */
   readonly comments: ReadonlyMap<string, number>;
   /** User replies handled, by ledger key. */
   readonly replies: ReadonlySet<string>;
@@ -558,7 +558,7 @@ function handledThreadKeysAmong(
   for (const ann of annotations) {
     if (!settled.get(ann.id)?.has(commentEntryKey(ann.editedAt))) continue;
     const key = ledgerKey(documentId, ann.id);
-    if (!noticeKeys.has(key)) comments.set(key, ann.editedAt ?? 0);
+    if (!noticeKeys.has(key)) comments.set(key, finiteOrNull(ann.editedAt) ?? 0);
   }
   const replies = new Set<string>();
   for (const row of rows) {
@@ -801,7 +801,9 @@ function handledReader(
   return (kind, id, version) => {
     handled ??= handledThreadKeysAmong(documentId, annotations, ydoc);
     const key = ledgerKey(documentId, id);
-    return kind === "r" ? handled.replies.has(key) : handled.comments.get(key) === version;
+    return kind === "r"
+      ? handled.replies.has(key)
+      : handled.comments.get(key) === (finiteOrNull(version) ?? 0);
   };
 }
 
