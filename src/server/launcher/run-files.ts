@@ -485,11 +485,23 @@ export function runFileText(value: unknown): string {
 
 /**
  * The pre-spawn read-back (#2358, smoke S1 on Linux, Claude Code 2.1.332;
- * Bryan's pick of 2026-11-26, "Guard it before the flip (Recommended)"). True
+ * Bryan's pick of 2026-11-26, "Guard it before the flip (Recommended)"). `ok`
  * only when `file` is a regular file, not a link, whose whole content is
  * exactly `expected`. A missing, emptied or truncated file fails (a truncated
  * one does not parse), and so does any other content than what was written.
- * Never throws, never logs, never returns what it read.
+ * Never throws, never logs, never returns what it read: a refusal carries only
+ * a {@link RunFileReadBackReason}, a closed set with no path in it.
+ *
+ * **One retry, for a file another process holds open** (Bryan, 2026-11-26,
+ * "Retry once, log the reason (Recommended)"): an antivirus scanner or a sync
+ * client on Windows can hold a just-written file, and the read then fails with
+ * EBUSY, EPERM or EACCES. On exactly those three codes, from the `lstat` or
+ * the read, it waits {@link RUN_FILE_READ_BACK_RETRY_MS} once and reads again;
+ * a second failure refuses with whatever that attempt found. Only those three,
+ * Bryan's set: `TRANSIENT_READ_CODES` (supervisor.ts, the crash restart's
+ * `integrations.json` read) adds EAGAIN, EMFILE and ENFILE, but that read
+ * retries through the crash loop's backoff, and here a non-blocking read of a
+ * FIFO answers EAGAIN, which must refuse at once rather than retry.
  *
  * Why it exists: Claude Code IGNORES a `--settings` file it cannot parse, with
  * no error, so the plugin's Tandem toolset loads beside the launcher's and a
@@ -497,7 +509,13 @@ export function runFileText(value: unknown): string {
  * config already fails closed ("MCP config is not a valid JSON").
  *
  * **Synchronous on purpose**, so its caller (`spawnOnce`) adds no `await`
- * between the post-write re-checks (R1.8) and `spawn()`.
+ * between the post-write re-checks (R1.8) and `spawn()`. That is also why the
+ * retry's wait is a synchronous sleep (`Atomics.wait`) rather than a timer: it
+ * blocks the server's event loop for at most 100 ms per file, and only when a
+ * read already failed with one of the three codes, which on POSIX is almost
+ * never. The other way to keep the invariant, an async read-back before the
+ * re-checks, would widen the gap below and need a second copy at each of
+ * `spawnOnce`'s two callers.
  *
  * **What it cannot close (TOCTOU).** Claude Code reads the files after it
  * starts, not when this runs: S1's strace saw the reads within about 0.5 s of
@@ -515,15 +533,88 @@ export function runFileText(value: unknown): string {
  * comparison. Both flags are absent on Windows, where the `lstat` alone
  * refuses a link.
  */
-export function runFileReadsBack(file: string, expected: string): boolean {
+export function runFileReadsBack(
+  file: string,
+  expected: string,
+  /** Test-only: the file system calls and the retry's sleep. */
+  io: RunFileReadBackIo = realReadBackIo,
+): RunFileReadBack {
+  const first = readBackOnce(file, expected, io);
+  if (first.ok || !READ_BACK_RETRY_CODES.has(first.reason)) return first;
+  io.sleep(RUN_FILE_READ_BACK_RETRY_MS);
+  return readBackOnce(file, expected, io);
+}
+
+/** The read-back's one wait before its retry. */
+export const RUN_FILE_READ_BACK_RETRY_MS = 100;
+
+/** Errno codes kept as themselves in a reason; any other reads `"unreadable"`.
+ * The first three are the ones retried (`READ_BACK_RETRY_CODES`). */
+const READ_BACK_ERRNO_REASONS = [
+  "EBUSY",
+  "EPERM",
+  "EACCES",
+  "EAGAIN",
+  "ELOOP",
+  "EISDIR",
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+] as const;
+const READ_BACK_RETRY_CODES: ReadonlySet<string> = new Set(["EBUSY", "EPERM", "EACCES"]);
+
+/**
+ * Why a run file did not read back. A closed set, so the refusal's log line
+ * can carry it: `missing` (no file at the name), `not-regular` (a link, a
+ * directory, anything but a regular file), `size` (not the length written, as a
+ * truncated file is), `content` (the right length, other bytes), one of a fixed
+ * list of errno codes, or `unreadable` for any other errno.
+ */
+export const RUN_FILE_READ_BACK_REASONS = [
+  "missing",
+  "not-regular",
+  "size",
+  "content",
+  ...READ_BACK_ERRNO_REASONS,
+  "unreadable",
+] as const;
+export type RunFileReadBackReason = (typeof RUN_FILE_READ_BACK_REASONS)[number];
+
+export type RunFileReadBack = { ok: true } | { ok: false; reason: RunFileReadBackReason };
+
+/** The calls the read-back makes, injectable so a test can fail one. */
+export interface RunFileReadBackIo {
+  lstat(file: string): { isFile(): boolean; size: number };
+  read(file: string, flag: number): string;
+  sleep(ms: number): void;
+}
+
+const realReadBackIo: RunFileReadBackIo = {
+  lstat: (file) => lstatSync(file),
+  read: (file, flag) => readFileSync(file, { encoding: "utf8", flag }),
+  sleep: (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
+};
+
+function errnoReason(err: unknown): RunFileReadBackReason {
+  const code = errCode(err);
+  if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+  return (READ_BACK_ERRNO_REASONS as readonly string[]).includes(code ?? "")
+    ? (code as RunFileReadBackReason)
+    : "unreadable";
+}
+
+function readBackOnce(file: string, expected: string, io: RunFileReadBackIo): RunFileReadBack {
   try {
-    const st = lstatSync(file);
-    if (!st.isFile() || st.size !== Buffer.byteLength(expected, "utf8")) return false;
+    const st = io.lstat(file);
+    if (!st.isFile()) return { ok: false, reason: "not-regular" };
+    if (st.size !== Buffer.byteLength(expected, "utf8")) return { ok: false, reason: "size" };
     const flag =
       fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
-    return readFileSync(file, { encoding: "utf8", flag }) === expected;
-  } catch {
-    return false;
+    return io.read(file, flag) === expected ? { ok: true } : { ok: false, reason: "content" };
+  } catch (err) {
+    return { ok: false, reason: errnoReason(err) };
   }
 }
 

@@ -20,6 +20,7 @@ import type { IntegrationsFile } from "../../../src/server/integrations/schema.j
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
   deleteRunFile,
+  RUN_FILE_READ_BACK_REASONS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
 } from "../../../src/server/launcher/run-files.js";
@@ -908,11 +909,12 @@ describe("teardown on every exit path (R4)", () => {
  * after the write and before the spawn; the crash restart's are left alone.
  */
 describe("the run files are read back before the spawn (S1)", () => {
-  const GUARD_LINE = (kind: string) =>
-    `[Launcher] Not spawning: the run ${kind} is missing or does not read back as written`;
+  const GUARD_LINE = (kind: string, reason: string) =>
+    `[Launcher] Not spawning: the run ${kind} does not read back as written (${reason})`;
 
+  type Damage = "delete" | "truncate" | "swap" | "none";
   /** Damage the first spawn's file of `kind` (`"mcp"` or `"settings"`). */
-  function damageOnce(kind: "mcp" | "settings", how: "delete" | "truncate" | "none") {
+  function damageOnce(kind: "mcp" | "settings", how: Damage) {
     let calls = 0;
     return async () => {
       calls += 1;
@@ -920,12 +922,11 @@ describe("the run files are read back before the spawn (S1)", () => {
       const name = runFilesOnDisk().find((n) => n.startsWith(`tandem-run-${kind}-`));
       if (!name) throw new Error(`no ${kind} run file to damage`);
       const file = path.join(launcherDir(), name);
-      if (how === "delete") {
-        fs.unlinkSync(file);
-        return;
-      }
       const text = fs.readFileSync(file, "utf8");
-      fs.writeFileSync(file, text.slice(0, Math.floor(text.length / 2)));
+      if (how === "delete") fs.unlinkSync(file);
+      else if (how === "truncate") fs.writeFileSync(file, text.slice(0, text.length >> 1));
+      // Same length, other bytes: the last newline becomes a space.
+      else fs.writeFileSync(file, `${text.slice(0, -1)} `);
     };
   }
 
@@ -937,8 +938,9 @@ describe("the run files are read back before the spawn (S1)", () => {
    */
   async function refusedThenRestarted(
     kind: "mcp" | "settings",
-    how: "delete" | "truncate",
+    how: Exclude<Damage, "none">,
     label: string,
+    reason: string,
   ) {
     const logs = captureErrors();
     const sup = makeSupervisor({
@@ -957,9 +959,12 @@ describe("the run files are read back before the spawn (S1)", () => {
     const launcherLines = logs().filter(
       (l) => l.includes("Not spawning") || l.includes("Spawn failed"),
     );
-    expect(launcherLines).toEqual([GUARD_LINE(label)]);
-    // Never the file's contents: no handle, no path.
-    expect(logs().join("\n")).not.toMatch(/th_[A-Za-z0-9_-]{32}|tandem-run-/);
+    expect(launcherLines).toEqual([GUARD_LINE(label, reason)]);
+    // Never the file's contents or its path: no handle, no run-file name, no
+    // part of the app-data directory.
+    const all = logs().join("\n");
+    expect(all).not.toMatch(/th_[A-Za-z0-9_-]{32}|tandem-run-/);
+    expect(all).not.toContain(tmpDir);
     await waitFor(() => runFilesOnDisk().length === 0, "the refused spawn's files deleted");
 
     const [rec] = await waitFor(() => {
@@ -972,17 +977,30 @@ describe("the run files are read back before the spawn (S1)", () => {
     expect(run.settings?.ok).toBe(true);
   }
 
-  it("a missing settings file refuses the spawn, then the restart spawns", async () => {
-    await refusedThenRestarted("settings", "delete", "settings file");
+  it("a missing settings file refuses the spawn (missing), then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "delete", "settings file", "missing");
   });
 
-  it("a truncated settings file refuses the spawn, then the restart spawns", async () => {
-    await refusedThenRestarted("settings", "truncate", "settings file");
+  it("a truncated settings file refuses the spawn (size), then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "truncate", "settings file", "size");
   });
 
-  it("a truncated MCP config refuses the spawn, then the restart spawns", async () => {
-    await refusedThenRestarted("mcp", "truncate", "MCP config");
+  it("a truncated MCP config refuses the spawn (size), then the restart spawns", async () => {
+    await refusedThenRestarted("mcp", "truncate", "MCP config", "size");
   });
+
+  it("a same-length settings file with other bytes refuses the spawn (content)", async () => {
+    await refusedThenRestarted("settings", "swap", "settings file", "content");
+  });
+
+  it.each(RUN_FILE_READ_BACK_REASONS)(
+    "the refusal line for reason %s names the kind and the reason, and nothing else",
+    (reason) => {
+      const err = new RunFileGuardError("settings file", reason);
+      expect(`[Launcher] Not spawning: ${err.message}`).toBe(GUARD_LINE("settings file", reason));
+      expect(err.message).not.toMatch(/[/\\]/);
+    },
+  );
 
   it("a valid pair spawns at once, with both flags, and no guard line", async () => {
     const logs = captureErrors();
@@ -1006,7 +1024,9 @@ describe("the run files are read back before the spawn (S1)", () => {
     });
     await expect(sup.startFresh(spawnDir)).rejects.toBeInstanceOf(RunFileGuardError);
     expect(records("spawn-")).toEqual([]);
-    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([GUARD_LINE("settings file")]);
+    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([
+      GUARD_LINE("settings file", "size"),
+    ]);
     expect(sup.status()).toMatchObject({ lastError: "spawn-failed", restartPending: true });
   });
 });

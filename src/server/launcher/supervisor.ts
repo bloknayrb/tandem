@@ -80,6 +80,7 @@ import {
   loopbackBaseUrl,
   type RunFileAcl,
   RunFileError,
+  type RunFileReadBackReason,
   realRunFileAcl,
   runFileReadsBack,
   runFileText,
@@ -460,10 +461,14 @@ interface SpawnRun {
 }
 
 /** A spawn refused by the pre-spawn read-back of its run files (`spawnOnce`).
- * Its message names the file's kind, never its path or contents. */
+ * Its message names the file's kind and the closed-set reason, never its path
+ * or contents. */
 export class RunFileGuardError extends Error {
-  constructor(readonly kind: "MCP config" | "settings file") {
-    super(`the run ${kind} is missing or does not read back as written`);
+  constructor(
+    readonly kind: "MCP config" | "settings file",
+    readonly reason: RunFileReadBackReason,
+  ) {
+    super(`the run ${kind} does not read back as written (${reason})`);
     this.name = "RunFileGuardError";
   }
 }
@@ -3299,23 +3304,25 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // the launcher's. Synchronous and as late as it can be, with no `await`
     // from here to `spawn()`. It cannot see a file changed after this point
     // and before Claude Code reads it, about half a second after start
-    // (`runFileReadsBack`'s TOCTOU paragraph). A refusal is one line naming
-    // the kind, then the crash path the long-lived "error" handler below takes
-    // for a failed spawn: `spawn-failed` and a restart under the breaker,
-    // unless a stop is under way. The throw ends this spawn's run state like
-    // any other throw before `spawn()` (R4.4).
+    // (`runFileReadsBack`'s TOCTOU paragraph). A read held by another process
+    // (EBUSY, EPERM, EACCES) is retried once there, after a synchronous wait of
+    // at most 100 ms, so the invariant holds. A refusal is one line naming the
+    // kind and the closed-set reason, then the crash path the long-lived
+    // "error" handler below takes for a failed spawn: `spawn-failed` and a
+    // restart under the breaker, unless a stop is under way. The throw ends
+    // this spawn's run state like any other throw before `spawn()` (R4.4).
     if (run) {
-      const bad: RunFileGuardError["kind"] | null = !runFileReadsBack(
-        run.mcpConfigPath,
-        run.mcpConfigText,
-      )
-        ? "MCP config"
-        : !runFileReadsBack(run.settingsPath, run.settingsText)
-          ? "settings file"
+      const mcpCheck = runFileReadsBack(run.mcpConfigPath, run.mcpConfigText);
+      const settingsCheck = mcpCheck.ok
+        ? runFileReadsBack(run.settingsPath, run.settingsText)
+        : mcpCheck;
+      const err = !mcpCheck.ok
+        ? new RunFileGuardError("MCP config", mcpCheck.reason)
+        : !settingsCheck.ok
+          ? new RunFileGuardError("settings file", settingsCheck.reason)
           : null;
-      if (bad !== null) {
+      if (err !== null) {
         run.discard();
-        const err = new RunFileGuardError(bad);
         console.error(`[Launcher] Not spawning: ${err.message}`);
         setLastError("spawn-failed");
         if (!stopRequested) scheduleRestart();

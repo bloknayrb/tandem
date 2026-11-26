@@ -9,9 +9,11 @@ import {
   collectTandemPluginKeys,
   ensureLauncherDir,
   loopbackBaseUrl,
+  RUN_FILE_READ_BACK_RETRY_MS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
   RunFileError,
+  type RunFileReadBackIo,
   readHostileSettingsKeys,
   realRunFileAcl,
   resetVerifiedLauncherDirsForTests,
@@ -294,32 +296,95 @@ describe("the run files' read-back before the spawn (S1)", () => {
     expect(() => JSON.parse(fs.readFileSync(file, "utf8"))).toThrow();
   }
 
+  const OK = { ok: true };
+  const refused = (reason: string) => ({ ok: false, reason });
+
   it("a valid pair reads back, and what is on disk is exactly the text written", async () => {
     const pair = await writePair();
-    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(true);
-    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(true);
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(OK);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(OK);
     expect(fs.readFileSync(pair.settings.file, "utf8")).toBe(pair.settings.text);
   });
 
-  it("a missing settings file is refused", async () => {
+  it("a missing settings file is refused: missing", async () => {
     const pair = await writePair();
     fs.unlinkSync(pair.settings.file);
-    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
-    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(true);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("missing"));
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(OK);
   });
 
-  it("a truncated settings file is refused", async () => {
+  it("a truncated settings file is refused: size", async () => {
     const pair = await writePair();
     truncate(pair.settings.file);
-    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("size"));
   });
 
-  it("a truncated MCP config is refused", async () => {
+  it("a truncated MCP config is refused: size", async () => {
     const pair = await writePair();
     truncate(pair.mcp.file);
-    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toBe(false);
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(refused("size"));
   });
 
+  it("a directory at the name is refused: not-regular", async () => {
+    const pair = await writePair();
+    fs.unlinkSync(pair.settings.file);
+    fs.mkdirSync(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(
+      refused("not-regular"),
+    );
+  });
+
+  /** An io over the real file system whose `read` throws `codes` in turn,
+   * once each, before reading for real; records every sleep. */
+  function flakyIo(codes: string[]) {
+    const sleeps: number[] = [];
+    let reads = 0;
+    const io: RunFileReadBackIo = {
+      lstat: (f) => fs.lstatSync(f),
+      read: (f, flag) => {
+        reads += 1;
+        const code = codes.shift();
+        if (code) throw Object.assign(new Error(`${code}: busy, open '${f}'`), { code });
+        return fs.readFileSync(f, { encoding: "utf8", flag });
+      },
+      sleep: (ms) => sleeps.push(ms),
+    };
+    return { io, sleeps, reads: () => reads };
+  }
+
+  it.each(["EBUSY", "EPERM", "EACCES"])(
+    "one %s, then a clean read: retried once after the bounded wait, and it reads back",
+    async (code) => {
+      const pair = await writePair();
+      const f = flakyIo([code]);
+      expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(OK);
+      expect(f.sleeps).toEqual([RUN_FILE_READ_BACK_RETRY_MS]);
+      expect(RUN_FILE_READ_BACK_RETRY_MS).toBeLessThanOrEqual(100);
+      expect(f.reads()).toBe(2);
+    },
+  );
+
+  it("a second transient error refuses, with that attempt's code as the reason", async () => {
+    const pair = await writePair();
+    const f = flakyIo(["EBUSY", "EACCES"]);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(
+      refused("EACCES"),
+    );
+    expect(f.sleeps).toEqual([RUN_FILE_READ_BACK_RETRY_MS]);
+    expect(f.reads()).toBe(2);
+  });
+
+  it.each([
+    ["EAGAIN", "EAGAIN"],
+    ["EIO", "EIO"],
+    ["ESOMETHINGNEW", "unreadable"],
+  ])("%s is not retried and refuses as %s", async (code, reason) => {
+    const pair = await writePair();
+    const f = flakyIo([code]);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(refused(reason));
+    expect(f.sleeps).toEqual([]);
+    expect(f.reads()).toBe(1);
+  });
   it("a file of the right length that parses but holds other values is refused", async () => {
     const pair = await writePair();
     // Re-enables a plugin key, at the same length, and still parses.
@@ -327,7 +392,7 @@ describe("the run files' read-back before the spawn (S1)", () => {
     expect(other.length).toBe(pair.settings.text.length);
     expect(() => JSON.parse(other)).not.toThrow();
     fs.writeFileSync(pair.settings.file, other);
-    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("content"));
   });
 
   it.runIf(POSIX)("a link at the name is refused, even to the right text (POSIX)", async () => {
@@ -336,7 +401,9 @@ describe("the run files' read-back before the spawn (S1)", () => {
     fs.writeFileSync(elsewhere, pair.settings.text);
     fs.unlinkSync(pair.settings.file);
     fs.symlinkSync(elsewhere, pair.settings.file);
-    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toBe(false);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(
+      refused("not-regular"),
+    );
   });
 });
 

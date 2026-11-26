@@ -185,9 +185,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "`runFileReadsBack`), which cannot see a file changed between that check and Claude " +
       "Code's read about half a second later; and no run file was re-read after start in 16 " +
       "spawns (#2439's void condition not observed, on Linux). Still unmeasured: Windows " +
-      "(and so #2439's re-read there, and whether an antivirus holding a new run file makes " +
-      "the read-back refuse every spawn until the breaker trips), macOS, the desktop build and the AppImage's bundled " +
-      "Node, and whether a not-signed-in child's bridge binds before its refusal.",
+      "(and so #2439's re-read there, and whether antivirus or sync-client collisions with " +
+      "a new run file happen on a real Windows install, where the read-back retries EBUSY, " +
+      "EPERM and EACCES once after 100 ms (Bryan's 'Retry once, log the reason " +
+      "(Recommended)') and a lock that outlasts that refuses every spawn until the breaker " +
+      "trips), macOS, the desktop build and the AppImage's bundled Node, and whether a " +
+      "not-signed-in child's bridge binds before its refusal.",
     closedBy:
       "A further smoke measuring them, or Bryan's acceptance of each; whoever closes it " +
       "checks #2439's acceptance against the re-read result.",
