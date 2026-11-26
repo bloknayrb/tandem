@@ -131,6 +131,7 @@ import {
   keepEditsCapturedAtSwap,
   keepUnsavedEdits,
   notifyUnsavedEditsKept,
+  reportKeptBackupOnFailure,
   unsavedEditsOf,
 } from "./keep-unsaved.js";
 import {
@@ -491,53 +492,68 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
       // Edits typed during the awaits between that capture and the swap are
       // read inside the swap's own transaction and kept after it.
       const swap = keepHolder ? captureAtSwap(existingId, existing) : undefined;
-      const remap = await clearAndReload(
-        existingId,
-        doc,
-        resolved,
-        format,
-        existing,
-        reloadBuffer,
-        { readOnly, ...(swap ? { atSwap: swap.capture } : {}) },
-      );
-      if (keepHolder) {
-        const keptAtSwap = swap
-          ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
-          : undefined;
-        keepHolder.kept = keptAtSwap ?? keptBefore;
-        // Told now, not at the end: the edits are already gone, so a later
-        // step that throws (the store re-wire, the tutorial replay) must not
-        // also hide where they went.
-        if (keepHolder.kept) {
-          notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
+      // From here a failure may come after the edits were discarded, so a
+      // kept backup is reported whatever the outcome.
+      let keptNotified = false;
+      try {
+        const remap = await clearAndReload(
+          existingId,
+          doc,
+          resolved,
+          format,
+          existing,
+          reloadBuffer,
+          { readOnly, ...(swap ? { atSwap: swap.capture } : {}) },
+        );
+        if (keepHolder) {
+          const keptAtSwap = swap
+            ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
+            : undefined;
+          keepHolder.kept = keptAtSwap ?? keptBefore;
+          // Told now, not at the end: the edits are already gone, so a later
+          // step that throws (the store re-wire, the tutorial replay) must not
+          // also hide where they went.
+          if (keepHolder.kept) {
+            notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
+            keptNotified = true;
+          }
         }
-      }
-      await openDocumentWhenReady(
-        { id: existingId, filePath: resolved, format, readOnly, source: "file" },
-        async () => {
-          // `clearAndReload` kept the annotation map and remapped every record
-          // onto the new content (#2269). Disk content differing from the
-          // in-memory doc is the whole REASON to force, so "the text moved" is
-          // this path's normal case. The merge persists the remapped map; where
-          // the envelope's copy of a record wins instead, that copy holds
-          // pre-reload coordinates and `afterMerge` remaps it too.
-          await wireAnnotationStore(existingId, doc, resolved, {
-            afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
-          });
-        },
-      );
-      // Settings > Replay tutorial force-opens welcome.md. The reload keeps
-      // every seed still in the map (and the merge above then persists it, a
-      // map-only record), but a seed the user DELETED is gone and nothing else
-      // re-creates it, so replay here, past any tombstone those deletions left
-      // (#1696). A re-created tombstoned seed is persisted, or the envelope's
-      // tombstone deletes it again on the first reopen that has no session file
-      // to carry it.
-      if (
-        isWelcomeDoc(resolved) &&
-        injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
-      ) {
-        await persistEnvelopeNow(existingId, doc, resolved);
+        await openDocumentWhenReady(
+          { id: existingId, filePath: resolved, format, readOnly, source: "file" },
+          async () => {
+            // `clearAndReload` kept the annotation map and remapped every record
+            // onto the new content (#2269). Disk content differing from the
+            // in-memory doc is the whole REASON to force, so "the text moved" is
+            // this path's normal case. The merge persists the remapped map; where
+            // the envelope's copy of a record wins instead, that copy holds
+            // pre-reload coordinates and `afterMerge` remaps it too.
+            await wireAnnotationStore(existingId, doc, resolved, {
+              afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
+            });
+          },
+        );
+        // Settings > Replay tutorial force-opens welcome.md. The reload keeps
+        // every seed still in the map (and the merge above then persists it, a
+        // map-only record), but a seed the user DELETED is gone and nothing else
+        // re-creates it, so replay here, past any tombstone those deletions left
+        // (#1696). A re-created tombstoned seed is persisted, or the envelope's
+        // tombstone deletes it again on the first reopen that has no session file
+        // to carry it.
+        if (
+          isWelcomeDoc(resolved) &&
+          injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
+        ) {
+          await persistEnvelopeNow(existingId, doc, resolved);
+        }
+      } catch (err) {
+        throw reportKeptBackupOnFailure(
+          err,
+          existingId,
+          resolved,
+          "reload",
+          keepHolder?.kept ?? keptBefore,
+          keptNotified,
+        );
       }
       ensureAutoSave();
       return {

@@ -638,7 +638,7 @@ To restore by hand: find the right subfolder (check `source.txt`, or sort by dat
 
 Notes:
 
-- Backups of the file on disk are taken once per document per server run (and before every restore), and skipped when nothing changed since the newest backup — so the folder stays small.
+- Backups of the file on disk are taken once per document per server run (and before every restore Claude makes), and skipped when nothing changed since the newest backup — so the folder stays small.
 - If Tandem can't keep a backup of unsaved edits — the backup folder is full or can't be written — Claude's reload, restore or close is refused and nothing changes. Save the document first, then try again.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
 

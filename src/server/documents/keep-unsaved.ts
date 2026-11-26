@@ -192,22 +192,55 @@ export function notifyUnsavedEditsKept(
   filePath: string,
   action: DiscardingAction,
   kept: KeptBackup,
+  outcome: "done" | "failed" = "done",
 ): void {
   const name = path.basename(filePath);
+  const verb = action === "reload" ? "reload" : action === "restore" ? "restore" : "close";
   const what =
-    action === "reload"
-      ? `Claude reloaded ${name} from disk.`
-      : action === "restore"
-        ? `Claude restored ${name} from a backup.`
-        : `Claude closed ${name}.`;
+    outcome === "failed"
+      ? `Claude's ${verb} of ${name} did not finish.`
+      : action === "reload"
+        ? `Claude reloaded ${name} from disk.`
+        : action === "restore"
+          ? `Claude restored ${name} from a backup.`
+          : `Claude closed ${name}.`;
   pushNotification({
     id: generateNotificationId(),
     type: "unsaved-edits-kept",
     severity: "warning",
-    message: `${what} Your unsaved edits were kept as a backup, which you can restore.`,
+    message:
+      outcome === "failed"
+        ? `${what} Your unsaved edits had been kept as a backup first, which you can restore if they are gone.`
+        : `${what} Your unsaved edits were kept as a backup, which you can restore.`,
     documentId,
     backupName: kept.name,
     dedupKey: `unsaved-edits-kept:${documentId}:${kept.name}`,
     timestamp: Date.now(),
   });
+}
+
+/**
+ * A Claude action failed after its backup was kept. Say where the edits went
+ * anyway — the failure may have come after they were discarded (a restore's
+ * bytes are already on disk; a reload's swap may have landed) — by a notice
+ * and a sentence on the error Claude receives. Returns the error to rethrow.
+ * `alreadyNotified`: the success notice went out before the failure, so only
+ * the error is amended.
+ */
+export function reportKeptBackupOnFailure(
+  err: unknown,
+  documentId: string,
+  filePath: string,
+  action: DiscardingAction,
+  kept: KeptBackup | undefined,
+  alreadyNotified = false,
+): unknown {
+  if (!kept) return err;
+  if (!alreadyNotified) notifyUnsavedEditsKept(documentId, filePath, action, kept, "failed");
+  if (err instanceof Error) {
+    err.message +=
+      ` The document's unsaved edits had been kept first as backup ${JSON.stringify(kept.name)}; ` +
+      "tell the user, and restore it with tandem_restoreBackup if they want it.";
+  }
+  return err;
 }

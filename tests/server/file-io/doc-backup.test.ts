@@ -326,6 +326,33 @@ describe("doc-backup", () => {
     });
   });
 
+  describe("prune order", () => {
+    it("prunes by mtime, not by name, when snapshots share a timestamp segment", async () => {
+      // Three same-second snapshots whose uuid8 order is the reverse of their age:
+      // name order would rank the newest last and prune it.
+      const name = (uuid: string) => `thesis-20260609-141500-${uuid}.md`;
+      const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000);
+      const subdirPath = (n: string) => docBackupSnapshotPath(docPath, appDataDir, n)!;
+      mkdirSync(join(subdirPath(name("00000000")), ".."), { recursive: true });
+      for (const [uuid, age] of [
+        ["00000000", 10],
+        ["88888888", 20],
+        ["ffffffff", 30],
+      ] as const) {
+        writeFileSync(subdirPath(name(uuid)), `${uuid}\n`);
+        utimesSync(subdirPath(name(uuid)), at(age), at(age));
+      }
+      writeFileSync(docPath, "fresh disk bytes\n");
+
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir })).toBe("written");
+
+      const names = allSnapshots().map((s) => s.name);
+      expect(names).toContain(name("00000000"));
+      expect(names).toContain(name("88888888"));
+      expect(names).not.toContain(name("ffffffff"));
+    });
+  });
+
   describe("snapshotBeforeFirstWrite — ignoreRunGate", () => {
     it("snapshots again in the same run when asked, still skipping identical bytes", async () => {
       writeFileSync(docPath, "first\n");

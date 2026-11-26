@@ -304,6 +304,67 @@ describe("tandem_restoreBackup keeps unsaved edits", () => {
     );
   });
 
+  it("makes the kept edits the newest backup, so the palette's 'most recent' restores them", async () => {
+    const filePath = path.join(tmpDir, "newest.md");
+    await fs.writeFile(filePath, "good version\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("newest.md", "good version\n", "my edits\n");
+    await fs.writeFile(filePath, "external version\n");
+
+    await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true });
+
+    const [newest] = await listDocBackups(filePath, resolveAppDataDir());
+    expect(newest.kind).toBe("unsaved");
+    expect(
+      await fs.readFile(
+        docBackupSnapshotPath(filePath, resolveAppDataDir(), newest.name)!,
+        "utf-8",
+      ),
+    ).toContain("my edits");
+  });
+
+  it("the browser's restore keeps the once-per-run gate, so a second Restore does not undo the first", async () => {
+    const filePath = path.join(tmpDir, "browser.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    await fs.writeFile(filePath, "mangled\n");
+    const opened = await openFromDisk(filePath);
+
+    await restoreDocumentFromBackup(opened.documentId, good.name);
+
+    const all = await listDocBackups(filePath, resolveAppDataDir());
+    expect(all).toHaveLength(1);
+    expect(all[0].name).toBe(good.name);
+  });
+
+  it("names the kept backup when the restore fails after keeping it", async () => {
+    const filePath = path.join(tmpDir, "fail-late.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("fail-late.md", "good\n", "edits\n");
+    const watcher = await import("../../src/server/documents/watcher.js");
+    const spy = vi.spyOn(watcher, "reloadFromDisk").mockResolvedValue(false);
+    try {
+      const err = await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true }).then(
+        () => null,
+        (e: Error & { code?: string }) => e,
+      );
+      expect(err?.code).toBe("RELOAD_IN_PROGRESS");
+      expect(err?.message).toMatch(/-unsaved\.md/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(pushNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "unsaved-edits-kept",
+        message: expect.stringMatching(/did not finish/),
+      }),
+    );
+  });
+
   it("refuses before writing the file when the edits cannot be kept", async () => {
     const filePath = path.join(tmpDir, "refuse.md");
     await fs.writeFile(filePath, "good version\n");

@@ -623,6 +623,25 @@ export async function snapshotBeforeFirstWrite(
   }
 }
 
+/**
+ * `names` ordered newest first by mtime, the name as tiebreak (as
+ * `listDocBackups`). A name that cannot be stat'ed sorts last, so a prune
+ * removes it before any snapshot whose age is known.
+ */
+async function sortByMtimeNewestFirst(subdir: string, names: string[]): Promise<string[]> {
+  const stamped = await Promise.all(
+    names.map(async (name) => {
+      try {
+        return { name, mtimeMs: (await fs.stat(path.join(subdir, name))).mtimeMs };
+      } catch {
+        return { name, mtimeMs: Number.NEGATIVE_INFINITY };
+      }
+    }),
+  );
+  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  return stamped.map((s) => s.name);
+}
+
 /** The most recently modified of `names` in `subdir`, or null when none can be stat'ed. */
 async function newestByMtime(subdir: string, names: string[]): Promise<string | null> {
   let best: { name: string; mtimeMs: number } | null = null;
@@ -697,12 +716,15 @@ async function writeSnapshotFile(
 
   // Prune this kind beyond MAX_DOC_BACKUPS, newest kept. The write added
   // exactly one file to the listing we already have — no second readdir
-  // needed. Do NOT re-sort: the timestamp segment is second-granular, so two
-  // snapshots in the same second tie and fall to the random uuid8 — which can
-  // rank the just-written file "oldest" and prune it. By construction it is
-  // newest. Per kind, so neither kind can evict the other (ADR-057). The
-  // pinned snapshot is kept beyond the cap and does not count toward it.
-  const all = [snapshotName, ...existing].filter((name) => name !== pinned);
+  // needed. The just-written file goes first by construction: never re-sort it,
+  // since the name's timestamp segment is second-granular and a same-second tie
+  // falls to the random uuid8, which could rank it "oldest". The older ones ARE
+  // ordered by mtime, for the same reason: name order can rank a newer one
+  // below an older one taken in the same second. Per kind, so neither kind can
+  // evict the other (ADR-057). The pinned snapshot is kept beyond the cap and
+  // does not count toward it.
+  const olderNewestFirst = await sortByMtimeNewestFirst(subdir, existing);
+  const all = [snapshotName, ...olderNewestFirst].filter((name) => name !== pinned);
   for (const name of all.slice(MAX_DOC_BACKUPS)) {
     await fs
       .rm(path.join(subdir, name), { force: true })

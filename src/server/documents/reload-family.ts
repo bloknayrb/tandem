@@ -67,6 +67,7 @@ import {
   keepEditsCapturedAtSwap,
   keepUnsavedEdits,
   notifyUnsavedEditsKept,
+  reportKeptBackupOnFailure,
   unsavedEditsOf,
 } from "./keep-unsaved.js";
 import { clearAndReload } from "./populate.js";
@@ -429,11 +430,28 @@ export async function restoreDocumentFromBackup(
     throw err;
   }
 
-  // ADR-057: keep the unsaved edits this restore would discard, before the
-  // file is written — a failed backup throws here with nothing changed. Edits
-  // typed during the awaits below are read again at the reload's swap.
-  const restoreDoc = getOrCreateDocument(id);
   const keepEdits = opts?.keepUnsavedEdits === true;
+
+  // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
+  // is itself reversible (first overwrite per path per run; never throws — a
+  // skip or snapshot failure must not block the restore). A Claude restore
+  // snapshots every time (ADR-057): after a Claude force-open the bytes on disk
+  // can be an external version an earlier autosave's once-per-run snapshot
+  // never saw. Not the browser's: its palette restores the newest snapshot, so
+  // an every-time snapshot would make a second Restore bring back the version
+  // the first one replaced.
+  await snapshotBeforeFirstWrite(existing.filePath, {
+    appDataDir,
+    documentId: id,
+    ignoreRunGate: keepEdits,
+  });
+
+  // ADR-057: keep the unsaved edits this restore would discard, before the
+  // file is written — a failed backup throws here with nothing changed. AFTER
+  // the disk snapshot, so the edits are the newest snapshot and the palette's
+  // "restore the most recent backup" brings them back. Edits typed during the
+  // awaits below are read again at the reload's swap.
+  const restoreDoc = getOrCreateDocument(id);
   const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
   const incoming = typeof content === "string" ? content : undefined;
   const keptBefore =
@@ -441,73 +459,67 @@ export async function restoreDocumentFromBackup(
       ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
       : undefined;
   const swap = keepEdits ? captureAtSwap(id, existing) : undefined;
-
-  // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
-  // is itself reversible. Every restore, not only the first overwrite of the
-  // path this run (ADR-057): after a Claude force-open the bytes on disk can be
-  // an external version that an earlier autosave's once-per-run snapshot never
-  // saw. Never throws — a skip or snapshot failure must not block the restore.
-  await snapshotBeforeFirstWrite(existing.filePath, {
-    appDataDir,
-    documentId: id,
-    ignoreRunGate: true,
-  });
-
-  // #1310: validate BEFORE the write, not during the reload below.
-  //
-  // The ordering is the whole point. `reloadFromDisk` is where `adapter.parse` — and therefore the
-  // size gate — would otherwise run, and that is AFTER `atomicWriteBuffer` has already committed
-  // these bytes to disk. A refusal at that point would leave the rejected archive on disk, the
-  // Y.Doc still holding pre-restore content, and the `savedAtVersion` baseline below never updated
-  // — the exact split this function's own comments describe as making the autosave
-  // external-modification guard misfire. Snapshots can predate this gate, so restoring an old
-  // hostile file reaches that ordering by an ordinary route, not a contrived one.
-  if (isDocx) {
-    await assertDocxWithinSizeLimits(content as Buffer);
-  }
-
-  // Inner try/finally wrapping exactly the suppress/write/record triple
-  // (#1749). On POSIX this write is a tmp+rename that replaces the inode, so
-  // without the re-arm the restore would kill this document's own watcher; and
-  // without the `finally` a throw from the write would leave the arrival
-  // counter armed for 2 s on a live watcher, swallowing the next external
-  // atomic save. The two arms are one triple, so one `try` covers both.
+  // From here the file is written before anything can fail, so a kept backup
+  // is reported whatever the outcome.
   try {
-    suppressNextChange(existing.filePath);
+    // #1310: validate BEFORE the write, not during the reload below.
+    //
+    // The ordering is the whole point. `reloadFromDisk` is where `adapter.parse` — and therefore the
+    // size gate — would otherwise run, and that is AFTER `atomicWriteBuffer` has already committed
+    // these bytes to disk. A refusal at that point would leave the rejected archive on disk, the
+    // Y.Doc still holding pre-restore content, and the `savedAtVersion` baseline below never updated
+    // — the exact split this function's own comments describe as making the autosave
+    // external-modification guard misfire. Snapshots can predate this gate, so restoring an old
+    // hostile file reaches that ordering by an ordinary route, not a contrived one.
     if (isDocx) {
-      // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
-      // re-parses it and re-injects Word comments idempotently via adapter.apply.
-      await atomicWriteBuffer(existing.filePath, content as Buffer);
-    } else {
-      await atomicWrite(existing.filePath, content as string);
+      await assertDocxWithinSizeLimits(content as Buffer);
     }
-    // Content backstop for the watcher: the restore write's own `change`-event
-    // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
-    // The direct reloadFromDisk below does the intended re-anchor; this stops the
-    // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
-    // It MUST stay ahead of `rearmWatch`: the re-arm clears the suppression
-    // counter, so this fingerprint is the only layer left.
-    recordSelfWrite(existing.filePath, content);
-  } finally {
-    rearmWatch(existing.filePath);
-  }
-  // The early reloadInProgress check above closes the common case, but a
-  // watcher reload can still start during the awaits since that check. A
-  // silent skip here would report success while the Y.Doc still holds
-  // pre-restore content — surface it as the same coded error instead.
-  const reloaded = await reloadFromDisk(
-    id,
-    existing.filePath,
-    existing.format,
-    swap ? { atSwap: swap.capture } : undefined,
-  );
-  if (!reloaded) {
-    throw Object.assign(
-      new Error(
-        "A concurrent reload interrupted the restore. The backup bytes are on disk — retry to reload the document.",
-      ),
-      { code: "RELOAD_IN_PROGRESS" },
+
+    // Inner try/finally wrapping exactly the suppress/write/record triple
+    // (#1749). On POSIX this write is a tmp+rename that replaces the inode, so
+    // without the re-arm the restore would kill this document's own watcher; and
+    // without the `finally` a throw from the write would leave the arrival
+    // counter armed for 2 s on a live watcher, swallowing the next external
+    // atomic save. The two arms are one triple, so one `try` covers both.
+    try {
+      suppressNextChange(existing.filePath);
+      if (isDocx) {
+        // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
+        // re-parses it and re-injects Word comments idempotently via adapter.apply.
+        await atomicWriteBuffer(existing.filePath, content as Buffer);
+      } else {
+        await atomicWrite(existing.filePath, content as string);
+      }
+      // Content backstop for the watcher: the restore write's own `change`-event
+      // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
+      // The direct reloadFromDisk below does the intended re-anchor; this stops the
+      // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
+      // It MUST stay ahead of `rearmWatch`: the re-arm clears the suppression
+      // counter, so this fingerprint is the only layer left.
+      recordSelfWrite(existing.filePath, content);
+    } finally {
+      rearmWatch(existing.filePath);
+    }
+    // The early reloadInProgress check above closes the common case, but a
+    // watcher reload can still start during the awaits since that check. A
+    // silent skip here would report success while the Y.Doc still holds
+    // pre-restore content — surface it as the same coded error instead.
+    const reloaded = await reloadFromDisk(
+      id,
+      existing.filePath,
+      existing.format,
+      swap ? { atSwap: swap.capture } : undefined,
     );
+    if (!reloaded) {
+      throw Object.assign(
+        new Error(
+          "A concurrent reload interrupted the restore. The backup bytes are on disk — retry to reload the document.",
+        ),
+        { code: "RELOAD_IN_PROGRESS" },
+      );
+    }
+  } catch (err) {
+    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", keptBefore);
   }
 
   // The restored bytes are the new saved baseline. Without this, the autosave
