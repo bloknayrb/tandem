@@ -1202,6 +1202,252 @@ describe("a killed child whose exit lands after a relaunch replaced it", () => {
   });
 });
 
+// --- A resumed run that dies by a signal inside the confirm window ---------------
+
+describe("a resumed run that dies by a signal inside the resume-confirm window", () => {
+  // #2358 (comment 7202149262), measured on Linux: the reaper does not die on
+  // a Restart's SIGTERM, it forwards it and relays Claude's death as
+  // `128 + signum` — 143 for SIGTERM, 137 for SIGKILL. `shouldClearSession`
+  // read only `code === null` as a signal, so a Restart or crash within
+  // `RESUME_CONFIRM_MS` of a resume unlinked `launcher-session.json` and the
+  // next spawn started a fresh conversation. An intentional kill of ours
+  // (Restart, stop, Off, the sign-in kill) keeps the session every time; a
+  // crash — including one a stdin-gone or receipt fault kill follows — keeps it
+  // for ONE more resume, so a session that kills Claude on every load cannot
+  // loop forever.
+
+  const sessionFile = () => path.join(baseDir, "launcher-session.json");
+  const savedId = () =>
+    (JSON.parse(fs.readFileSync(sessionFile(), "utf8")) as { sessionId: string }).sessionId;
+  /** The Claude argv of the n-th spawn (1-based): the reaper's argv after
+   * `<parent_pid> <claude>`. */
+  const claudeArgs = (n: number) => (vi.mocked(spawn).mock.calls[n - 1][1] as string[]).slice(2);
+  const resumes = (n: number, id: string) =>
+    expect(claudeArgs(n)).toEqual(expect.arrayContaining(["--resume", id]));
+  const isFresh = (n: number) => !claudeArgs(n).includes("--resume");
+
+  /** The real Linux reaper on a kill WE send: SIGTERM is forwarded, Claude
+   * dies by it, and the reaper EXITS 143 rather than dying by the signal. */
+  function relayKillsAs143(child: FakeChild): void {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      setImmediate(() => {
+        if (child.exitCode === null) exitChild(child, 143);
+      });
+      return true;
+    };
+  }
+
+  /** Child 1 runs fresh (writing the saved session) and is stopped; a new
+   * supervisor's start then RESUMES it as child 2, unconfirmed. */
+  async function resumedChild(
+    extra: ExtraOpts = {},
+  ): Promise<{ sup: Supervisor; emit: (e: TandemEvent) => void; child2: FakeChild; id: string }> {
+    const first = makeSupervisor().sup;
+    await first.startFresh(cwdDir);
+    await first.stop();
+    const id = savedId();
+
+    const { sup, emit } = makeSupervisor(extra);
+    await sup.start();
+    const child2 = await nthChild(2);
+    resumes(2, id);
+    expect(sup.status()).toMatchObject({ running: true, resuming: true });
+    return { sup, emit, child2, id };
+  }
+
+  it("a Restart relayed as 143 keeps the session, every time", async () => {
+    onSpawn = relayKillsAs143;
+    const { sup, id } = await resumedChild();
+    for (let n = 3; n <= 6; n++) {
+      await sup.relaunch(cwdDir);
+      await nthChild(n);
+      expect(children[n - 2].kills).toEqual(["SIGTERM"]);
+      expect(savedId()).toBe(id);
+      resumes(n, id);
+    }
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a crash relayed as 137 resumes the same conversation once; a second one goes fresh", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 137); // not our kill: `killed` is false
+
+    const child3 = await nthChild(3);
+    expect(savedId()).toBe(id);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    expect(logText()).not.toContain("clearing saved session");
+
+    exitChild(child3, 137);
+    await nthChild(4);
+    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(isFresh(4)).toBe(true);
+    expect(claudeArgs(4)).not.toContain(id);
+  });
+
+  it("our own kill between two crashes neither clears nor resets the allowance", async () => {
+    // A stop and a plain `start()` (as at boot): our kill, but not a user's
+    // Start or Restart, which would reset the allowance on purpose.
+    onSpawn = relayKillsAs143;
+    const { sup, child2, id } = await resumedChild();
+    exitChild(child2, 137); // crash 1: kept
+    const child3 = await nthChild(3);
+    await sup.stop(); // our 143: kept
+    expect(child3.kills).toEqual(["SIGTERM"]);
+    resumes(3, id);
+    await sup.start();
+    const child4 = await nthChild(4);
+    resumes(4, id);
+    exitChild(child4, 137); // crash 2: cleared
+    await nthChild(5);
+    expect(isFresh(5)).toBe(true);
+  });
+
+  it("the sign-in kill is ours: after a crash it does not clear the session", async () => {
+    onSpawn = relayKillsAs143;
+    const { sup, child2, id } = await resumedChild();
+    exitChild(child2, 137); // crash 1: kept, the allowance used
+    const child3 = await nthChild(3);
+    pushJson(child3, INIT);
+    pushJson(child3, NOT_SIGNED_IN); // the sign-in trip kills it; relayed 143
+    await waitFor(() => sup.status().lastError === "needs-login", "the sign-in trip");
+    await waitFor(() => child3.exitCode !== null, "child 3's exit");
+    await settle();
+    expect(child3.kills).toEqual(["SIGTERM"]);
+    expect(savedId()).toBe(id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a confirmed resume resets the allowance", async () => {
+    const { child2, id } = await resumedChild({ resumeConfirmMs: 40 });
+    exitChild(child2, 137); // crash 1: kept, allowance used
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    await sleep(80); // child 3 confirms: the id loads
+    exitChild(child3, 137); // after confirmation: kept regardless
+    const child4 = await nthChild(4);
+    resumes(4, id);
+    exitChild(child4, 137); // unconfirmed again, but the first since the reset
+    await nthChild(5);
+    resumes(5, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a session that kills Claude on every load ends within two resumes", async () => {
+    // Every resumed child aborts (V8, 134) as soon as it is up; a fresh one lives.
+    onSpawn = (child, index) => {
+      child.once("spawn", () => {
+        setTimeout(() => {
+          if (!isFresh(index + 1) && child.exitCode === null) exitChild(child, 134);
+        }, 5);
+      });
+    };
+    await resumedChild();
+    const freshIndex = await waitFor(
+      () => children.findIndex((_, i) => i > 0 && isFresh(i + 1)) + 1 || null,
+      "a fresh spawn",
+    );
+    const resumedSpawns = children.slice(1, freshIndex - 1).length;
+    expect(resumedSpawns).toBe(2);
+    await sleep(50);
+    expect(children).toHaveLength(freshIndex);
+  });
+
+  /** A reaper whose Claude is already dying: our kill is recorded, and the
+   * exit is the test's to deliver (with whatever code the reaper relays). */
+  function holdKill(child: FakeChild): void {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      return true;
+    };
+  }
+
+  /** `holdKill` on the resumed spawns only, so a fresh successor still stops
+   * at teardown. (The spawn mock records its call before running `onSpawn`.) */
+  function holdKillWhenResumed(child: FakeChild, index: number): void {
+    if (!isFresh(index + 1)) holdKill(child);
+  }
+
+  /** The OOM killer ends Claude mid-turn: the owed write fails with EPIPE, the
+   * stdin-gone handler fault-kills the reaper, and the reaper relays 137. */
+  async function oomWhileWriting(child: FakeChild): Promise<void> {
+    await waitFor(() => held(child).length > 0, "a turn written to the child");
+    failWrite(child);
+    await waitFor(() => child.killed, "the stdin-gone kill");
+    exitChild(child, 137);
+  }
+
+  it("a crash that the stdin-gone kill follows is not our kill: kept once, then cleared", async () => {
+    onSpawn = holdKillWhenResumed;
+    const { emit, child2, id } = await resumedChild();
+    emit(annotationEvent()); // a wake is written to the resumed child
+    await oomWhileWriting(child2);
+    expect(child2.kills).toEqual(["SIGTERM"]);
+
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    await oomWhileWriting(child3); // the owed wake is written to child 3 too
+
+    await nthChild(4);
+    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("a session that crashes Claude on every load, through the delivery kill, ends within two resumes", async () => {
+    onSpawn = holdKillWhenResumed;
+    const { emit } = await resumedChild();
+    emit(annotationEvent());
+    let n = 2;
+    while (!isFresh(n) && n < 8) {
+      await oomWhileWriting(children[n - 1]);
+      n++;
+      await nthChild(n);
+    }
+    expect(n).toBe(4); // spawns 2 and 3 resumed; spawn 4 is fresh
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it.each([
+    [
+      "Off, then Start",
+      async (sup: Supervisor) => {
+        await sup.updateSettings({ startMode: "off" });
+        await sup.updateSettings({ startMode: "on-click" });
+        await sup.startByUser();
+      },
+    ],
+    ["Restart", (sup: Supervisor) => sup.relaunch(cwdDir).then(() => undefined)],
+  ])("a user's %s forgets an earlier crash: a later unrelated crash is kept", async (_l, act) => {
+    const { sup, child2, id } = await resumedChild();
+    exitChild(child2, 137); // crash 1: kept, the allowance used
+    await nthChild(3); // the automatic retry
+    resumes(3, id);
+
+    await act(sup); // before child 3 confirms
+    const next = await nthChild(4);
+    resumes(4, id);
+    exitChild(next, 137); // an unrelated crash
+    await nthChild(5);
+    resumes(5, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  // The control: the exit the gate exists for still clears at once.
+  it("a doomed resume (exit 1) still clears the saved session and goes fresh", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(isFresh(3)).toBe(true);
+    expect(claudeArgs(3)).not.toContain(id);
+  });
+});
+
 // --- #2125 --------------------------------------------------------------------
 
 /** Routes every `integrations.json` read to `handler`, which receives the read's
