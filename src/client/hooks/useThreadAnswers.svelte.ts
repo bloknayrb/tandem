@@ -104,6 +104,10 @@ export function createThreadAnswers(options: {
     const { ydoc, id } = tab;
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Reply ids this window has seen as an "I'm on it", kept for this Y.Doc's
+    // life: a later strip of the field (an untrusted reload) must not turn the
+    // same row into an unseen answer, as the detector keeps it known.
+    const acknowledgements = new Set<string>();
     const read = () => {
       const replies: AnnotationReply[] = [];
       repliesMap.forEach((value) => {
@@ -132,7 +136,11 @@ export function createThreadAnswers(options: {
         if (!isThreadAnswer(reply, parents.get(reply.annotationId))) continue;
         // An "I'm on it" holds no "new" marker either: only the real answer
         // calls for attention (Bryan, 2026-11-26). It still shows in the thread.
-        if (reply.inProgress === true) continue;
+        if (reply.inProgress === true) {
+          acknowledgements.add(reply.id);
+          continue;
+        }
+        if (acknowledgements.has(reply.id)) continue;
         const list = answers.get(reply.annotationId);
         if (list) list.push(reply);
         else answers.set(reply.annotationId, [reply]);
