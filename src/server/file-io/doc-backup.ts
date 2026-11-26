@@ -660,7 +660,22 @@ export async function markSnapshotNewest(
 ): Promise<void> {
   const resolved = docBackupSnapshotPath(filePath, appDataDir, name);
   if (resolved === null) return;
-  await touchBestEffort(path.dirname(resolved), path.basename(resolved));
+  const subdir = path.dirname(resolved);
+  const leaf = path.basename(resolved);
+  // Strictly later than every other snapshot here, not just "now": a file
+  // system stamps its own clock, which on Windows can run ahead of
+  // `Date.now()`'s ~15 ms tick, so a disk snapshot written a moment ago can
+  // carry a later mtime than the `new Date()` set after it.
+  let latestOther = Number.NEGATIVE_INFINITY;
+  for (const other of await listSnapshots(subdir).catch(() => [] as string[])) {
+    if (other === leaf) continue;
+    try {
+      latestOther = Math.max(latestOther, (await fs.stat(path.join(subdir, other))).mtimeMs);
+    } catch {
+      // Raced away — not a rival.
+    }
+  }
+  await touchBestEffort(subdir, leaf, new Date(Math.max(Date.now(), latestOther + 1)));
 }
 
 /**

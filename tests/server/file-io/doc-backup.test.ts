@@ -20,6 +20,7 @@ import {
   docBackupsRoot,
   listDocBackups,
   MAX_DOC_BACKUPS,
+  markSnapshotNewest,
   sanitizeBackupStem,
   snapshotBeforeFirstWrite,
   snapshotFilename,
@@ -339,6 +340,23 @@ describe("doc-backup", () => {
 
       const listed = await listDocBackups(docPath, appDataDir);
       expect(listed[0]).toMatchObject({ name: u.name, kind: "unsaved" });
+    });
+
+    it("markSnapshotNewest ranks a snapshot above one whose mtime is ahead of the clock", async () => {
+      // Windows: the file system's clock can run ahead of Date.now()'s ~15 ms
+      // tick, so a disk snapshot written a moment ago can carry a later mtime.
+      const u = await snapshotUnsavedEdits(docPath, "edits\n", { appDataDir });
+      if (u.outcome !== "written") throw new Error("unreachable");
+      writeFileSync(docPath, "disk\n");
+      await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      const disk = allSnapshots().find((s) => !s.name.includes("-unsaved"))!;
+      const ahead = new Date(Date.now() + 5000);
+      utimesSync(join(docBackupsRoot(appDataDir), disk.subdir, disk.name), ahead, ahead);
+
+      await markSnapshotNewest(docPath, appDataDir, u.name);
+
+      const [first] = await listDocBackups(docPath, appDataDir);
+      expect(first).toMatchObject({ name: u.name, kind: "unsaved" });
     });
 
     it("a refused mtime refresh never turns kept edits into a failure", async () => {
