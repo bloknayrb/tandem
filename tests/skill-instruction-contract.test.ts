@@ -180,7 +180,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // 41 drops "or an unrecognized extension" from Hard Rule 4: `tandem_open` refuses an
   // unrecognized extension, so it never reaches the plaintext path. Outside the wake section.
   // 42 answers a user's comment in its own thread (#2360 PR C, the switch): `inProgress`,
-  // answered threads leaving the inbox, and the NOT_OWNED fallback. Outside the wake section.
+  // answered threads leaving the inbox, and the NOT_OWNED fallback; the in-thread "I'm on it"
+  // and the answer tracking are keyed on the tool's schema listing `inProgress`, which a dark
+  // server's does not. Outside the wake section.
   expect(skill).toMatch(/^version:\s*42$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
@@ -571,7 +573,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "42", bodyHash: "f46a356facf2" });
+    ).toEqual({ version: "42", bodyHash: "0cf8c038a27f" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -771,6 +773,19 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(p).toMatch(/Answer a user's comment in its own thread with `tandem_annotationReply`/);
     // "I'm on it" in the thread, and that it answers nothing.
     expect(p).toMatch(/`inProgress: true`[\s\S]{0,80}it answers nothing/);
+    // The skill ships while the server may be dark, whose schema strips an undeclared
+    // `inProgress` (an "I'm on it" would land as a final reply) and which tracks no answers.
+    // So both are keyed on a signal Claude can see: the schema listing `inProgress`. The
+    // condition must come BEFORE the instruction it governs.
+    const keyed = p.indexOf(
+      "**Only if `tandem_annotationReply`'s input schema lists `inProgress`**",
+    );
+    expect(keyed).toBeGreaterThan(-1);
+    expect(keyed).toBeLessThan(p.indexOf("`inProgress: true`"));
+    expect(keyed).toBeLessThan(p.indexOf("stop arriving in `tandem_checkInbox`"));
+    expect(p).toMatch(
+      /if it does not, send no separate "I'm on it" \(it would read as your answer\), and the answer tracking below does not apply/,
+    );
     // Answered threads stop arriving; an edit or a new reply re-opens one.
     expect(p).toMatch(/stop arriving in `tandem_checkInbox`/);
     expect(p).toMatch(/editing the comment, or replying in the thread again, re-opens it/);

@@ -341,6 +341,60 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
     expect(header === "## [Unreleased]" || OWNERSHIP_ENABLED, header).toBe(true);
   });
 
+  // The CHANGELOG entry is not what ships: the bundled skill is, and a cut that
+  // left the entry under Unreleased (or dropped it) would still ship skill 42.
+  // So tie the skill itself to the flag. A release, and only a release, moves
+  // `package.json`'s `version` (surface 1 of the release skill; npm, the
+  // desktop bundle and the plugin pins are all guarded to agree with it, and a
+  // version cannot be published twice). Skill 42 landed while it read
+  // `SKILL_42_LANDED_AT` (v0.32.0 shipped skill 40), so `package.json` moving
+  // off that value while the literal is dark and the skill carries the
+  // thread-reply rule IS a release shipping skill 42 dark: red. Between
+  // releases the value stays put and this stays green; once the literal flips
+  // it is green whatever the version. The same emergency un-flip as above
+  // (a patch setting the literal back to false) is red here too, on purpose.
+  const SKILL_42_LANDED_AT = "0.32.0";
+  const THREAD_RULE = "Answer a user's comment in its own thread with `tandem_annotationReply`";
+
+  function shipsSkill42Dark(state: {
+    literal: boolean;
+    skill: string;
+    packageVersion: string;
+  }): boolean {
+    if (state.literal) return false;
+    const version = Number(/^version:\s*(\d+)\s*$/m.exec(state.skill)?.[1] ?? Number.NaN);
+    // An unreadable version counts as 42 or later: fail toward red.
+    const carriesRule = state.skill.includes(THREAD_RULE) || !(version < 42);
+    return carriesRule && state.packageVersion !== SKILL_42_LANDED_AT;
+  }
+
+  it("the shipped skill 42 is never released while the literal is dark", () => {
+    const skill = read("skills/tandem/SKILL.md");
+    const packageVersion = (JSON.parse(read("package.json")) as { version: string }).version;
+    // Not vacuous: the skill on this branch carries the rule this guards.
+    expect(skill).toContain(THREAD_RULE);
+    expect(
+      shipsSkill42Dark({ literal: OWNERSHIP_ENABLED, skill, packageVersion }),
+      `package.json is ${packageVersion}: a release would ship skill 42 (in-thread answers) ` +
+        "while OWNERSHIP_ENABLED is false. Flip the literal in this release, or take the " +
+        "thread-reply section out of skills/tandem/SKILL.md (and its version back below 42).",
+    ).toBe(false);
+  });
+
+  it("the skill release guard fires exactly on a version move with skill 42 dark", () => {
+    const lit = `---\nversion: 42\n---\n${THREAD_RULE}`;
+    const old = "---\nversion: 41\n---\nanswer it in chat";
+    const unbumped = `---\nversion: 41\n---\n${THREAD_RULE}`;
+    const later = "---\nversion: 43\n---\nreworded";
+    const cut = "0.33.0";
+    expect(shipsSkill42Dark({ literal: false, skill: lit, packageVersion: cut })).toBe(true);
+    expect(shipsSkill42Dark({ literal: false, skill: unbumped, packageVersion: cut })).toBe(true);
+    expect(shipsSkill42Dark({ literal: false, skill: later, packageVersion: cut })).toBe(true);
+    expect(shipsSkill42Dark({ literal: false, skill: lit, packageVersion: "0.32.0" })).toBe(false);
+    expect(shipsSkill42Dark({ literal: true, skill: lit, packageVersion: cut })).toBe(false);
+    expect(shipsSkill42Dark({ literal: false, skill: old, packageVersion: cut })).toBe(false);
+  });
+
   // The gap (a) pins (its test's title exists, and a row names it) went with
   // the row: the scope PR closed gap (a) and flipped that test.
   it("every row names its gap and what closes it", () => {

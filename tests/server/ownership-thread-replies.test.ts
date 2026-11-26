@@ -1388,9 +1388,13 @@ describe("the local model's reply_to_annotation description (#2360 PR C)", () =>
     expect(text).not.toBe(DARK);
     expect(text).not.toMatch(/written by the user cannot/);
     expect(text).toMatch(/one the user wrote and shared with you/);
-    // The refusals that stay are still named.
-    expect(text).toMatch(/INVALID_ARGUMENT/);
-    expect(text).toMatch(/NOT_OWNED/);
+    // The refusals that stay are still named, each with the records it
+    // covers: an AI-authored highlight passes the author arm and is refused
+    // not-repliable (INVALID_ARGUMENT); only the user's highlight is NOT_OWNED.
+    expect(text).toContain(
+      "A private note or comment, or a highlight an AI authored, returns INVALID_ARGUMENT",
+    );
+    expect(text).toContain("an imported record or the user's highlight NOT_OWNED");
   });
 });
 
