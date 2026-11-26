@@ -16,11 +16,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetDocBackupGateForTests,
   describeSnapshotFailure,
+  docBackupSnapshotPath,
   docBackupsRoot,
+  listDocBackups,
   MAX_DOC_BACKUPS,
   sanitizeBackupStem,
   snapshotBeforeFirstWrite,
   snapshotFilename,
+  snapshotKind,
+  snapshotUnsavedEdits,
   sweepDocBackups,
 } from "../../../src/server/file-io/doc-backup.js";
 
@@ -221,6 +225,97 @@ describe("doc-backup", () => {
     });
   });
 
+  describe("snapshotUnsavedEdits (ADR-057)", () => {
+    it("writes an unsaved-kind snapshot holding exactly the given text", async () => {
+      const r = await snapshotUnsavedEdits(docPath, "my unsaved edits\n", { appDataDir });
+
+      expect(r.outcome).toBe("written");
+      if (r.outcome !== "written") throw new Error("unreachable");
+      expect(r.name).toMatch(/^thesis-\d{8}-\d{6}-[0-9a-f]{8}-unsaved\.md$/);
+      expect(snapshotKind(r.name)).toBe("unsaved");
+      const snaps = allSnapshots();
+      expect(snaps).toHaveLength(1);
+      expect(snaps[0].content).toBe("my unsaved edits\n");
+      // Listed with its kind, and restorable by name through the same boundary.
+      const listed = await listDocBackups(docPath, appDataDir);
+      expect(listed).toEqual([expect.objectContaining({ name: r.name, kind: "unsaved" })]);
+      expect(docBackupSnapshotPath(docPath, appDataDir, r.name)).not.toBeNull();
+    });
+
+    it("is not gated per run and never consumes the disk-kind gate", async () => {
+      writeFileSync(docPath, "on disk\n");
+      expect((await snapshotUnsavedEdits(docPath, "edit 1\n", { appDataDir })).outcome).toBe(
+        "written",
+      );
+      expect((await snapshotUnsavedEdits(docPath, "edit 2\n", { appDataDir })).outcome).toBe(
+        "written",
+      );
+      // The serializer-bug safety net still fires on the first save afterwards.
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir })).toBe("written");
+    });
+
+    it("returns the existing snapshot for a byte-identical repeat instead of writing again", async () => {
+      const first = await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+      const again = await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+
+      expect(again.outcome).toBe("skipped-identical");
+      if (first.outcome !== "written" || again.outcome !== "skipped-identical") {
+        throw new Error("unreachable");
+      }
+      expect(again.name).toBe(first.name);
+      expect(allSnapshots()).toHaveLength(1);
+    });
+
+    it("prunes each kind separately, so Claude actions never evict disk snapshots", async () => {
+      writeFileSync(docPath, "disk version\n");
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir })).toBe("written");
+      for (let i = 0; i < MAX_DOC_BACKUPS + 2; i++) {
+        await snapshotUnsavedEdits(docPath, `edit ${i}\n`, { appDataDir });
+      }
+
+      const listed = await listDocBackups(docPath, appDataDir);
+      expect(listed.filter((b) => b.kind === "unsaved")).toHaveLength(MAX_DOC_BACKUPS);
+      const disk = listed.filter((b) => b.kind === "disk");
+      expect(disk).toHaveLength(1);
+      expect(allSnapshots().find((s) => s.name === disk[0].name)?.content).toBe("disk version\n");
+    });
+
+    it("reports the size cap rather than writing, and raises no notification itself", async () => {
+      const r = await snapshotUnsavedEdits(docPath, "0123456789", { appDataDir, maxTotalBytes: 5 });
+
+      expect(r.outcome).toBe("skipped-size-cap");
+      expect(allSnapshots()).toHaveLength(0);
+      expect(pushNotificationMock).not.toHaveBeenCalled();
+    });
+
+    it("returns failed and never throws when the backup folder cannot be written", async () => {
+      writeFileSync(docBackupsRoot(appDataDir), "not a directory");
+
+      const r = await snapshotUnsavedEdits(docPath, "edits\n", { appDataDir });
+
+      expect(r.outcome).toBe("failed");
+      expect(pushNotificationMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("snapshotBeforeFirstWrite — ignoreRunGate", () => {
+    it("snapshots again in the same run when asked, still skipping identical bytes", async () => {
+      writeFileSync(docPath, "first\n");
+      await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      writeFileSync(docPath, "second\n");
+
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir })).toBe(
+        "skipped-already-this-run",
+      );
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir, ignoreRunGate: true })).toBe(
+        "written",
+      );
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir, ignoreRunGate: true })).toBe(
+        "skipped-identical",
+      );
+    });
+  });
+
   describe("describeSnapshotFailure", () => {
     it.each([
       { code: "EPERM", match: /permission/i, why: "the #1299 report's own errno" },
@@ -274,6 +369,21 @@ describe("doc-backup", () => {
       // POSIX CI and a path on Windows, making the assertion platform-split.
       const name = snapshotFilename("CON.md", new Date(2026, 5, 9, 14, 15, 0));
       expect(name).toMatch(/^doc-CON-20260609-141500-[0-9a-f]{8}\.md$/);
+    });
+
+    it("tags the unsaved kind in the tail, never the stem", () => {
+      const name = snapshotFilename("notes.md", new Date(2026, 5, 9, 14, 15, 0), "unsaved");
+      expect(name).toMatch(/^notes-20260609-141500-[0-9a-f]{8}-unsaved\.md$/);
+      expect(snapshotKind(name)).toBe("unsaved");
+      // A document whose own name ends in -unsaved still yields a disk-kind snapshot.
+      const lookalike = snapshotFilename("draft-unsaved.md", new Date(2026, 5, 9, 14, 15, 0));
+      expect(snapshotKind(lookalike)).toBe("disk");
+    });
+
+    it("keeps the traversal boundary: separators, .. and source.txt never resolve", () => {
+      for (const bad of ["../x-20260609-141500-abcdef01-unsaved.md", "source.txt", "..", "a/b"]) {
+        expect(docBackupSnapshotPath("/d/notes.md", "/app", bad)).toBeNull();
+      }
     });
   });
 

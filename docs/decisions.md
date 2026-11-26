@@ -71,6 +71,7 @@ The Status column repeats the first status line a record states; a dash means th
 | ADR-054 | Multi-Session Document Ownership — Identity, and Shipping Dark | Accepted (ships dark) | [Read](#adr-054-multi-session-document-ownership--identity-and-shipping-dark) |
 | ADR-055 | Cowork Setup Ships Dark | Accepted | [Read](#adr-055-cowork-setup-ships-dark) |
 | ADR-056 | The Non-Loopback Bind Ships Dark | Accepted | [Read](#adr-056-the-non-loopback-bind-ships-dark) |
+| ADR-057 | Undo, Not Ask: Keep Unsaved Edits a Claude Action Discards | Accepted | [Read](#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards) |
 
 ## ADR-001: Tiptap over ProseMirror Direct
 **Decision:** Use Tiptap instead of raw ProseMirror.
@@ -2331,7 +2332,7 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 >   (GA 2026-07-27) does exactly this via `createMcpHandler`'s built-in `'stateless'` legacy
 >   posture — see the addendum in `docs/spikes/stateless-transport-probe.md`. What actually
 >   blocks Tandem is not upstream anymore: it is Tandem's own migration off the retired
->   `@modelcontextprotocol/sdk` umbrella (frozen at `1.30.0`) onto the scoped packages, plus
+>   `@modelcontextprotocol/sdk` umbrella (then at `1.30.0`; the lockfile has since moved to `1.32.2`, still the v1 line) onto the scoped packages, plus
 >   building the `isLegacyRequest`-fronted composition Decisions 1/3/4 need for the *stateful*
 >   legacy serving `createMcpHandler`'s built-in fallback does not provide. Tracked in **#1505**.
 > - **The watch item** — whether Claude Code itself goes modern-only, which is the only live failure
@@ -4209,6 +4210,38 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 10. The owner handle's destination rule (the bridge's `ownerHandleForUpstream`) must not widen with the bind, as `tokenMayGoTo` does: the handle goes only to `http:` on `127.0.0.1` or `[::1]`, at the URL the launcher named.
 
 **Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.
+
+## ADR-057: Undo, Not Ask: Keep Unsaved Edits a Claude Action Discards
+
+**Status:** Accepted (2026-11-26)
+
+**Context.** Three MCP tools can throw away edits the user has not saved yet: `tandem_open` with `force` (reloads from disk), the `tandem_restoreBackup` restore arm (replaces the content with a snapshot) and `tandem_close` (does not save). The only guard was prose — `SKILL.md` Hard Rule 6, "ask the user first" — which a model that skips or misreads the skill does not follow.
+
+The MCP features announced on 2026-11-24 prompted a plan to enforce that rule on the server with an elicitation dialog before the force-open. Seven adversarial reviews of that plan, and of an editor-banner variant, found the confirm to be the wrong shape:
+
+- **It is usually a second ask.** A skill-following model has already asked in chat, so a dialog repeats the question; it helps only when the model ignores Hard Rule 6. Confirmations that fire on routine actions become rubber stamps.
+- **MCP elicitation** reaches only clients that declare form support (unverified for the plugin bridge, Tandem's own `claude -p` session and Claude Desktop), and an `Elicitation` hook can answer it with no human. Carrying it through the stdio bridge needs a timer hold, and generation-namespaced server→client request ids: every per-session `Server` counts from 0, so after a 404-replay a stale Accept would answer a different dialog. That finding is recorded here for when elicitation returns with #1505.
+- **An editor Allow/Deny banner** needs a server-held request episode, a toast, an expiry and an "editor attached" signal Tandem does not have. "Attached" is also true for background tabs and a hidden window, so Claude can wait on a banner nobody sees.
+
+**Decision.** Make the three actions undoable instead of asking first. Before a Claude-initiated action discards an open document's unsaved edits, Tandem keeps them as a backup, proceeds, and says so. If the backup cannot be kept, the action is refused. `src/server/documents/keep-unsaved.ts` holds the logic.
+
+- **Scope.** Only the three MCP tools, which opt in (`openFromDisk`'s `keepUnsavedEdits`, `restoreDocumentFromBackup`'s and `closeDocumentById`'s). `/api/open`, the browser's Reload and Restore, `POST /api/close` and the watcher's auto-reload are unchanged.
+- **Formats.** `.md` and `.txt` opened from disk (`AUTO_SAVE_FORMATS`, `source: "file"`), where "what the next autosave would write" exists. Not `.html` (restoring the backup would write it to disk, which the save path refuses on purpose), not `.docx` (ships dark; its serializer is lossy, async and never autosaves), not uploads or scratchpads (no backup directory).
+- **What counts as unsaved.** The dirty flag or a pending external conflict, never "the serialized text differs from disk": the serializer does not reproduce arbitrary Markdown byte for byte, so a clean document would always differ. Edits equal to the incoming content are not kept, since nothing would be lost.
+- **The store.** A second snapshot kind in `doc-backups/`, tagged `-unsaved` in the name's anchored tail (`SNAPSHOT_TAIL_RE`), never in the user-derived stem. Each kind is pruned to `MAX_DOC_BACKUPS` separately, so Claude's actions can never evict the disk-kind snapshots that guard against serializer bugs, and `listDocBackups` reports each entry's `kind`. `snapshotUnsavedEdits` is not gated once per run and never touches that gate.
+- **Failure contract: refuse.** The disk kind's warn-and-proceed contract exists because the in-memory edits are the newer data during a save. Here they are what is about to be destroyed, so a failed write or the size cap refuses the action with `BACKUP_FAILED`, before anything irreversible.
+- **No loss window.** The edits are read and kept before the action's first irreversible step. They are read again synchronously inside the transaction that swaps the content (`clearAndReload`'s and `reloadFromDisk`'s opt-in `atSwap`) and kept after it if they changed in between. That second write cannot refuse, since the swap has landed, so its failure is logged. A close has no swap: edits typed in the milliseconds between its backup and its teardown are not kept, and that window is accepted.
+- **Restore keeps the external version too.** A restore's pre-overwrite disk snapshot now runs on every restore (`ignoreRunGate`), not only the first overwrite of the run, because after a force-open the bytes on disk can be an external version the once-per-run gate never saw.
+- **Telling the user and Claude.** The tool result carries `backupKept: { name, timestamp }` and a `backupKeptNote`. The editor gets an `unsaved-edits-kept` notice at `warning` severity, which carries `backupName`. `SKILL.md` (v42) tells Claude to mention the backup and how to restore it by name. Hard Rule 6's "ask the user first" stands: this makes the actions recoverable, not Claude's to take.
+- **A pending conflict at close is skipped**, because that close already keeps its session with the edits in it. A snapshot is preferred to extending `keepSession` to every MCP close: a kept session reopens the tab at the next boot.
+
+**Consequences.**
+- No new route, no client UI and no change to the MCP transport or SDK. No new AI surface (Critical Rule 9) and no Y.Doc write (the snapshot is app-data file I/O).
+- `CLAUDE.md`'s backup gotcha ("path-keyed and once-per-run") now names the second kind.
+- **Follow-ups** (separate PRs): a version-history picker that lists both kinds and restores any by name, with a durable "your edits were kept" banner derived from the store rather than from `documentMeta`; the same undo for the editor's own conflict Keep/Reload and Restore; and a compare view.
+- **When this would become a security-register entry.** Nothing here is a permission check. If anything ever treats a kept backup as licence to skip asking the user, or makes it the only guard on a new destructive flag, record it in `docs/security.md`'s open-findings register, as #2027 is.
+
+**Cross-references:** ADR-045 and #1505 (the v2 SDK move that would carry elicitation), ADR-054 (ownership placement: the backups are written inside the owned operation, after its decision), #1086 (the backup store), #1238 (external conflicts), #2269 (the reload remap).
 
 ## Related
 

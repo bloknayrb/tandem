@@ -32,6 +32,7 @@ import {
   openScratchpad,
   resolveOpenPath,
   toWireResult,
+  type UnsavedEditsHolder,
 } from "../documents/open.js";
 import { docxEnabled } from "../file-io/docx-flag.js";
 import { mdParser } from "../file-io/markdown.js";
@@ -49,6 +50,7 @@ import { saveSession } from "../session/manager.js";
 import { FOCUS_NOT_MOVED_WARNING } from "../sessions/ownership-refusal.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations } from "./annotations.js";
+import { backupKeptFields } from "./backup-kept.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
@@ -633,7 +635,7 @@ export function registerDocumentTools(server: McpServer): void {
         .boolean()
         .optional()
         .describe(
-          'Reload from disk even if already open, discarding unsaved in-memory edits and the session. Annotations are kept and re-anchored to the reloaded text; any whose text changed may be reported with anchor: "degraded" by tandem_getAnnotations.',
+          'Reload from disk even if already open, discarding unsaved in-memory edits and the session. Unsaved edits are first kept as a backup, named in the result as backupKept (restore it with tandem_restoreBackup); if that backup cannot be kept, nothing is reloaded and the call answers BACKUP_FAILED. Annotations are kept and re-anchored to the reloaded text; any whose text changed may be reported with anchor: "degraded" by tandem_getAnnotations.',
         ),
       authoredBy: z
         .literal("claude")
@@ -667,8 +669,16 @@ export function registerDocumentTools(server: McpServer): void {
           }
         },
         open: async (expectTargetId) => {
+          // ADR-057: a force-reload keeps the unsaved edits it discards as a
+          // backup, reported here. A fresh holder per attempt, so a retried
+          // open never reports an earlier attempt's backup.
+          const unsaved: UnsavedEditsHolder = {};
           try {
-            const result = await openFromDisk(filePath, { force, expectTargetId });
+            const result = await openFromDisk(filePath, {
+              force,
+              expectTargetId,
+              keepUnsavedEdits: unsaved,
+            });
 
             // Issue #937: attribute Claude-authored documents at creation. Stamp
             // AFTER openFromDisk resolves — content is guaranteed populated, and
@@ -691,6 +701,7 @@ export function registerDocumentTools(server: McpServer): void {
               envelope: mcpSuccess({
                 ...toWireResult(result),
                 message: openResultMessage(result),
+                ...(unsaved.kept ? backupKeptFields(unsaved.kept) : {}),
                 ...wakeUrlField(),
               }),
             };
@@ -719,6 +730,11 @@ export function registerDocumentTools(server: McpServer): void {
       }
       if (e.code === "INVALID_PATH") {
         return mcpError("INVALID_PATH", e.message);
+      }
+      // A force-reload refused because the unsaved edits it would discard could
+      // not be kept as a backup (ADR-057). Nothing was reloaded.
+      if (e.code === "BACKUP_FAILED") {
+        return mcpError("BACKUP_FAILED", e.message);
       }
       if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
         return mcpError("FORMAT_ERROR", e.message);
@@ -1818,7 +1834,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_close",
-    "Close a document's tab (the active document when documentId is omitted); if it was the active document, another open document, if any, becomes active. Closing does not save: edits not yet written by tandem_save or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened." +
+    "Close a document's tab (the active document when documentId is omitted); if it was the active document, another open document, if any, becomes active. Closing does not save: edits not yet written by tandem_save or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. For an on-disk .md/.txt file those edits are first kept as a backup, named in the result as backupKept (restore it with tandem_restoreBackup after reopening); if that backup cannot be kept, the document stays open and the call answers BACKUP_FAILED. Annotations on an on-disk file are kept and return when it is reopened." +
       ownedDescription(CLOSE_OWNERSHIP_NOTE),
     {
       documentId: z
@@ -1840,13 +1856,20 @@ export function registerDocumentTools(server: McpServer): void {
           if (!rawId) return noClaim(mcpError("NO_DOCUMENT", "No document to close."));
           const id = path.basename(rawId);
 
-          const result = await closeDocumentById(id);
-          if (!result.success) return noClaim(mcpError("NO_DOCUMENT", result.error));
+          const result = await closeDocumentById(id, { keepUnsavedEdits: true });
+          if (!result.success) {
+            // ADR-057: the unsaved edits could not be kept, so the document
+            // stays open with them. The call did reach the document, so the
+            // claim it made stands.
+            if (result.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", result.error);
+            return noClaim(mcpError("NO_DOCUMENT", result.error));
+          }
 
           return mcpSuccess({
             closed: true,
             was: result.closedPath,
             activeDocumentId: result.activeDocumentId,
+            ...(result.unsavedEditsKept ? backupKeptFields(result.unsavedEditsKept) : {}),
           });
         },
       );

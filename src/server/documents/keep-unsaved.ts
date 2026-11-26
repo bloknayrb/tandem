@@ -1,0 +1,199 @@
+/**
+ * Keep an open document's unsaved edits before a Claude action discards them
+ * (ADR-057: undo, not ask).
+ *
+ * Three MCP tools can throw away edits the user has not saved yet:
+ * `tandem_open force:true` (reloads from disk), `tandem_restoreBackup`
+ * (replaces the content with a snapshot) and `tandem_close` (does not save).
+ * Rather than ask the user first, each keeps those edits as an `unsaved`-kind
+ * backup snapshot (`file-io/doc-backup.ts`), proceeds, and says so: the tool
+ * result names the backup and the editor gets a notice. If the backup cannot be
+ * kept, the action is REFUSED with `BACKUP_FAILED` — the edits are the thing at
+ * risk, so proceeding would be the loss this exists to prevent.
+ *
+ * Opt-in by the three tools only. The browser's own Reload, Restore and close,
+ * `/api/open` and the watcher's auto-reload do not pass through here.
+ *
+ * Covered: `.md`/`.txt` documents opened from disk (`AUTO_SAVE_FORMATS`,
+ * `source: "file"`), i.e. exactly where "what the next autosave would write"
+ * exists. Not `.html` (restoring a snapshot writes it to disk, which the save
+ * path refuses on purpose), not `.docx` (ships dark; its serializer is lossy and
+ * async and never autosaves), not uploads or scratchpads (no backup directory).
+ *
+ * Two captures, so nothing typed during the action's own awaits is lost:
+ *  1. `unsavedEditsOf` + `keepUnsavedEdits` BEFORE anything irreversible, which
+ *     refuses on failure.
+ *  2. `captureAtSwap` synchronously inside the transaction that replaces the
+ *     content, then `keepEditsCapturedAtSwap` after it. Only text that differs
+ *     from the first capture and from the incoming content is kept. The swap has
+ *     already happened by then, so this one cannot refuse; a failure is logged
+ *     and reported as no second backup.
+ */
+
+import path from "path";
+import type * as Y from "yjs";
+import { AUTO_SAVE_FORMATS } from "../../shared/constants.js";
+import { generateNotificationId } from "../../shared/utils.js";
+import { snapshotUnsavedEdits } from "../file-io/doc-backup.js";
+import { getAdapter } from "../file-io/index.js";
+import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
+import { readPendingConflict } from "./conflict.js";
+import { isDirty } from "./dirty.js";
+
+/** A backup that holds the edits a Claude action discarded. */
+export interface KeptBackup {
+  /** Snapshot name: pass it to `tandem_restoreBackup` to bring the edits back. */
+  name: string;
+  /** When the snapshot was taken, ISO 8601. */
+  timestamp: string;
+}
+
+/** Which Claude action discarded the edits; picks the notice's wording. */
+export type DiscardingAction = "reload" | "restore" | "close";
+
+/** The open-document fields this module reads. */
+interface DocFacts {
+  format: string;
+  source: string;
+  readOnly?: boolean;
+}
+
+/** True when this document can hold edits a Claude action would discard, and a backup can hold them. */
+function isCovered(docState: DocFacts): boolean {
+  return (
+    docState.source === "file" &&
+    docState.readOnly !== true &&
+    AUTO_SAVE_FORMATS.has(docState.format)
+  );
+}
+
+/**
+ * The document's unsaved edits as the next autosave would have written them,
+ * or null when it has none a Claude action could lose (clean, not covered).
+ * Synchronous, so it can run inside the transaction that swaps the content.
+ *
+ * Gated on the dirty flag or a pending conflict, never on "the serialized text
+ * differs from disk": the serializer does not reproduce arbitrary Markdown
+ * byte-for-byte, so a clean document would otherwise "differ" on every call.
+ */
+export function unsavedEditsOf(id: string, doc: Y.Doc, docState: DocFacts): string | null {
+  if (!isCovered(docState)) return null;
+  if (!isDirty(id) && readPendingConflict(doc) === undefined) return null;
+  const adapter = getAdapter(docState.format);
+  if (!adapter.save) return null;
+  return adapter.save(doc);
+}
+
+/** The refusal a Claude action answers with when the edits could not be kept. */
+export function backupFailedError(filePath: string): Error & { code: "BACKUP_FAILED" } {
+  return Object.assign(
+    new Error(
+      `Couldn't keep a backup of the unsaved edits in ${path.basename(filePath)}, so nothing was ` +
+        "changed. Save the document first (tandem_save), or ask the user how to proceed.",
+    ),
+    { code: "BACKUP_FAILED" as const },
+  );
+}
+
+/**
+ * Keep `edits` as an `unsaved` snapshot unless they equal `incoming` (the
+ * content about to replace them, when known), in which case nothing would be
+ * lost and nothing is kept. Throws `BACKUP_FAILED` when the snapshot could not
+ * be written or the backup folder is at its size limit.
+ */
+export async function keepUnsavedEdits(
+  filePath: string,
+  edits: string,
+  incoming?: string,
+): Promise<KeptBackup | undefined> {
+  if (incoming !== undefined && edits === incoming) return undefined;
+  const r = await snapshotUnsavedEdits(filePath, edits, { appDataDir: resolveAppDataDir() });
+  if (r.outcome === "written" || r.outcome === "skipped-identical") {
+    return { name: r.name, timestamp: r.timestamp };
+  }
+  throw backupFailedError(filePath);
+}
+
+/**
+ * A slot `captureAtSwap` fills inside the swap transaction. Call `capture()`
+ * there (synchronously, before the content is replaced); read `text` after.
+ */
+export interface SwapCapture {
+  capture(): void;
+  readonly text: string | null;
+}
+
+/** Build the swap-time capture for one document. */
+export function captureAtSwap(id: string, doc: Y.Doc, docState: DocFacts): SwapCapture {
+  let text: string | null = null;
+  return {
+    capture() {
+      try {
+        text = unsavedEditsOf(id, doc, docState);
+      } catch (err) {
+        // A serializer throw must not abort the swap it rides in; the first
+        // capture already holds everything but what was typed in the gap.
+        console.error("[KeepUnsaved] swap-time capture failed for %s:", id, err);
+      }
+    },
+    get text() {
+      return text;
+    },
+  };
+}
+
+/**
+ * After the swap: keep the text `captureAtSwap` read if it holds edits made
+ * since the first capture (`before`) that the incoming content does not
+ * contain. Never throws — the swap has landed, so a failure can only be
+ * logged; it returns undefined then.
+ */
+export async function keepEditsCapturedAtSwap(
+  filePath: string,
+  atSwap: string | null,
+  before: string | null,
+  incoming?: string,
+): Promise<KeptBackup | undefined> {
+  if (atSwap === null || atSwap === before || atSwap === incoming) return undefined;
+  try {
+    return await keepUnsavedEdits(filePath, atSwap, incoming);
+  } catch (err) {
+    console.error(
+      "[KeepUnsaved] edits typed during the action could not be kept for %s:",
+      filePath,
+      err,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Tell the editor that a Claude action discarded unsaved edits and where they
+ * went. `warning`, so it stays in the activity tray (an `info` expires) — past
+ * tense on what happened, per `TandemNotification.severity`.
+ */
+export function notifyUnsavedEditsKept(
+  documentId: string,
+  filePath: string,
+  action: DiscardingAction,
+  kept: KeptBackup,
+): void {
+  const name = path.basename(filePath);
+  const what =
+    action === "reload"
+      ? `Claude reloaded ${name} from disk.`
+      : action === "restore"
+        ? `Claude restored ${name} from a backup.`
+        : `Claude closed ${name}.`;
+  pushNotification({
+    id: generateNotificationId(),
+    type: "unsaved-edits-kept",
+    severity: "warning",
+    message: `${what} Your unsaved edits were kept as a backup, which you can restore.`,
+    documentId,
+    backupName: kept.name,
+    dedupKey: `unsaved-edits-kept:${documentId}:${kept.name}`,
+    timestamp: Date.now(),
+  });
+}

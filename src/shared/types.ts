@@ -913,6 +913,9 @@ export interface TandemNotification {
     | "read-only-file"
     | "launcher"
     | "documents-not-reopened"
+    // A Claude action discarded unsaved edits after keeping them as a backup
+    // (ADR-057); `backupName` names the snapshot that holds them.
+    | "unsaved-edits-kept"
     // Client-originated from the licence status poll (#2231): the grace-period
     // notice. Never sent over the notify stream, and never shown to Claude.
     | "license";
@@ -932,4 +935,6 @@ export interface TandemNotification {
   timestamp: number;
   toolName?: string;
   errorCode?: string;
+  /** `unsaved-edits-kept` only: the backup snapshot holding the discarded edits. */
+  backupName?: string;
 }

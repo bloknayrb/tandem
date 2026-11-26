@@ -61,6 +61,14 @@ import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { wireAnnotationStore } from "./annotation-wiring.js";
 import { ensureAutoSave } from "./autosave.js";
 import { readPendingConflict } from "./conflict.js";
+import {
+  captureAtSwap,
+  type KeptBackup,
+  keepEditsCapturedAtSwap,
+  keepUnsavedEdits,
+  notifyUnsavedEditsKept,
+  unsavedEditsOf,
+} from "./keep-unsaved.js";
 import { clearAndReload } from "./populate.js";
 import { broadcastOpenDocs, getOpenDocs } from "./registry.js";
 import { remapEnvelopeWins } from "./reload-remap.js";
@@ -308,6 +316,11 @@ export interface RestoreBackupResult {
   restoredFrom: string;
   /** Absolute path of the document that was restored. */
   filePath: string;
+  /**
+   * Set when `keepUnsavedEdits` was asked for and the document held unsaved
+   * edits the restore discarded: the backup now holding them (ADR-057).
+   */
+  unsavedEditsKept?: KeptBackup;
 }
 
 /**
@@ -341,6 +354,14 @@ export interface RestoreBackupResult {
 export async function restoreDocumentFromBackup(
   id: string,
   backupName: string,
+  opts?: {
+    /**
+     * Keep the document's unsaved edits as a backup before the restore
+     * discards them (ADR-057). Passed by `tandem_restoreBackup` alone. A backup
+     * that cannot be kept throws `BACKUP_FAILED` before the file is written.
+     */
+    keepUnsavedEdits?: boolean;
+  },
 ): Promise<RestoreBackupResult> {
   const existing = getOpenDocs().get(id);
   if (!existing) {
@@ -408,10 +429,29 @@ export async function restoreDocumentFromBackup(
     throw err;
   }
 
+  // ADR-057: keep the unsaved edits this restore would discard, before the
+  // file is written — a failed backup throws here with nothing changed. Edits
+  // typed during the awaits below are read again at the reload's swap.
+  const restoreDoc = getOrCreateDocument(id);
+  const keepEdits = opts?.keepUnsavedEdits === true;
+  const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
+  const incoming = typeof content === "string" ? content : undefined;
+  const keptBefore =
+    editsBefore !== null
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
+      : undefined;
+  const swap = keepEdits ? captureAtSwap(id, restoreDoc, existing) : undefined;
+
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
-  // is itself reversible (first overwrite per path per run; never throws — a
-  // skip or snapshot failure must not block the restore).
-  await snapshotBeforeFirstWrite(existing.filePath, { appDataDir, documentId: id });
+  // is itself reversible. Every restore, not only the first overwrite of the
+  // path this run (ADR-057): after a Claude force-open the bytes on disk can be
+  // an external version that an earlier autosave's once-per-run snapshot never
+  // saw. Never throws — a skip or snapshot failure must not block the restore.
+  await snapshotBeforeFirstWrite(existing.filePath, {
+    appDataDir,
+    documentId: id,
+    ignoreRunGate: true,
+  });
 
   // #1310: validate BEFORE the write, not during the reload below.
   //
@@ -455,7 +495,12 @@ export async function restoreDocumentFromBackup(
   // watcher reload can still start during the awaits since that check. A
   // silent skip here would report success while the Y.Doc still holds
   // pre-restore content — surface it as the same coded error instead.
-  const reloaded = await reloadFromDisk(id, existing.filePath, existing.format);
+  const reloaded = await reloadFromDisk(
+    id,
+    existing.filePath,
+    existing.format,
+    swap ? { atSwap: swap.capture } : undefined,
+  );
   if (!reloaded) {
     throw Object.assign(
       new Error(
@@ -473,20 +518,33 @@ export async function restoreDocumentFromBackup(
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
 
-  pushNotification({
-    id: generateNotificationId(),
-    type: "file-reloaded",
-    severity: "info",
-    message: `Restored ${path.basename(existing.filePath)} from backup.`,
-    documentId: id,
-    dedupKey: `restore-backup:${id}`,
-    timestamp: Date.now(),
-  });
+  const unsavedEditsKept = keepEdits
+    ? ((swap
+        ? await keepEditsCapturedAtSwap(existing.filePath, swap.text, editsBefore, incoming)
+        : undefined) ?? keptBefore)
+    : undefined;
+
+  if (unsavedEditsKept) {
+    // The kept-edits notice replaces the plain one: it says the same thing and
+    // where the discarded edits went.
+    notifyUnsavedEditsKept(id, existing.filePath, "restore", unsavedEditsKept);
+  } else {
+    pushNotification({
+      id: generateNotificationId(),
+      type: "file-reloaded",
+      severity: "info",
+      message: `Restored ${path.basename(existing.filePath)} from backup.`,
+      documentId: id,
+      dedupKey: `restore-backup:${id}`,
+      timestamp: Date.now(),
+    });
+  }
 
   return {
     message: `Restored ${path.basename(existing.filePath)} from backup ${backupName}.`,
     restoredFrom: snapshotPath,
     filePath: existing.filePath,
+    ...(unsavedEditsKept ? { unsavedEditsKept } : {}),
   };
 }
 

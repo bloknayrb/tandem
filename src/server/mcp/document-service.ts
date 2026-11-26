@@ -40,6 +40,12 @@ import {
   markCleanIfUnchanged,
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
+import {
+  type KeptBackup,
+  keepUnsavedEdits,
+  notifyUnsavedEditsKept,
+  unsavedEditsOf,
+} from "../documents/keep-unsaved.js";
 import { openFromRestore } from "../documents/open.js";
 import {
   clearReadOnlyFileState,
@@ -1826,9 +1832,22 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
  */
 export async function closeDocumentById(
   id: string,
+  opts?: {
+    /**
+     * Keep the document's unsaved edits as a backup before the close discards
+     * them (ADR-057). Passed by `tandem_close` alone; `POST /api/close` (the
+     * browser, which confirms its own closes) is unchanged.
+     */
+    keepUnsavedEdits?: boolean;
+  },
 ): Promise<
-  | { success: true; closedPath: string; activeDocumentId: string | null }
-  | { success: false; error: string }
+  | {
+      success: true;
+      closedPath: string;
+      activeDocumentId: string | null;
+      unsavedEditsKept?: KeptBackup;
+    }
+  | { success: false; error: string; code?: "BACKUP_FAILED" }
 > {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input through Map.get(id) to docState.filePath FS sinks
@@ -1850,6 +1869,26 @@ export async function closeDocumentById(
   }
 
   const closedPath = docState.filePath;
+
+  // ADR-057: keep the unsaved edits this close would discard, before any
+  // teardown, so a failed backup refuses the close with the document intact.
+  // A pending conflict is skipped: its session is kept below, edits and all.
+  // A close has no swap to re-read at, so edits typed between this await and
+  // the teardown are not kept — milliseconds, accepted in ADR-057.
+  let unsavedEditsKept: KeptBackup | undefined;
+  if (opts?.keepUnsavedEdits) {
+    const closingDocForBackup = getOrCreateDocument(safeId);
+    if (readPendingConflict(closingDocForBackup) === undefined) {
+      const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
+      if (edits !== null) {
+        try {
+          unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
+        } catch (err) {
+          return { success: false, error: (err as Error).message, code: "BACKUP_FAILED" };
+        }
+      }
+    }
+  }
 
   // Stop watching for external changes BEFORE reading the pending-conflict
   // flag below (review finding). A file-watcher debounce timer can still be
@@ -1981,7 +2020,13 @@ export async function closeDocumentById(
     stopAutoSave();
   }
 
-  return { success: true, closedPath, activeDocumentId: getActiveDocId() };
+  if (unsavedEditsKept) notifyUnsavedEditsKept(safeId, closedPath, "close", unsavedEditsKept);
+  return {
+    success: true,
+    closedPath,
+    activeDocumentId: getActiveDocId(),
+    ...(unsavedEditsKept ? { unsavedEditsKept } : {}),
+  };
 }
 
 /** Save all open sessions (for shutdown handler). */

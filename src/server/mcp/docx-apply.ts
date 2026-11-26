@@ -31,6 +31,7 @@ import {
 import { resolveAppDataDir } from "../platform.js";
 import { relPosToFlatOffset } from "../positions.js";
 import { narrowConflict } from "../session/manager.js";
+import { backupKeptFields } from "./backup-kept.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
@@ -559,6 +560,7 @@ async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | n
       name: path.basename(sidecar),
       timestamp: new Date(st.mtimeMs).toISOString(),
       size: st.size,
+      kind: "disk",
     };
   } catch {
     // No sidecar is the normal case, not an error.
@@ -666,8 +668,11 @@ export function registerApplyTools(server: McpServer): void {
           "tandem_applyChanges, listed last; restore it by name like any snapshot. "
         : "") +
       "Restoring overwrites the file on disk with the snapshot and reloads the open document in " +
-      "place, discarding unsaved in-memory edits; annotations are preserved and re-anchored. Refused " +
-      "for read-only, uploaded and scratchpad documents.",
+      "place; annotations are preserved and re-anchored. The bytes it overwrites are snapshotted " +
+      "first, and unsaved in-memory edits it discards are kept as a backup named in the result as " +
+      "backupKept (each entry's kind says which: disk or unsaved); if that backup cannot be kept, " +
+      "nothing is restored and the call answers BACKUP_FAILED. Refused for read-only, uploaded and " +
+      "scratchpad documents.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
@@ -746,8 +751,17 @@ export function registerApplyTools(server: McpServer): void {
                 " restore it.",
             });
           }
-          const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
-          return mcpSuccess(result);
+          // ADR-057: unsaved edits the restore discards are kept as a backup
+          // first; a backup that cannot be kept refuses with nothing written.
+          const { unsavedEditsKept, ...result } = await restoreDocumentFromBackup(
+            docState.id,
+            path.basename(args.backup),
+            { keepUnsavedEdits: true },
+          );
+          return mcpSuccess({
+            ...result,
+            ...(unsavedEditsKept ? backupKeptFields(unsavedEditsKept) : {}),
+          });
         } catch (err) {
           const e = err as Error & { code?: string };
           if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
@@ -766,6 +780,8 @@ export function registerApplyTools(server: McpServer): void {
           if (e.code === "UNSUPPORTED_FORMAT") return noClaim(mcpError("FORMAT_ERROR", e.message));
           if (e.code === "READ_ONLY") return noClaim(mcpError("READ_ONLY", e.message));
           if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
+          // The unsaved edits could not be kept, so nothing was written.
+          if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
           throw err;
         }
       }

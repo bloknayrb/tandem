@@ -622,22 +622,24 @@ If a saved session file is corrupt, Tandem quarantines it instead of failing the
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file, or you just want yesterday's version back, there are three ways to restore:
+Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. It also keeps your **unsaved edits** there when Claude reloads a document from disk, restores a backup over it, or closes it while it holds edits that hadn't been saved yet. The editor tells you when that happens. If a save ever mangles your file, you want yesterday's version back, or you want those unsaved edits back, there are three ways to restore:
 
 - **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
-- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach. Each one is labelled `disk` (the file as it was on disk) or `unsaved` (edits Claude's action discarded). When Claude's action keeps your edits, it tells Claude the backup's name, so you can simply ask for them back.
 - **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
-- up to 3 timestamped copies, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), and
+- up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins),
+- up to 3 copies of unsaved edits, named the same way with `-unsaved` before the extension, e.g. `thesis-20260609-142200-9f8e7d6c-unsaved.md`, and
 - a `source.txt` recording the original file's full path.
 
 To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 
 Notes:
 
-- Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
+- Backups of the file on disk are taken once per document per server run (and before every restore), and skipped when nothing changed since the newest backup — so the folder stays small.
+- If Tandem can't keep a backup of unsaved edits — the backup folder is full or can't be written — Claude's reload, restore or close is refused and nothing changes. Save the document first, then try again.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
 
 ## Reading server logs

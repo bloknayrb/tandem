@@ -126,6 +126,14 @@ import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
 import {
+  captureAtSwap,
+  type KeptBackup,
+  keepEditsCapturedAtSwap,
+  keepUnsavedEdits,
+  notifyUnsavedEditsKept,
+  unsavedEditsOf,
+} from "./keep-unsaved.js";
+import {
   clearAndReload,
   evictPartialDocState,
   loadContentIntoDoc,
@@ -366,9 +374,22 @@ export async function openFromDisk(
      * Passed by `tandem_open`'s wrapper alone, and only with ownership on.
      */
     expectTargetId?: string;
+    /**
+     * Keep the document's unsaved edits as a backup before a force-reload
+     * discards them, and report the backup here (ADR-057). Passed by
+     * `tandem_open` alone, so `/api/open` (the browser, Replay tutorial) is
+     * unchanged. A backup that cannot be kept throws `BACKUP_FAILED` before
+     * anything is reloaded.
+     */
+    keepUnsavedEdits?: UnsavedEditsHolder;
   },
 ): Promise<OpenSuccess> {
   return openValidated(filePath, options);
+}
+
+/** Filled by a force-reload that kept the document's unsaved edits (`openFromDisk`'s `keepUnsavedEdits`). */
+export interface UnsavedEditsHolder {
+  kept?: KeptBackup;
 }
 
 /**
@@ -411,6 +432,8 @@ interface OpenOptions {
   fromRestore?: boolean;
   /** See `openFromDisk`. */
   expectTargetId?: string;
+  /** See `openFromDisk`. */
+  keepUnsavedEdits?: UnsavedEditsHolder;
 }
 
 async function openValidated(filePath: string, options?: OpenOptions): Promise<OpenSuccess> {
@@ -455,8 +478,19 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
       // CodeQL traces the sanitizer cross-line within a function but not
       // across function boundaries.
       const doc = getDocument(existingId) ?? getOrCreateDocument(existingId);
+      const keepHolder = options?.keepUnsavedEdits;
+      // ADR-057: read the unsaved edits before the disk read's await, and keep
+      // them before anything irreversible — a failed backup throws here, with
+      // the document untouched.
+      const editsBefore = keepHolder ? unsavedEditsOf(existingId, doc, existing) : null;
       const reloadBuffer =
         format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
+      const incoming = typeof reloadBuffer === "string" ? reloadBuffer : undefined;
+      const keptBefore =
+        editsBefore !== null ? await keepUnsavedEdits(resolved, editsBefore, incoming) : undefined;
+      // Edits typed during the awaits between that capture and the swap are
+      // read inside the swap's own transaction and kept after it.
+      const swap = keepHolder ? captureAtSwap(existingId, doc, existing) : undefined;
       const remap = await clearAndReload(
         existingId,
         doc,
@@ -464,8 +498,14 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
         format,
         existing,
         reloadBuffer,
-        { readOnly },
+        { readOnly, ...(swap ? { atSwap: swap.capture } : {}) },
       );
+      if (keepHolder) {
+        const keptAtSwap = swap
+          ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
+          : undefined;
+        keepHolder.kept = keptAtSwap ?? keptBefore;
+      }
       await openDocumentWhenReady(
         { id: existingId, filePath: resolved, format, readOnly, source: "file" },
         async () => {
@@ -494,6 +534,9 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
         await persistEnvelopeNow(existingId, doc, resolved);
       }
       ensureAutoSave();
+      if (keepHolder?.kept) {
+        notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
+      }
       return {
         ...buildResult(doc, {
           documentId: existingId,

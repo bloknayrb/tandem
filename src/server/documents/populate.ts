@@ -405,6 +405,13 @@ export async function clearAndReload(
     markCleanAfter?: boolean;
     readOnly?: boolean;
     conflictGuard?: { raw: unknown };
+    /**
+     * Called synchronously inside the swap transaction, before the old
+     * content is cleared: `tandem_open force` reads the unsaved edits typed
+     * during this function's own awaits here (ADR-057, `keep-unsaved.ts`).
+     * Must not write to the document.
+     */
+    atSwap?: () => void;
   },
 ): Promise<ReloadRemap | undefined> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
@@ -473,6 +480,7 @@ export async function clearAndReload(
       } catch (err) {
         console.error("[Tandem] clearAndReload: annotation capture failed for %s:", id, err);
       }
+      opts?.atSwap?.();
       // #2070: a parked local-model turn that captured the old generation sees
       // the replacement through this, since the Y.Doc instance is unchanged.
       bumpContentGeneration(doc);

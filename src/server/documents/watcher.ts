@@ -109,6 +109,15 @@ export async function reloadFromDisk(
   id: string,
   filePath: string,
   format: string,
+  opts?: {
+    /**
+     * Called synchronously inside the swap transaction, before the old
+     * content is replaced: a Claude restore reads the unsaved edits typed
+     * during its own awaits here (ADR-057, `keep-unsaved.ts`). Must not write
+     * to the document. The watcher's own auto-reload never passes it.
+     */
+    atSwap?: () => void;
+  },
 ): Promise<boolean> {
   if (!acquireReloadGuard(id)) {
     console.error("[FileWatcher] reload already in progress for %s, skipping", id);
@@ -148,6 +157,7 @@ export async function reloadFromDisk(
     //    durable-sync persists, the tombstone observer records — file-watcher
     //    reload semantics.
     withReload(doc, () => {
+      opts?.atSwap?.();
       // While the OLD fragment is still live — after the swap its relRanges
       // resolve to nothing. Its own catch, like the apply below: an annotation
       // the capture cannot read must not block the content from landing.
