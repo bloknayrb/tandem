@@ -534,6 +534,12 @@ export interface SessionData {
    */
   dirty?: boolean;
   /**
+   * #2360 (ships dark): written only by a build with ownership on, whose
+   * replies-map undo keeps client writes out. Absent, `restoreYDoc` strips the
+   * restored reply rows' server-only `answers` / `inProgress`.
+   */
+  threadFieldsTrusted?: true;
+  /**
    * The external-conflict flag pending when the session was written (#1238),
    * carried across the restart so the choice is not silently laundered away.
    *

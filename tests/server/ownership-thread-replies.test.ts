@@ -12,6 +12,9 @@
  * `answers` row here is read straight off the stored reply.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -26,6 +29,10 @@ import {
   SCHEMA_VERSION,
 } from "../../src/server/annotations/schema.js";
 import { loadAndMerge, resetForTesting as resetSync } from "../../src/server/annotations/sync.js";
+import {
+  copyThreadFieldsTrust,
+  threadFieldsTrustedForDoc,
+} from "../../src/server/annotations/thread-answers-trust.js";
 import {
   boundThreadAnswers,
   commentEntryKey,
@@ -54,9 +61,13 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { deliveryRegistry, documentItemKey } from "../../src/server/mcp/inbox-cursor.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import {
+  deleteSession,
   loadCtrlSession,
+  loadSession,
   restoreCtrlDoc,
+  restoreYDoc,
   saveCtrlSession,
+  saveSession,
 } from "../../src/server/session/manager.js";
 import {
   DEFAULT_GRACE_MS,
@@ -539,6 +550,22 @@ describe("answers, flag on (#2360 §3)", () => {
     expect(replyRow(ydoc, first)?.answers).toEqual([]);
   });
 
+  it("KNOWN GAP (must close before PR B): condition (b) accepts any reader's acknowledgement once the caller holds", async () => {
+    // A claim of an unowned document is not a handover, so an entry handed
+    // and acknowledged while it was unowned (here put in the registry by
+    // hand) stays live. B claims by writing (its first reply lists nothing:
+    // condition (c)), and B's next reply lists the entry although B was never
+    // handed it. Pinned so PR B's fix shows up as a deliberate edit of this
+    // test (plan §8; ADR-054's #2360 PR A amendment).
+    const ydoc = fixture("d");
+    seed(ydoc, "c1");
+    const entry = deliveryRegistry.assign("a", docOf("d"), documentItemKey(docOf("d"), "c1"), 0);
+    deliveryRegistry.markAcked(entry);
+    expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual([]);
+    expect(getDocOwner(docOf("d"))?.ownerId).toBe(B);
+    expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual(["c:0"]);
+  });
+
   it("condition (c): a caller that does not hold the document lists nothing, even a live acknowledged entry", async () => {
     // A live, acknowledged entry on an UNOWNED document (put in the registry
     // by hand: a handover would have retired it). B's write claims the
@@ -932,10 +959,11 @@ describe("rows already on disk (#2360 §3)", () => {
     ydoc.on("afterTransaction", (txn: Y.Transaction) => {
       if (txn.origin === INTERNAL_ORIGIN) transactions++;
     });
+    const hash = `h${run++}`;
     const cleanup = await loadAndMerge({
       ydoc,
       store,
-      docHash: `h${run++}`,
+      docHash: hash,
       meta: { filePath: "/tmp/x.md" },
     });
     cleanup("close");
@@ -943,7 +971,12 @@ describe("rows already on disk (#2360 §3)", () => {
       string,
       Record<string, unknown>
     >;
-    return { rows, writes: writes as Array<{ meta: Record<string, unknown> }>, transactions };
+    return {
+      rows,
+      writes: writes as Array<{ meta: Record<string, unknown> }>,
+      transactions,
+      hash,
+    };
   }
 
   it("flag on, unmarked: stripped, and the rewrite carries the marker", async () => {
@@ -973,6 +1006,82 @@ describe("rows already on disk (#2360 §3)", () => {
     expect(Object.keys(stray.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as object)).not.toContain(
       "answers",
     );
+  });
+
+  it("trust survives a Hocuspocus swap and a later content reload (PR A review, item 1)", async () => {
+    setChatClientWritesUndone(() => true);
+    const oldDoc = new Y.Doc();
+    const { hash } = await load(envelope({ threadAnswersTrusted: true }, [forged]), oldDoc);
+    // `onDocSwapped`: a fresh Y.Doc with the same rows replaces the old one.
+    const swapped = new Y.Doc();
+    Y.applyUpdate(swapped, Y.encodeStateAsUpdate(oldDoc));
+    copyThreadFieldsTrust(oldDoc, swapped);
+    reattachObservers(`swap-${run}`, swapped);
+    // `clearAndReload`: the file-sync context is cleared, then the observers
+    // re-attach (no context bound), which runs the sweep.
+    attachObservers(`swap-${run}`, swapped, { uploadDoc: false });
+    expect((swapped.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as AnnotationReply).answers).toEqual(
+      ["c:0"],
+    );
+    // Belt and braces: a Y.Doc found trusted through its context's hash is
+    // remembered, so the same reload finds it with no context at all.
+    const viaHash = new Y.Doc();
+    expect(threadFieldsTrustedForDoc(viaHash, hash)).toBe(true);
+    expect(threadFieldsTrustedForDoc(viaHash, undefined)).toBe(true);
+    // An untrusted old doc passes nothing on.
+    const untrusted = new Y.Doc();
+    const next = new Y.Doc();
+    copyThreadFieldsTrust(untrusted, next);
+    expect(threadFieldsTrustedForDoc(next, undefined)).toBe(false);
+  });
+
+  it("onDocSwapped carries the trust, and restoreCtrlDoc strips first (pinned from source)", () => {
+    const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), "utf8");
+    const lifecycle = read("src/server/bootstrap/hocuspocus-lifecycle.ts");
+    const swap = lifecycle.slice(lifecycle.indexOf("onDocSwapped("));
+    expect(swap.indexOf("copyThreadFieldsTrust(oldDoc, newDoc);")).toBeGreaterThan(-1);
+    expect(swap.indexOf("copyThreadFieldsTrust(oldDoc, newDoc);")).toBeLessThan(
+      swap.indexOf("reattachObservers("),
+    );
+    const manager = read("src/server/session/manager.ts");
+    const restore = manager.slice(manager.indexOf("export function restoreCtrlDoc("));
+    // The strip is the first statement after the apply (item 2).
+    expect(restore).toMatch(
+      /Y\.applyUpdate\(doc, new Uint8Array\(state\)\);\n(?:\s*\/\/[^\n]*\n)*\s*stripUntrustedChatSettles\(doc\);/,
+    );
+  });
+
+  it("the session path: a session file a dark build wrote is stripped at a lit restore; one a lit build wrote is kept (item 3)", async () => {
+    const filePath = path.join(os.tmpdir(), `tandem-thread-session-${run++}.md`);
+    const save = async (lit: boolean) => {
+      setChatClientWritesUndone(() => lit);
+      const doc = new Y.Doc();
+      doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("fr", forged);
+      await saveSession(filePath, "md", doc);
+    };
+    const restore = async () => {
+      setChatClientWritesUndone(() => true);
+      const session = await loadSession(filePath);
+      const doc = new Y.Doc();
+      restoreYDoc(doc, session as NonNullable<typeof session>);
+      return doc.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as Record<string, unknown>;
+    };
+    try {
+      await save(false);
+      expect(Object.keys(await restore())).not.toContain("answers");
+      await save(true);
+      expect((await restore()).answers).toEqual(["c:0"]);
+      // Dark, nothing is trusted: the restore strips even a marked file.
+      setChatClientWritesUndone(() => false);
+      const session = await loadSession(filePath);
+      const doc = new Y.Doc();
+      restoreYDoc(doc, session as NonNullable<typeof session>);
+      expect(Object.keys(doc.getMap(Y_MAP_ANNOTATION_REPLIES).get("fr") as object)).not.toContain(
+        "answers",
+      );
+    } finally {
+      await deleteSession(filePath);
+    }
   });
 
   it("flag off, a marked envelope with no rows is rewritten without the marker", async () => {

@@ -29,6 +29,7 @@ import {
   isStoreReadOnly,
   removeOldName,
 } from "../annotations/store.js";
+import { stripThreadFields } from "../annotations/thread-answers-trust.js";
 import { clientWritesUndoneGrant } from "../chat-client-writes.js";
 import { noteChatRowsDeleted } from "../chat-row-deletions.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
@@ -226,6 +227,8 @@ export async function saveSession(
     // Conditional spread, not `readOnly`, so a writable document's record stays
     // byte-identical to the shape it had before this field existed.
     ...(readOnly ? { readOnly: true } : {}),
+    // #2360 (ships dark): only a lit build marks the file; see `restoreYDoc`.
+    ...(clientWritesUndoneGrant() ? { threadFieldsTrusted: true as const } : {}),
   };
 
   await atomicWrite(sessionPathFor(filePath), JSON.stringify(data), SESSION_FILE_WRITE);
@@ -541,6 +544,13 @@ export function narrowConflict(value: unknown): ExternalConflictState | undefine
 export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
   const state = Buffer.from(session.ydocState, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+  // #2360 PR A review: the session half of the load sweep. A reply row's
+  // `answers` / `inProgress` restored from a file no lit build marked are
+  // stripped here, so the envelope's marker cannot vouch for them later. Dark
+  // no legitimate row carries them: a file holding none opens no transaction.
+  if (!(clientWritesUndoneGrant() && session.threadFieldsTrusted === true)) {
+    stripThreadFields(doc);
+  }
 }
 
 /**
@@ -1095,10 +1105,13 @@ export async function loadCtrlSession(): Promise<string | null> {
 export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   const state = Buffer.from(base64State, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+  // #2360 PR A review: FIRST after the apply, so a throw in a later step can
+  // never leave forged `settles` / `superseded` in place for the next lit
+  // persist to mark trusted.
+  stripUntrustedChatSettles(doc);
   foldChatStream(doc);
   clearChatDelivered(doc);
   dropPublishedOwnership(doc);
-  stripUntrustedChatSettles(doc);
 }
 
 /**

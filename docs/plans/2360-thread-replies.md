@@ -602,6 +602,13 @@ the parent record; forged pre-flip chat `replyTo` rows).
   - collector / waiting agreement;
   - that flag off stays byte-identical except for the sweeps.
 - **svelte-migration-reviewer:** only if Q3(a) changes how `inProgress` thread rows render.
+- **Must close before PR B (from PR A's reviews, 2026-11-26).** Condition (b) accepts any
+  reader's acknowledgement once the caller holds: a claim of an unowned document is not a
+  handover, so an entry handed and acknowledged while the document was unowned stays live, and
+  the claiming session's later reply lists it. PR A pins the gap in
+  `ownership-thread-replies.test.ts` ("KNOWN GAP"); PR B must close it (for example by retiring
+  live entries at a claim of an unowned document, or by remembering per record what it was
+  handed) before its filter reads `answers`.
 - **Residuals for the ADR:**
   - answers in chat or by an edit;
   - an answer from a push before acknowledgement, or after a restart (owed again: fails safe);

@@ -20,8 +20,16 @@
  *   has TRUSTED: one whose load either found the marker or stripped, with the
  *   flag on (after a flag-on strip only the server can write the fields). A
  *   flag-off load of a marked envelope strips and rewrites it unmarked.
- * - A document with no file-sync context (an unwired or read-only store) is
- *   never trusted, so every attach strips it: fails safe (owed again).
+ * - A document whose load never ran (no file-sync context: an unwired store,
+ *   or a load that threw) is never trusted, so every attach strips it: fails
+ *   safe (owed again). A READ-ONLY store (another instance holds the lock) is
+ *   still loaded and can be trusted from its envelope's marker; it cannot
+ *   write the marker or drop one, which the ADR amendment records as a
+ *   bounded residual.
+ * - **The session path.** A document's session file is marked
+ *   `threadFieldsTrusted` only by a lit build, and `restoreYDoc` strips the
+ *   restored rows of an unmarked file (or of any file, dark), so a row forged
+ *   into a session file while dark is not trusted through the envelope marker.
  *
  * The strip is ONE `withInternal` transaction (Critical Rule 2: a server-side
  * repair; `internal` derives no channel event), and it bumps each row's `rev`
@@ -65,7 +73,26 @@ export function threadFieldsTrusted(docHash: string): boolean {
  */
 export function threadFieldsTrustedForDoc(ydoc: Y.Doc, docHash: string | undefined): boolean {
   if (!clientWritesUndoneGrant()) return false;
-  return trustedDocs.has(ydoc) || (docHash !== undefined && trusted.has(docHash));
+  if (trustedDocs.has(ydoc)) return true;
+  if (docHash === undefined || !trusted.has(docHash)) return false;
+  // Belt and braces (PR A review): a Y.Doc found trusted through its bound
+  // context is remembered by object too, so a later content reload, which
+  // clears the context before it re-attaches, still finds it trusted.
+  trustedDocs.add(ydoc);
+  return true;
+}
+
+/**
+ * Carry the trust of the Y.Doc Hocuspocus replaces to the one that replaces
+ * it (`onDocSwapped`, beside `copyArbiterHistory`; PR A review). The swapped-in
+ * Y.Doc holds the same rows, so it is trusted exactly when the old one was.
+ * Without this, a content reload after a swap (`clearAndReload`: `tandem_open
+ * force`, the source-view commit, restore, the external-conflict Reload),
+ * which clears the file-sync context before re-attaching, would find the new
+ * Y.Doc untrusted and strip, and persist, legitimate `answers` / `inProgress`.
+ */
+export function copyThreadFieldsTrust(oldDoc: Y.Doc, newDoc: Y.Doc): void {
+  if (trustedDocs.has(oldDoc)) trustedDocs.add(newDoc);
 }
 
 /**

@@ -89,8 +89,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "and handed to no session. #2360 PR A strips forged `settles` and `superseded` on " +
       "restore, but `replyTo` is legitimate data while dark and cannot be stripped.",
     closedBy:
-      "A server-written provenance stamp on Claude chat rows that the handled rule requires, or " +
-      "Bryan's decision to accept it for the flip.",
+      "#2360 PR B's docs/security.md entry, filed as accepted (bounded) under ownership design " +
+      "D4 (Bryan's Q7, 2026-11-26), naming this row (master's dark answeredChatIds already " +
+      "honours replyTo, so the flip adds no new harm); or a server-written provenance stamp on " +
+      "Claude chat rows that the handled rule requires.",
   },
   {
     gap:
