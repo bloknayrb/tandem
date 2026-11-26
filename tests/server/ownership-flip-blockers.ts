@@ -60,6 +60,15 @@
  * schema only, and Bryan picked "Skill and description (Recommended)" for
  * where the sentence goes: the shipped skill's Multi-Document paragraph
  * (version 43) and a one-line form in the lit `tandem_checkInbox` description.
+ * And *a session whose live stream dropped stays lapsed* (2026-11-26), closed
+ * by its own `closedBy`: smoke S5 (Claude Code 2.1.332 on Linux, a
+ * direct-HTTP entry, on #2358) found Claude Code holds its GET stream: one
+ * stream stayed open for 61 idle minutes with no close, reopen or
+ * re-initialize, the idle reaper logged it pinned past its 30-minute TTL,
+ * and the last `tools/call` ran on the same session. Recorded in ADR-054's
+ * flip amendment, so 3b-2b2's re-ask is not owed. What it cannot speak to
+ * (other versions, the stdio bridge, Windows and macOS, real network drops
+ * or sleep, reopening after a drop) is listed there.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -277,16 +286,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
-  },
-  {
-    gap:
-      "A session still open whose live stream dropped and that stayed quiet past its grace has " +
-      "lapsed and stays lapsed while registered, so it does not count as another session, and " +
-      "another session's departure starts or wakes Tandem's Claude beside it (3b-2b1c; how often " +
-      "Claude Code drops its GET stream is unmeasured).",
-    closedBy:
-      "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
-      "ADR; if it does not, 3b-2b2's re-ask, with a test.",
   },
 ];
 
