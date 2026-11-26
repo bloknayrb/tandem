@@ -113,7 +113,7 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 | `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1914`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
 | `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code, including a raw errno from the filesystem, which arrives in `details.errorCode`. Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required (including `tandem_open`'s `filePath`), or used a UNC / extended-length / device-namespace prefix -- or the document has no on-disk location to act on: `tandem_applyChanges` or `tandem_restoreBackup` on an upload or scratchpad. |
-| `NOT_OWNED` | `tandem_editAnnotation` or `tandem_annotationReply` was aimed at an annotation Claude did not author. Authority over a user's own card belongs to the user; answer it with `tandem_reply` or a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770)). |
+| `NOT_OWNED` | `tandem_editAnnotation` was aimed at an annotation Claude did not author, or `tandem_annotationReply` at a record that takes no Claude reply: an imported record or a user's highlight (and, on a build with multi-session ownership off, any user-authored record). Authority over a user's own card belongs to the user; answer a user's comment in its thread with `tandem_annotationReply`, or leave a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770), [#2360](https://github.com/bloknayrb/tandem/issues/2360)). |
 | `DOCUMENT_BUSY` | **Ships dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054): never returned by a release build. With ownership on, the write tools and `tandem_open` run one at a time per document, and a call that finds the document busy waits at most 20 seconds for its turn. Past that it is refused with this code: **it was not run, nothing was changed, and the caller does not become the owner.** Retryable, but the message says to retry once and then tell the user, because an operation that never finishes (a save stalled on an unreachable drive) keeps the document busy until Tandem restarts; before retrying an edit, read the document again, since the operation ahead may have changed it. `details` is `{ reason, documentId, waitedMs? }` (`waitedMs` is the wait limit that applied, not a measurement) with `reason` `wait-expired`, or `cancelled` for a call whose own request was cancelled before its turn (which no client normally sees). It names no holder: it is about an unfinished operation, not about who owns the document, and it is answered before the ownership check. |
 | `NOT_DOC_OWNER` | **Ships dark** (multi-session document ownership, [#2358](https://github.com/bloknayrb/tandem/issues/2358), ADR-054): never returned by a release build. With ownership on, at most one session owns each open document, and a write tool (`tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_save`, `tandem_rename`, `tandem_close`, `tandem_comment`, the four id-keyed annotation tools, `tandem_restoreBackup` in restore mode, `tandem_applyChanges`, `tandem_convertToMarkdown`), `tandem_open` or `tandem_switchDocument` called by another session is refused with this code before anything is written (one exception: a `tandem_open` that lost a race with another session's take while it was reading the disk has already opened or reloaded the document, and its message says so). Reads stay open. Distinct from `NOT_OWNED`, which is about who authored an annotation; `NOT_DOC_OWNER` is answered first. `details` is `{ reason, documentId, holder: { label, displayKind } \| null, cause?, heldDocumentIds? }`, and the message carries its own remedy. `reason`: `held` (another session opened it or was assigned it; only the user can move it), `claimed` (another session picked it up; for a write, `tandem_open` it only if the user asked you to work on it; for `tandem_annotationReply` the message says instead not to answer and not to take the document because of the comment), `default` (Tandem's own Claude is answering it; the same two remedies), `lost` (you held it and lost it; `cause` is `taken` or `taken back`), `answered` (`tandem_annotationReply` on a thread whose latest user reply another session already answered; `holder` is that session), `switch` (`tandem_switchDocument`: ask the user to click the tab), `not-present` (Tandem's own Claude, while off or stopped, holds nothing), `chat` (`tandem_reply` to a chat message another session answers or that is not this session's to answer now; see `tandem_reply`'s "ships dark" paragraph; its `details` carry `documentId` only when the message names a document, and no `cause` or `heldDocumentIds`), `post` (a `tandem_reply` with no `replyTo`, or one naming no message, that is not about a document, while another session answers such chat; since the posts PR). `tandem_reply` also answers `answered` (a reply or acknowledgement to a chat message another session already answered) and, for a post, `held`, `claimed`, `default`, `lost` and `not-present` in forms that fit a post; a post's and a chat reply's `details` carry `documentId` only when there is one, and never `heldDocumentIds`. `heldDocumentIds` is present when the call named no `documentId` and so targeted the active document: it lists the documents the caller holds. A refusal decided by the arguments or by the document's format never makes the caller the owner; the ones each tool already answered first (no such document, read-only, wrong format) are answered before this code. `tandem_open` can also answer `RELOAD_IN_PROGRESS` with ownership on, when the document a path is open as kept changing while the call waited: retry it. |
 | `ANNOTATION_RESOLVED` | The annotation is already accepted or dismissed, so `tandem_resolveAnnotation`, `tandem_editAnnotation` and `tandem_annotationReply` refuse it. `tandem_resolveAnnotation` sent this as `ANNOTATION_NOT_PENDING` until #1823; that code is gone. |
@@ -843,13 +843,14 @@ tandem_editAnnotation({
 
 ### tandem_annotationReply
 
-Reply to a thread on an annotation Claude authored. Only works on pending annotations; a user-authored or imported parent — including a promoted note or Word comment, stored as a user comment — returns `NOT_OWNED` (#1770).
+Reply in the thread of a pending comment: one Claude authored, or one the user shared with Claude, where the user reads the answer to their comment (#2360). Promoted notes and promoted Word comments are stored as user comments, so they take replies too. An imported record and a user's highlight return `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `annotationId` | string | yes | The annotation ID to reply to |
 | `text` | string | yes | Reply text |
 | `suggestedText` | string | no | A refined replacement proposal, over the **parent annotation's** range (#1626). A reply has no range of its own. |
+| `inProgress` | boolean | no | Marks the reply as an acknowledgement ("I'm on it"): it answers nothing, and the thread still waits for the answer. Refused with `INVALID_ARGUMENT` alongside `suggestedText`. |
 | `documentId` | string | no | Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does); if the id is Claude-facing in more than one open document the call is refused with `INVALID_ARGUMENT` and `details: { reason: "ambiguous-document", documentIds }` (#2187, PR #2225 review). The success payload names the `documentId` it acted on. The lookup applies no Solo hold, deliberately, matching the explicit-`documentId` form. |
 
 **Returns:**
@@ -857,7 +858,7 @@ Reply to a thread on an annotation Claude authored. Only works on pending annota
 { "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3", "documentId": "report-a1b2c3" }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight, or a private note / private comment, the reply text or `suggestedText` is over the length limit, or a `suggestedText` was sent on a parent whose live span overlaps heading markup -- arms of one code in `describeReplyWriteRefusal`). `NOT_OWNED` and the ADR-027 refusals are answered *ahead* of the heading check, which is the runtime order: the range layer never speaks about a record Claude was not allowed to touch.
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found, or a user comment the Solo hold keeps from Claude, the answer a read gives), `NOT_OWNED` (an imported record or a user's highlight; its message names `tandem_comment` as the remedy), `NOT_DOC_OWNER` (another session holds the document, or already answered the thread's latest user reply: `reason: "answered"`; see the error table), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight Claude authored, or a private note / private comment, the reply text or `suggestedText` is over the length limit, `inProgress` was sent with `suggestedText`, or a `suggestedText` was sent on a parent whose live span overlaps heading markup -- arms of one code in `describeReplyWriteRefusal`). `NOT_OWNED` and the ADR-027 refusals are answered *ahead* of the heading check, which is the runtime order: the range layer never speaks about a record Claude was not allowed to touch.
 
 **Example:**
 ```
@@ -868,19 +869,26 @@ tandem_annotationReply({
 ```
 
 **Notes:**
-- **Claude may only reply inside threads it started (#1770).** A user's comment
-  is addressed *to* Claude, not a thread Claude is a participant in — answer it
-  with `tandem_reply` (chat) or a fresh `tandem_comment`. A user-authored parent
-  returns `NOT_OWNED`. The user's own replies inside Claude's thread are
-  unaffected, as is the user replying in their own note thread (#1000).
-- **Ships dark (#2360, behind `OWNERSHIP_ENABLED`; ADR-054's 2026-11-26 amendment).** With
-  ownership on, Claude may also reply inside a user's shared (outbound) comment thread, promoted
-  notes and promoted Word comments included; an imported record and a highlight still return
-  `NOT_OWNED`, whose message then no longer names `tandem_reply`; a user comment the Solo hold
-  hides returns `NOT_FOUND`, as a read does. The tool gains an `inProgress` boolean for an
-  acknowledgement that answers nothing (no `suggestedText` with it), and a final reply records,
-  server-side only, which thread entries it answers. None of this reaches the description or the
-  schema while ownership is off, and the skill does not mention it until the flip (PR C).
+- **Claude answers a user's comment inside its thread (#2360; ADR-054's 2026-11-26 amendments).**
+  This replaced answering it in chat (#1770's rule, which kept Claude to threads it started). The
+  parent must be a pending, Claude-facing comment: a user's shared (outbound) comment, promoted
+  notes and promoted Word comments included, or one Claude authored. A private note or private
+  comment still answers `INVALID_ARGUMENT` (ADR-027), an imported record and a user's highlight
+  `NOT_OWNED`, and a user comment the Solo hold hides `NOT_FOUND`, as a read does. The user's own
+  replies inside Claude's thread are unaffected, as is the user replying in their own note thread
+  (#1000). `tandem_editAnnotation` still refuses a user's card: the text stays theirs.
+- **`inProgress` and what a reply answers.** An `inProgress` reply is an acknowledgement and
+  answers nothing. A final reply records, server-side only, which of the thread's entries it
+  answers: the user's comment at its current version and the user's replies that this session's
+  polls were handed and acknowledged. `tandem_checkInbox` no longer hands out an answered entry,
+  even after the document passes to another session; a user edit to the comment, or a new user
+  reply, re-opens the thread. A comment answered in chat or by an edit is not seen as answered.
+  The record of what a reply answers never reaches `tandem_getAnnotations`,
+  `tandem_exportAnnotations` or the reply event, and an `inProgress` reply is not written into a
+  `.docx`.
+- **On a build with multi-session ownership off** (`OWNERSHIP_ENABLED`), the tool keeps #1770's
+  rule: a user-authored parent returns `NOT_OWNED`, whose message names `tandem_reply`, and the
+  description and schema carry no `inProgress`.
 - Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.

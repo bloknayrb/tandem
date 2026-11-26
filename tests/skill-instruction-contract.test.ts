@@ -182,7 +182,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // 42 adds `backupKept` and `BACKUP_FAILED` to Error Recovery (ADR-057: a Claude force-open,
   // restore or close keeps the unsaved edits it discards), and rewords Hard Rule 6's force
   // clause to match. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*42$/m);
+  // 43 answers a user's comment in its own thread (#2360 PR C, the switch): `inProgress`,
+  // answered threads leaving the inbox, and the NOT_OWNED fallback. Outside the wake section.
+  expect(skill).toMatch(/^version:\s*43$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -572,7 +574,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "42", bodyHash: "312d5d083721" });
+    ).toEqual({ version: "43", bodyHash: "2120110bdc52" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -759,6 +761,29 @@ describe("shipped Tandem skill instruction contract", () => {
       /action: "dismiss"[\s\S]{0,120}withdraw|withdraw[\s\S]{0,160}action: "dismiss"/i,
     );
     expect(skill).toMatch(/resolvedBy/);
+  });
+
+  // #2360 PR C, the switch (Bryan's decision 6: "comments should get answered with replies to
+  // the comment directly, not in the chat"). Lands right before the ownership flip, so it
+  // describes the lit server; its NOT_OWNED fallback keeps it right against a dark one.
+  it("tells Claude to answer a user's comment in its own thread (#2360)", () => {
+    const skill = readShippedSkill();
+    const userComments = skill.split(/\n\n/).filter((p) => p.startsWith("**User comments.**"));
+    expect(userComments).toHaveLength(1);
+    const p = userComments[0] ?? "";
+    expect(p).toMatch(/Answer a user's comment in its own thread with `tandem_annotationReply`/);
+    // "I'm on it" in the thread, and that it answers nothing.
+    expect(p).toMatch(/`inProgress: true`[\s\S]{0,80}it answers nothing/);
+    // Answered threads stop arriving; an edit or a new reply re-opens one.
+    expect(p).toMatch(/stop arriving in `tandem_checkInbox`/);
+    expect(p).toMatch(/editing the comment, or replying in the thread again, re-opens it/);
+    // The refusals that stay, and the fallback for a server that keeps NOT_OWNED.
+    expect(p).toMatch(/ANNOTATION_RESOLVED/);
+    expect(p).toMatch(/INVALID_ARGUMENT/);
+    expect(p).toMatch(/If it refuses a user's comment with `NOT_OWNED`/);
+    // The old rule is gone.
+    expect(skill).not.toMatch(/answering inside their thread is not your seat/);
+    expect(skill).not.toMatch(/is for continuing \*your own\* threads/);
   });
 
   it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {

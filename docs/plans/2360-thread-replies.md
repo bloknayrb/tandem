@@ -624,6 +624,15 @@ the parent record; forged pre-flip chat `replyTo` rows).
   is retired like any other, so a handled mark that is later lost (the load sweep on an untrusted
   room) re-owes the item instead of leaving it read as delivered. ADR-054's #2360 PR B amendment
   records it.
+- **Closed in PR C (2026-11-26): row S.** The skill (version 43 after the rebase; 42 went to ADR-057), `docs/mcp-tools.md` and the
+  local model's `reply_to_annotation` description carry the switch, and row S is deleted.
+  Decisions the plan left open, recorded in ADR-054's #2360 PR C amendment: the skill describes
+  the lit server, as §5 says, with one fallback that keeps it right against a dark or older server
+  (a user's comment refused `NOT_OWNED`: do what the refusal says); the local model's description
+  is read per request through `clientWritesUndoneGrant()`, byte-identical dark. Its editing
+  prompt still limits it to ids it created in the same reply, and the harness fingerprint records
+  the dark description; neither changed here. The `CHANGELOG.md` entry says the v0.31.0 chime and
+  notification now fire.
 
 ## 9. Review dispositions
 

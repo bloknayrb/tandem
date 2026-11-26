@@ -35,7 +35,11 @@
  * the filter cannot see), and *a forged pre-flip chat `replyTo`*, closed by
  * its own `closedBy`: `docs/security.md`'s accepted (bounded) entry for
  * client-written answer marks (Bryan's Q7, "Accepted, bounded
- * (Recommended)").
+ * (Recommended)"). And #2360 PR C's one (2026-11-26): *#2360's switch has
+ * not merged*, closed by its own `closedBy`, the switch PR (the shipped
+ * skill, `docs/mcp-tools.md` and the local model's tool description), which
+ * lands immediately before the flip, in the same release (Bryan's Q1, "Gate
+ * it, skill last (Recommended)").
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -196,12 +200,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     closedBy:
       "A hand test on a real Claude Code session before the flip, recorded on #2358; if the " +
       "descriptions are not shown, a decision on where that sentence goes.",
-  },
-  {
-    gap:
-      "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
-      "answered-link, and the switch lands immediately before the flip, in the same release).",
-    closedBy: "#2360's switch PR merged.",
   },
   {
     gap:
