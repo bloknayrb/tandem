@@ -504,7 +504,7 @@ jobs:
   #  - The build forces __OWNERSHIP_ENABLED__ on through tsup's API
   #    (scripts/ci/build-ownership-on.ts); tsup.config.ts itself reads no
   #    environment, so nothing else can.
-  #  - The probe boots that bundle with NO TANDEM_OWNERSHIP and checks it is
+  #  - The probe boots that bundle with TANDEM_OWNERSHIP=0 and checks it is
   #    ownership-ON, so the define, not the env fallback, did it.
   #  - The Test and E2E steps carry TANDEM_OWNERSHIP=1, so the suites run
   #    flag-on whether the code under test is bundled or loaded by tsx/vitest.
@@ -650,11 +650,12 @@ jobs:
         run: npm run build
 
       # Multi-session ownership (#2358, ADR-054), on since the flip. This boots
-      # the bundle just built with NO TANDEM_OWNERSHIP in its environment and
+      # the bundle just built with TANDEM_OWNERSHIP=0 in its environment and
       # checks it behaves ownership-ON (session ids hashed in its log, a second
       # session's write refused): only the define can have turned it on, so a
       # define dropped from tsup.config.ts, or an identifier ownership-flag.ts
-      # reads under another name, fails here. Before the flip this step ran
+      # reads under another name, fails here. (Set, not absent: an unset
+      # variable follows the bundled `true` literal, which would pass too.) Before the flip this step ran
       # `--expect off` with the variable set, to prove a release ignored it.
       # The probe builds the child's environment itself, so this step sets
       # none. tests/scripts/ownership-flag-on-wiring.test.ts pins this step whole.

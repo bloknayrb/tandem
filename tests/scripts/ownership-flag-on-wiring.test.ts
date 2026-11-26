@@ -177,8 +177,8 @@ describe("check sets no variable, and proves the release bundle is ownership-on 
 
   it("the probe step is pinned whole, immediately after Build", () => {
     // Since the flip (ADR-054's flip amendment): `--expect on` gives the
-    // child no TANDEM_OWNERSHIP, so only the release build's define can turn
-    // it on. Before it, this step ran `--expect off` with the variable set.
+    // child TANDEM_OWNERSHIP=0, so only the release build's define can turn
+    // it on (an unset variable would follow the literal and prove nothing). Before it, this step ran `--expect off` with the variable set.
     const i = check.steps.findIndex((s) => s.run === PROBE_ON);
     expect(i, "check no longer runs the --expect on probe").toBeGreaterThan(0);
     expect(check.steps[i - 1]).toEqual({ name: "Build", run: "npm run build" });
@@ -312,7 +312,7 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
     expect(hashForLog(MCP)).toMatch(/^#[0-9a-f]{8}$/);
   });
 
-  it("builds the child's environment itself: isolated homes, no inherited secrets, the variable only for --expect off", () => {
+  it("builds the child's environment itself: isolated homes, no inherited secrets, the variable set against the expectation", () => {
     const parent = {
       PATH: "/bin",
       TANDEM_AUTH_TOKEN: "secret",
@@ -320,7 +320,9 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
       TANDEM_OWNERSHIP: "1",
     };
     const on = serverEnvFor("on", "/tmp/p", { ws: 5001, mcp: 5002 }, parent);
-    expect(on.TANDEM_OWNERSHIP).toBeUndefined();
+    // Set, not absent: since the flip an unset variable follows the `true`
+    // literal, so a bundle with the define dropped would pass `--expect on`.
+    expect(on.TANDEM_OWNERSHIP).toBe("0");
     expect(on.TANDEM_AUTH_TOKEN).toBeUndefined();
     expect(on.PATH).toBe("/bin");
     for (const k of [
@@ -356,12 +358,12 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
   });
 
   it("boots its entry with an environment it built itself (spawned against fixture servers)", () => {
-    // The env-following fixture hashes exactly when TANDEM_OWNERSHIP=1 reaches
-    // it, as a bundle with the define dropped would, and refuses to start
-    // unless the probe isolated its home. So both expectations must FAIL
-    // against it: `off` because the probe hands the child the variable, `on`
-    // because it hands it nothing. A probe that inherited the parent's env, or
-    // stopped setting the variable for `off`, turns one of these green.
+    // The env-following fixture hashes when TANDEM_OWNERSHIP is unset or "1",
+    // as a bundle with the define dropped would since the flip, and refuses to
+    // start unless the probe isolated its home. So both expectations must FAIL
+    // against it: `off` because the probe hands the child "1", `on` because it
+    // hands it "0". A probe that inherited the parent's env, or stopped setting
+    // the variable for either, turns one of these green.
     const fixtures = path.join(ROOT, "tests/scripts/fixtures/ownership-probe");
     const boot = (expect: string, entry: string) =>
       spawnSync(process.execPath, [probe, `--expect=${expect}`, `--entry=${entry}`], {

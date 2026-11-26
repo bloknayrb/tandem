@@ -10,11 +10,12 @@ import { OWNERSHIP_ENABLED } from "../shared/constants.js";
 declare const __OWNERSHIP_ENABLED__: boolean;
 
 // Ship guard, the twin of docx-flag.ts's: a sidecar bundle without the define
-// would fall back to the env var, so a mis-built bundle is caught at boot.
+// would fall back to the env var (or, unset, the literal), so a mis-built
+// bundle is caught at boot.
 if (process.env.TANDEM_TAURI_SIDECAR === "1" && typeof __OWNERSHIP_ENABLED__ === "undefined") {
   console.error(
     "[ownership] WARNING: __OWNERSHIP_ENABLED__ define missing in sidecar bundle — " +
-      "the ownership flag is falling back to the TANDEM_OWNERSHIP env var",
+      "the ownership flag is falling back to the TANDEM_OWNERSHIP env var, or the source literal when it is unset",
   );
 }
 
