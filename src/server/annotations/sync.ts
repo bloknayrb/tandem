@@ -241,7 +241,7 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
       lastUpdated: Date.now(),
       contentHash: contentHashValue,
       keyIdentity: KEY_IDENTITY_FORMAT,
-      // #2360 (ships dark): only for a document this process trusts, which
+      // #2360 (ownership on): only for a document this process trusts, which
       // needs ownership on (`thread-answers-trust.ts`). Never written dark, so
       // a dark build's envelope is byte-identical to before.
       ...(threadFieldsTrusted(docHash) ? { threadAnswersTrusted: true as const } : {}),

@@ -164,8 +164,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "`--mcp-config`; a project-scope `.mcp.json` `tandem` entry and the user's own Tandem " +
       "entry and skill being replaced; missing or invalid run files; a `--settings` re-read; " +
       "macOS, Linux and the bundled Node; whether a not-signed-in child's bridge binds before " +
-      "its refusal.",
-    closedBy: "A further smoke measuring them, or Bryan's acceptance of each.",
+      "its refusal. The `--settings` re-read (Claude Code reading a run file again after it " +
+      "starts) is also one of #2439's void conditions (`docs/security.md`), so the result " +
+      "decides #2439 too.",
+    closedBy:
+      "A further smoke measuring them, or Bryan's acceptance of each; whoever closes it " +
+      "checks #2439's acceptance against the re-read result.",
   },
   {
     gap:

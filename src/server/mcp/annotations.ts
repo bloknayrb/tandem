@@ -1300,7 +1300,7 @@ export function registerAnnotationTools(server: McpServer): void {
     ),
   );
 
-  // #2360 (ships dark): with ownership on, Claude replies inside a user's
+  // #2360 (ownership on): with ownership on, Claude replies inside a user's
   // shared comment thread, and an "I'm on it" takes `inProgress`. Decided once
   // per registration like the owner label, so a dark registration's
   // description and schema are byte-identical to before.

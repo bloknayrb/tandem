@@ -3,7 +3,7 @@
  *
  * Mount as `GET /api/events` on the Express app.
  *
- * With multi-session ownership on (#2358 PR 4a, ships dark), each stream is
+ * With multi-session ownership on (#2358 PR 4a), each stream is
  * narrowed by its `X-Claude-Session-Id` (`pushStreamAdmits`, ownership design
  * §9.1), and every stream also gets the payload-free `ownership-changed`
  * nudge ({@link requestOwnershipChangedEvent}), which is not an event.

@@ -2,7 +2,7 @@
 /**
  * Is the BUILT server bundle ownership-on or ownership-off? (#2358, ADR-054)
  *
- * Ownership ships dark behind the `__OWNERSHIP_ENABLED__` define. Every source-
+ * Ownership is decided by the `__OWNERSHIP_ENABLED__` define (on since the flip). Every source-
  * level pin (the literal, the tsup block, the identifier `ownership-flag.ts`
  * reads) can be green while the artifact is wrong — a misspelled identifier or a
  * dropped define leaves the bundle falling back to the `TANDEM_OWNERSHIP` env

@@ -771,7 +771,7 @@ export function attachObservers(
 
   const cleanups: Array<() => void> = [];
 
-  // #2360 (ships dark): undo a client connection's change to the replies map,
+  // #2360 (ownership on): undo a client connection's change to the replies map,
   // and drop update data a client left pending. Every document, upload and
   // scratchpad included, re-run after the Hocuspocus swap; and FIRST, so the
   // undo runs before the replies observer derives anything from the same

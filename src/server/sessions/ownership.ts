@@ -3,12 +3,11 @@
  * (#2358, ADR-054; ownership design v5 §2–§4,
  * docs/spikes/multi-session-ownership/README.md).
  *
- * **Ships dark.** Every exported function that production code calls returns at
- * once while `ownershipEnabled()` is false, so a release build never creates a
- * record, an entry or a timer. (The wiring seams — `setTransportView`,
+ * **Flag-gated** (on since the flip). Every exported function that production code
+ * calls returns at once while `ownershipEnabled()` is false, so a build with
+ * ownership off never creates a record, an entry or a timer. (The wiring seams — `setTransportView`,
  * `setOwnershipSeqSource` and their kin — only store a function, which
- * nothing calls while dark.) The `ownership-flag-on` CI job runs everything
- * flag-on.
+ * nothing calls while ownership is off.)
  *
  * **What is here.** PR 1a: records, labels, display kinds, attachment and lapse
  * (ownership design §3.4), the ownership map, `setDocOwner`, the default

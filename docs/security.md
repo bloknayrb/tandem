@@ -914,7 +914,8 @@ bound in full, and the conditions that void the acceptance.
     - The new folder under the system temp folder that holds the Claude Code installer's downloaded script (`install-claude-cli.ts`): the script does not run.
     - The launcher folder and each run file (`src/server/launcher/run-files.ts`): a spawn starts Claude without them; the boot sweep, when the folder's check fails, logs that and skips the sweep.
   - **Log and continue:** the private app-data directories above.
-  - Every caller ships in every release except the run files. *(updated 2026-11-20 at the flip: the `models.json` half is live from v0.32.0; a fact update, not part of what Bryan accepted on 2026-11-17)*
+  - Every caller ships in every release, the run files included since the multi-session ownership flip (ADR-054's flip amendment). *(updated 2026-11-20 at the flip: the `models.json` half is live from v0.32.0; a fact update, not part of what Bryan accepted on 2026-11-17)*
+  - **Not re-decided for the ownership flip.** The run-file case goes live with the flip: until then no release wrote run files, and Bryan's acceptance of 2026-11-17 was made while they were dark. Unlike #2439, whose re-decision of 2026-11-25 says "#2441 holds that case", this entry has not been re-decided for the flip; whether it holds with the run files live is Bryan's call, owed before that release (ADR-054's flip amendment lists it).
 
   **What a principal the check does not see could do, by what is protected.**
   - **The app-data stores** hold document content, chat history, annotation text and verbatim document backups. With read rights it reads them. With write rights it can change session or annotation files that Tandem restores into open documents and that Claude reads.

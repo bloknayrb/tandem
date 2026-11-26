@@ -2319,7 +2319,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return next;
   }
 
-  // --- Tandem's Claude's run state (#2358 PR 3b-1, ships dark) -------------
+  // --- Tandem's Claude's run state (#2358 PR 3b-1) -------------
   //
   // Computed here and consumed by nothing yet (3b-2 is its first reader).
   // Every write below is flag-on only: flag off no spawn record exists, no
