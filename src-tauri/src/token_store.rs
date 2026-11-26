@@ -120,7 +120,11 @@ fn token_with_keyring(entry: &Entry) -> Result<String, String> {
             // token not yet stored — fall through to file or generate
         }
         Err(e) => {
-            log::warn!("{KEYRING_LOG_PREFIX} read failed (falling through to file): {e}");
+            // Once per process, like "unavailable": this runs on every call.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                log::warn!("{KEYRING_LOG_PREFIX} read failed (falling through to file): {e}");
+            });
         }
     }
 
