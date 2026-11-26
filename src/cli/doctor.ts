@@ -1346,6 +1346,17 @@ function reportBridgeEntry(
 }
 
 /**
+ * What a direct-HTTP entry costs while it stays one, with ownership on. Ends
+ * every arm's fix in {@link reportDirectHttpEntry}, so each remedy says why it
+ * matters.
+ */
+export const DIRECT_HTTP_OWNERSHIP_COST =
+  "While this entry is direct HTTP, Tandem can't tell that a terminal's Tandem toolsets are one session: a terminal " +
+  "that also has the Tandem plugin counts as two sessions, so writing through one toolset to a " +
+  "document it opened through the other is refused, and replies sent through the optional " +
+  "channel shim are refused. Each refusal says what to do.";
+
+/**
  * The direct-HTTP entry Tandem used to write. Whether the next start switches
  * it depends on whether this install can write the bridge at all, so the fix
  * never offers a step that would write the same entry again.
@@ -1360,16 +1371,6 @@ function reportBridgeEntry(
  * config names its bridge), so the dark-era cost (its own Claude unconfirmed,
  * its earlier connection read as another AI) is not stated.
  */
-/**
- * What a direct-HTTP entry costs while it stays one, with ownership on. Ends
- * every arm's fix below, so each remedy says why it matters.
- */
-export const DIRECT_HTTP_OWNERSHIP_COST =
-  "While this entry is direct HTTP, Tandem can't tell that a terminal's Tandem toolsets are one session: a terminal " +
-  "that also has the Tandem plugin counts as two sessions, so writing through one toolset to a " +
-  "document it opened through the other is refused, and replies sent through the optional " +
-  "channel shim are refused. Each refusal says what to do.";
-
 async function reportDirectHttpEntry(
   r: Recorder,
   cliAvailable: CliAvailability,

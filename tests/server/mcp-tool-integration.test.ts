@@ -22,6 +22,7 @@ import {
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   CHAT_ACK_DIRECTIVE,
+  CHAT_REFUSED_DIRECTIVE,
   onTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
   registerAwarenessTools,
@@ -2415,6 +2416,7 @@ describe("MCP tool integration — awareness tools", () => {
       await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
     );
     expect(withChat.data.summary).toContain(CHAT_ACK_DIRECTIVE);
+    expect(withChat.data.summary).toContain(CHAT_REFUSED_DIRECTIVE);
   });
 
   it("tandem_reply records inProgress and marks the answered message read", async () => {

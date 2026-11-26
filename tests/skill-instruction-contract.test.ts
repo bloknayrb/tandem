@@ -192,6 +192,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // paragraph). Outside it: Multi-Document's default poll covers what is yours to answer, the
   // NO_DOCUMENT bullet's no-document sentence, and three Error Recovery bullets (NOT_DOC_OWNER,
   // DOCUMENT_BUSY, and an output-schema failure after an update: restart or reconnect).
+  // Still 44 (unreleased): smoke S7 found Claude Code never shows output-schema descriptions
+  // to a model, so Multi-Document also says `holding` is the truth and `changed` may be
+  // incomplete (Bryan, 2026-11-26, "Skill and description (Recommended)"; pinned below).
   expect(skill).toMatch(/^version:\s*44$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
@@ -550,6 +553,21 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(workflow).toContain("heldFromExport");
   });
 
+  // Smoke S7 (#2358, 2026-11-26): Claude Code 2.1.332 shows a model a tool's name, top-level
+  // description and input schema only, so `ownership.changed`'s output-schema description
+  // (`CHANGED_FIELD_DESCRIPTION`) never reaches it. Bryan's pick, "Skill and description
+  // (Recommended)": the sentence lives in Multi-Document, beside `holding` and `notYours`.
+  it("Multi-Document says `holding` is the truth and `changed` may be incomplete (S7)", () => {
+    const section = namedSection(readShippedSkill().replace(/\r\n/g, "\n"), "Multi-Document");
+    const paragraph = section.split("\n\n").find((p) => p.includes("`ownership.notYours`")) ?? "";
+    expect(paragraph).toContain("`ownership.holding` is the truth");
+    expect(paragraph).toContain("`ownership.changed` only explains past changes to `holding`");
+    expect(paragraph).toContain(
+      "may be incomplete (after a Tandem restart, after a poll response that never reached you, and in other cases)",
+    );
+    expect(paragraph).toContain("it does not change what you may do");
+  });
+
   it("docs/workflows.md's Multi-Model Workflow names orchestrator-only polling (#1820)", () => {
     const doc = readRepoText("docs/workflows.md");
     const section = /^## Multi-Model Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(doc)?.[1];
@@ -582,7 +600,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "44", bodyHash: "844b267c226e" });
+    ).toEqual({ version: "44", bodyHash: "59c494ce3313" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

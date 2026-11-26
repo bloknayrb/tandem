@@ -54,6 +54,12 @@
  * tab stopped syncing, so Bryan picked "Drop the doc-room guard
  * (Recommended)"; the guard was removed, which closes the row's premise, and
  * what that leaves is `docs/security.md` #2576's widened bound.
+ * And *whether Claude Code shows output-schema descriptions to a model*
+ * (2026-11-26), closed by its own `closedBy`: smoke S7 (Claude Code 2.1.332,
+ * on #2358) found it shows a tool's name, top-level description and input
+ * schema only, and Bryan picked "Skill and description (Recommended)" for
+ * where the sentence goes: the shipped skill's Multi-Document paragraph
+ * (version 43) and a one-line form in the lit `tandem_checkInbox` description.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -142,16 +148,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     acceptedFor:
       "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
       "(PR 5's controls are the remedy); tracked as #2358.",
-  },
-  {
-    gap:
-      "Whether Claude Code shows output-schema descriptions to a model is unverified (the " +
-      "change-notice PR): if it does not, a model sees only `changed`'s bare cause words and the " +
-      "summary sentence, not the description saying `holding` is the truth and `changed` may be " +
-      "incomplete.",
-    closedBy:
-      "A hand test on a real Claude Code session before the flip, recorded on #2358; if the " +
-      "descriptions are not shown, a decision on where that sentence goes.",
   },
   {
     gap:

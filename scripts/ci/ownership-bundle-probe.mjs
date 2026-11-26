@@ -29,8 +29,10 @@
  *                 after the normal build, and the `ownership-flag-on` job,
  *                 after scripts/ci/build-ownership-on.ts);
  *   --expect off  the child gets `TANDEM_OWNERSHIP=1`, so a bundle that fell
- *                 back to the env var would turn on and fail (`check`, after the
- *                 normal build: a release ignores the variable).
+ *                 back to the env var would turn on and fail. No CI step runs
+ *                 it since the flip (before it, `check` did, to prove a dark
+ *                 release ignored the variable): every release bundle is
+ *                 ownership-on now and fails it by design.
  *
  * The child's environment is built here from scratch (`serverEnvFor`), never
  * inherited: a home, app-data and config directories inside one temp dir, so a
