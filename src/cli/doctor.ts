@@ -1365,7 +1365,7 @@ function reportBridgeEntry(
  * every arm's fix below, so each remedy says why it matters.
  */
 export const DIRECT_HTTP_OWNERSHIP_COST =
-  "Until it switches, Tandem can't tell that a terminal's Tandem toolsets are one session: a terminal " +
+  "While this entry is direct HTTP, Tandem can't tell that a terminal's Tandem toolsets are one session: a terminal " +
   "that also has the Tandem plugin counts as two sessions, so writing through one toolset to a " +
   "document it opened through the other is refused, and replies sent through the optional " +
   "channel shim are refused. Each refusal says what to do.";
