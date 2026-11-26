@@ -919,7 +919,12 @@ describe("the remaining R4.4 exit paths", () => {
       const unrunnable = path.join(recordDir, "reaper-not-executable");
       fs.writeFileSync(unrunnable, "", { mode: 0o644 });
       process.env.TANDEM_REAPER_PATH = unrunnable;
-      const sup = makeSupervisor();
+      // EACCES is `spawn-failed`, which schedules a restart. At the helper's
+      // 50 ms backoff that restart registers its own spawn state while this
+      // test is still polling (ownership-flag-on on #2574: `serial` one past
+      // the failed spawn, `started: false`). This test judges the failed
+      // spawn's own teardown, so no restart may run inside it.
+      const sup = makeSupervisor({ restartBackoffsMs: [60_000] });
       await expect(sup.startFresh(spawnDir)).rejects.toThrow();
       // The child's async 'error' discards the run files; poll for that end
       // state rather than a fixed sleep, which a loaded CI runner outran
