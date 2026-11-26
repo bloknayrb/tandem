@@ -44,6 +44,7 @@ import {
   type KeptBackup,
   keepUnsavedEdits,
   notifyUnsavedEditsKept,
+  reportKeptBackupOnFailure,
   unsavedEditsOf,
 } from "../documents/keep-unsaved.js";
 import { openFromRestore } from "../documents/open.js";
@@ -1872,30 +1873,43 @@ export async function closeDocumentById(
 
   // ADR-057: keep the unsaved edits this close would discard, before any
   // teardown, so a failed backup refuses the close with the document intact.
-  // A pending conflict is skipped: its session is kept below, edits and all.
-  // A close has no swap to re-read at, so edits typed between this await and
-  // the teardown are not kept — milliseconds, accepted in ADR-057.
+  // Skipped where the close keeps its session below, edits and all: a pending
+  // conflict, or edits a read-only file refused (#2273). A close has no swap to
+  // re-read at, so edits typed between this await and the teardown are not
+  // kept — milliseconds, accepted in ADR-057.
   let unsavedEditsKept: KeptBackup | undefined;
   if (opts?.keepUnsavedEdits) {
     const closingDocForBackup = getOrCreateDocument(safeId);
-    if (readPendingConflict(closingDocForBackup) === undefined) {
-      const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
-      if (edits !== null) {
-        try {
-          unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
-        } catch (err) {
-          return { success: false, error: (err as Error).message, code: "BACKUP_FAILED" };
-        }
-        // The backup awaited disk I/O. If the document was closed (and perhaps
-        // reopened, `POST /api/close` is not queued) meanwhile, the teardown
-        // below would act on a document this call never looked at.
-        if (openDocs.get(safeId) !== docState) {
-          return {
-            success: false,
-            error: `Document ${id} was closed or reopened while this close was in progress; nothing was closed.`,
-          };
-        }
+    const sessionWillBeKept =
+      readPendingConflict(closingDocForBackup) !== undefined ||
+      (isDirty(safeId) &&
+        (hasReadOnlyFileEpisode(safeId) ||
+          (docState.source === "file" && !(await isWritableOnDisk(docState.filePath)))));
+    if (!sessionWillBeKept) {
+      try {
+        const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
+        if (edits !== null) unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
+      } catch (err) {
+        // A failed snapshot, the size cap, or edits the serializer could not
+        // write: all `BACKUP_FAILED`, the code the skill keys on.
+        return { success: false, error: (err as Error).message, code: "BACKUP_FAILED" };
       }
+    }
+    // The checks above awaited disk I/O. If the document was closed (and
+    // perhaps reopened: `POST /api/close` is not queued) meanwhile, the
+    // teardown below would act on a document this call never looked at. A
+    // backup already written is still reported.
+    if (openDocs.get(safeId) !== docState) {
+      const err = reportKeptBackupOnFailure(
+        new Error(
+          `Document ${id} was closed or reopened while this close was in progress; nothing was closed.`,
+        ),
+        safeId,
+        docState.filePath,
+        "close",
+        unsavedEditsKept,
+      ) as Error;
+      return { success: false, error: err.message };
     }
   }
 

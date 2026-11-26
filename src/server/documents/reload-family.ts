@@ -431,6 +431,11 @@ export async function restoreDocumentFromBackup(
   }
 
   const keepEdits = opts?.keepUnsavedEdits === true;
+  // ADR-057: read the unsaved edits first, so edits the serializer cannot
+  // write refuse (`BACKUP_FAILED`) before the disk snapshot below writes and
+  // prunes anything.
+  const restoreDoc = getOrCreateDocument(id);
+  const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
   // is itself reversible (first overwrite per path per run; never throws — a
@@ -446,13 +451,11 @@ export async function restoreDocumentFromBackup(
     ignoreRunGate: keepEdits,
   });
 
-  // ADR-057: keep the unsaved edits this restore would discard, before the
-  // file is written — a failed backup throws here with nothing changed. AFTER
-  // the disk snapshot, so the edits are the newest snapshot and the palette's
+  // Keep the unsaved edits this restore would discard, before the file is
+  // written — a failed backup throws here with the file unchanged. AFTER the
+  // disk snapshot, so the edits are the newest snapshot and the palette's
   // "restore the most recent backup" brings them back. Edits typed during the
   // awaits below are read again at the reload's swap.
-  const restoreDoc = getOrCreateDocument(id);
-  const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
   const incoming = typeof content === "string" ? content : undefined;
   const keptBefore =
     editsBefore !== null
@@ -519,7 +522,13 @@ export async function restoreDocumentFromBackup(
       );
     }
   } catch (err) {
-    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", keptBefore);
+    // A failure after the swap: edits typed during the awaits were read at the
+    // swap but not yet kept, and they are gone from the document now.
+    const kept =
+      (swap
+        ? await keepEditsCapturedAtSwap(existing.filePath, swap.text, editsBefore, incoming)
+        : undefined) ?? keptBefore;
+    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept);
   }
 
   // The restored bytes are the new saved baseline. Without this, the autosave

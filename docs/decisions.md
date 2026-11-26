@@ -4241,6 +4241,7 @@ The MCP features announced on 2026-11-24 prompted a plan to enforce that rule on
 **Consequences.**
 - No new route, no client UI and no change to the MCP transport or SDK. No new AI surface (Critical Rule 9) and no Y.Doc write (the snapshot is app-data file I/O).
 - `CLAUDE.md`'s backup gotcha ("path-keyed and once-per-run") now names the second kind.
+- **Downgrade.** A build from before this ADR does not match `-unsaved` names, so it neither lists, restores nor sweeps those files, while `totalTreeBytes` still counts them toward the 500 MB cap. After a downgrade they can be deleted by hand from `doc-backups/` (any `*-unsaved.*` file).
 - **Follow-ups** (separate PRs): a version-history picker that lists both kinds and restores any by name, with a durable "your edits were kept" banner derived from the store rather than from `documentMeta`; the same undo for the editor's own conflict Keep/Reload and Restore; and a compare view.
 - **When this would become a security-register entry.** Nothing here is a permission check. If anything ever treats a kept backup as licence to skip asking the user, or makes it the only guard on a new destructive flag, record it in `docs/security.md`'s open-findings register, as #2027 is.
 

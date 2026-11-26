@@ -771,12 +771,13 @@ export async function snapshotUnsavedEdits(
     const newest = await newestByMtime(subdir, existing);
     const identical = newest !== null ? await findIdenticalSnapshot(subdir, [newest], bytes) : null;
     if (identical !== null) {
-      const st = await fs.stat(path.join(subdir, identical));
-      return {
-        outcome: "skipped-identical",
-        name: identical,
-        timestamp: new Date(st.mtimeMs).toISOString(),
-      };
+      // Touched, not left as it was: these edits are being kept NOW, so the
+      // snapshot that holds them must rank as now too — newer than a disk
+      // snapshot a restore just wrote, so "restore the most recent backup"
+      // still returns them, and last in line for the prune.
+      const now = new Date();
+      await fs.utimes(path.join(subdir, identical), now, now);
+      return { outcome: "skipped-identical", name: identical, timestamp: now.toISOString() };
     }
 
     if ((await totalTreeBytes(root)) + bytes.length > maxTotalBytes) {

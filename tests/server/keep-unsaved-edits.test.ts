@@ -587,3 +587,107 @@ describe("close keeps its document identity across the backup's await", () => {
     }
   });
 });
+
+describe("second cloud review (d2de584)", () => {
+  it("tandem_close maps a serializer throw to BACKUP_FAILED, not INTERNAL_ERROR", async () => {
+    const { id } = await openWithUnsavedEdits("close-throw.md", "disk\n", "edits\n");
+    const spy = vi.spyOn(getAdapter("md"), "save").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    try {
+      const parsed = await callDocumentTool("tandem_close", { documentId: id });
+      expect(parsed).toMatchObject({ error: true, code: "BACKUP_FAILED" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(getOpenDocs().has(id)).toBe(true);
+  });
+
+  it("tandem_close keeps no backup, and is not refused, when the file is read-only on disk (its session is kept)", async () => {
+    const { id } = await openWithUnsavedEdits("ro.md", "disk\n", "edits\n");
+    await breakBackupFolder();
+    const readOnlyFile = await import("../../src/server/documents/read-only-file.js");
+    const spy = vi.spyOn(readOnlyFile, "isWritableOnDisk").mockResolvedValue(false);
+    try {
+      const result = await closeDocumentById(id, { keepUnsavedEdits: true });
+      expect(result.success).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a force-open that fails after the swap keeps the edits typed during the action", async () => {
+    const { filePath, doc } = await openWithUnsavedEdits("late.md", "disk\n", "first edits\n");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const registry = await import("../../src/server/documents/registry.js");
+    const realSnapshot = store.snapshotUnsavedEdits;
+    let typed = false;
+    const snapSpy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      const r = await realSnapshot(...args);
+      if (!typed) {
+        // The user types while the first backup is being written.
+        typed = true;
+        const adapter = getAdapter("md");
+        const prepared = await adapter.parse("first edits plus more typed in the gap\n");
+        withMcp(doc, () => adapter.apply(doc, prepared, { fileName: "late.md" }));
+      }
+      return r;
+    });
+    const readySpy = vi
+      .spyOn(registry, "openDocumentWhenReady")
+      .mockRejectedValue(new Error("wiring failed"));
+    try {
+      const err = await openFromDisk(filePath, { force: true, keepUnsavedEdits: {} }).then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err?.message).toMatch(/wiring failed/);
+      expect(err?.message).toMatch(/-unsaved\.md/);
+    } finally {
+      snapSpy.mockRestore();
+      readySpy.mockRestore();
+    }
+    const kept = await unsavedSnapshots(filePath);
+    expect(kept.some((t) => t.includes("typed in the gap"))).toBe(true);
+  });
+
+  it("a Claude restore whose edits cannot be serialized writes no disk snapshot", async () => {
+    const filePath = path.join(tmpDir, "no-prune.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("no-prune.md", "good\n", "edits\n");
+    await fs.writeFile(filePath, "external\n");
+    const before = await listDocBackups(filePath, resolveAppDataDir());
+    const spy = vi.spyOn(getAdapter("md"), "save").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    try {
+      await expect(
+        restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true }),
+      ).rejects.toMatchObject({ code: "BACKUP_FAILED" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await listDocBackups(filePath, resolveAppDataDir())).toEqual(before);
+    expect(await fs.readFile(filePath, "utf-8")).toBe("external\n");
+  });
+
+  it("edits already kept are touched, so they stay newer than the disk snapshot a restore just wrote", async () => {
+    const filePath = path.join(tmpDir, "touch.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("touch.md", "good\n", "same edits\n");
+    // An earlier attempt already kept exactly these edits.
+    const first = await keepUnsavedEdits(filePath, getAdapter("md").save!(getOrCreateDocument(id)));
+    await new Promise((r) => setTimeout(r, 20));
+    await fs.writeFile(filePath, "external\n");
+
+    await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true });
+
+    const [newest] = await listDocBackups(filePath, resolveAppDataDir());
+    expect(newest.kind).toBe("unsaved");
+    expect(newest.name).toBe(first?.name);
+  });
+});

@@ -546,14 +546,15 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
           await persistEnvelopeNow(existingId, doc, resolved);
         }
       } catch (err) {
-        throw reportKeptBackupOnFailure(
-          err,
-          existingId,
-          resolved,
-          "reload",
-          keepHolder?.kept ?? keptBefore,
-          keptNotified,
-        );
+        // A failure after the swap: the edits typed during the awaits were read
+        // at the swap but not yet kept, and they are gone from the document now.
+        const kept =
+          keepHolder?.kept ??
+          (swap
+            ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
+            : undefined) ??
+          keptBefore;
+        throw reportKeptBackupOnFailure(err, existingId, resolved, "reload", kept, keptNotified);
       }
       ensureAutoSave();
       return {
