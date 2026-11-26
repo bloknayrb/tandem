@@ -617,6 +617,11 @@ the parent record; forged pre-flip chat `replyTo` rows).
     document clears the marker;
   - (PR B) a same-holder change of kind rewrites the hold mark, so an entry handed before it is
     not listed by a later reply (owed again: fails safe).
+- **PR B departure (2026-11-26, from its code review).** §5's "a live registry entry for it is
+  marked acknowledged" and the handover's "and not handled" are not built: a handled item's entry
+  is retired like any other, so a handled mark that is later lost (the load sweep on an untrusted
+  room) re-owes the item instead of leaving it read as delivered. ADR-054's #2360 PR B amendment
+  records it.
 
 ## 9. Review dispositions
 

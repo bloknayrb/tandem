@@ -14,8 +14,8 @@
  *
  * PR A writes `answers` and uses {@link settledThreadKeys} to avoid listing a
  * key twice; PR B's handled filter (`mcp/awareness.ts`, `mcp/inbox-selection.ts`)
- * reads {@link settledKeysByThread} so a handled entry is neither handed out,
- * re-owed at a handover nor counted as waiting, and the reply observer
+ * reads {@link settledKeysByThread} so a handled entry is neither handed out
+ * nor counted as waiting, and the reply observer
  * (`events/observers/replies.ts`) reads {@link threadHoldsFinalClaudeReply} to
  * make a user's follow-up start-worthy (Bryan's Q6).
  */

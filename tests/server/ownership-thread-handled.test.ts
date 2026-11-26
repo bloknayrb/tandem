@@ -272,7 +272,7 @@ describe("the handled filter, flag on (#2360 PR B; row H)", () => {
     expect(handed(await reader(B).poll()).sort()).toEqual(["c1", r1].sort());
   });
 
-  it("the handover keeps a handled entry's registry entry and a legacy poll's ledger key (design §6.3 step 1 as amended)", async () => {
+  it("a handled entry's registry entry is retired at the handover, so a lost mark re-owes the item (review fix)", async () => {
     const ydoc = fixture("d");
     seed(ydoc, "c1");
     const r1 = userReply(ydoc, "c1", "first reply");
@@ -282,34 +282,19 @@ describe("the handled filter, flag on (#2360 PR B; row H)", () => {
     expect(getDocOwner(docOf("d"))?.ownerId).toBe(A);
     const id = await answer(A, "d");
     expect(replyRow(ydoc, id)?.answers).toEqual(["c:0", `r:${r1}`]);
-    const comment = [...deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"))];
-    const reply = [...deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1))];
-    expect(comment).toHaveLength(1);
-    expect(reply).toHaveLength(1);
     lapseNow(A);
-    expect([...deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"))]).toEqual(
-      comment,
-    );
-    expect([...deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1))]).toEqual(reply);
+    expect([...deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"))]).toEqual([]);
+    expect([...deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1))]).toEqual([]);
+    // Handled: nothing handed, to either kind of reader.
     expect(handed(await pollAs(B))).toEqual([]);
-    // What keeping them is for: the user's edit reaches both kinds of reader
-    // marked `edited`, as it would have before the handover.
-    seed(ydoc, "c1", { editedAt: 4242, rev: 2 });
-    const legacy = await pollAs(B);
-    expect(handed(legacy)).toEqual(["c1"]);
-    expect(legacy.userActions[0]?.edited).toBe(true);
-  });
-
-  it("a fresh cursor after the handover is handed the edited comment marked edited too", async () => {
-    const ydoc = fixture("d");
-    seed(ydoc, "c1");
-    await handToA();
-    await answer(A, "d");
-    lapseNow(A);
-    seed(ydoc, "c1", { editedAt: 4242, rev: 2 });
-    const inbox = await reader(B).poll();
-    expect(handed(inbox)).toEqual(["c1"]);
-    expect(inbox.userActions[0]?.edited).toBe(true);
+    expect(handed(await reader(B).poll())).toEqual([]);
+    // The mark lost (as a load sweep strips an untrusted `answers`): the
+    // comment and the reply are owed again, not read as delivered for good.
+    const row = replyRow(ydoc, id) as AnnotationReply;
+    const { answers: _answers, ...stripped } = row;
+    withInternal(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set(id, stripped));
+    expect(documentWaiting(docOf("d"))).toBe(true);
+    expect(handed(await reader(B).poll()).sort()).toEqual(["c1", r1].sort());
   });
 
   it("the Solo regression: a reply written in Solo is handed after the release, and owed again after a handover", async () => {
@@ -373,7 +358,7 @@ describe("the handled filter, flag on (#2360 PR B; row H)", () => {
     expect(handed(await reader(B).poll())).toEqual(["c1"]);
   });
 
-  it("an owed entry for a handled item is marked acknowledged, neither held nor retired", async () => {
+  it("an owed entry for a handled item is retired, not held, and the item is not handed (review fix)", async () => {
     const ydoc = fixture("d");
     // A second cursor of A, positioned before the comment exists.
     const late = reader(A);
@@ -382,15 +367,13 @@ describe("the handled filter, flag on (#2360 PR B; row H)", () => {
     const r1 = userReply(ydoc, "c1", "a reply");
     await handToA();
     await answer(A, "d");
-    const [comment] = deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"));
-    const [reply] = deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1));
-    expect(comment?.acked).toBe(true);
-    expect(reply?.acked).toBe(true);
-    // The late cursor's mark is below both entries: owed to it, filtered, kept.
+    // The late cursor's mark is below both entries: owed to it, filtered,
+    // retired (a lost mark would then re-owe the item to every reader).
     expect(handed(await late.poll())).toEqual([]);
-    expect(deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"))).toEqual([comment]);
-    expect(deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1))).toEqual([reply]);
+    expect([...deliveryRegistry.versionsOf("a", documentItemKey(docOf("d"), "c1"))]).toEqual([]);
+    expect([...deliveryRegistry.versionsOf("r", documentItemKey(docOf("d"), r1))]).toEqual([]);
     expect(handed(await late.poll())).toEqual([]);
+    expect(documentWaiting(docOf("d"))).toBe(false);
   });
 
   it("with the registry emptied (a restart), a handled thread neither waits nor is handed; the agreement holds", async () => {

@@ -309,21 +309,11 @@ const HANDOVER_READ_FAILED =
  * Y.Doc is gone, or the read throws). Nothing here creates a document or
  * writes one: the Y.Doc comes from the non-creating getter.
  */
-function currentNoticeKeys(
-  documentId: string,
-  ydoc: Y.Doc | undefined,
-  /**
-   * Told the records this read found, before the notice keys are computed
-   * (#2360 PR B: the handover's handled keys, from the same single read). A
-   * throw here is the read's: null, so everything is owed again.
-   */
-  onAnnotations?: (annotations: readonly Annotation[], ydoc: Y.Doc) => void,
-): Set<string> | null {
+function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<string> | null {
   try {
     const doc = getCurrentDoc(documentId);
     if (!doc || !ydoc) return null;
     const annotations = new YDocStore(ydoc, doc.filePath, doc.id).listAnnotations();
-    onAnnotations?.(annotations, ydoc);
     return noticeKeysAmong(documentId, annotations, ydoc);
   } catch {
     return null;
@@ -524,8 +514,13 @@ class SettledNoticeLedger implements InboxLedger {
  * key; an in-progress acknowledgement, the local model's reply and a row
  * written before #2360 settle nothing (`isFinalClaudeThreadReply`).
  *
- * Keyed as the inbox's ledgers are (`ledgerKey`), so the collectors' ledgers,
- * `carryHeld` and the handover read one answer. It applies no gate of its
+ * Keyed as the inbox's ledgers are (`ledgerKey`), so the collectors' ledgers
+ * and the waiting rule read one answer. It is recomputed from persisted rows
+ * on every read and nothing in the registry depends on it: an entry the
+ * filter skips is retired as any unhanded entry is (`carryHeld`, the
+ * handover), so a handled mark that is later lost re-owes its item rather
+ * than leaving it read as delivered (a deliberate departure from the plan's
+ * "marked acknowledged", ADR-054's #2360 PR B amendment). It applies no gate of its
  * own: it only ever withholds, and every record it names is still judged by
  * the collectors' gates (author, type, audience, Solo, ADR-027) before
  * anything is handed, so a record no collector would hand (a note, a private
@@ -630,11 +625,12 @@ class HandledReplyLedger implements ReplyLedger {
  *
  * Accept and dismiss notices about Claude's own annotations keep their
  * entries and cursor-less keys ({@link currentNoticeKeys}); when in doubt a
- * key is forgotten, which costs one duplicate. So do handled thread entries
- * (#2360 PR B, {@link handledThreadKeysAmong}, over the same read): a user
- * comment at the version a final Claude reply answered, and a user reply one
- * answered, are not owed again (an unreadable document handles nothing, so
- * all are). The mark the ownership module
+ * key is forgotten, which costs one duplicate. A handled thread entry
+ * (#2360 PR B) is retired like any other: the handled filter, which reads
+ * persisted `answers` on every pass, keeps it from being handed out while it
+ * stays handled, and if its mark is ever lost (a load sweep strips an
+ * untrusted `answers`) the item is owed again rather than read as delivered
+ * for good. The mark the ownership module
  * writes right after this makes every kept notice settled (the notice rule,
  * {@link settleNotices}), so a kept cursor-less key with no live entry is
  * registered here first.
@@ -651,17 +647,7 @@ class HandledReplyLedger implements ReplyLedger {
  */
 export function handOverDocumentInbox(documentId: string): void {
   const ydoc = getDocument(documentId);
-  // #2360 PR B: a handled thread entry stays seen (design §6.3 step 1 as the
-  // handled filter amends it): the filter would exclude it anyway, and a kept
-  // entry keeps `edited` meaningful for the comment's next version. (A
-  // cursor-less reply key is forgotten as before: a reply has no next
-  // version, and the filter excludes it while it stays handled.) Read from
-  // the notice read's own records; an unreadable document handles nothing.
-  let handled = NOTHING_HANDLED;
-  const read = currentNoticeKeys(documentId, ydoc, (annotations, doc) => {
-    handled = handledThreadKeysAmong(documentId, annotations, doc);
-  });
-  if (read === null) handled = NOTHING_HANDLED;
+  const read = currentNoticeKeys(documentId, ydoc);
   const notices = read ?? new Set<string>();
   if (read === null) {
     const now = Date.now();
@@ -682,10 +668,9 @@ export function handOverDocumentInbox(documentId: string): void {
 
   // Cursor readers: forget the entries, so the item gets a new seq above
   // every mark the next time the collectors hand it out.
-  deliveryRegistry.retireWhere(documentId, (entry) =>
-    entry.kind === "r"
-      ? !handled.replies.has(entry.base)
-      : !notices.has(entry.base) && handled.comments.get(entry.base) !== entry.editedAt,
+  deliveryRegistry.retireWhere(
+    documentId,
+    (entry) => entry.kind === "r" || !notices.has(entry.base),
   );
 
   // Cursor-less readers. By key prefix, not from the registry's entries: these
@@ -694,7 +679,6 @@ export function handOverDocumentInbox(documentId: string): void {
   const prefix = ledgerKey(documentId, "");
   for (const [key, editedAt] of [...surfacedIds]) {
     if (!key.startsWith(prefix)) continue;
-    if (handled.comments.get(key) === editedAt) continue;
     if (!notices.has(key)) {
       surfacedIds.delete(key);
       continue;
@@ -804,7 +788,9 @@ function documentWaitingInput(documentId: string): DocumentWaitingInput | null {
 /**
  * The waiting rule's `isHandled` for one document (#2360 PR B): the collectors'
  * answer ({@link handledThreadKeysAmong}), computed once on first ask, so the
- * rule and a poll cannot disagree on what is handled.
+ * rule and a scoped poll agree on what is handled. (The poll applies it on
+ * `scope.scoped`, this on the wired ownership predicate; both are ownership
+ * on in a booted server, and the waiting rule is reached only then.)
  */
 function handledReader(
   documentId: string,
@@ -1828,19 +1814,9 @@ function carryHeld(
    * now, so the entry the notice rule depends on stays in the registry and a
    * settled notice goes to nobody on this poll or any later one. Whether it
    * stays settled is the notice rule's to decide (`settleNotices`), never a
-   * pass's by passing it. (Since #2360 PR B a handover also keeps a handled
-   * user comment's entry, which sits below the mark too and is likewise
-   * neither held nor retired: it stays seen, as the handled filter wants.)
+   * pass's by passing it.
    */
   settledThrough: number,
-  /**
-   * The handled filter's answer for this pass (#2360 PR B; empty while
-   * ownership is off). An owed entry for a handled thread entry at its
-   * current version is neither held nor retired: it is marked acknowledged
-   * (ownership design §6.4 as the plan's §5 rules), since no reader is owed
-   * it while it stays handled.
-   */
-  handled: HandledThreadKeys,
 ): Set<number> {
   const owed = deliveryRegistry
     .unseenIn(documentId, view)
@@ -1857,20 +1833,12 @@ function carryHeld(
       annotations ??= new Map(allAnnotations.map((a) => [inboxLedgerKey(documentId, a), a]));
       const ann = annotations.get(entry.base);
       if (ann && (ann.editedAt ?? 0) !== entry.editedAt) continue;
-      if (ann && handled.comments.get(entry.base) === entry.editedAt) {
-        deliveryRegistry.markAcked(entry);
-        continue;
-      }
       if (ann && isClaudeFacing(ann) && (hideFromAI(ann, modeState) || refused.has(entry))) {
         held.add(entry.seq);
       } else {
         retire.push(entry);
       }
     } else if (entry.kind === "r") {
-      if (handled.replies.has(entry.base)) {
-        deliveryRegistry.markAcked(entry);
-        continue;
-      }
       if (!replies) {
         replies = new Map();
         // One token for the whole pass: reconciling is a full scan of the map.
@@ -2222,7 +2190,6 @@ function collectInboxDocuments(
             refusedEntries,
             modeState,
             through,
-            handled,
           );
           pass.readDocuments.set(id, held);
           const record =
@@ -2260,7 +2227,6 @@ function collectInboxDocuments(
               refusedEntries,
               modeState,
               through,
-              handled,
             ),
           );
         }
