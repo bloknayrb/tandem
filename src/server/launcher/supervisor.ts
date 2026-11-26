@@ -1047,54 +1047,99 @@ export type SupervisorStatus =
     };
 
 /**
- * Did the process `exit` reported as `code` die by a signal?
+ * Is `code` Claude's signal death as the reaper relays it?
  *
- * Two shapes, because the process Node sees is the reaper, not Claude:
- *   - `code === null`: the reaper ITSELF died by a signal (Node then sets
- *     `signal`). That is macOS's reaper on a Restart (it installs no SIGTERM
- *     handler), `stopInternal`'s SIGKILL escalation on any OS, and every
- *     `kill()` on Windows, where Node's `TerminateProcess` reports
- *     `code = null, signal = "SIGTERM"`.
- *   - `128 < code <= 192`: the reaper survived and relayed CLAUDE's signal
- *     death in the shell's `128 + signum` form (`reaper/src/linux.rs` and
- *     `macos.rs`, `WaitStatus::Signaled` → `128 + sig`; measured on Linux:
- *     143 for a Restart's forwarded SIGTERM, 137 for SIGKILL, #2358). 192 is
- *     128 + 64, Linux's SIGRTMAX, so a code above it cannot be a signal.
+ * The process Node sees is the reaper, not Claude. When the REAPER itself dies
+ * by a signal, Node reports `code === null` (with `signal` set): macOS's reaper
+ * on a Restart (it installs no SIGTERM handler), `stopInternal`'s SIGKILL
+ * escalation on any OS, and every `kill()` on Windows, where Node's
+ * `TerminateProcess` reports `code = null, signal = "SIGTERM"`. That shape is
+ * not this function's; `shouldClearSession` keeps the session on it outright.
  *
- * The range cannot swallow the one exit this gate exists for: a doomed
- * `--resume` ("No conversation found") exits 1. A Claude that chose a code
- * in 129–192 itself would be read as a signal death too. That costs nothing
- * here: the only exit this gate needs to see is the doomed resume's 1, and a
- * JavaScript runtime (Node's documented exit codes stop at 14) uses `> 128`
- * for signal deaths, so a high code is a death, never a missing conversation.
- * The cost of a misread is one more `--resume` attempt, not a lost
- * conversation. Windows has no signals:
- * a Restart there is the `null` shape above, and the reaper relays Claude's
- * `GetExitCodeProcess` truncated to a byte, so a code in the range can only
- * be the low byte of a crash status (STATUS_INTEGER_DIVIDE_BY_ZERO,
- * 0xC0000094, relays as 148). That is a crash, not a failed resume, and keeps
- * the session for the same reason a crash does on Linux; a doomed resume
- * there still exits 1 and clears it.
+ * On Linux and macOS the reaper otherwise survives and relays Claude's own
+ * signal death in the shell's `128 + signum` form (`reaper/src/linux.rs` and
+ * `macos.rs`, `WaitStatus::Signaled` → `128 + sig`; measured on Linux: 143 for
+ * a Restart's forwarded SIGTERM, 137 for SIGKILL, #2358). 192 is 128 + 64,
+ * Linux's SIGRTMAX, so a code above it cannot be a signal.
+ *
+ * The code alone cannot prove a signal: Claude may exit 129–192 by choice, and
+ * on Windows, which has no signals, the reaper relays `GetExitCodeProcess`
+ * truncated to a byte, so the low byte of an NTSTATUS crash lands in the range
+ * for some statuses (0xC0000094 → 148) and outside it for most (0xC0000005 →
+ * 5, 0xC0000409 → 9, 0xC00000FD → 253). That is why `shouldClearSession`
+ * trusts this range only once, unless the supervisor sent the kill itself.
  */
-function isSignalDeath(code: number | null): boolean {
-  return code === null || (code > 128 && code <= 128 + 64);
+function isRelayedSignalDeath(code: number | null): boolean {
+  return code !== null && code > 128 && code <= 128 + 64;
+}
+
+/**
+ * Is this relayed signal death one the supervisor's own kill caused?
+ * `ChildProcess.killed` says only that WE signalled the reaper, not what
+ * Claude died of: the stdin-gone handler kills a reaper whose Claude has
+ * already crashed (the EPIPE is the crash's symptom), and the reaper then
+ * relays the crash, say a V8 abort's 134. The supervisor sends the reaper
+ * SIGTERM only, which it forwards and escalates to SIGKILL after its grace
+ * (`reaper/src/linux.rs`), so our kill relays as 143 or 137 and nothing else.
+ */
+function isCommandedRelayedKill(code: number | null, killedBySupervisor: boolean): boolean {
+  return killedBySupervisor && (code === 128 + 15 || code === 128 + 9);
 }
 
 /**
  * Pure decision: should the saved session be cleared after a spawn exits?
- * Exported for unit testing — all three conditions must hold:
- *   - we were attempting a resume (`resuming`)
- *   - the process exited with a non-zero code that is not a signal death
- *     (`isSignalDeath`: a Restart or a crash says nothing about whether the
- *     conversation exists, so it must not cost the user the conversation)
- *   - the spawn never ran long enough to be considered successfully resumed
+ * Exported for unit testing. Never, unless the spawn was a resume (`resuming`)
+ * that exited non-zero before running long enough to count as resumed
+ * (`resumeConfirmed`). Then, by exit shape:
+ *   - `code === null` (the reaper itself died by a signal): keep.
+ *   - a relayed signal death the supervisor caused (`isCommandedRelayedKill`:
+ *     `killedBySupervisor` — Restart, relaunch, stop, a delivery or fault
+ *     kill — AND the code is our SIGTERM's 143 or its escalation's 137): keep,
+ *     every time. Our own kill says nothing about whether the conversation
+ *     exists.
+ *   - a relayed signal death the supervisor did NOT cause (a crash, the OOM
+ *     killer, an outside kill): keep ONCE, so a one-off crash resumes the same
+ *     conversation; clear when an earlier resume of the same session id
+ *     already died that way (`priorUncommandedDeaths >= 1`). Keeping it
+ *     unconditionally loops forever on a session that kills Claude every
+ *     time it loads (a V8 abort on a huge transcript, 134): each death lands
+ *     inside the confirm window, so the backoff never resets and the
+ *     breaker's window never fills.
+ *   - any other non-zero code, chiefly a doomed `--resume`'s 1 ("No
+ *     conversation found"): clear.
  */
 export function shouldClearSession(opts: {
   resuming: boolean;
   code: number | null;
   resumeConfirmed: boolean;
+  /** `ChildProcess.killed` of the exiting reaper: the supervisor sent it a signal. */
+  killedBySupervisor: boolean;
+  /** Consecutive earlier resumes of this session id that died unconfirmed by a
+   * relayed signal the supervisor did not send. */
+  priorUncommandedDeaths: number;
 }): boolean {
-  return opts.resuming && opts.code !== 0 && !isSignalDeath(opts.code) && !opts.resumeConfirmed;
+  if (!opts.resuming || opts.resumeConfirmed || opts.code === null || opts.code === 0) {
+    return false;
+  }
+  if (!isRelayedSignalDeath(opts.code)) return true;
+  if (isCommandedRelayedKill(opts.code, opts.killedBySupervisor)) return false;
+  return opts.priorUncommandedDeaths >= 1;
+}
+
+/** The uncommanded-signal-death half of `shouldClearSession`: true when this
+ * exit is kept only on the one-retry allowance, so the caller counts it. */
+function isUncommandedResumeDeath(opts: {
+  resuming: boolean;
+  code: number | null;
+  resumeConfirmed: boolean;
+  killedBySupervisor: boolean;
+}): boolean {
+  return (
+    opts.resuming &&
+    !opts.resumeConfirmed &&
+    isRelayedSignalDeath(opts.code) &&
+    !isCommandedRelayedKill(opts.code, opts.killedBySupervisor)
+  );
 }
 
 /** Contents of `launcher-session.json`. */
@@ -1596,6 +1641,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * stopInternal and the exit handler. Module-scoped so stopInternal can
    * cancel it if the user-stops the process before it confirms. */
   let confirmTimer: NodeJS.Timeout | null = null;
+  /** Consecutive resumes of `sessionId` that died unconfirmed by a relayed
+   * signal the supervisor did not send (`isUncommandedResumeDeath`). Feeds
+   * `shouldClearSession`'s one-retry allowance. Reset by a confirmed resume of
+   * that id, by a fresh spawn, and when the session is cleared. In memory only:
+   * a Tandem restart is a human-paced retry, not the loop this bounds. */
+  let uncommandedDeaths: { sessionId: string; count: number } | null = null;
   /**
    * Teardown for the active spawn's event subscription, paired with the handle
    * it belongs to.
@@ -2190,8 +2241,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * it a turn, whether or not any wake is owed.
    *
    * Needed because Check again is a relaunch, and the trip's SIGTERM keeps the
-   * saved session (`shouldClearSession` ignores a signal death: `code` null, or
-   * the reaper's relayed `128 + signum`, 143 on Linux), so the relaunch
+   * saved session (`shouldClearSession` keeps it on a kill the supervisor sent:
+   * `code` null, or the reaper's relayed `128 + signum`, 143 on Linux), so the relaunch
    * RESUMES — and a resumed spawn writes no turn, while the CLI is silent until
    * it gets one. Without this, Check again could never learn the user has since
    * signed in.
@@ -3310,6 +3361,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // drop it in the exit handler.
     if (!plan.resuming) {
       writeSavedSession(plan.sessionId, plan.cwd);
+      uncommandedDeaths = null;
     }
 
     // Track whether this spawn has run long enough to be considered a
@@ -3329,6 +3381,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const timer = setTimeout(() => {
         resumeConfirmed = true;
         if (confirmTimer === timer) confirmTimer = null;
+        // This id loads: earlier signal deaths were one-offs. Only while this
+        // spawn is current: a superseded spawn's leaked timer (above) proves
+        // nothing about the successor resuming the same id, and would hand it
+        // a second retry.
+        if (child === spawned && uncommandedDeaths?.sessionId === plan.sessionId) {
+          uncommandedDeaths = null;
+        }
       }, resumeConfirmMs);
       confirmTimer = timer;
     }
@@ -4024,6 +4083,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
       const wasCurrent = child === spawned;
+      // The verdict, computed once: the clear below and judging site (a) must
+      // agree, and the counter it reads is updated in between.
+      const exitShape = {
+        resuming: plan.resuming,
+        code,
+        resumeConfirmed,
+        killedBySupervisor: spawned.killed,
+      };
+      const priorUncommandedDeaths =
+        uncommandedDeaths?.sessionId === plan.sessionId ? uncommandedDeaths.count : 0;
+      const clearSession = shouldClearSession({ ...exitShape, priorUncommandedDeaths });
       // A superseded spawn's verdict must not act on state the successor now
       // owns (#1995): neither the timer slot this spawn no longer holds, nor
       // the single `launcher-session.json` the successor is running on. Both
@@ -4039,28 +4109,30 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
 
         // If the resume failed before being confirmed, drop the stale session so
-        // the next restart goes fresh. A signal death never clears it — neither
-        // the reaper's own (`code` null) nor Claude's as the reaper relays it
-        // (`128 + signum`, e.g. 143 on a Restart): see `isSignalDeath`.
+        // the next restart goes fresh. A signal death keeps it: the reaper's own
+        // (`code` null) and a relayed one we sent (143 on a Restart) always, a
+        // relayed crash once (`shouldClearSession`).
         // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
         // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
         // was set (5 s), so the session was never cleared (issue #1169).
-        if (shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })) {
+        if (clearSession) {
           console.error("[Launcher] Resume failed before confirmation — clearing saved session");
           clearSavedSession();
+          uncommandedDeaths = null;
+        } else if (isUncommandedResumeDeath(exitShape)) {
+          uncommandedDeaths = { sessionId: plan.sessionId, count: priorUncommandedDeaths + 1 };
+          console.error(
+            `[Launcher] Resumed Claude died by a signal before confirmation (code=${code}) — keeping the saved session for one more resume`,
+          );
         }
       }
       // Judging site (a) (#2358 PR 3b-1, R1.4): here, with the exit code in
-      // hand. The #1169 shape (a resumed, unconfirmed spawn exiting non-zero)
-      // is never judged; its record is torn down now, so no later release
-      // judges it either. "Non-zero" here is `shouldClearSession`'s, so a
-      // signal death (`isSignalDeath`: `code` null, or a relayed 129–192 such
-      // as a fault kill's 143 on Linux) is NOT the #1169 shape and is judged.
-      if (
-        record !== null &&
-        judgeable(record) &&
-        !shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })
-      ) {
+      // hand. The #1169 shape — an exit that clears the saved session
+      // (`shouldClearSession`) — is never judged; its record is torn down now,
+      // so no later release judges it either. An exit that keeps the session
+      // (a null code, a relayed signal we sent such as a fault kill's 143 on
+      // Linux, or a first relayed crash) is not that shape and is judged.
+      if (record !== null && judgeable(record) && !clearSession) {
         try {
           failBind(record, "torn-down-unbound");
         } catch (err) {

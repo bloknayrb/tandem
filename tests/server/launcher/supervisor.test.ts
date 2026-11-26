@@ -573,50 +573,99 @@ describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
 });
 
 describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => {
+  /** A resumed, unconfirmed spawn the supervisor did not kill, first death. */
+  const base = {
+    resuming: true,
+    resumeConfirmed: false,
+    killedBySupervisor: false,
+    priorUncommandedDeaths: 0,
+  };
+
   it("clears on non-zero exit while resuming and unconfirmed", () => {
-    expect(shouldClearSession({ resuming: true, code: 1, resumeConfirmed: false })).toBe(true);
+    expect(shouldClearSession({ ...base, code: 1 })).toBe(true);
   });
 
   it("does NOT clear on signal kill (code = null) while resuming and unconfirmed", () => {
-    // SIGTERM / SIGKILL: code is null. Must not invalidate a session just
-    // because the user stopped the supervisor before the confirm window elapsed.
-    expect(shouldClearSession({ resuming: true, code: null, resumeConfirmed: false })).toBe(false);
+    // The reaper itself died by a signal (macOS Restart, SIGKILL escalation,
+    // any Windows kill). Kept whoever sent it, and however often.
+    expect(shouldClearSession({ ...base, code: null })).toBe(false);
+    expect(shouldClearSession({ ...base, code: null, priorUncommandedDeaths: 5 })).toBe(false);
   });
 
   it("does NOT clear when resumeConfirmed is true, even on non-zero exit", () => {
     // Claude ran long enough to confirm the session; a crash later should not
     // remove the session so the next restart can attempt another --resume.
-    expect(shouldClearSession({ resuming: true, code: 1, resumeConfirmed: true })).toBe(false);
+    expect(shouldClearSession({ ...base, code: 1, resumeConfirmed: true })).toBe(false);
+    expect(
+      shouldClearSession({ ...base, code: 137, resumeConfirmed: true, priorUncommandedDeaths: 3 }),
+    ).toBe(false);
   });
 
   it("does NOT clear on non-zero exit when not resuming (fresh spawn)", () => {
-    expect(shouldClearSession({ resuming: false, code: 1, resumeConfirmed: false })).toBe(false);
+    expect(shouldClearSession({ ...base, code: 1, resuming: false })).toBe(false);
   });
 
   it("does NOT clear on clean exit (code = 0) while resuming and unconfirmed", () => {
     // User stopped Claude cleanly before the window elapsed — session is valid.
-    expect(shouldClearSession({ resuming: true, code: 0, resumeConfirmed: false })).toBe(false);
+    expect(shouldClearSession({ ...base, code: 0 })).toBe(false);
   });
 
   // #2358 (comment 7202149262): the reaper survives a Restart on Linux and
   // relays Claude's signal death as `128 + signum`, so `code` is NOT null.
   it.each([
     [143, "SIGTERM — a Restart, forwarded by the reaper"],
-    [137, "SIGKILL — a crash, or the reaper's grace escalation"],
+    [137, "SIGKILL — the reaper's grace escalation"],
+  ])("never clears on a relayed signal death the supervisor sent (code %i, %s)", (code) => {
+    for (const prior of [0, 1, 7]) {
+      expect(
+        shouldClearSession({
+          ...base,
+          code,
+          killedBySupervisor: true,
+          priorUncommandedDeaths: prior,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it.each([
+    [137, "the OOM killer"],
+    [134, "a V8 abort"],
+    [139, "a segfault"],
+    [143, "an outside SIGTERM"],
+  ])("keeps the session once on a relayed crash (code %i, %s), clears on the second", (code) => {
+    expect(shouldClearSession({ ...base, code })).toBe(false);
+    expect(shouldClearSession({ ...base, code, priorUncommandedDeaths: 1 })).toBe(true);
+  });
+
+  // `killed` says we signalled the reaper, not what Claude died of: the
+  // stdin-gone handler kills a reaper whose Claude already crashed, and the
+  // reaper then relays the crash. Only our SIGTERM (143) or its SIGKILL
+  // escalation (137) is our kill.
+  it.each([
+    [134, "a V8 abort"],
+    [139, "a segfault"],
     [130, "SIGINT"],
     [129, "SIGHUP"],
     [192, "128 + 64, the highest Linux signal"],
-  ])("does NOT clear on a reaper-relayed signal death (code %i, %s)", (code) => {
-    expect(shouldClearSession({ resuming: true, code, resumeConfirmed: false })).toBe(false);
-  });
+  ])(
+    "a relayed death that is not our signal counts as a crash though we sent a kill (code %i, %s)",
+    (code) => {
+      expect(shouldClearSession({ ...base, code, killedBySupervisor: true })).toBe(false);
+      expect(
+        shouldClearSession({ ...base, code, killedBySupervisor: true, priorUncommandedDeaths: 1 }),
+      ).toBe(true);
+    },
+  );
 
   it.each([
     [1, 'a doomed --resume ("No conversation found")'],
     [127, "the reaper's exec failure"],
     [128, "128 + 0 is no signal"],
     [193, "above 128 + SIGRTMAX, so no signal could produce it"],
-  ])("still clears on a non-signal exit (code %i, %s)", (code) => {
-    expect(shouldClearSession({ resuming: true, code, resumeConfirmed: false })).toBe(true);
+  ])("clears at once on a non-signal exit (code %i, %s), even if we sent a kill", (code) => {
+    expect(shouldClearSession({ ...base, code })).toBe(true);
+    expect(shouldClearSession({ ...base, code, killedBySupervisor: true })).toBe(true);
   });
 });
 
