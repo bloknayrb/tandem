@@ -571,7 +571,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "42", bodyHash: "20b287e1e5a7" });
+    ).toEqual({ version: "42", bodyHash: "bdf9686edda4" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -778,6 +778,13 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(p).toMatch(/ANNOTATION_RESOLVED/);
     expect(p).toMatch(/INVALID_ARGUMENT/);
     expect(p).toMatch(/If it refuses a user's comment with `NOT_OWNED`/);
+    // A Solo-held comment's NOT_FOUND is held, never answered with a fresh comment.
+    expect(p).toMatch(/`NOT_FOUND`: hold your answer until the mode is back to Tandem/);
+    // The selections paragraph no longer sends a comment's answer to chat.
+    expect(skill).not.toMatch(/\(chat messages, question annotations\)/);
+    expect(skill).toMatch(
+      /except an answer to a user's comment, which goes in that comment's thread/,
+    );
     // The old rule is gone.
     expect(skill).not.toMatch(/answering inside their thread is not your seat/);
     expect(skill).not.toMatch(/is for continuing \*your own\* threads/);

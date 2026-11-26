@@ -321,6 +321,22 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
     expect(flipBlockerViolations(OWNERSHIP_ENABLED, OWNERSHIP_FLIP_BLOCKERS)).toEqual([]);
   });
 
+  // #2360 PR C (Bryan's Q1, "Gate it, skill last"): the switch lands
+  // immediately before the flip, in the same release, and "if the flip slips
+  // past a cut, this PR must not be in that release". A cut moves Unreleased
+  // under a version header, so that is where this turns `check` red while the
+  // source literal is still dark. The literal, for the reason above.
+  it("#2360's switch entry is never released while the literal is dark", () => {
+    const changelog = read("CHANGELOG.md");
+    const at = changelog.indexOf("**Claude answers your comment in its own thread (#2360).**");
+    expect(at).toBeGreaterThan(-1);
+    const header = changelog
+      .slice(0, at)
+      .match(/^## \[[^\]]+\]/gm)
+      ?.at(-1);
+    expect(header === "## [Unreleased]" || OWNERSHIP_ENABLED, header).toBe(true);
+  });
+
   // The gap (a) pins (its test's title exists, and a row names it) went with
   // the row: the scope PR closed gap (a) and flipped that test.
   it("every row names its gap and what closes it", () => {
