@@ -139,6 +139,38 @@ describe("ADR-035 Unit 8f: who may write a reply", () => {
     ]);
   });
 
+  it("#2360: both producers decide parents by the flag, and only the MCP handler reaches `final`", () => {
+    const codeOf = (file: string) => stripComments(SRC_FILES.get(file) ?? "");
+    const filesWith = (pattern: RegExp) =>
+      [...SRC_FILES.keys()].filter((file) => pattern.test(codeOf(file))).sort();
+
+    // The relaxed parents value: defined in the seam, chosen by the flag at
+    // the two producers, and nowhere else (no default at the store layer).
+    expect(filesWith(/"claude-facing-comment"/)).toStrictEqual([
+      LIFECYCLE,
+      "src/server/local-model/tools.ts",
+      "src/server/mcp/annotations.ts",
+    ]);
+    expect(codeOf("src/server/mcp/annotations.ts")).toMatch(
+      /lit \? "claude-facing-comment" : "own"/,
+    );
+    expect(codeOf("src/server/local-model/tools.ts")).toMatch(
+      /clientWritesUndoneGrant\(\) \? "claude-facing-comment" : "own",\s*\{ kind: "untracked" \}/,
+    );
+    // `final` (the only arm that writes `answers`) is built only by the MCP
+    // handler; the local model never names it (Bryan's Q2: settles nothing).
+    expect(filesWith(/kind: "final"/)).toStrictEqual([LIFECYCLE, "src/server/mcp/annotations.ts"]);
+    expect(codeOf("src/server/local-model/tools.ts")).not.toMatch(/"final"|"in-progress"/);
+    // The store forwards both discriminants and adds none.
+    const store = codeOf("src/server/mcp/document-store.ts");
+    expect(store).toMatch(
+      /this\.lifecycle\.reply\(annotationId, text, suggestion, parents, tracking,/,
+    );
+    expect(store).not.toMatch(/"claude-facing-comment"|"untracked"|"own"/);
+    // The seam reads no flag (ownership-module-seam pins the importer set).
+    expect(codeOf(LIFECYCLE)).not.toMatch(/ownership|OWNERSHIP/);
+  });
+
   it("routes Claude's two consumers through the same refusal describer", () => {
     // `describeReplyWriteRefusal` holds the family's only `never` anchor. A
     // consumer that re-derives its own wire code from `result.kind` compiles,

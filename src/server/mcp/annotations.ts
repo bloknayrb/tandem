@@ -11,7 +11,7 @@ import type {
 } from "../../shared/positions/index.js";
 import { isAnchorVerdict } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
-import { atMapKey, isHeldInSoloMarker, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { atMapKey, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -32,9 +32,11 @@ import {
 import {
   describeReplyWriteRefusal,
   describeSuggestionRangeRefusal,
+  type ReplyTracking,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { isClaudeFacing, narrowForChannel, replyPrivacyAllows } from "../annotations/projection.js";
+import { visibleThreadEntries } from "../annotations/thread-handled.js";
 import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { honourLocalPeriodRecords, isLocalModelRecord } from "../models/local-period.js";
@@ -51,10 +53,13 @@ import {
   resolveAnnotationStore,
   type YDocStore,
 } from "./document-store.js";
+import { acknowledgedAtOrAbove } from "./inbox-cursor.js";
 import { getAnnotationsOutputShapeFor, getAnnotationsOwnershipShape } from "./output-schemas.js";
 import {
+  callerHolds,
   heldAmong,
   noClaim,
+  noteFinalThreadReply,
   ownedWrite,
   ownerLabelFor,
   ownershipOn,
@@ -86,6 +91,27 @@ function withoutStoredLocalModelMark<T extends object>(rec: T): T {
   const { byLocalModel: _stored, ...rest } = rec as Marked;
   const replies = (rec as Marked).replies?.map(({ byLocalModel: _r, ...reply }) => reply);
   return { ...rest, ...(replies ? { replies } : {}) } as T;
+}
+
+/**
+ * A reply without its server-only thread fields (#2360): `answers` and
+ * `inProgress` describe the inbox's bookkeeping, never what Claude should
+ * read, and are stripped from every Claude-facing reply list
+ * (`tandem_getAnnotations`, `tandem_exportAnnotations`). A copy only when one
+ * is present, so a reply without them (every reply while dark) is returned as
+ * is and the output stays byte-identical.
+ */
+function withoutThreadFields<T extends object>(reply: T): T {
+  if (!Object.hasOwn(reply, "answers") && !Object.hasOwn(reply, "inProgress")) return reply;
+  const {
+    answers: _answers,
+    inProgress: _inProgress,
+    ...rest
+  } = reply as T & {
+    answers?: unknown;
+    inProgress?: unknown;
+  };
+  return rest as T;
 }
 
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
@@ -163,7 +189,7 @@ function ownedIdKeyed(
   tool: string,
   id: string,
   givenId: string | undefined,
-  opts: { family?: RefusalFamily; answersThread?: boolean },
+  opts: { family?: RefusalFamily; answersThread?: boolean; inProgress?: boolean },
   body: (store: YDocStore) => Promise<McpToolResult> | McpToolResult,
 ): Promise<McpToolResult> {
   return ownedWrite(
@@ -186,7 +212,10 @@ function ownedIdKeyed(
       family: opts.family,
       nothingToWrite: (documentId) => !rawAnnotationRecord(documentId, id).present,
       answers: opts.answersThread
-        ? (documentId) => threadItemAnsweredBy(documentId, id)
+        ? (documentId) => {
+            const answering = threadItemAnsweredBy(documentId, id);
+            return answering && opts.inProgress ? { ...answering, inProgress: true } : answering;
+          }
         : undefined,
     },
     async (documentId) => {
@@ -213,8 +242,11 @@ function ownedIdKeyed(
  * released — and an answer given during Solo is recorded against the item
  * Claude could see.
  *
- * A read: no refresh, no transaction. A user-authored comment as the item
- * arrives with #2360, which makes such a thread repliable.
+ * A read: no refresh, no transaction. Since #2360 a USER-authored comment with
+ * no such reply is its own item, `c:<editedAt>` (the thread entry key,
+ * `thread-handled.ts`), as such a thread is now repliable. The gates are
+ * `visibleThreadEntries`', shared with the seam's `answers`, so the two cannot
+ * disagree about what Claude could see.
  */
 function threadItemAnsweredBy(
   documentId: string,
@@ -229,16 +261,46 @@ function threadItemAnsweredBy(
   const parent = atMapKey(annotationId, narrowed);
   const store = getDocumentStore(documentId);
   if (!store) return null;
-  if (hideFromAI(parent, readModeState())) return null;
-  const visible = channelVisibleReplies(store.reconciled(), parent);
-  for (let i = visible.length - 1; i >= 0; i--) {
-    const reply = visible[i];
-    if (reply.author === "user" && !isHeldInSoloMarker(reply.heldInSolo)) {
-      return { annotationId, item: `r:${reply.id}` };
-    }
-  }
-  return null;
+  const entries = visibleThreadEntries(
+    parent,
+    channelVisibleReplies(store.reconciled(), parent),
+    readModeState(),
+  );
+  const latest = entries[entries.length - 1];
+  return latest ? { annotationId, item: latest.key } : null;
 }
+
+/**
+ * The `answers` tracking for a final Claude reply on `store`'s document
+ * (#2360; the plan's §3): the seam lists an entry only if it is visible
+ * (`visibleThreadEntries`, condition (a)), the delivery registry holds a live
+ * acknowledged entry for it at its current version (condition (b)), and the
+ * caller holds the document (condition (c), read once here, at the body's
+ * turn in the queue). A caller that does not hold it lists nothing.
+ */
+function finalReplyTracking(store: YDocStore, caller: ToolCaller): ReplyTracking {
+  const holds = callerHolds(caller, store.documentId);
+  return {
+    kind: "final",
+    visibleEntries: (parent) =>
+      visibleThreadEntries(
+        parent,
+        channelVisibleReplies(store.reconciled(), parent),
+        readModeState(),
+      ),
+    handed: (entry) =>
+      holds && acknowledgedAtOrAbove(entry.kind, store.documentId, entry.id, entry.version),
+  };
+}
+
+/**
+ * The flag-on remedy half of a `NOT_OWNED` reply refusal (#2360): it no longer
+ * points at chat, because with ownership on a user's shared comment takes
+ * Claude's reply in its own thread. What still refuses is an imported record
+ * or a highlight.
+ */
+const THREAD_NOT_OWNED_REMEDY =
+  "only your own annotations and the user's shared comments take replies; leave a fresh tandem_comment on the text instead";
 
 /**
  * Replies safe to surface to Claude for `annotation`. The SINGLE place that
@@ -669,6 +731,7 @@ export function registerAnnotationTools(server: McpServer): void {
             ...anchorOf(ann),
             replies: channelVisibleReplies(reconciled, ann)
               .filter((r) => !hideFromAI(r, modeState))
+              .map(withoutThreadFields)
               .map(withLocalModelMark),
           };
         });
@@ -1035,6 +1098,7 @@ export function registerAnnotationTools(server: McpServer): void {
           // chains both for the same reason.
           replies: channelVisibleReplies(reconciled, ann)
             .filter((r) => !hideFromAI(r, modeState))
+            .map(withoutThreadFields)
             .map(withLocalModelMark),
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
@@ -1233,35 +1297,86 @@ export function registerAnnotationTools(server: McpServer): void {
     ),
   );
 
+  // #2360 (ships dark): with ownership on, Claude replies inside a user's
+  // shared comment thread, and an "I'm on it" takes `inProgress`. Decided once
+  // per registration like the owner label, so a dark registration's
+  // description and schema are byte-identical to before.
+  const threadReplies = ownershipOn();
+  const annotationReplySchema = {
+    annotationId: z.string().describe("The annotation ID to reply to"),
+    text: z.string().describe("Reply text"),
+    suggestedText: z
+      .string()
+      .optional()
+      .describe(
+        "Optional refined replacement proposal, over the PARENT annotation's range. Accepting " +
+          "it in the editor supersedes the parent's own suggestedText. Refused with " +
+          "INVALID_ARGUMENT when the parent's live span overlaps heading markup.",
+      ),
+    documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
+  };
   server.tool(
     "tandem_annotationReply",
-    "Reply in the thread of a pending annotation Claude authored (ANNOTATION_RESOLVED once it is " +
-      "accepted or dismissed). A user-authored or imported record — including a promoted note or " +
-      "imported comment, which is stored as a user comment — returns NOT_OWNED; answer it in chat with " +
-      "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments return " +
-      "INVALID_ARGUMENT.",
-    {
-      annotationId: z.string().describe("The annotation ID to reply to"),
-      text: z.string().describe("Reply text"),
-      suggestedText: z
-        .string()
-        .optional()
-        .describe(
-          "Optional refined replacement proposal, over the PARENT annotation's range. Accepting " +
-            "it in the editor supersedes the parent's own suggestedText. Refused with " +
-            "INVALID_ARGUMENT when the parent's live span overlaps heading markup.",
-        ),
-      documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
-    },
+    threadReplies
+      ? "Reply in the thread of a pending comment: one Claude authored, or one the user shared " +
+          "with Claude, where the user reads the answer to their comment (ANNOTATION_RESOLVED once " +
+          "it is accepted or dismissed). Any other record (an imported comment, a highlight) " +
+          "returns NOT_OWNED; leave a fresh tandem_comment. Private notes and private comments " +
+          "return INVALID_ARGUMENT, and a comment held while the user works in Solo returns " +
+          "NOT_FOUND. Set inProgress for a short acknowledgement that answers nothing yet, then " +
+          "reply again with the answer."
+      : "Reply in the thread of a pending annotation Claude authored (ANNOTATION_RESOLVED once it is " +
+          "accepted or dismissed). A user-authored or imported record — including a promoted note or " +
+          "imported comment, which is stored as a user comment — returns NOT_OWNED; answer it in chat with " +
+          "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments return " +
+          "INVALID_ARGUMENT.",
+    threadReplies
+      ? {
+          ...annotationReplySchema,
+          inProgress: z
+            .boolean()
+            .optional()
+            .describe(
+              'Mark this reply as an acknowledgement ("I\'m on it"): it answers nothing, and ' +
+                "the thread still waits for your answer. Takes no suggestedText.",
+            ),
+        }
+      : annotationReplySchema,
     withErrorBoundary(
       "tandem_annotationReply",
-      async ({ annotationId, text, suggestedText, documentId }, caller) =>
-        ownedIdKeyed(
+      async (
+        {
+          annotationId,
+          text,
+          suggestedText,
+          documentId,
+          inProgress: inProgressArg,
+        }: {
+          annotationId: string;
+          text: string;
+          suggestedText?: string;
+          documentId?: string;
+          inProgress?: boolean;
+        },
+        caller,
+      ) => {
+        // Dark, the input is not declared, so nothing can set it.
+        const inProgress = threadReplies && inProgressArg === true;
+        if (inProgress && suggestedText !== undefined) {
+          // Decided by the arguments: answered before the queue, never claims.
+          return noClaim(
+            mcpError(
+              "INVALID_ARGUMENT",
+              "An inProgress reply answers nothing, so it takes no suggestedText; send the proposal with your answer.",
+            ),
+          );
+        }
+        return ownedIdKeyed(
           caller,
           "tandem_annotationReply",
           annotationId,
           documentId,
-          { family: "answer", answersThread: true },
+          { family: "answer", answersThread: true, inProgress },
           (store) => {
             // #651 presence: surface the typing indicator on the specific card being
             // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
@@ -1286,6 +1401,9 @@ export function registerAnnotationTools(server: McpServer): void {
               Y_MAP_ANNOTATIONS,
             );
             const reply = async (): Promise<McpToolResult> => {
+              // #2360: both discriminants decided by the flag, per call, here
+              // and nowhere below. Dark: master's parents and no thread fields.
+              const lit = ownershipOn();
               const result = store.addReply(
                 annotationId,
                 text,
@@ -1294,8 +1412,19 @@ export function registerAnnotationTools(server: McpServer): void {
                 suggestedText === undefined
                   ? { kind: "none" }
                   : { kind: "replacement", suggestedText },
+                lit ? "claude-facing-comment" : "own",
+                !lit
+                  ? { kind: "untracked" }
+                  : inProgress
+                    ? { kind: "in-progress" }
+                    : finalReplyTracking(store, caller),
               );
               if (result.kind === "ok") {
+                // The second step of `answers` (the plan's §3): this caller's
+                // next acknowledging poll appends what it confirms.
+                if (lit && !inProgress) {
+                  noteFinalThreadReply(caller, store.documentId, annotationId, result.replyId);
+                }
                 return mcpSuccess({
                   replyId: result.replyId,
                   annotationId,
@@ -1305,7 +1434,10 @@ export function registerAnnotationTools(server: McpServer): void {
               // The wire codes are unchanged from the ternary chain this replaces;
               // what moved is that a new arm now fails to compile inside
               // `describeReplyWriteRefusal` instead of falling into a catch-all.
-              const { code, message } = describeReplyWriteRefusal(result);
+              const { code, message } = describeReplyWriteRefusal(
+                result,
+                lit ? { notOwnedRemedy: THREAD_NOT_OWNED_REMEDY } : undefined,
+              );
               // A refused reply wrote nothing, so it leaves no claim behind.
               return noClaim(mcpError(code, message));
             };
@@ -1324,7 +1456,8 @@ export function registerAnnotationTools(server: McpServer): void {
               reply,
             );
           },
-        ),
+        );
+      },
     ),
   );
 }

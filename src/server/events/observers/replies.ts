@@ -15,6 +15,7 @@ import { isLocalModelRecord, markWithheldForLocalPeriod } from "../../models/loc
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
+import { wasRepairedByReplyUndo } from "./reply-client-undo.js";
 
 export function makeRepliesObserver(deps: {
   docName: string;
@@ -28,6 +29,9 @@ export function makeRepliesObserver(deps: {
   return makePerKeyChangeObserver<AnnotationReply>({
     map: repliesMap,
     pushEvent,
+    // #2360: a client write the reply undo repaired (it runs first, being
+    // registered first) derives nothing, so a forged add pushes no event.
+    shouldSkipTransaction: wasRepairedByReplyUndo,
     derive: ({ key, action, value: reply }) => {
       if (action !== "add") return undefined;
 

@@ -296,7 +296,14 @@ describe("Unit 8g G4 — promotion does NOT make a parent repliable by Claude (#
 
     // Before: refused for the ADR-027 reason rather than any other.
     expect(
-      createAnnotationLifecycle(ydoc).reply(parent, "too early", { kind: "none" }, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        parent,
+        "too early",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({
       kind: "invalid-note",
     });
@@ -306,7 +313,14 @@ describe("Unit 8g G4 — promotion does NOT make a parent repliable by Claude (#
     // After: still refused, but now on authorship — and the author is echoed so
     // the caller can see whose annotation it is.
     expect(
-      createAnnotationLifecycle(ydoc).reply(parent, "on it", { kind: "none" }, noRelay),
+      createAnnotationLifecycle(ydoc).reply(
+        parent,
+        "on it",
+        { kind: "none" },
+        "own",
+        { kind: "untracked" },
+        noRelay,
+      ),
     ).toStrictEqual({
       kind: "not-owned",
       author: "user",

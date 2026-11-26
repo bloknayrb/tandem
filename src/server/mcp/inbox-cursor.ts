@@ -468,6 +468,33 @@ function remove<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 /** The process-wide registry `tandem_checkInbox` uses. */
 export const deliveryRegistry = new DeliveryRegistry();
 
+/**
+ * The registry base of a document item: a user comment's or a user reply's
+ * ledger key (`awareness.ts`' `ledgerKey` delegates here, so the format has
+ * one spelling).
+ */
+export function documentItemKey(documentId: string, itemId: string): string {
+  return `${documentId}:${itemId}`;
+}
+
+/**
+ * Whether the registry holds a live ACKNOWLEDGED entry of `kind` for item
+ * `id` on `documentId` at version `version` or above (#2360, condition (b) of
+ * the plan's §3): the same read `documentWaiting`'s `handedAtOrAbove` makes.
+ * Asked only about user comments (`"a"`, version `editedAt`) and user replies
+ * (`"r"`, version 0), whose registry base is the bare item key.
+ */
+export function acknowledgedAtOrAbove(
+  kind: "a" | "r",
+  documentId: string,
+  id: string,
+  version: number,
+): boolean {
+  return deliveryRegistry
+    .versionsOf(kind, documentItemKey(documentId, id))
+    .some((entry) => entry.acked && entry.editedAt >= version);
+}
+
 // ── The cursor ───────────────────────────────────────────────────────────────
 
 /** A decoded cursor: one reader's whole position. */

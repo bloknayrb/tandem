@@ -30,6 +30,7 @@ import {
   migrateTombstoneLedger,
   persistSnapshot,
 } from "../annotations/sync.js";
+import { carryThreadFieldsTrustOnRename } from "../annotations/thread-answers-trust.js";
 import { wireAnnotationStore } from "../documents/annotation-wiring.js";
 import { readPendingConflict } from "../documents/conflict.js";
 import {
@@ -1621,12 +1622,18 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // `docHash(oldPath)` — a fixed-length hash with no path component. No
     // user-controlled string reaches this store's filesystem path; an alert here
     // is a false positive (dismiss per issue #1042).
+    let oldFileMarked = false;
     try {
       const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
+      oldFileMarked = oldFile.meta.threadAnswersTrusted === true;
       mergeEnvelopeForward(doc, oldFile, newHash);
     } catch (err) {
       console.error("[Rename] old-envelope fold-forward failed for %s:", docId, err);
     }
+    // #2360 (#2574 review): carry the thread fields' trust to newHash BEFORE
+    // the RMW snapshot, so that write carries the marker and the re-wire's
+    // load keeps the rows. Moves only from a marked, trusted old envelope.
+    carryThreadFieldsTrustOnRename(oldHash, newHash, oldFileMarked);
 
     // RMW step 1: write the NEW envelope from the live Y.Maps + migrated ledger,
     // with meta.filePath already = newPath. This is the move (annotations +

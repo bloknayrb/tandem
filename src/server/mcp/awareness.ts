@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { z } from "zod";
 import {
   CTRL_ROOM,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_CHAT_STREAM,
@@ -10,6 +11,7 @@ import {
 import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
+import { atMapKey } from "../../shared/sanitize.js";
 import { selectionFingerprint } from "../../shared/selection-fingerprint.js";
 import type {
   AgentIdentity,
@@ -20,14 +22,24 @@ import type {
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import type { ReconciledDoc } from "../annotations/key-identity.js";
-import { isClaudeFacing } from "../annotations/projection.js";
+import { isClaudeFacing, narrowForChannel } from "../annotations/projection.js";
+import { nextRev } from "../annotations/schema.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { queueSnapshot } from "../annotations/sync.js";
+import {
+  boundThreadAnswers,
+  finiteOrNull,
+  isFinalClaudeThreadReply,
+  settledThreadKeys,
+  visibleThreadEntries,
+} from "../annotations/thread-handled.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import {
   closeMessageDeliveryRound,
   recordInboxPoll,
   resolveDeliveryRound,
 } from "../events/delivery-state.js";
+import { getFileSyncContextForDoc } from "../events/file-sync-registry.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannelInDocument } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
@@ -63,6 +75,7 @@ import {
   type DeliveryRegistry,
   decodeCursor,
   deliveryRegistry,
+  documentItemKey,
   encodeCursor,
   type ReaderCursor,
   type RegistryEntry,
@@ -146,7 +159,7 @@ export const CHAT_ACK_DIRECTIVE = `The user sees nothing in chat until you reply
 
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
-  return `${documentId}:${itemId}`;
+  return documentItemKey(documentId, itemId);
 }
 
 /**
@@ -1702,11 +1715,6 @@ function carryHeld(
   return held;
 }
 
-/** A finite number, or null. `Number.isFinite`, not `typeof`: NaN is a number. */
-function finiteOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 /**
  * The span `[from, to)` of `text` a selection record names, or null unless it
  * is a non-empty span lying wholly inside `text`. Narrowed BEFORE hashing so
@@ -2914,6 +2922,14 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     }
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
+  // #2360's second step (the plan's §3), ownership on: this caller's accepted
+  // final thread replies gain what this acknowledgement confirmed and the
+  // registry had handed out before each reply. After the documents'
+  // acknowledgement above, in the same step, so a poll that fails later
+  // cannot lose it.
+  if (poll.scoped) {
+    poll.settleThreadReplies((writes) => settleThreadReplyRows(writes, reader, poll));
+  }
   if (reader.handOut !== undefined) {
     const confirmed = deliveryRegistry.confirmHandOut(reader.handOut);
     // Ownership on (the posts PR, R3.4 step 2, R3.8): the confirmed hand-out's
@@ -2949,6 +2965,115 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     if (!msg.read) keys.push(key);
   });
   stampUserChat(keys, "read");
+}
+
+/**
+ * The second step of #2360's `answers` (`docs/plans/2360-thread-replies.md`
+ * §3). For each accepted final thread reply of this caller (`writes`) on a
+ * document the caller HOLDS in this poll's snapshot: append to the reply's
+ * `answers` every entry of its thread that is visible now (the read path's
+ * gates, `visibleThreadEntries`), not already listed by a final Claude reply
+ * on the thread, and whose registry entry is live, acknowledged, seen by this
+ * cursor (`seenBy`: this acknowledgement confirmed it) and was handed out at
+ * or below the reply's `seqAtAccept` (so an entry that arrived after the reply
+ * is never listed). Bounded like the write (`boundThreadAnswers`).
+ *
+ * A fresh cursor (null mark) acknowledges nothing and appends nothing. One
+ * `withInternal` write per document (Critical Rule 2: server bookkeeping on a
+ * server-only field; it derives no event), each changed row with a new `rev`,
+ * then a queued snapshot (`internal` is skipped by durable sync).
+ *
+ * Returns the reply ids no later poll can add to, for the ownership module to
+ * forget (review: otherwise every poll re-walks every remembered reply): one
+ * on a document the caller no longer holds or that is closed (a handover or a
+ * close retires the entries it could list), one whose row is gone or no longer
+ * a final Claude reply, and one this cursor has now seen past (`mark` at or
+ * above its `seqAtAccept`, with no held seq at or below it), since every entry
+ * it could list is then confirmed or never will be by this reader.
+ */
+function settleThreadReplyRows(
+  writes: Parameters<Parameters<PollScope["settleThreadReplies"]>[0]>[0],
+  reader: ReaderCursor,
+  poll: PollScope,
+): string[] {
+  const done: string[] = [];
+  const byDocument = new Map<string, (typeof writes)[number][]>();
+  for (const write of writes) {
+    const list = byDocument.get(write.documentId);
+    if (list) list.push(write);
+    else byDocument.set(write.documentId, [write]);
+  }
+  const mode = readModeState();
+  for (const [documentId, documentWrites] of byDocument) {
+    const doc = getCurrentDoc(documentId);
+    const ydoc = getDocument(documentId);
+    if (!doc || !ydoc || poll.scopeOf(documentId) !== "holds") {
+      for (const write of documentWrites) done.push(write.replyId);
+      continue;
+    }
+    const view = viewOf(reader, documentId);
+    if (view.mark === null) continue;
+    const mark = view.mark;
+    const seenPast = (write: { seqAtAccept: number }) =>
+      mark >= write.seqAtAccept && ![...view.held].some((seq) => seq <= write.seqAtAccept);
+    const reconciled = new YDocStore(ydoc, doc.filePath, doc.id).reconciled();
+    const annotations = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const replies = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const updates = new Map<string, AnnotationReply>();
+    /** Keys this pass already added, per thread, so two replies never list one key. */
+    const addedOn = new Map<string, Set<string>>();
+    for (const write of documentWrites) {
+      const row = updates.get(write.replyId) ?? replies.get(write.replyId);
+      if (
+        !isFinalClaudeThreadReply(row) ||
+        (row as AnnotationReply).annotationId !== write.annotationId
+      ) {
+        done.push(write.replyId);
+        continue;
+      }
+      if (seenPast(write)) done.push(write.replyId);
+      const current = row as AnnotationReply;
+      const narrowed = narrowForChannel(annotations.get(write.annotationId));
+      if (narrowed === null) continue;
+      const parent = atMapKey(write.annotationId, narrowed);
+      const settled = settledThreadKeys(replies.values(), write.annotationId);
+      const added = addedOn.get(write.annotationId) ?? new Set<string>();
+      const fresh: string[] = [];
+      for (const entry of visibleThreadEntries(
+        parent,
+        channelVisibleReplies(reconciled, parent),
+        mode,
+      )) {
+        if (settled.has(entry.key) || added.has(entry.key)) continue;
+        const confirmed = deliveryRegistry
+          .versionsOf(entry.kind, ledgerKey(documentId, entry.id))
+          .some(
+            (e) =>
+              e.acked &&
+              e.editedAt >= entry.version &&
+              e.seq <= write.seqAtAccept &&
+              seenBy(view, e),
+          );
+        if (confirmed) fresh.push(entry.key);
+      }
+      if (fresh.length === 0) continue;
+      const listed = current.answers ?? [];
+      const answers = boundThreadAnswers([...listed, ...fresh]);
+      if (answers.length === listed.length) continue;
+      for (const key of answers.slice(listed.length)) added.add(key);
+      addedOn.set(write.annotationId, added);
+      // `nextRev(current)`: a real bump, so the appended row beats the file's
+      // older copy at the next merge (`pickWinner`); `nextRev()` is `rev: 1`.
+      updates.set(write.replyId, { ...current, answers, rev: nextRev(current) });
+    }
+    if (updates.size === 0) continue;
+    withInternal(ydoc, () => {
+      for (const [key, value] of updates) replies.set(key, value);
+    });
+    const ctx = getFileSyncContextForDoc(ydoc);
+    if (ctx) queueSnapshot(ctx);
+  }
+  return done;
 }
 
 /**

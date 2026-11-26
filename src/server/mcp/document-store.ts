@@ -87,7 +87,9 @@ import {
   type EditResult,
   type LifecycleResult,
   type RemoveResult,
+  type ReplyParents,
   type ReplySuggestion,
+  type ReplyTracking,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { narrowForChannel } from "../annotations/projection.js";
@@ -447,8 +449,19 @@ export class YDocStore {
    * uninteresting and nothing would warn the next editor off re-adding the
    * parameter.
    */
-  addReply(annotationId: string, text: string, suggestion: ReplySuggestion): ClaudeReplyResult {
-    return this.lifecycle.reply(annotationId, text, suggestion, (e) => this.onLossy(e));
+  addReply(
+    annotationId: string,
+    text: string,
+    suggestion: ReplySuggestion,
+    parents: ReplyParents,
+    tracking: ReplyTracking,
+  ): ClaudeReplyResult {
+    // #2360: both discriminants are forwarded, never defaulted here. The MCP
+    // handler decides them from the flag; a default at this layer would be a
+    // second place the permission could be granted.
+    return this.lifecycle.reply(annotationId, text, suggestion, parents, tracking, (e) =>
+      this.onLossy(e),
+    );
   }
 
   /**

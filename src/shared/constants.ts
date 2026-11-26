@@ -452,6 +452,16 @@ export const Y_MAP_CHAT_DOCUMENT_NAMES = "chatDocumentNames";
 export const Y_MAP_CHAT_STREAM = "chatStream";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
+/**
+ * The bounds on a Claude reply's `answers` (#2360, ADR-054's PR A amendment):
+ * the longest key one entry may hold, and how many entries one reply lists.
+ * **Read by both the write and the durable schema**, so a reply accepted
+ * live is never dropped at reload by `normalizeReply` (#1295 L3's class). A
+ * key over the bound is not listed and an entry past the cap is not listed:
+ * both stay owed, which fails safe. Keys are `c:<editedAt>` and `r:<replyId>`.
+ */
+export const THREAD_ANSWER_KEY_MAX = 128;
+export const THREAD_ANSWERS_MAX = 256;
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";
 export const Y_MAP_AUTHORSHIP = "authorship";
 // Y.Map sub-keys: userAwareness

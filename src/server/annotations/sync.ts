@@ -85,6 +85,11 @@ import {
   type TombstoneRecordV1,
 } from "./schema.js";
 import type { DocStore } from "./store.js";
+import {
+  resetThreadFieldsTrustForTests,
+  settleThreadFieldsAtLoad,
+  threadFieldsTrusted,
+} from "./thread-answers-trust.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -236,6 +241,10 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
       lastUpdated: Date.now(),
       contentHash: contentHashValue,
       keyIdentity: KEY_IDENTITY_FORMAT,
+      // #2360 (ships dark): only for a document this process trusts, which
+      // needs ownership on (`thread-answers-trust.ts`). Never written dark, so
+      // a dark build's envelope is byte-identical to before.
+      ...(threadFieldsTrusted(docHash) ? { threadAnswersTrusted: true as const } : {}),
     },
     annotations,
     tombstones,
@@ -714,10 +723,19 @@ export async function loadAndMerge(
   // still drops a resurrected Y.Map entry.
   const effectiveTombstones = Array.from(seed.values());
 
+  // #2360: the reply rows' server-only thread fields are trusted, or
+  // stripped, AFTER whatever reaches the Y.Doc here (session restore before
+  // this call, the file's rows in the merge below). The fast path takes
+  // nothing from the file, so it decides here; the full merge, after it.
+  const fileTrusted = file.meta.threadAnswersTrusted === true;
+
   if (fileEmpty && !seedHasExtraTombstones) {
-    if (ymapHasState) {
-      // First-upgrade path. Write one atomic snapshot capturing whatever the
-      // Y.Maps currently hold. No merge work needed.
+    const rewrite = settleThreadFieldsAtLoad(ydoc, docHash, fileTrusted);
+    // First-upgrade path: write one atomic snapshot capturing whatever the
+    // Y.Maps currently hold. No merge work needed. A rowless file is
+    // rewritten only to drop a marker (flag off): with the Y.Maps empty there
+    // is nothing stripped, and a marker alone is not worth creating a file.
+    if (ymapHasState || (rewrite && fileTrusted)) {
       store.queueWrite(() => snapshot(ydoc, docHash, meta));
     }
     // Both sides empty (and no migrated-forward tombstone) — nothing to merge.
@@ -778,6 +796,8 @@ export async function loadAndMerge(
       needsWrite = true;
     }
   });
+
+  if (settleThreadFieldsAtLoad(ydoc, docHash, fileTrusted)) needsWrite = true;
 
   // Force a write when the union pulled in tombstones the file lacked — those
   // migrated-forward deletes must land on disk so a subsequent reopen (with an
@@ -893,4 +913,5 @@ export async function persistSnapshot(
 /** Reset all module state. Tests only — never call in production. */
 export function resetForTesting(): void {
   tombstonesByDoc.clear();
+  resetThreadFieldsTrustForTests();
 }

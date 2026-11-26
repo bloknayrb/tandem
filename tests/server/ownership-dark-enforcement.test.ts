@@ -196,7 +196,10 @@ describe("tools/list while dark", () => {
     // The scope PR adds `tandem_checkInbox`'s `ownership` output field.
     // #2358 PR 5c adds the owner label to `tandem_getAnnotations` and
     // `tandem_listDocuments`: their output schemas only (below).
+    // #2360 PR A: `tandem_annotationReply`'s description and `inProgress`
+    // input, which a dark registration does not carry.
     expect(changed.sort()).toEqual([
+      "tandem_annotationReply",
       "tandem_checkInbox",
       "tandem_close",
       "tandem_getAnnotations",

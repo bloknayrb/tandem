@@ -763,6 +763,15 @@ async function main() {
   // future restore path that produced an upload-sourced doc.
   installTandemLifecycle();
 
+  // The posts PR (R4.5): whether a client connection's changes to the chat
+  // map are undone, which is the ownership flag, read through this seam so
+  // the CTRL chat observer never imports it. **Before the boot restore**
+  // (#2360): `restoreCtrlSession`'s chat `settles` / `superseded` strip and
+  // `restoreOpenDocuments`' envelope trust (`thread-answers-trust.ts`) both
+  // read it, and unwired it answers false, so a lit boot would strip every
+  // restored row's server-written fields and never trust a restored document.
+  setChatClientWritesUndone(undoClientChatWrites);
+
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
   const previousActiveDocId = await restoreCtrlSession().catch((err) => {
     console.error("[Tandem] Failed to restore chat history:", err);
@@ -956,10 +965,7 @@ async function main() {
   // decision calls the first, and the listener returns at the flag.
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
-  // The posts PR (R4.5): whether a client connection's changes to the chat
-  // map are undone, which is the ownership flag, read through this seam so
-  // the CTRL chat observer never imports it.
-  setChatClientWritesUndone(undoClientChatWrites);
+  // (`setChatClientWritesUndone` is wired above, before the boot restore.)
   // The delivery-rounds PR (design §6.7): whether delivery rounds are keyed by
   // document and by message, which is the ownership flag, and whether a
   // document is open (a forward on one that is not keys no document round,

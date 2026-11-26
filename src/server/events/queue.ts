@@ -16,6 +16,11 @@ import {
 } from "../../shared/constants.js";
 import { makeHeldInSoloStampObserver } from "../annotations/held-in-solo.js";
 import { attachKeyIdentityObserver, reconcileAnnotationKeys } from "../annotations/key-identity.js";
+import { queueSnapshot } from "../annotations/sync.js";
+import {
+  stripThreadFields,
+  threadFieldsTrustedForDoc,
+} from "../annotations/thread-answers-trust.js";
 import { makeAnnotationWriteArbiter } from "../annotations/write-arbiter.js";
 import {
   resetForTesting as dirtyResetForTesting,
@@ -41,6 +46,7 @@ import {
   clearFileSyncContext,
   resetForTesting as fileSyncResetForTesting,
   getFileSyncContext,
+  getFileSyncContextForDoc,
   reattachFileSyncObserver,
   setFileSyncContext,
 } from "./file-sync-registry.js";
@@ -49,6 +55,11 @@ import { makeAwarenessObserver } from "./observers/awareness.js";
 import { makeCtrlChatObserver } from "./observers/ctrl-chat.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
+import {
+  makeDocumentPendingGuard,
+  makeReplyClientUndo,
+  resetReplyUndoForTests,
+} from "./observers/reply-client-undo.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
@@ -760,6 +771,18 @@ export function attachObservers(
 
   const cleanups: Array<() => void> = [];
 
+  // #2360 (ships dark): undo a client connection's change to the replies map,
+  // and drop update data a client left pending. Every document, upload and
+  // scratchpad included, re-run after the Hocuspocus swap; and FIRST, so the
+  // undo runs before the replies observer derives anything from the same
+  // event (Yjs calls a map's listeners in registration order).
+  cleanups.push(makeReplyClientUndo(doc), makeDocumentPendingGuard(doc, docName));
+  // The load sweep (`thread-answers-trust.ts`), at room creation: a document
+  // whose store this process does not trust loses any `answers`/`inProgress`
+  // its rows carry. On a swap it runs from `reattachObservers`, after the
+  // file-sync rebind, so a strip persists.
+  if (!opts?.deferKeyScan) sweepUntrustedThreadFields(doc);
+
   if (!opts?.uploadDoc) {
     cleanups.push(
       makeAnnotationsObserver({ docName, doc, pushEvent }),
@@ -818,6 +841,21 @@ export function reattachObservers(
   reattachFileSyncObserver(docName, newDoc);
   // After the rebind, so a repair finds the new file-sync context and persists.
   reconcileAnnotationKeys(newDoc);
+  // #2360: the load sweep, after the rebind for the same reason.
+  sweepUntrustedThreadFields(newDoc);
+}
+
+/**
+ * #2360's load sweep at attach (`annotations/thread-answers-trust.ts`): unless
+ * this process trusts the document's store (ownership on, and its load found
+ * the marker or stripped), strip `answers` and `inProgress` from every reply
+ * row, and persist the strip. Opens no transaction when no row carries either,
+ * which is every row while ownership is off.
+ */
+function sweepUntrustedThreadFields(doc: Y.Doc): void {
+  const ctx = getFileSyncContextForDoc(doc);
+  if (threadFieldsTrustedForDoc(doc, ctx?.docHash)) return;
+  if (stripThreadFields(doc) > 0 && ctx) queueSnapshot(ctx);
 }
 
 // --- CTRL_ROOM observers (chat + document meta) ---
@@ -872,6 +910,7 @@ export function resetForTesting(): void {
 
   for (const cleanup of ctrlCleanups) cleanup();
   ctrlCleanups = [];
+  resetReplyUndoForTests();
 
   // Delegate to registry — its cleanup loop is the only way to dispose
   // in-flight tombstone debounces across tests.

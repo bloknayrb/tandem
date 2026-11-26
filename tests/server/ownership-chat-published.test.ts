@@ -58,6 +58,7 @@ import {
   controlMessageOwner,
   DEFAULT_GRACE_MS,
   forgetChatMessageOwners,
+  getDocOwner,
   getOwnerRecord,
   type LauncherFacts,
   messageClocksForTests,
@@ -683,6 +684,27 @@ describe("each unanswered message's owner facts (ownership design §10.2)", () =
     await startPublishing();
     expect(published()?.[m]).toMatchObject({ heldBy: "document", tandemMayTake: true });
     expect(await freshPoll(TANDEM)).toContain(m);
+  });
+
+  it("the with-document arm: a message on an unowned document Released from an absent Tandem's Claude reads true (#2573 review)", async () => {
+    // The arm `tandemMayTakeMessage` answers for an UNOWNED open document from
+    // the message alone (the 2026-11-25 amendment's "Decided here"): the
+    // document's loss names Tandem's Claude, released while it was absent, and
+    // still the message reads true, because a Start's presence gives the
+    // document back by the default rule, which ends that loss.
+    tandemPresent();
+    const d = mkDoc("released-absent");
+    setDocOwner(d, { ownerId: TANDEM, kind: "claimed" }, "claim", TANDEM);
+    present = false;
+    expect(await controlDocumentOwner(d, "release", undefined, () => true)).toBe("changed");
+    expect(getDocOwner(d)).toBeUndefined();
+    expect(ownershipSnapshotForTests().losses).toContainEqual([
+      d,
+      { ownerId: TANDEM, cause: "released" },
+    ]);
+    const m = userChat(key("on-released-absent"), d);
+    await startPublishing();
+    expect(published()?.[m]).toMatchObject({ heldBy: "document", tandemMayTake: true });
   });
 
   it("is an empty object with nothing unanswered, so a client tells none from ownership off", async () => {

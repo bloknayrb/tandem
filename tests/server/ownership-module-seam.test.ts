@@ -214,6 +214,8 @@ describe("tests and the flag", () => {
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-reowe-rounds.test.ts",
     "tests/server/ownership-take-back.test.ts",
+    // #2360 PR A: thread replies and their `answers`, flag on with dark rows.
+    "tests/server/ownership-thread-replies.test.ts",
     // PR 5c: the owner labels on the two read tools, flag on with dark rows.
     "tests/server/ownership-tool-labels.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
@@ -306,6 +308,9 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      // #2360 PR A: Claude's thread replies flag on, with dark rows (master's
+      // NOT_OWNED and schema) and the local model's reply both ways.
+      "tests/server/ownership-thread-replies.test.ts",
       // PR 5c: the owner labels, with dark rows that build their server flag off.
       "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
@@ -375,6 +380,7 @@ describe("tests and the flag", () => {
       // dark row run with every seam wired.
       "tests/server/ownership-reowe-rounds.test.ts",
       "tests/server/ownership-take-back.test.ts",
+      "tests/server/ownership-thread-replies.test.ts",
       // PR 5c: the owner labels, with dark rows that build their server flag off.
       "tests/server/ownership-tool-labels.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
