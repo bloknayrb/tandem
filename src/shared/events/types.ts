@@ -65,6 +65,15 @@ export interface AnnotationReplyPayload {
    * (`narrowForChannel` refuses them).
    */
   parentAuthor: Annotation["author"];
+  /**
+   * Set (only ever `true`) on a USER reply in a thread that already holds a
+   * final Claude reply (#2360 PR B; Bryan's Q6, "Yes, start it"): the user is
+   * following up on Claude's answer to their own comment, so it starts a
+   * stopped Tandem's Claude as a reply on Claude's own thread does
+   * (`isStartWorthy`). Written only while ownership is on (the reply observer
+   * reads the fail-closed grant), so a dark build's payload is unchanged.
+   */
+  threadAnswered?: true;
 }
 
 export interface DocumentSwitchedPayload {

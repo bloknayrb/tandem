@@ -52,6 +52,7 @@ import {
   checkWrite,
   decideTake,
   dropWriteClaim,
+  getDocOwner,
   type HolderView,
   heldDocumentIds,
   type InboxScope,
@@ -555,17 +556,26 @@ export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
 }
 
 /**
- * Whether the caller holds `documentId` now (#2360, condition (c) of the
- * plan's §3): a reply lists an entry only on a document its writer holds,
- * because a handover retires the previous holder's registry entries and only
- * the holder reads a held document, so every live entry there was handed to
- * the caller. False while ownership is off, for a caller with no owner id,
- * and while a claim of an unowned document is still pending (it is applied at
- * the body's outcome, so a session that claims after a lapse lists nothing).
+ * The caller's hold mark on `documentId` (#2360, conditions (b) and (c) of the
+ * plan's §3): the delivery registry's counter when the caller's ownership
+ * entry was written (`OwnershipEntry.sinceSeq`; for a claim made by an inbox
+ * poll, the counter before that poll's pass), or undefined when the caller
+ * does not hold the document now. A reply lists an entry only on a document
+ * its writer holds, and only an entry registered ABOVE this mark: a handover
+ * retires the previous holder's registry entries and only the holder reads a
+ * held document, so every live entry above the mark was handed to the caller.
+ * An entry at or below it may have been handed to and acknowledged by another
+ * reader while the document was unowned (a claim of an unowned document is
+ * not a handover, so it retires nothing; PR B closes PR A's known gap with
+ * this), and is never listed: it stays owed, which fails safe. Undefined
+ * while ownership is off, for a caller with no owner id, and while a claim of
+ * an unowned document is still pending (it is applied at the body's outcome,
+ * so a session that claims after a lapse lists nothing).
  */
-export function callerHolds(caller: ToolCaller, documentId: string): boolean {
-  if (!ownershipEnabled() || caller.ownerId === undefined) return false;
-  return heldDocumentIds(caller.ownerId).includes(documentId);
+export function callerHoldMark(caller: ToolCaller, documentId: string): number | undefined {
+  if (!ownershipEnabled() || caller.ownerId === undefined) return undefined;
+  if (!heldDocumentIds(caller.ownerId).includes(documentId)) return undefined;
+  return getDocOwner(documentId)?.sinceSeq;
 }
 
 /**

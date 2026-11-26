@@ -457,7 +457,7 @@ Whether Tandem runs its Claude is a setting of its own, separate from the claude
 
 While any standby is set, the supervisor holds a **standby watch** — the same `"internal"` + `wasForwardedExternally` subscription as the gap watch, so Solo-held user content (dropped before fan-out) and licence-refused events never reach it. An event that is `isStartWorthy` (`src/shared/events/wake-scope.ts`) starts Claude through `respawn`, exactly like the user's Start: the licence check first, `off` saved as `on-click`, the saved session resumed.
 
-- **Start-worthy is narrower than wake-worthy:** a chat message, or a user's reply whose parent annotation Claude created (`AnnotationReplyPayload.parentAuthor === "claude"`). New comments, replies on other threads and accept/dismiss wait for the next start.
+- **Start-worthy is narrower than wake-worthy:** a chat message, or a user's reply whose parent annotation Claude created (`AnnotationReplyPayload.parentAuthor === "claude"`), or — with multi-session ownership on, which ships dark (#2360 PR B, Bryan's Q6) — a user's follow-up in their own comment thread once a final Claude reply is there (`threadAnswered`). New comments, replies on other threads and accept/dismiss wait for the next start.
 - **Not while another AI is on** (Bryan, 2026-10-13). `otherAiAttached` — wired in `index.ts` to `isOtherMcpClientLive` — asks whether a live MCP entry exists from any Claude session but the supervisor's own children (every one it spawned, since a start-fresh changes the id), whose leftover entries stay live-looking for up to `LIVE_RECENT_MS`. An entry with no Claude session id counts as someone else. Checked in the watch callback and again under the op lock. **Claude Desktop does not count** (Bryan, 2026-10-14; #2199): an entry whose initialize reported `clientInfo.name === "claude-ai"` (`CLAUDE_DESKTOP_CLIENT_NAME`, captured by `readClientName` into the registry entry and printed on the "MCP session established" log line) is skipped, because Tandem cannot push to it and it answers the chat only when the user asks it something in Desktop. Any other or missing name still counts. The two then share one inbox when they poll without a cursor — chat `read` stamps and the surfaced-id set are process-wide — so whichever polls first takes a message; that race is the accepted cost. Since #2064 a caller passing `tandem_checkInbox`'s `cursor` keeps its own position instead, so both are handed the message unless one has already answered it with `tandem_reply` `replyTo`.
 - **The owed wake is set synchronously in the callback**, before the start queues on the lock, so a message that arrives while the user's own Start holds the lock rides on that spawn. In `off`, this is the only thing that sets `wakeOwedAcrossSpawns` (#1866) — the message is owed because it is starting Claude to answer it. It is set again under the lock, just before the spawn, because a Turn off that took the lock in between cleared it. A declined message (another AI on) is owed nothing.
 - **A burst makes one spawn:** one start is queued at a time (`messageStartQueued`); later messages only record their owed wake. The queued start counts toward `restartPending`, so the status reads "Starting" from the moment the message lands. With multi-session ownership on (dark, ADR-054), the supervisor's start-or-wake pass is a separate pass: a message never coalesces into one, so it is decided by its own start at the lock position it would have without it, and the status reads "Starting" until that start ends.
@@ -555,7 +555,7 @@ brand, so the only way to construct an annotation-bearing payload is through
 | `document:opened` | New document opened in browser | `fileName`, `format` |
 | `document:closed` | Document closed | `fileName` |
 | `document:switched` | User switches tabs | `fileName` |
-| `annotation:reply` | Reply added to an annotation thread, by either author | `annotationId`, `replyId`, `replyText`, `replyAuthor`, `textSnippet` (the *parent's* snapshot), `parentAuthor` (#2196) |
+| `annotation:reply` | Reply added to an annotation thread, by either author | `annotationId`, `replyId`, `replyText`, `replyAuthor`, `textSnippet` (the *parent's* snapshot), `parentAuthor` (#2196), and `threadAnswered: true` on a user reply in a thread holding a final Claude reply (ownership on only, #2360) |
 | `annotation:edited` | User edits their own comment's body and `editedAt` advances | `annotationId`, `content`, `textSnippet`, `editedAt` |
 
 Two fields carry more weight than they look. `replyAuthor` is what `isUserPrivacyHeld`
@@ -563,7 +563,8 @@ Two fields carry more weight than they look. `replyAuthor` is what `isUserPrivac
 is half the channel de-duplication key for edits (`getAnnotationEditedChannelKey`), so an edit
 payload without it would collapse every edit of one annotation onto a single trackable id.
 `parentAuthor` is what decides whether a user's reply starts a stopped Tandem's Claude (#2196):
-only a reply on a thread Claude started does.
+only a reply on a thread Claude started does — and, with ownership on (#2360 PR B, ships dark),
+one carrying `threadAnswered`, a follow-up in a thread where Claude has already answered.
 
 ### Channel Shim Architecture
 

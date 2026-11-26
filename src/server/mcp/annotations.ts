@@ -56,7 +56,7 @@ import {
 import { acknowledgedAtOrAbove } from "./inbox-cursor.js";
 import { getAnnotationsOutputShapeFor, getAnnotationsOwnershipShape } from "./output-schemas.js";
 import {
-  callerHolds,
+  callerHoldMark,
   heldAmong,
   noClaim,
   noteFinalThreadReply,
@@ -274,12 +274,14 @@ function threadItemAnsweredBy(
  * The `answers` tracking for a final Claude reply on `store`'s document
  * (#2360; the plan's §3): the seam lists an entry only if it is visible
  * (`visibleThreadEntries`, condition (a)), the delivery registry holds a live
- * acknowledged entry for it at its current version (condition (b)), and the
- * caller holds the document (condition (c), read once here, at the body's
- * turn in the queue). A caller that does not hold it lists nothing.
+ * acknowledged entry for it at its current version registered after the
+ * caller's hold began (condition (b), `callerHoldMark`: an entry another
+ * reader acknowledged while the document was unowned is not the caller's),
+ * and the caller holds the document (condition (c), read once here, at the
+ * body's turn in the queue). A caller that does not hold it lists nothing.
  */
 function finalReplyTracking(store: YDocStore, caller: ToolCaller): ReplyTracking {
-  const holds = callerHolds(caller, store.documentId);
+  const holdMark = callerHoldMark(caller, store.documentId);
   return {
     kind: "final",
     visibleEntries: (parent) =>
@@ -289,7 +291,8 @@ function finalReplyTracking(store: YDocStore, caller: ToolCaller): ReplyTracking
         readModeState(),
       ),
     handed: (entry) =>
-      holds && acknowledgedAtOrAbove(entry.kind, store.documentId, entry.id, entry.version),
+      holdMark !== undefined &&
+      acknowledgedAtOrAbove(entry.kind, store.documentId, entry.id, entry.version, holdMark),
   };
 }
 

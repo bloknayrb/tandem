@@ -545,6 +545,20 @@ export interface ThreadReplyWrite {
   readonly seqAtAccept: number;
 }
 
+/**
+ * A remembered final thread reply as a poll's second step is handed it
+ * (#2360 PR B): with the caller's hold mark on its document now
+ * (`OwnershipEntry.sinceSeq`), or undefined when the caller does not hold it.
+ * The step lists only entries registered above the mark, as the first step
+ * does (`owned-op.ts`' `callerHoldMark`): an entry another reader
+ * acknowledged before the hold began (a claim of an unowned document is no
+ * handover, so it retires nothing) was never handed to this record, though a
+ * cursor's mark reads it as seen.
+ */
+export interface ThreadReplyWriteAtPoll extends ThreadReplyWrite {
+  readonly holdSinceSeq: number | undefined;
+}
+
 /** How many accepted final thread replies one record remembers (the oldest go first). */
 export const MAX_THREAD_REPLY_WRITES = 256;
 
@@ -3478,12 +3492,15 @@ export interface InboxPollScope {
   /**
    * The second step of #2360's `answers` (the plan's §3), called by a cursor
    * poll right after it applied its acknowledgement: `settle` is given this
-   * caller's own accepted final thread replies (copies), appends to each what
-   * the poll confirmed, and returns the reply ids no later poll can add to,
+   * caller's own accepted final thread replies (copies, each with the
+   * caller's hold mark on its document now: {@link ThreadReplyWriteAtPoll}),
+   * appends to each what the poll confirmed, and returns the reply ids no later poll can add to,
    * which are forgotten. Nothing for a caller with no record, and while
    * ownership is off. Never throws.
    */
-  settleThreadReplies(settle: (writes: readonly ThreadReplyWrite[]) => readonly string[]): void;
+  settleThreadReplies(
+    settle: (writes: readonly ThreadReplyWriteAtPoll[]) => readonly string[],
+  ): void;
   /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
@@ -3749,7 +3766,17 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       const writes = threadRepliesByRecord.get(callerId);
       if (writes === undefined || writes.length === 0) return;
       total("settleThreadReplies", undefined, () => {
-        const done = new Set(settle(writes.map((w) => ({ ...w }))));
+        const done = new Set(
+          settle(
+            writes.map((w) => {
+              const entry = ownerByDoc.get(w.documentId);
+              return {
+                ...w,
+                holdSinceSeq: entry?.ownerId === callerId ? entry.sinceSeq : undefined,
+              };
+            }),
+          ),
+        );
         if (done.size === 0) return;
         const kept = writes.filter((w) => !done.has(w.replyId));
         if (kept.length > 0) threadRepliesByRecord.set(callerId, kept);

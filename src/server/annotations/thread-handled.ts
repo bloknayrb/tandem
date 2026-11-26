@@ -12,9 +12,12 @@
  * reply arriving while Claude worked, and an entry another session was handed
  * are never listed.
  *
- * Nothing reads {@link settledThreadKeys} to hide an entry yet (PR B's handled
- * filter does); PR A only writes `answers` and uses it to avoid listing a key
- * twice.
+ * PR A writes `answers` and uses {@link settledThreadKeys} to avoid listing a
+ * key twice; PR B's handled filter (`mcp/awareness.ts`, `mcp/inbox-selection.ts`)
+ * reads {@link settledKeysByThread} so a handled entry is neither handed out,
+ * re-owed at a handover nor counted as waiting, and the reply observer
+ * (`events/observers/replies.ts`) reads {@link threadHoldsFinalClaudeReply} to
+ * make a user's follow-up start-worthy (Bryan's Q6).
  */
 
 import { THREAD_ANSWER_KEY_MAX, THREAD_ANSWERS_MAX } from "../../shared/constants.js";
@@ -131,4 +134,47 @@ export function settledThreadKeys(rows: Iterable<unknown>, annotationId: string)
     for (const key of reply.answers ?? []) if (typeof key === "string") settled.add(key);
   }
   return settled;
+}
+
+/**
+ * The keys settled on every thread among `rows`, by `annotationId`, in one
+ * pass (#2360 PR B, the handled filter): the same rule as
+ * {@link settledThreadKeys}, for a reader that asks about many threads.
+ */
+export function settledKeysByThread(rows: Iterable<unknown>): Map<string, Set<string>> {
+  const byThread = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!isFinalClaudeThreadReply(row)) continue;
+    const reply = row as AnnotationReply;
+    if (typeof reply.annotationId !== "string") continue;
+    let settled = byThread.get(reply.annotationId);
+    for (const key of reply.answers ?? []) {
+      if (typeof key !== "string") continue;
+      if (!settled) {
+        settled = new Set();
+        byThread.set(reply.annotationId, settled);
+      }
+      settled.add(key);
+    }
+  }
+  return byThread;
+}
+
+/**
+ * Whether the thread `annotationId` holds a final Claude reply among `rows`
+ * (#2360 PR B; Bryan's Q6, "Yes, start it"): the user is then talking to
+ * Claude in that thread, so their follow-up may start a stopped Tandem's
+ * Claude. A row written before #2360 (no `answers`), an in-progress
+ * acknowledgement and the local model's reply do not count.
+ */
+export function threadHoldsFinalClaudeReply(
+  rows: Iterable<unknown>,
+  annotationId: string,
+): boolean {
+  for (const row of rows) {
+    if (isFinalClaudeThreadReply(row) && (row as AnnotationReply).annotationId === annotationId) {
+      return true;
+    }
+  }
+  return false;
 }

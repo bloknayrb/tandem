@@ -8,8 +8,9 @@
  * stub `""`, so they pin master's behaviour in the flag-on job too. The seam
  * rows take `parents` explicitly and need no flag.
  *
- * Nothing in PR A reads `answers`; PR B's handled filter will. So every
- * `answers` row here is read straight off the stored reply.
+ * Every `answers` row here is read straight off the stored reply; PR B's
+ * handled filter, which reads them, is pinned in
+ * `ownership-thread-handled.test.ts`.
  */
 
 import fs from "node:fs";
@@ -553,20 +554,38 @@ describe("answers, flag on (#2360 §3)", () => {
     expect(replyRow(ydoc, first)?.answers).toEqual([]);
   });
 
-  it("KNOWN GAP (must close before PR B): condition (b) accepts any reader's acknowledgement once the caller holds", async () => {
+  it("condition (b) counts only entries registered after the caller's hold began (PR A's known gap, closed by PR B)", async () => {
     // A claim of an unowned document is not a handover, so an entry handed
     // and acknowledged while it was unowned (here put in the registry by
     // hand) stays live. B claims by writing (its first reply lists nothing:
-    // condition (c)), and B's next reply lists the entry although B was never
-    // handed it. Pinned so PR B's fix shows up as a deliberate edit of this
-    // test (plan §8; ADR-054's #2360 PR A amendment).
+    // condition (c)); its next reply lists nothing either, because the entry
+    // sits at or below B's hold mark (`sinceSeq`): B was never handed it.
+    // Before PR B this listed `c:0` (the "KNOWN GAP" pin).
     const ydoc = fixture("d");
     seed(ydoc, "c1");
     const entry = deliveryRegistry.assign("a", docOf("d"), documentItemKey(docOf("d"), "c1"), 0);
     deliveryRegistry.markAcked(entry);
     expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual([]);
     expect(getDocOwner(docOf("d"))?.ownerId).toBe(B);
-    expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual(["c:0"]);
+    expect(entry.seq).toBeLessThanOrEqual(getDocOwner(docOf("d"))?.sinceSeq as number);
+    expect(replyRow(ydoc, await answer(B, "d"))?.answers).toEqual([]);
+  });
+
+  it("the second step also lists only entries registered after the hold began", async () => {
+    // The same world, then two cursor polls by B: a cursor's mark reads the
+    // other reader's acknowledged entry as seen, but B was never handed it,
+    // so the second step appends nothing to B's reply.
+    const ydoc = fixture("d");
+    seed(ydoc, "c1");
+    const entry = deliveryRegistry.assign("a", docOf("d"), documentItemKey(docOf("d"), "c1"), 0);
+    deliveryRegistry.markAcked(entry);
+    const first = await answer(B, "d");
+    expect(getDocOwner(docOf("d"))?.ownerId).toBe(B);
+    expect(threadReplyWritesForTests(B)).toHaveLength(1);
+    const r = reader(B);
+    await r.poll();
+    await r.poll();
+    expect(replyRow(ydoc, first)?.answers).toEqual([]);
   });
 
   it("condition (c): a caller that does not hold the document lists nothing, even a live acknowledged entry", async () => {

@@ -602,13 +602,10 @@ the parent record; forged pre-flip chat `replyTo` rows).
   - collector / waiting agreement;
   - that flag off stays byte-identical except for the sweeps.
 - **svelte-migration-reviewer:** only if Q3(a) changes how `inProgress` thread rows render.
-- **Must close before PR B (from PR A's reviews, 2026-11-26).** Condition (b) accepts any
-  reader's acknowledgement once the caller holds: a claim of an unowned document is not a
-  handover, so an entry handed and acknowledged while the document was unowned stays live, and
-  the claiming session's later reply lists it. PR A pins the gap in
-  `ownership-thread-replies.test.ts` ("KNOWN GAP"); PR B must close it (for example by retiring
-  live entries at a claim of an unowned document, or by remembering per record what it was
-  handed) before its filter reads `answers`.
+- **Closed in PR B (2026-11-26): PR A's known gap.** Condition (b) accepted any reader's
+  acknowledgement once the caller held. PR B counts only registry entries registered above the
+  caller's hold mark (`OwnershipEntry.sinceSeq`) in both steps; ADR-054's #2360 PR B amendment
+  records why that was chosen over retiring entries at a claim.
 - **Residuals for the ADR:**
   - answers in chat or by an edit;
   - an answer from a push before acknowledgement, or after a restart (owed again: fails safe);
@@ -617,7 +614,9 @@ the parent record; forged pre-flip chat `replyTo` rows).
   - a parent-record rewrite or `editedAt` rewind by a client (D4; security.md);
   - a reply on a document not open at a Solo release that keeps a stale `heldInSolo` marker
     (`mode-release.ts:106`). It is never listed, so it fails safe. Check whether opening the
-    document clears the marker.
+    document clears the marker;
+  - (PR B) a same-holder change of kind rewrites the hold mark, so an entry handed before it is
+    not listed by a later reply (owed again: fails safe).
 
 ## 9. Review dispositions
 

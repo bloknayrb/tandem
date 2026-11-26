@@ -479,20 +479,25 @@ export function documentItemKey(documentId: string, itemId: string): string {
 
 /**
  * Whether the registry holds a live ACKNOWLEDGED entry of `kind` for item
- * `id` on `documentId` at version `version` or above (#2360, condition (b) of
- * the plan's §3): the same read `documentWaiting`'s `handedAtOrAbove` makes.
- * Asked only about user comments (`"a"`, version `editedAt`) and user replies
- * (`"r"`, version 0), whose registry base is the bare item key.
+ * `id` on `documentId` at version `version` or above, registered above
+ * `aboveSeq` (#2360, condition (b) of the plan's §3): the read
+ * `documentWaiting`'s `handedAtOrAbove` makes, narrowed to entries newer than
+ * the caller's hold mark (its ownership entry's `sinceSeq`, passed in), so an
+ * entry some other reader acknowledged before the caller's hold began never
+ * counts as the caller's (PR B, closing PR A's known gap). Asked only about user
+ * comments (`"a"`, version `editedAt`) and user replies (`"r"`, version 0),
+ * whose registry base is the bare item key.
  */
 export function acknowledgedAtOrAbove(
   kind: "a" | "r",
   documentId: string,
   id: string,
   version: number,
+  aboveSeq: number,
 ): boolean {
   return deliveryRegistry
     .versionsOf(kind, documentItemKey(documentId, id))
-    .some((entry) => entry.acked && entry.editedAt >= version);
+    .some((entry) => entry.acked && entry.editedAt >= version && entry.seq > aboveSeq);
 }
 
 // ── The cursor ───────────────────────────────────────────────────────────────

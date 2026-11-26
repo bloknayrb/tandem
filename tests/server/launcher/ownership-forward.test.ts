@@ -49,6 +49,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 import { spawn } from "node:child_process";
 import { addUserReply } from "../../../src/server/annotations/lifecycle.js";
+import { setChatClientWritesUndone } from "../../../src/server/chat-client-writes.js";
 import { setChatRowsDeletedListener } from "../../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc } from "../../../src/server/documents/registry-testing.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
@@ -116,10 +117,16 @@ import {
   type TransportViewEntry,
   takeDocument,
   tandemWorkWaiting,
+  undoClientChatWrites,
   type WakeCause,
 } from "../../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
-import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../../src/shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+} from "../../../src/shared/constants.js";
 import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { withBrowser, withInternal } from "../../../src/shared/origins.js";
 import { setCtrlMode } from "../../helpers/ctrl-mode.js";
@@ -1357,12 +1364,16 @@ describe("other cases (PR a)", () => {
     expect(wakes(c1)).toBe(1);
   });
 
-  describe("new blocker 2, asserted as built", () => {
+  describe("row W, closed by the handled filter (#2360 PR B)", () => {
     let client: Client;
     let close: (() => Promise<void>) | undefined;
     let callingAs = A;
 
+    // The ownership predicate as `index.ts` wires it: the handled filter's
+    // waiting half reads it (fail-closed) to know ownership is on.
+    beforeEach(() => setChatClientWritesUndone(undoClientChatWrites));
     afterEach(async () => {
+      setChatClientWritesUndone(undefined);
       await close?.();
       close = undefined;
     });
@@ -1384,9 +1395,27 @@ describe("other cases (PR a)", () => {
       return h;
     }
 
-    // Replaced, when the handled filter lands (#2360), by "a lapse of a holder
-    // that answered everything in its threads starts nothing".
-    it("answered work starts Tandem's Claude (new blocker 2): a user reply in A's own thread, answered there by A and acknowledged; A lapses; the pass starts Claude", async () => {
+    /** `owner` polls D (handed), answers `annotationId` in its thread, and polls again (acknowledged). */
+    async function answerInThread(owner: string, d: Doc, annotationId: string): Promise<string> {
+      const first = await as(owner, "tandem_checkInbox", { cursor: "start" });
+      expect(first.error, JSON.stringify(first)).toBe(false);
+      const replied = await as(owner, "tandem_annotationReply", {
+        annotationId,
+        text: "answered here",
+        documentId: d.id,
+      });
+      expect(replied.error, JSON.stringify(replied)).toBe(false);
+      const ack = await as(owner, "tandem_checkInbox", { cursor: first.data?.cursor });
+      expect(ack.error, JSON.stringify(ack)).toBe(false);
+      return replied.data?.replyId as string;
+    }
+
+    const answersOf = (d: Doc, replyId: string) =>
+      (d.ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as { answers?: string[] }).answers;
+
+    // Was "answered work starts Tandem's Claude (new blocker 2)", asserted as
+    // built: the lapse started Claude for a reply A had answered.
+    it("a user reply in A's own thread, answered there by A and acknowledged; A lapses: nothing starts", async () => {
       const h = await idleWithClient();
       const { d } = worldA(false);
       const wrote = await as(A, "tandem_comment", {
@@ -1398,51 +1427,80 @@ describe("other cases (PR a)", () => {
       expect(wrote.error, JSON.stringify(wrote)).toBe(false);
       const mine = wrote.data?.annotationId as string;
       expect(addUserReply(d.ydoc, mine, "my answer to your question", () => {}).kind).toBe("ok");
-      const first = await as(A, "tandem_checkInbox", { cursor: "start" });
-      expect(first.error, JSON.stringify(first)).toBe(false);
-      const replied = await as(A, "tandem_annotationReply", {
-        annotationId: mine,
-        text: "thanks, done",
-        documentId: d.id,
-      });
-      expect(replied.error, JSON.stringify(replied)).toBe(false);
-      const ack = await as(A, "tandem_checkInbox", { cursor: first.data?.cursor });
-      expect(ack.error, JSON.stringify(ack)).toBe(false);
-      // Handed to its holder: not waiting before the lapse.
+      const replyId = await answerInThread(A, d, mine);
+      expect(answersOf(d, replyId)).toHaveLength(1);
       expect(documentWaiting(d.id)).toBe(false);
-      causes = [];
+      const before = passes(h);
+      lapse(A);
+      expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+      expect(sink).not.toHaveBeenCalled();
+      expect(tandemWorkWaiting()).toBe(false);
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      expect(passes(h)).toBe(before + departurePasses());
+    });
+
+    // Was the second "answered work starts Tandem's Claude" row: before
+    // #2360 A could answer a user's comment only with a fresh comment.
+    it("A answered D's one user comment in its thread and acknowledged it; A lapses: nothing starts", async () => {
+      const h = await idleWithClient();
+      const { d, c } = worldA();
+      const replyId = await answerInThread(A, d, c);
+      expect(answersOf(d, replyId)).toEqual(["c:0"]);
+      expect((annotations(d.ydoc).get(c) as { status: string }).status).toBe("pending");
+      lapse(A);
+      expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+      expect(sink).not.toHaveBeenCalled();
+      expect(tandemWorkWaiting()).toBe(false);
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+    });
+
+    it("the same with one unanswered user reply after the answer: the lapse starts Claude", async () => {
+      const h = await idleWithClient();
+      const { d, c } = worldA();
+      await answerInThread(A, d, c);
+      expect(addUserReply(d.ydoc, c, "one more thing", () => {}).kind).toBe("ok");
       lapse(A);
       expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
       expect(sink.mock.calls).toEqual([["document"]]);
+      expect(tandemWorkWaiting()).toBe(true);
       await lockBarrier(h);
       const c2 = await childN(2);
       await settle();
       expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
     });
 
-    // Replaced, when the handled filter lands (#2360), by "a lapse of a holder
-    // that answered everything in its threads starts nothing".
-    it("answered work starts Tandem's Claude (new blocker 2): A answered D's one user comment (a fresh comment) and acknowledged it; A lapses; the pass starts Claude", async () => {
+    it("Tandem's Claude holds D and answered everything; a terminal takes D and lapses: nothing starts", async () => {
       const h = await idleWithClient();
-      const { d, c } = worldA();
-      const first = await as(A, "tandem_checkInbox", { cursor: "start" });
-      expect(first.error, JSON.stringify(first)).toBe(false);
-      expect(JSON.stringify(first.data)).toContain(c);
-      // A thread reply on a user's comment is refused today (NOT_OWNED, until
-      // #2360), so A answers as the refusal says: a fresh comment on D.
-      const replied = await as(A, "tandem_comment", {
-        from: 0,
-        to: 5,
-        text: `answering ${c}`,
-        documentId: d.id,
-      });
-      expect(replied.error, JSON.stringify(replied)).toBe(false);
-      const ack = await as(A, "tandem_checkInbox", { cursor: first.data?.cursor });
-      expect(ack.error, JSON.stringify(ack)).toBe(false);
-      // Handed to its holder: not waiting before the lapse.
-      expect(documentWaiting(d.id)).toBe(false);
-      // Answered and acknowledged: the comment is still pending, handed to A.
-      expect((annotations(d.ydoc).get(c) as { status: string }).status).toBe("pending");
+      register(A);
+      const d = mkDoc("d");
+      applyUserOpenDefault(d.id);
+      expect(getDocOwner(d.id)).toMatchObject({ ownerId: TANDEM, kind: "default" });
+      const c = comment(d.ydoc, key("c1"));
+      const replyId = await answerInThread(TANDEM, d, c);
+      expect(answersOf(d, replyId)).toEqual(["c:0"]);
+      expect(takeDocument(d.id, A)).toEqual({ ok: true, took: true });
+      sink.mockClear();
+      lapse(A);
+      expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
+      expect(sink).not.toHaveBeenCalled();
+      expect(tandemWorkWaiting()).toBe(false);
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+    });
+
+    it("the same with one unanswered user reply: the terminal's lapse starts Claude", async () => {
+      const h = await idleWithClient();
+      register(A);
+      const d = mkDoc("d");
+      applyUserOpenDefault(d.id);
+      expect(getDocOwner(d.id)).toMatchObject({ ownerId: TANDEM, kind: "default" });
+      const c = comment(d.ydoc, key("c1"));
+      await answerInThread(TANDEM, d, c);
+      expect(addUserReply(d.ydoc, c, "one more thing", () => {}).kind).toBe("ok");
+      expect(takeDocument(d.id, A)).toEqual({ ok: true, took: true });
+      sink.mockClear();
       lapse(A);
       expect(getDocOwner(d.id)?.ownerId).toBe(TANDEM);
       expect(sink.mock.calls).toEqual([["document"]]);

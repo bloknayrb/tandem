@@ -45,8 +45,10 @@ export function isWakeWorthy(event: TandemEvent): boolean {
  * idle-stopped, or on-click not yet clicked (#2196). Narrower than
  * `isWakeWorthy`, which only decides what to tell a Claude that is already
  * running: starting a process is work, and Bryan's line for it is the user
- * talking TO Claude — a chat message, or the user's reply on a thread Claude
- * started. A new comment, a reply on the user's own highlight or an imported
+ * talking TO Claude — a chat message, the user's reply on a thread Claude
+ * started, or (#2360 PR B, Bryan's Q6; set only while ownership is on) the
+ * user's follow-up in their own comment thread once Claude has answered there
+ * (`threadAnswered`). A new comment, a reply on the user's own highlight or an imported
  * Word comment, and accept/dismiss are not, so they wait for the next start
  * (they are still owed to it as wakes; see the supervisor's gap watch).
  *
@@ -59,7 +61,7 @@ export function isStartWorthy(event: TandemEvent): boolean {
   return (
     event.type === "annotation:reply" &&
     event.payload.replyAuthor === "user" &&
-    event.payload.parentAuthor === "claude"
+    (event.payload.parentAuthor === "claude" || event.payload.threadAnswered === true)
   );
 }
 
