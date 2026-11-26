@@ -348,8 +348,9 @@ export interface OwnershipEntry {
    * The hold mark (#2360 PR B): the registry's counter when this record's
    * CURRENT hold of the document began. Unlike `sinceSeq` it survives a
    * rewrite that leaves the holder the same record (a change of kind: a
-   * `tandem_open`, a same-holder Assign, a Release falling back to
-   * `default`), since nothing was handed to anyone else meanwhile; a change
+   * `tandem_open` or a Release falling back to `default`; an Assign to the
+   * current holder is a no-op that never reaches `setDocOwner`), since
+   * nothing was handed to anyone else meanwhile; a change
    * of holder (which runs a handover) starts it again at `sinceSeq`. Read only by a thread reply's `answers` (`owned-op.ts`'
    * `callerHoldMark` and the poll's second step): an entry registered at or
    * below it may have been handed to another reader.

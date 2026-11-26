@@ -590,8 +590,8 @@ describe("answers, flag on (#2360 §3)", () => {
 
   it("the hold mark survives a same-holder rewrite of the entry (a change of kind): both steps still list", async () => {
     // A holds D, is handed and acknowledges the comment, then its own entry
-    // is rewritten with another kind (as `tandem_open`, a same-holder Assign
-    // or a Release to default do): `sinceSeq` moves, the hold mark does not.
+    // is rewritten with another kind (as `tandem_open` or a Release to
+    // default do): `sinceSeq` moves, the hold mark does not.
     const ydoc = fixture("d");
     seed(ydoc, "c1");
     const r = reader(A);
