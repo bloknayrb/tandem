@@ -111,7 +111,7 @@ const REPLY_DESCRIPTION_OWN =
 /** With ownership on, a user's shared comment takes the local model's reply
  *  too (#2360, Bryan's Q2), so the description stops saying it is refused. */
 const REPLY_DESCRIPTION_USER_THREADS =
-  "Reply to a pending comment thread by its annotation id: one you or another AI authored, or one the user wrote and shared with you. A private note or comment returns INVALID_ARGUMENT, and an imported record or a highlight NOT_OWNED; leave a new comment_on_quote instead.";
+  "Reply to a pending comment thread by its annotation id: one you or another AI authored, or one the user wrote and shared with you. A private note or comment, or a highlight an AI authored, returns INVALID_ARGUMENT, and an imported record or the user's highlight NOT_OWNED; leave a new comment_on_quote instead.";
 
 /**
  * `reply_to_annotation`'s description (#2360 PR C), decided by the gate its

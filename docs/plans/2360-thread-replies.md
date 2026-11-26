@@ -537,7 +537,9 @@ must not be in that release. The alternative is to fold C into the flip PR (Q1).
 **Q3. An "I'm on it" inside a thread** (ownership design §5.5 requires a marker).
 - (a) An `inProgress` input, flag on only: it settles nothing, sets no answerer, and is not exported
   to `.docx`. *(Recommended: it matches `tandem_reply`.)* The v0.31.0 chime fires twice, once for
-  the acknowledgement and once for the answer.
+  the acknowledgement and once for the answer. *(Superseded 2026-11-26 by Bryan's pick "Quiet it, like chat": the
+  acknowledgement shows in the thread but neither chimes nor notifies; only the answer does. See
+  ADR-054's PR C amendment.)*
 - (b) No in-thread acknowledgement. The skill acknowledges in chat, and every thread reply is
   final.
 - **Answer.** Bryan, 2026-11-26: **"Yes, as in-progress (Recommended)"** — (a).

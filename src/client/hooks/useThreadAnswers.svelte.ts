@@ -28,7 +28,10 @@ interface DocData {
   documentId: string;
   replies: AnnotationReply[];
   parents: Map<string, ParentInfo>;
-  /** The thread answers per annotation, oldest first — what cards look up. */
+  /**
+   * The thread answers per annotation, oldest first — what cards look up.
+   * In-progress acknowledgements are left out.
+   */
   answers: Map<string, AnnotationReply[]>;
 }
 
@@ -127,6 +130,9 @@ export function createThreadAnswers(options: {
       const answers = new Map<string, AnnotationReply[]>();
       for (const reply of replies) {
         if (!isThreadAnswer(reply, parents.get(reply.annotationId))) continue;
+        // An "I'm on it" holds no "new" marker either: only the real answer
+        // calls for attention (Bryan, 2026-11-26). It still shows in the thread.
+        if (reply.inProgress === true) continue;
         const list = answers.get(reply.annotationId);
         if (list) list.push(reply);
         else answers.set(reply.annotationId, [reply]);

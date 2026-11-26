@@ -328,7 +328,7 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   // source literal is still dark. The literal, for the reason above. An
   // emergency un-flip (a patch setting `OWNERSHIP_ENABLED` back to false after
   // this entry is released) turns this red on purpose: it forces a decision on
-  // the released skill 42, which tells Claude to answer in threads a dark
+  // the released skill 43, which tells Claude to answer in threads a dark
   // server refuses.
   it("#2360's switch entry is never released while the literal is dark", () => {
     const changelog = read("CHANGELOG.md");
@@ -339,6 +339,60 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
       .match(/^## \[[^\]]+\]/gm)
       ?.at(-1);
     expect(header === "## [Unreleased]" || OWNERSHIP_ENABLED, header).toBe(true);
+  });
+
+  // The CHANGELOG entry is not what ships: the bundled skill is, and a cut that
+  // left the entry under Unreleased (or dropped it) would still ship skill 43.
+  // So tie the skill itself to the flag. A release, and only a release, moves
+  // `package.json`'s `version` (surface 1 of the release skill; npm, the
+  // desktop bundle and the plugin pins are all guarded to agree with it, and a
+  // version cannot be published twice). Skill 43 landed while it read
+  // `SKILL_43_LANDED_AT` (v0.32.0 shipped skill 40; 42 is ADR-057's), so `package.json` moving
+  // off that value while the literal is dark and the skill carries the
+  // thread-reply rule IS a release shipping skill 43 dark: red. Between
+  // releases the value stays put and this stays green; once the literal flips
+  // it is green whatever the version. The same emergency un-flip as above
+  // (a patch setting the literal back to false) is red here too, on purpose.
+  const SKILL_43_LANDED_AT = "0.32.0";
+  const THREAD_RULE = "Answer a user's comment in its own thread with `tandem_annotationReply`";
+
+  function shipsSkill43Dark(state: {
+    literal: boolean;
+    skill: string;
+    packageVersion: string;
+  }): boolean {
+    if (state.literal) return false;
+    const version = Number(/^version:\s*(\d+)\s*$/m.exec(state.skill)?.[1] ?? Number.NaN);
+    // An unreadable version counts as 43 or later: fail toward red.
+    const carriesRule = state.skill.includes(THREAD_RULE) || !(version < 43);
+    return carriesRule && state.packageVersion !== SKILL_43_LANDED_AT;
+  }
+
+  it("the shipped skill 43 is never released while the literal is dark", () => {
+    const skill = read("skills/tandem/SKILL.md");
+    const packageVersion = (JSON.parse(read("package.json")) as { version: string }).version;
+    // Not vacuous: the skill on this branch carries the rule this guards.
+    expect(skill).toContain(THREAD_RULE);
+    expect(
+      shipsSkill43Dark({ literal: OWNERSHIP_ENABLED, skill, packageVersion }),
+      `package.json is ${packageVersion}: a release would ship skill 43 (in-thread answers) ` +
+        "while OWNERSHIP_ENABLED is false. Flip the literal in this release, or take the " +
+        "thread-reply section out of skills/tandem/SKILL.md (and its version back below 43).",
+    ).toBe(false);
+  });
+
+  it("the skill release guard fires exactly on a version move with skill 43 dark", () => {
+    const lit = `---\nversion: 43\n---\n${THREAD_RULE}`;
+    const old = "---\nversion: 42\n---\nanswer it in chat";
+    const unbumped = `---\nversion: 42\n---\n${THREAD_RULE}`;
+    const later = "---\nversion: 44\n---\nreworded";
+    const cut = "0.33.0";
+    expect(shipsSkill43Dark({ literal: false, skill: lit, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: unbumped, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: later, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: lit, packageVersion: "0.32.0" })).toBe(false);
+    expect(shipsSkill43Dark({ literal: true, skill: lit, packageVersion: cut })).toBe(false);
+    expect(shipsSkill43Dark({ literal: false, skill: old, packageVersion: cut })).toBe(false);
   });
 
   // The gap (a) pins (its test's title exists, and a row names it) went with
