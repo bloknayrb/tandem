@@ -104,6 +104,15 @@ export function snapshotKind(name: string): DocBackupKind {
 /** Paths (by hash) already snapshotted — or deliberately skipped — this run. */
 const snapshottedPaths = new Set<string>();
 
+/**
+ * Per path (by hash): the disk-kind snapshot that holds the file as it was
+ * before Tandem's first write this run — the serializer-bug net. Prune never
+ * removes it, so a run of restores (each snapshotting the bytes it overwrites,
+ * `ignoreRunGate`) cannot push it out (ADR-057). At most one extra file per
+ * path; it ages out normally once a later run pins its own.
+ */
+const pinnedFirstSnapshot = new Map<string, string>();
+
 /** One cap-exceeded notification per server run. */
 let sizeCapNotified = false;
 
@@ -124,6 +133,7 @@ const failureNotifiedPaths = new Set<string>();
  */
 export function _resetDocBackupGateForTests(): void {
   snapshottedPaths.clear();
+  pinnedFirstSnapshot.clear();
   sizeCapNotified = false;
   failureNotifiedPaths.clear();
   _resetPrivateDirAclForTests();
@@ -518,12 +528,19 @@ export async function snapshotBeforeFirstWrite(
     // Byte-identical skip: nothing changed on disk since the newest snapshot
     // (typical across restarts with no external edits). Newest by mtime, not by
     // name: two snapshots in the same second tie on name and fall to the random
-    // uuid8, and `ignoreRunGate` makes that ordinary. Only the newest counts —
-    // an older identical copy is the next one the prune removes.
+    // uuid8, and `ignoreRunGate` makes that ordinary. The first write of a run
+    // compares only against the newest, which the prune removes last. A
+    // gate-ignoring snapshot (a restore) compares against every kept one: bytes
+    // already kept are recoverable, and re-writing them would only crowd older
+    // versions out (restoring a version, then restoring another, would
+    // otherwise snapshot the first one twice).
     const existing = await listSnapshots(subdir, "disk");
     const newest = await newestByMtime(subdir, existing);
-    if (newest !== null && (await findIdenticalSnapshot(subdir, [newest], original)) !== null) {
+    const candidates = opts.ignoreRunGate ? existing : newest !== null ? [newest] : [];
+    const identical = await findIdenticalSnapshot(subdir, candidates, original);
+    if (identical !== null) {
       snapshottedPaths.add(pathKey);
+      if (!pinnedFirstSnapshot.has(pathKey)) pinnedFirstSnapshot.set(pathKey, identical);
       return "skipped-identical";
     }
 
@@ -558,7 +575,17 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    const snapshotPath = await writeSnapshotFile(subdir, filePath, original, "disk", existing);
+    const snapshotPath = await writeSnapshotFile(
+      subdir,
+      filePath,
+      original,
+      "disk",
+      existing,
+      pinnedFirstSnapshot.get(pathKey),
+    );
+    if (!pinnedFirstSnapshot.has(pathKey)) {
+      pinnedFirstSnapshot.set(pathKey, path.basename(snapshotPath));
+    }
 
     snapshottedPaths.add(pathKey);
     // A success after earlier failures re-arms the notification: if the path
@@ -641,6 +668,8 @@ async function writeSnapshotFile(
   bytes: Buffer,
   kind: DocBackupKind,
   existing: string[],
+  /** A snapshot the prune must keep beyond the cap (the run's first-write copy). */
+  pinned?: string,
 ): Promise<string> {
   // 0o700 mode on the per-path subdir. Windows ignores it; the root's
   // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
@@ -671,8 +700,9 @@ async function writeSnapshotFile(
   // needed. Do NOT re-sort: the timestamp segment is second-granular, so two
   // snapshots in the same second tie and fall to the random uuid8 — which can
   // rank the just-written file "oldest" and prune it. By construction it is
-  // newest. Per kind, so neither kind can evict the other (ADR-057).
-  const all = [snapshotName, ...existing];
+  // newest. Per kind, so neither kind can evict the other (ADR-057). The
+  // pinned snapshot is kept beyond the cap and does not count toward it.
+  const all = [snapshotName, ...existing].filter((name) => name !== pinned);
   for (const name of all.slice(MAX_DOC_BACKUPS)) {
     await fs
       .rm(path.join(subdir, name), { force: true })
@@ -714,7 +744,10 @@ export async function snapshotUnsavedEdits(
     await ensureBackupRootHardened(root);
 
     const existing = await listSnapshots(subdir, "unsaved");
-    const identical = await findIdenticalSnapshot(subdir, existing, bytes);
+    // Newest only: an older identical copy is the next one the prune removes,
+    // and its name is about to be handed to the user and Claude.
+    const newest = await newestByMtime(subdir, existing);
+    const identical = newest !== null ? await findIdenticalSnapshot(subdir, [newest], bytes) : null;
     if (identical !== null) {
       const st = await fs.stat(path.join(subdir, identical));
       return {

@@ -54,6 +54,7 @@ export type DiscardingAction = "reload" | "restore" | "close";
 
 /** The open-document fields this module reads. */
 interface DocFacts {
+  filePath: string;
   format: string;
   source: string;
   readOnly?: boolean;
@@ -82,7 +83,14 @@ export function unsavedEditsOf(id: string, doc: Y.Doc, docState: DocFacts): stri
   if (!isDirty(id) && readPendingConflict(doc) === undefined) return null;
   const adapter = getAdapter(docState.format);
   if (!adapter.save) return null;
-  return adapter.save(doc);
+  try {
+    return adapter.save(doc);
+  } catch (err) {
+    // The edits cannot be serialized, so they cannot be kept: refuse, under the
+    // code that says so, rather than let the action discard them.
+    console.error("[KeepUnsaved] serializing the unsaved edits failed for %s:", id, err);
+    throw backupFailedError(docState.filePath);
+  }
 }
 
 /** The refusal a Claude action answers with when the edits could not be kept. */
@@ -90,7 +98,8 @@ export function backupFailedError(filePath: string): Error & { code: "BACKUP_FAI
   return Object.assign(
     new Error(
       `Couldn't keep a backup of the unsaved edits in ${path.basename(filePath)}, so nothing was ` +
-        "changed. Save the document first (tandem_save), or ask the user how to proceed.",
+        "changed. Tandem's backup folder may be full or not writable. Save the document first " +
+        "(tandem_save), or ask the user how to proceed.",
     ),
     { code: "BACKUP_FAILED" as const },
   );
@@ -120,17 +129,22 @@ export async function keepUnsavedEdits(
  * there (synchronously, before the content is replaced); read `text` after.
  */
 export interface SwapCapture {
-  capture(): void;
+  /** `liveDoc`: the document the swap is replacing, as the swapping code holds it. */
+  capture(liveDoc: Y.Doc): void;
   readonly text: string | null;
 }
 
-/** Build the swap-time capture for one document. */
-export function captureAtSwap(id: string, doc: Y.Doc, docState: DocFacts): SwapCapture {
+/**
+ * Build the swap-time capture for one document. It reads the document the
+ * swap passes in, not one looked up earlier, so a Y.Doc replaced during the
+ * action's awaits (Hocuspocus `onLoadDocument`) is never the one serialized.
+ */
+export function captureAtSwap(id: string, docState: DocFacts): SwapCapture {
   let text: string | null = null;
   return {
-    capture() {
+    capture(liveDoc) {
       try {
-        text = unsavedEditsOf(id, doc, docState);
+        text = unsavedEditsOf(id, liveDoc, docState);
       } catch (err) {
         // A serializer throw must not abort the swap it rides in; the first
         // capture already holds everything but what was typed in the gap.

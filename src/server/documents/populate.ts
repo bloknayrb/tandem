@@ -411,7 +411,7 @@ export async function clearAndReload(
      * during this function's own awaits here (ADR-057, `keep-unsaved.ts`).
      * Must not write to the document.
      */
-    atSwap?: () => void;
+    atSwap?: (doc: Y.Doc) => void;
   },
 ): Promise<ReloadRemap | undefined> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
@@ -480,7 +480,7 @@ export async function clearAndReload(
       } catch (err) {
         console.error("[Tandem] clearAndReload: annotation capture failed for %s:", id, err);
       }
-      opts?.atSwap?.();
+      opts?.atSwap?.(doc);
       // #2070: a parked local-model turn that captured the old generation sees
       // the replacement through this, since the Y.Doc instance is unchanged.
       bumpContentGeneration(doc);

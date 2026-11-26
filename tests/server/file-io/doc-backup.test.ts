@@ -298,6 +298,34 @@ describe("doc-backup", () => {
     });
   });
 
+  describe("snapshotBeforeFirstWrite — the run's first snapshot is pinned", () => {
+    it("a run of restores never prunes the copy taken before the run's first write", async () => {
+      writeFileSync(docPath, "the original\n");
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir })).toBe("written");
+      for (let i = 0; i < MAX_DOC_BACKUPS + 3; i++) {
+        writeFileSync(docPath, `restore round ${i}\n`);
+        await snapshotBeforeFirstWrite(docPath, { appDataDir, ignoreRunGate: true });
+      }
+
+      const contents = allSnapshots().map((s) => s.content);
+      expect(contents).toContain("the original\n");
+      // The pinned copy sits beyond the cap; the rest are pruned as before.
+      expect(contents).toHaveLength(MAX_DOC_BACKUPS + 1);
+    });
+
+    it("a restore does not re-snapshot bytes already kept", async () => {
+      writeFileSync(docPath, "version A\n");
+      await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      writeFileSync(docPath, "version B\n");
+      await snapshotBeforeFirstWrite(docPath, { appDataDir, ignoreRunGate: true });
+      writeFileSync(docPath, "version A\n");
+
+      expect(await snapshotBeforeFirstWrite(docPath, { appDataDir, ignoreRunGate: true })).toBe(
+        "skipped-identical",
+      );
+    });
+  });
+
   describe("snapshotBeforeFirstWrite — ignoreRunGate", () => {
     it("snapshots again in the same run when asked, still skipping identical bytes", async () => {
       writeFileSync(docPath, "first\n");

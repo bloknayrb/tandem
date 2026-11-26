@@ -1886,6 +1886,15 @@ export async function closeDocumentById(
         } catch (err) {
           return { success: false, error: (err as Error).message, code: "BACKUP_FAILED" };
         }
+        // The backup awaited disk I/O. If the document was closed (and perhaps
+        // reopened, `POST /api/close` is not queued) meanwhile, the teardown
+        // below would act on a document this call never looked at.
+        if (openDocs.get(safeId) !== docState) {
+          return {
+            success: false,
+            error: `Document ${id} was closed or reopened while this close was in progress; nothing was closed.`,
+          };
+        }
       }
     }
   }

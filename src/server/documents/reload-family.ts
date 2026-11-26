@@ -440,7 +440,7 @@ export async function restoreDocumentFromBackup(
     editsBefore !== null
       ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
       : undefined;
-  const swap = keepEdits ? captureAtSwap(id, restoreDoc, existing) : undefined;
+  const swap = keepEdits ? captureAtSwap(id, existing) : undefined;
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
   // is itself reversible. Every restore, not only the first overwrite of the

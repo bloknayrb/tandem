@@ -24,6 +24,7 @@
 
 import fs from "fs/promises";
 import path from "path";
+import type * as Y from "yjs";
 import {
   mayHoldUnsavedWork,
   Y_MAP_AWARENESS,
@@ -116,7 +117,7 @@ export async function reloadFromDisk(
      * during its own awaits here (ADR-057, `keep-unsaved.ts`). Must not write
      * to the document. The watcher's own auto-reload never passes it.
      */
-    atSwap?: () => void;
+    atSwap?: (doc: Y.Doc) => void;
   },
 ): Promise<boolean> {
   if (!acquireReloadGuard(id)) {
@@ -157,7 +158,7 @@ export async function reloadFromDisk(
     //    durable-sync persists, the tombstone observer records — file-watcher
     //    reload semantics.
     withReload(doc, () => {
-      opts?.atSwap?.();
+      opts?.atSwap?.(doc);
       // While the OLD fragment is still live — after the swap its relRanges
       // resolve to nothing. Its own catch, like the apply below: an annotation
       // the capture cannot read must not block the content from landing.

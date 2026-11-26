@@ -34,8 +34,14 @@ vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
 }));
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { flagExternalConflict } from "../../src/server/documents/conflict.js";
 import { markDirty } from "../../src/server/documents/dirty.js";
-import { captureAtSwap, keepEditsCapturedAtSwap } from "../../src/server/documents/keep-unsaved.js";
+import {
+  captureAtSwap,
+  keepEditsCapturedAtSwap,
+  keepUnsavedEdits,
+  unsavedEditsOf,
+} from "../../src/server/documents/keep-unsaved.js";
 import { openFromDisk, type UnsavedEditsHolder } from "../../src/server/documents/open.js";
 import { clearAndReload } from "../../src/server/documents/populate.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -50,6 +56,7 @@ import {
   snapshotBeforeFirstWrite,
 } from "../../src/server/file-io/doc-backup.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
+import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
@@ -58,7 +65,8 @@ import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { withMcp } from "../../src/shared/origins.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
-import { asTestCaller } from "../helpers/ownership-caller.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { asTestCaller, ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const pushNotificationMock = vi.mocked(pushNotification);
 
@@ -71,6 +79,18 @@ registerApplyTools({
   },
 } as unknown as McpServer);
 const restoreTool = toolHandlers.get("tandem_restoreBackup")!;
+
+/** `tandem_open` / `tandem_close` through a real in-memory MCP server and client. */
+async function callDocumentTool(name: string, args: Record<string, unknown>) {
+  const { client, close } = await setupMcpServer([registerDocumentTools], {
+    dispatch: ownershipTestDispatch,
+  });
+  try {
+    return parseResult(await client.callTool({ name, arguments: args }));
+  } finally {
+    await close();
+  }
+}
 
 let tmpDir: string;
 
@@ -226,8 +246,8 @@ describe("the swap-time capture", () => {
 
   it("captureAtSwap reads the edits; keepEditsCapturedAtSwap keeps only what is new", async () => {
     const { filePath, id, doc } = await openWithUnsavedEdits("gap.md", "disk\n", "typed in gap\n");
-    const swap = captureAtSwap(id, doc, getOpenDocs().get(id)!);
-    swap.capture();
+    const swap = captureAtSwap(id, getOpenDocs().get(id)!);
+    swap.capture(doc);
     expect(swap.text).toContain("typed in gap");
 
     // Same as the first capture, or as the incoming text: nothing new to keep.
@@ -377,5 +397,132 @@ describe("tandem_close keeps unsaved edits", () => {
     await closeDocumentById(id);
 
     expect(await unsavedSnapshots(filePath)).toEqual([]);
+  });
+});
+
+describe("the tool envelopes", () => {
+  it("tandem_open force reports backupKept and a note that names the backup", async () => {
+    const { filePath } = await openWithUnsavedEdits("tool-open.md", "disk\n", "edits\n");
+
+    const parsed = await callDocumentTool("tandem_open", { filePath, force: true });
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.backupKept.name).toMatch(/-unsaved\.md$/);
+    expect(parsed.data.backupKeptNote).toContain(JSON.stringify(parsed.data.backupKept.name));
+    expect(parsed.data.backupKeptNote).not.toMatch(/reopen/);
+  });
+
+  it("tandem_open force answers BACKUP_FAILED when the edits cannot be kept", async () => {
+    const { filePath, doc } = await openWithUnsavedEdits("tool-fail.md", "disk\n", "edits\n");
+    await breakBackupFolder();
+
+    const parsed = await callDocumentTool("tandem_open", { filePath, force: true });
+
+    expect(parsed).toMatchObject({ error: true, code: "BACKUP_FAILED" });
+    expect(extractText(doc)).toContain("edits");
+  });
+
+  it("tandem_close reports backupKept with a note that says to reopen first", async () => {
+    const { id } = await openWithUnsavedEdits("tool-close.md", "disk\n", "edits\n");
+
+    const parsed = await callDocumentTool("tandem_close", { documentId: id });
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.backupKept.name).toMatch(/-unsaved\.md$/);
+    expect(parsed.data.backupKeptNote).toMatch(/reopen the document with tandem_open/);
+  });
+
+  it("tandem_close answers BACKUP_FAILED and leaves the document open", async () => {
+    const { id } = await openWithUnsavedEdits("tool-close-fail.md", "disk\n", "edits\n");
+    await breakBackupFolder();
+
+    const parsed = await callDocumentTool("tandem_close", { documentId: id });
+
+    expect(parsed).toMatchObject({ error: true, code: "BACKUP_FAILED" });
+    expect(getOpenDocs().has(id)).toBe(true);
+  });
+});
+
+describe("what counts as unsaved edits", () => {
+  it("a pending conflict counts even when the dirty flag is clear", async () => {
+    const filePath = path.join(tmpDir, "conflict.md");
+    await fs.writeFile(filePath, "text\n");
+    const opened = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    flagExternalConflict(opened.documentId, doc, filePath, {
+      kind: "external-edit",
+      diskChanged: true,
+      detectedAt: Date.now(),
+    });
+
+    expect(
+      unsavedEditsOf(opened.documentId, doc, getOpenDocs().get(opened.documentId)!),
+    ).not.toBeNull();
+  });
+
+  it("covers .txt, but not read-only documents, uploads or other formats", async () => {
+    const { id, doc } = await openWithUnsavedEdits("plain.txt", "a\n", "b\n");
+    const state = getOpenDocs().get(id)!;
+
+    expect(unsavedEditsOf(id, doc, state)).not.toBeNull();
+    expect(unsavedEditsOf(id, doc, { ...state, readOnly: true })).toBeNull();
+    expect(unsavedEditsOf(id, doc, { ...state, source: "upload" })).toBeNull();
+    expect(unsavedEditsOf(id, doc, { ...state, format: "html" })).toBeNull();
+    expect(unsavedEditsOf(id, doc, { ...state, format: "docx" })).toBeNull();
+  });
+
+  it("a serializer that throws refuses with BACKUP_FAILED rather than lose the edits", async () => {
+    const { id, doc } = await openWithUnsavedEdits("throw.md", "a\n", "b\n");
+    const adapter = getAdapter("md");
+    const spy = vi.spyOn(adapter, "save").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    try {
+      expect(() => unsavedEditsOf(id, doc, getOpenDocs().get(id)!)).toThrow(
+        expect.objectContaining({ code: "BACKUP_FAILED" }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps nothing when the edits equal the incoming content", async () => {
+    const filePath = path.join(tmpDir, "same.md");
+    expect(await keepUnsavedEdits(filePath, "same\n", "same\n")).toBeUndefined();
+    expect(await unsavedSnapshots(filePath)).toEqual([]);
+  });
+
+  it("a backup folder at its size limit refuses with BACKUP_FAILED", async () => {
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const spy = vi
+      .spyOn(store, "snapshotUnsavedEdits")
+      .mockResolvedValue({ outcome: "skipped-size-cap" });
+    try {
+      await expect(keepUnsavedEdits(path.join(tmpDir, "cap.md"), "edits\n")).rejects.toMatchObject({
+        code: "BACKUP_FAILED",
+        message: expect.stringMatching(/full/),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("close keeps its document identity across the backup's await", () => {
+  it("closes nothing when the document was closed during the backup", async () => {
+    const { id } = await openWithUnsavedEdits("race.md", "disk\n", "edits\n");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const real = store.snapshotUnsavedEdits;
+    const spy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      // A browser close lands while the backup is being written.
+      await closeDocumentById(id);
+      return real(...args);
+    });
+    try {
+      const result = await closeDocumentById(id, { keepUnsavedEdits: true });
+      expect(result).toMatchObject({ success: false });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

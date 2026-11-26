@@ -490,7 +490,7 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
         editsBefore !== null ? await keepUnsavedEdits(resolved, editsBefore, incoming) : undefined;
       // Edits typed during the awaits between that capture and the swap are
       // read inside the swap's own transaction and kept after it.
-      const swap = keepHolder ? captureAtSwap(existingId, doc, existing) : undefined;
+      const swap = keepHolder ? captureAtSwap(existingId, existing) : undefined;
       const remap = await clearAndReload(
         existingId,
         doc,
@@ -505,6 +505,12 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
           ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
           : undefined;
         keepHolder.kept = keptAtSwap ?? keptBefore;
+        // Told now, not at the end: the edits are already gone, so a later
+        // step that throws (the store re-wire, the tutorial replay) must not
+        // also hide where they went.
+        if (keepHolder.kept) {
+          notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
+        }
       }
       await openDocumentWhenReady(
         { id: existingId, filePath: resolved, format, readOnly, source: "file" },
@@ -534,9 +540,6 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
         await persistEnvelopeNow(existingId, doc, resolved);
       }
       ensureAutoSave();
-      if (keepHolder?.kept) {
-        notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
-      }
       return {
         ...buildResult(doc, {
           documentId: existingId,

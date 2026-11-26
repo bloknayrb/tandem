@@ -635,7 +635,7 @@ export function registerDocumentTools(server: McpServer): void {
         .boolean()
         .optional()
         .describe(
-          'Reload from disk even if already open, discarding unsaved in-memory edits and the session. Unsaved edits are first kept as a backup, named in the result as backupKept (restore it with tandem_restoreBackup); if that backup cannot be kept, nothing is reloaded and the call answers BACKUP_FAILED. Annotations are kept and re-anchored to the reloaded text; any whose text changed may be reported with anchor: "degraded" by tandem_getAnnotations.',
+          'Reload from disk even if already open, discarding unsaved in-memory edits and the session. For an on-disk .md/.txt file, unsaved edits are first kept as a backup, named in the result as backupKept (restore it with tandem_restoreBackup); if that backup cannot be kept, nothing is reloaded and the call answers BACKUP_FAILED. Other formats keep no backup. Annotations are kept and re-anchored to the reloaded text; any whose text changed may be reported with anchor: "degraded" by tandem_getAnnotations.',
         ),
       authoredBy: z
         .literal("claude")
@@ -701,7 +701,7 @@ export function registerDocumentTools(server: McpServer): void {
               envelope: mcpSuccess({
                 ...toWireResult(result),
                 message: openResultMessage(result),
-                ...(unsaved.kept ? backupKeptFields(unsaved.kept) : {}),
+                ...(unsaved.kept ? backupKeptFields(unsaved.kept, "reload") : {}),
                 ...wakeUrlField(),
               }),
             };
@@ -1869,7 +1869,7 @@ export function registerDocumentTools(server: McpServer): void {
             closed: true,
             was: result.closedPath,
             activeDocumentId: result.activeDocumentId,
-            ...(result.unsavedEditsKept ? backupKeptFields(result.unsavedEditsKept) : {}),
+            ...(result.unsavedEditsKept ? backupKeptFields(result.unsavedEditsKept, "close") : {}),
           });
         },
       );

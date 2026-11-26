@@ -659,7 +659,8 @@ export function registerApplyTools(server: McpServer): void {
   server.tool(
     "tandem_restoreBackup",
     "Restore a document from a backup. Tandem snapshots a document's on-disk bytes before its " +
-      `first overwrite each server run (${docxEnabled() ? ".md/.txt/.docx" : ".md/.txt"}). ` +
+      `first overwrite each server run and before every restore (${docxEnabled() ? ".md/.txt/.docx" : ".md/.txt"}), ` +
+      "and keeps .md/.txt unsaved edits that tandem_open force, a restore or tandem_close discarded. " +
       "Call without `backup` to list available " +
       "snapshots (newest first), then call again with `backup` set to a snapshot name to restore " +
       "it. " +
@@ -731,7 +732,9 @@ export function registerApplyTools(server: McpServer): void {
               return mcpError(
                 "FILE_NOT_FOUND",
                 `No backups found for ${path.basename(filePath)}. Tandem snapshots a ` +
-                  "document's on-disk bytes before its first overwrite each server run." +
+                  "document's on-disk bytes before its first overwrite each server run and " +
+                  "before every restore, and keeps unsaved edits a Claude reload, restore or " +
+                  "close discarded." +
                   (docState.format === "docx"
                     ? " tandem_applyChanges also writes a {name}.backup.docx sidecar beside the " +
                       "document, which is listed here whenever it exists."
@@ -760,7 +763,7 @@ export function registerApplyTools(server: McpServer): void {
           );
           return mcpSuccess({
             ...result,
-            ...(unsavedEditsKept ? backupKeptFields(unsavedEditsKept) : {}),
+            ...(unsavedEditsKept ? backupKeptFields(unsavedEditsKept, "restore") : {}),
           });
         } catch (err) {
           const e = err as Error & { code?: string };
