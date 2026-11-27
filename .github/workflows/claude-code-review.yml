@@ -93,8 +93,10 @@ jobs:
           path: trusted
           persist-credentials: false
           sparse-checkout-cone-mode: false
+          # `CLAUDE.md` without a leading slash matches at every depth: the
+          # colocated per-directory files are master's instructions too.
           sparse-checkout: |
-            /CLAUDE.md
+            CLAUDE.md
             /AGENTS.md
             /.github/claude-review/
 
@@ -114,8 +116,10 @@ jobs:
 
       # Symlinks first, so nothing below can write through one. Then every
       # agent-config name at every depth (a nested CLAUDE.md is loaded as
-      # instructions when the model reads that directory), then master's root
-      # copies back. The PR's changes to these files still show in the diff.
+      # instructions when the model reads that directory), then master's copies
+      # back: AGENTS.md at the root and every CLAUDE.md at its own depth where
+      # the PR still has that directory. The PR's changes to these
+      # files still show in the diff; a CLAUDE.md the PR adds is not restored.
       - name: Neutralise the PR checkout
         if: steps.recheck.outputs.skip == 'false'
         working-directory: pr
@@ -133,7 +137,29 @@ jobs:
             echo "neutralising left $left entries behind"
             exit 1
           fi
-          cp ../trusted/CLAUDE.md ../trusted/AGENTS.md .
+          cp -L ../trusted/AGENTS.md .
+          # Master's CLAUDE.md at every depth, by content (`cp -L`, so a
+          # symlinked one is copied as its target), never under a .claude*
+          # directory. Restored only where the PR still has that directory: a
+          # directory the PR removed, renamed or turned into a file is not
+          # recreated. A copy that cannot be read (a link whose target is
+          # outside the sparse set) is skipped and logged, never fatal; only
+          # the root copy is mandatory, checked below.
+          (cd ../trusted && find . -path ./.git -prune -o -name '.claude*' -prune -o \
+            \( -type f -o -type l \) -name 'CLAUDE.md' -print0) |
+            while IFS= read -r -d '' f; do
+              if [ ! -d "${f%/*}" ]; then
+                echo "not restoring $f: the PR has no directory there"
+              elif ! cp -L "../trusted/$f" "$f"; then
+                echo "not restoring $f: master's copy could not be read"
+              fi
+            done
+          # Fatal on its own, not as the script's last status: `bash -e` ignores a
+          # failure on the left of `&&`, so a line added after this would mask it.
+          if [ ! -f CLAUDE.md ] || [ -L CLAUDE.md ]; then
+            echo "master's root CLAUDE.md was not restored as a regular file"
+            exit 1
+          fi
 
       - name: Prepare review inputs
         if: steps.recheck.outputs.skip == 'false'
