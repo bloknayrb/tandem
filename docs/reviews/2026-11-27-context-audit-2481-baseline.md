@@ -32,9 +32,14 @@ judging by the numbers, did not load the project `CLAUDE.md` into context either
   lines 1–120 with Read. Its own audit says it saw "only its start".
 
 So this baseline measures **a session that had to fetch its instructions by hand**, not the
-normal auto-loaded case. Marking the copy trusted (an entry in `~/.claude.json`) was refused by
-this session's permission classifier; it is Bryan's call (section 7). The skill now says the copy
-must be trusted before a run counts as a with-instructions measurement.
+normal auto-loaded case.
+
+**Correction, same day: trust was not the cause; the location was.** With Bryan's approval the
+copy was trusted and probed with a three-line `CLAUDE.md` holding a marker word. Under the
+session's scratchpad (`/tmp/claude-0/...`) the marker never loaded, trusted or not, with or
+without a `.git`; moved to `/home/user/audit-2481` (outside the scratchpad and outside the repo)
+it loaded at once. The skill now builds the copy there. Section 8 is the re-run with
+`CLAUDE.md` actually loaded.
 
 ## 3. Numbers (from the event stream, not the agent's summary)
 
@@ -125,6 +130,45 @@ What it wished had been written down:
 - Next scheduled audit: [#2593](https://github.com/bloknayrb/tandem/issues/2593), "Context audit
   due 2027-02-27". Finding F1/F2 is [#2594](https://github.com/bloknayrb/tandem/issues/2594).
 
+## 8. Trusted re-run, with CLAUDE.md loaded
+
+Same bug, same prompt, same parent commit, the copy at `/home/user/audit-2481` and trusted,
+with **master's current `CLAUDE.md` (12,012 words at `1ee55d6`) overlaid**, so step 10 can
+compare the slimmed set against exactly this one. Tools as the revised skill says: Biome
+allowed, writes under `node_modules/` denied (none attempted).
+
+| Measure | Untrusted (sections 3–4) | Trusted (this run) |
+|---|---|---|
+| Startup context | 48,261 | **80,918** (CLAUDE.md costs about 32.6k tokens) |
+| Peak context | 123,342 | 134,499 |
+| Turns / tool calls | 48 / 47 | 43 / 42 |
+| Read / Grep / Bash calls | 4 / 5 / 24 | 13 / 10 / 6 |
+| Output tokens | 24,622 | 16,927 |
+| Wall time | 6 min 17 s | 5 min 34 s |
+| Cost reported | $1.87 | $1.87 |
+| Fix sites matched (of the real fix's 6) | 3 | 3 (the same three) |
+
+The trusted settings also turn on the copy's `.claude/settings.json` allow entries and hooks,
+which is why reads moved from Bash to Read/Grep; that confounds a tool-by-tool comparison, not
+the startup or fix-quality ones.
+
+**Fix.** Identical coverage: `hideFromAI`, the thread-item reader and the release sweep. It again
+missed `sanitize.ts`, `schema.ts` and the client badge, but this time **named the badge and the
+annotation-polarity question as residuals** ("someone should decide it deliberately"), which is
+exactly where the real fix went. It added 13 tests and checked they fail against the old
+predicate.
+
+**What it said about CLAUDE.md** (quoted): "Mostly noise for this task, a little useful. About
+40 KB auto-loaded … Neither the Solo/indeterminate hold, `hideFromAI` nor `heldInSolo` is
+mentioned anywhere in it, even though it is a privacy gate." The two things that helped were
+Critical Rule 2 (seed test writes with `withInternal`) and the #2460 precedent. Its wish list
+repeats the baseline's (a fail-closed rule for unsanitized reply fields, a reader inventory) and
+adds a "Where to look" row for Solo/Tandem mode and privacy holds.
+
+**Verdict.** For this bug, loading the 12k-word root `CLAUDE.md` cost about 32.6k tokens per
+session and did not change the fix's coverage; it shortened the run slightly. The decisive context
+was again in code docblocks. This is the baseline step 10 compares against.
+
 ## Appendix: ordered tool calls
 
 From the run's event stream. Turn is the assistant turn the call came in; targets are relative to
@@ -179,3 +223,50 @@ the copy and cut at 120 characters.
 | 45 | 65 | Read | `CHANGELOG.md` |
 | 46 | 66 | Edit | `CHANGELOG.md` |
 | 47 | 68 | Write | `AUDIT.md` |
+
+## Appendix B: ordered tool calls, trusted re-run (section 8)
+
+| # | Turn | Tool | Target |
+|---|---|---|---|
+| 1 | 2 | Grep | `heldInSolo` |
+| 2 | 3 | Read | `src/server/mode.ts` |
+| 3 | 4 | Read | `src/server/mcp/annotations.ts` |
+| 4 | 6 | Grep | `replyPrivacyAllows\|hideFromAI\(\|heldInSolo ===\|heldInSolo !==` |
+| 5 | 8 | Read | `src/server/annotations/projection.ts` |
+| 6 | 9 | Read | `src/server/mcp/routes/mode-release.ts` |
+| 7 | 11 | Read | `src/server/events/queue.ts` |
+| 8 | 14 | Read | `src/server/annotations/held-in-solo.ts` |
+| 9 | 16 | Edit | `src/server/mode.ts` |
+| 10 | 17 | Edit | `src/server/mcp/annotations.ts` |
+| 11 | 18 | Edit | `src/server/mcp/routes/mode-release.ts` |
+| 12 | 19 | Edit | `src/server/mcp/routes/mode-release.ts` |
+| 13 | 20 | Grep | `from "\.\./mode\.js"` |
+| 14 | 21 | Edit | `src/server/mcp/annotations.ts` |
+| 15 | 23 | Grep | `hideFromAI\|heldInSolo: "true"\|indeterminate` |
+| 16 | 24 | Grep | `hideFromAI\|indeterminate` |
+| 17 | 25 | Read | `tests/server/mode.test.ts` |
+| 18 | 27 | Edit | `tests/server/mode.test.ts` |
+| 19 | 28 | Edit | `tests/server/mode.test.ts` |
+| 20 | 30 | Grep | `indeterminate` |
+| 21 | 31 | Grep | `heldInSolo.*indeterminate\|indeterminate.*heldInSolo\|setMode\(undefined\)\|clearMode\|removeMode` |
+| 22 | 32 | Read | `tests/server/mcp-tool-integration.test.ts` |
+| 23 | 34 | Read | `tests/server/awareness-tools.test.ts` |
+| 24 | 35 | Read | `tests/server/awareness-tools.test.ts` |
+| 25 | 37 | Edit | `tests/server/awareness-tools.test.ts` |
+| 26 | 38 | Grep | `Y_MAP_ANNOTATION_REPLIES\|tandem_exportAnnotations` |
+| 27 | 39 | Read | `tests/server/mcp-tool-integration.test.ts` |
+| 28 | 41 | Read | `tests/server/mcp-tool-integration.test.ts` |
+| 29 | 42 | Grep | `function setMode\|beforeEach\|afterEach` |
+| 30 | 44 | Edit | `tests/server/mcp-tool-integration.test.ts` |
+| 31 | 46 | Read | `tests/server/mode-release.test.ts` |
+| 32 | 47 | Edit | `tests/server/mode-release.test.ts` |
+| 33 | 48 | Bash | `npx vitest run tests/server/mode.test.ts tests/server/mode-release.test.ts tests/server/awareness-tools.test.ts tests...` |
+| 34 | 51 | Bash | `cp src/server/mode.ts /tmp/claude-0/-home-user-audit-2481/5930a83b-522b-47ba-bb33-2e005138bb74/scratchpad/mode.bak &&...` |
+| 35 | 53 | Edit | `src/server/mode.ts` |
+| 36 | 54 | Bash | `npx vitest run tests/server/mode.test.ts tests/server/mode-release.test.ts tests/server/awareness-tools.test.ts tests...` |
+| 37 | 56 | Edit | `src/server/mode.ts` |
+| 38 | 57 | Bash | `npx vitest run tests/server/mode.test.ts tests/server/mode-release.test.ts tests/server/mode-release-race.test.ts tes...` |
+| 39 | 58 | Bash | `npx tsc -p tsconfig.tests.node.json --noEmit 2>&1 \| tail -5; npx biome check src/server/mode.ts src/server/mcp/annota...` |
+| 40 | 61 | Grep | `heldInSolo[^\n]{0,40}(=== ?true\|literally\|boolean)\|hideFromAI` |
+| 41 | 62 | Bash | `sed -n 617p docs/architecture.md \| cut -c1-1500; echo ----; sed -n 3560p docs/decisions.md \| grep -o ".\{300\}heldInS...` |
+| 42 | 65 | Write | `AUDIT.md` |

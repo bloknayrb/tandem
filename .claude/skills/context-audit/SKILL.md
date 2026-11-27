@@ -26,16 +26,20 @@ Record: issue number, fix commit `F`, its parent `F^`.
 ## 2. Build a history-free copy at `F^`
 
 The run must not be able to find the answer: no `git log`, no fix commit, no
-origin. In the scratchpad, never in the repo:
+origin. **Outside both the repo and the session scratchpad**: Claude Code does
+not load a `CLAUDE.md` under the scratchpad (`/tmp/claude-0/...`) at all, and
+a copy inside the repo would also load the repo's own `CLAUDE.md` as a parent
+(found 2026-11-27, see the #2481 report). A sibling of the checkout works:
 
 ```bash
-A="$SCRATCH/audit-<issue>-<label>"          # label: baseline, after, ...
+A="/home/user/audit-<issue>-<label>"        # label: baseline, after, ...
 mkdir -p "$A" && cd "$A"
 git init -q && git fetch -q --depth 1 /home/user/tandem "<F^ sha>" && git checkout -q FETCH_HEAD
 rm -rf .git                                 # no history, no remote
 ln -s /home/user/tandem/node_modules node_modules
 # A pristine copy to diff the run's work against (the copy has no .git):
-mkdir -p "$A.orig" && git -C /home/user/tandem archive "<F^ sha>" src tests | tar -x -C "$A.orig"
+mkdir -p "$SCRATCH/$(basename "$A").orig" && git -C /home/user/tandem archive "<F^ sha>" src tests \
+  | tar -x -C "$SCRATCH/$(basename "$A").orig"
 ```
 
 `node_modules` is the real checkout's, through a symlink, so the run must not
@@ -47,8 +51,10 @@ Claude Code does not load a project's `CLAUDE.md` or settings in a workspace
 it has not trusted, so an untrusted copy measures a session that must fetch
 its instructions by hand (the 2026-11-27 baseline did; see its report). Trust
 is an entry in `~/.claude.json` (`projects["<copy path>"].hasTrustDialogAccepted`)
-— a change to the user's Claude Code config, so ask Bryan before making it. If
-the copy stays untrusted, say so in the report and compare only like with like.
+— a change to the user's Claude Code config; Bryan approved it for audit
+copies on 2026-11-27, one entry per copy, removed after its run. Confirm the
+instructions loaded before trusting the numbers: a three-line `CLAUDE.md` with a
+marker word, asked for in a one-turn `claude -p`, must come back.
 
 To measure **another instruction set** against the same bug (step 10 of the
 plan: the slimmed CLAUDE.md), copy that set's `CLAUDE.md` files over the
@@ -102,7 +108,7 @@ From `$A.jsonl`, not from the agent's own summary:
   `node_modules/` or outside `$A` invalidates the run; say so and stop.
 - **Instruction files loaded without a read:** a nested `CLAUDE.md` loads on
   demand; list the ones under directories the session touched.
-- **Fix quality:** `diff -ruN "$A.orig/src" "$A/src"` (and the same for
+- **Fix quality:** `diff -ruN "$SCRATCH/$(basename "$A").orig/src" "$A/src"` (and the same for
   `tests/`) is the run's fix; compare it with the real fix `F` (`git show F` in
   the real repo). Did it find the same
   root cause and cover the same egresses? Run the real fix's tests against the
@@ -122,5 +128,6 @@ Write `docs/reviews/<date>-context-audit-<issue>-<label>.md`:
 End the report with the next audit's dated issue (`Context audit due
 <date>`, about three months on), per CLAUDE.md's rule on dated gates.
 
-Delete the copy and its siblings (`rm -rf "$A" "$A.orig" "$A".*`) when the
+Delete the copy, its scratch siblings and its trust entry (delete only that
+key from `~/.claude.json`, never restore a backup over later writes) when the
 report, with its call-list appendix, is written.
