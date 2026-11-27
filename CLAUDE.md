@@ -56,7 +56,7 @@ Each of these breaks something when violated, usually without a type error:
 | Network posture, CORS, auth, privacy | [docs/security.md](docs/security.md) |
 | Why a hook just fired | [.claude/hooks/README.md](.claude/hooks/README.md) |
 | "Why is it like this?" — 99 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
-| Architectural decisions, ADR-001–056 | [docs/decisions.md](docs/decisions.md) |
+| Architectural decisions, ADR-001–057 | [docs/decisions.md](docs/decisions.md) |
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
 | Chaining dependent PRs | [docs/stacked-prs.md](docs/stacked-prs.md) — `gh stack`; hand-chaining `--base` silently closes children |
@@ -64,7 +64,15 @@ Each of these breaks something when violated, usually without a type error:
 
 ## Development Workflow
 
-For every feature or fix: draft a plan (`/plan`), **spawn adversarial agents to review the plan
+**Review is tiered by risk (ADR-057).** A change is **Tier B** only if every path it touches is on
+the allowlist in `.claude/review-tiers.json` (working-record docs, README/CONTRIBUTING/CHANGELOG,
+client CSS, test files the session creates): implement, `/simplify`, verify, QA, PR, with no plan
+review, and do not enter plan mode for it. **Everything else is Tier A**, and Tier A is the flow
+below. Editing any `CLAUDE.md`, a skill, an agent, a hook, CI, `scripts/` or a check is always Tier A.
+Both tiers keep the merge gate and the #1602 rule. `nudge-plan-review.sh` warns on a Tier A edit made
+with no plan; it never blocks, and a Bash write never reaches it.
+
+For every Tier A feature or fix: draft a plan (`/plan`), **spawn adversarial agents to review the plan
 from multiple angles before writing any code**, implement, run `/simplify`, then verify (`npm run typecheck` +
 `npm test`; add `npm run test:e2e` for client/integration changes), do whatever manual testing
 is possible (browser automation via `claude-in-chrome`, MCP probing), and prompt Bryan for

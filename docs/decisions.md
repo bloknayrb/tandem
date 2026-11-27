@@ -71,6 +71,7 @@ The Status column repeats the first status line a record states; a dash means th
 | ADR-054 | Multi-Session Document Ownership — Identity, and Shipping Dark | Accepted (ships dark) | [Read](#adr-054-multi-session-document-ownership--identity-and-shipping-dark) |
 | ADR-055 | Cowork Setup Ships Dark | Accepted | [Read](#adr-055-cowork-setup-ships-dark) |
 | ADR-056 | The Non-Loopback Bind Ships Dark | Accepted | [Read](#adr-056-the-non-loopback-bind-ships-dark) |
+| ADR-057 | Checks Over Prose; Review Tiered by Risk | Accepted | [Read](#adr-057-checks-over-prose-review-tiered-by-risk) |
 
 ## ADR-001: Tiptap over ProseMirror Direct
 **Decision:** Use Tiptap instead of raw ProseMirror.
@@ -4209,6 +4210,33 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 10. The owner handle's destination rule (the bridge's `ownerHandleForUpstream`) must not widen with the bind, as `tokenMayGoTo` does: the handle goes only to `http:` on `127.0.0.1` or `[::1]`, at the URL the launcher named.
 
 **Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.
+
+
+## ADR-057: Checks Over Prose; Review Tiered by Risk
+
+**Status:** Accepted (2026-11-27)
+
+**Context.** Bryan asked how Tandem could apply David Veszelovszki's essay "I'm a 100x engineer now" (2026-10-24). The author builds a Rust + Tauri + Svelte app with Claude Code without reading the code. He keeps quality up with about 159 automated checks, a rule that every bug fix adds a check that structurally removes its class, size and complexity caps with reasoned allowlists, and short instruction files placed next to the code. He says plainly that this is for non-critical systems. Measured against Tandem on 2026-11-27:
+
+- Root `CLAUDE.md` was 11,846 words, auto-loaded into every session; no colocated instruction files existed.
+- About 23% of `docs/gotchas.md`'s bullets named a check that enforces them. The rest is prose an agent must remember.
+- Nothing pushed back on code shape: no file-size, complexity, dead-code or clippy gate.
+- Every change took the full flow: plan, adversarial agent review, implement, `/simplify`, verify.
+
+Bryan chose (2026-11-27) to adopt the checks, the bug-class discipline and colocated instruction files, to tier the review workflow by risk rather than drop it, and not to adopt the essay's rule that a human writes all human-facing copy. Tandem edits users' documents and carries security and licensing surfaces, so "never read plans or code" is not adopted.
+
+**Decision.**
+
+1. **Checks over prose.** A rule that can be checked becomes a check, and the prose shrinks to a pointer at it. Existing debt is frozen as a ratchet that may only go down, never waved through: the file-size baseline, the per-function complexity baseline and the knip baseline. A fix names the check that makes its bug's class impossible, or says why none can be written (CLAUDE.md's Development Workflow).
+2. **Review is tiered by risk.** `.claude/review-tiers.json` holds a **Tier B allowlist**: working records under `docs/plans`, `docs/reviews`, `docs/spikes` and `docs/triage`; `README.md`, `CONTRIBUTING.md` and `CHANGELOG.md`; client CSS; and test files a session creates under `tests/server`, `tests/client` and `tests/e2e`. A change whose every path is Tier B may skip plan review: implement, `/simplify`, checks, QA, PR. **Everything else is Tier A** and keeps the full flow, so the list fails closed (#1604). An `alwaysTierA` list beats every Tier B glob: any `CLAUDE.md` or `AGENTS.md`, `.claude/**`, `skills/**`, `.github/**`, `scripts/**` and the check directories under `tests/`. Editing an instruction file, a reviewer or a check is therefore never Tier B. Every other doc under `docs/` is Tier A, notably `docs/security.md`, because its register is the #1602 rule's one standing exception.
+3. **Both tiers keep** the cloud-review merge gate (#1831) and the #1602 blocking-finding rule.
+4. **Enforcement is a nudge.** `nudge-plan-review.sh` warns once per session on a Tier A edit made before any plan was written. It never blocks. `block-plan-without-agent-review` stays fail-closed, so a Tier B task should not enter plan mode.
+
+**Accepted residuals.** The agent classifies its own work, and a write made through Bash (a redirect, `sed -i`, `git apply`) never reaches the Edit/Write hook, so the nudge cannot see it. CHANGELOG.md ships to users in the npm and desktop bundles and is Tier B, as a consequence of Bryan's decision not to require human-owned copy.
+
+**Enforced by:** `tests/scripts/review-tier.test.ts` (the tier lists, the classifier, the hook's warning) and the ratchet tests named in CONTRIBUTING.md.
+
+**Cross-references:** ADR-051 (an advisory guarantee is enforced inside `check`), #1602, #1604, #1831, `docs/spikes/ai-debugging-blind-spots-audit.md`.
 
 ## Related
 

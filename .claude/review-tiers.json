@@ -1,0 +1,28 @@
+{
+  "$comment": "Review tiers (ADR-057). A change is Tier A (plan + adversarial agent review before code) unless EVERY path it touches is Tier B. Tier B is an allowlist, so an unlisted path fails closed to Tier A (#1604). alwaysTierA wins over every Tier B glob: instruction files, reviewers, hooks, CI, scripts and the checks themselves never go through the light path. tierBNewFilesOnly is Tier B only for a file the session CREATES; editing or overwriting an existing test there is Tier A. Read by .claude/hooks/review-tier.mjs; pinned by tests/scripts/review-tier.test.ts.",
+  "tierB": [
+    "docs/plans/**",
+    "docs/reviews/**",
+    "docs/spikes/**",
+    "docs/triage/**",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "src/client/**/*.css"
+  ],
+  "tierBNewFilesOnly": ["tests/server/**", "tests/client/**", "tests/e2e/**"],
+  "alwaysTierA": [
+    "**/CLAUDE.md",
+    "**/AGENTS.md",
+    ".claude/**",
+    "skills/**",
+    ".github/**",
+    "scripts/**",
+    "tests/docs/**",
+    "tests/build/**",
+    "tests/scripts/**",
+    "tests/setup/**",
+    "tests/helpers/**",
+    "tests/hooks/**"
+  ]
+}
