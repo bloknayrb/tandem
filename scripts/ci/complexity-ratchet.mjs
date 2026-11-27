@@ -29,7 +29,7 @@
  * rename the entry in the same change, at the same number, so the move shows in
  * the diff.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -151,6 +151,18 @@ async function main() {
   );
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compare real paths on both sides: the ESM loader resolves symlinks for
+// import.meta.url but process.argv[1] is as typed, so a checkout reached
+// through a symlink would otherwise skip main() and exit 0 without checking.
+function realpathOrNull(candidate) {
+  if (!candidate) return null;
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+const invokedPath = realpathOrNull(process.argv[1]);
+if (invokedPath !== null && invokedPath === realpathOrNull(fileURLToPath(import.meta.url))) {
   await main();
 }
