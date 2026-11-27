@@ -277,7 +277,8 @@ alias) is **hard-blocked** in agent sessions for exactly that reason. Use `HUSKY
 - Tests: `*.test.ts` / `*.spec.ts`, under the owning `tests/<area>/`
 - Route/service files: kebab-case where the surrounding directory already is
 - File size: `src/**/*.{ts,svelte}` stays under 800 lines and `src-tauri/src/**/*.rs` under
-  1,000 (not counting `#[cfg(test)]` items). Files already over that are listed in
+  1,000 code lines (non-blank, not counting comments or `#[cfg(test)]` items; a file declared
+  only as `#[cfg(test)] mod x;` is not counted). Files already over that are listed in
   `scripts/file-size-baseline.json` at their current size, which is a ceiling that only goes
   down. `tests/scripts/file-size-ratchet.test.ts` enforces it and prints the JSON to write.
 

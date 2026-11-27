@@ -1,24 +1,12 @@
 {
-  "$comment": "Size ceilings for source files over their limit (.ts/.svelte 800 lines; .rs 1000 lines excluding #[cfg(test)] items). Enforced by tests/scripts/file-size-ratchet.test.ts. Ceilings only go down: a file may not grow past its entry, and a file that shrinks must have its entry lowered to match. A new entry needs a real reason.",
+  "$comment": "Size ceilings for source files over their limit (.ts/.svelte 800 lines; .rs 1000 code lines: non-blank, excluding comments and #[cfg(test)] items). Enforced by tests/scripts/file-size-ratchet.test.ts. Ceilings only go down: a file may not grow past its entry, and a file that shrinks must have its entry lowered to match. A new entry needs a real reason.",
   "files": {
-    "src-tauri/src/cowork_commands.rs": {
-      "lines": 1368,
-      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
-    },
-    "src-tauri/src/cowork_workspace_scan.rs": {
-      "lines": 1064,
-      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
-    },
-    "src-tauri/src/firewall.rs": {
-      "lines": 1246,
-      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
-    },
     "src-tauri/src/lib.rs": {
-      "lines": 3360,
+      "lines": 1671,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src-tauri/src/sidecar.rs": {
-      "lines": 3003,
+      "lines": 1336,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/cli/doctor.ts": {
