@@ -14,6 +14,7 @@ import {
   API_CLOSE,
   API_CONVERT,
   API_DIAGNOSTICS,
+  API_DOCUMENT_COMPARE,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
   API_EXTERNAL_CONFLICT_RESOLVE,
@@ -50,6 +51,7 @@ import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleListBackups, handleRestoreBackup } from "./routes/backups.js";
 import { handleAcknowledgeKeptEdits } from "./routes/backups-ack.js";
 import { handleClose } from "./routes/close.js";
+import { handleGetDocumentCompare } from "./routes/compare.js";
 import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
@@ -507,6 +509,8 @@ export function registerApiRoutes(
   // content must not be disclosed to LAN peers, #1121 F5); POST is gated on
   // origin allowlist + loopback inside the handler (#1121 F6).
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
+  // The compare view (ADR-057 PR 4): loopback-only by hand, like raw above.
+  app.get(API_DOCUMENT_COMPARE, mw, handleGetDocumentCompare);
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
 

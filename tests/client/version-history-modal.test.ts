@@ -262,3 +262,35 @@ describe("backups formatting", () => {
     expect(formatBackupSize(3 * 1024 * 1024)).toBe("3.0 MB");
   });
 });
+
+describe("VersionHistoryModal compare", () => {
+  it("compares a backup with the document now, and Back returns to the list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/api/document/compare")) {
+          return Promise.resolve(
+            json({
+              data: {
+                current: "now\n",
+                other: "then\n",
+                otherLabel: "disk-backup",
+                truncated: false,
+              },
+            }),
+          );
+        }
+        return Promise.resolve(TWO());
+      }),
+    );
+    const { container } = open();
+    await settle();
+    await fireEvent.click(container.querySelectorAll("[data-testid='version-history-compare']")[1]);
+    await settle();
+    expect(container.querySelector("[data-testid='diff-view']")?.textContent).toContain("then");
+    expect(container.querySelectorAll(ROW)).toHaveLength(0);
+    await fireEvent.click(container.querySelector("[data-testid='version-history-compare-back']")!);
+    await settle();
+    expect(container.querySelectorAll(ROW)).toHaveLength(2);
+  });
+});

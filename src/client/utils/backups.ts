@@ -8,6 +8,7 @@ import {
   API_BACKUPS,
   API_BACKUPS_ACKNOWLEDGE,
   API_BACKUPS_RESTORE,
+  API_DOCUMENT_COMPARE,
 } from "../../shared/api-paths.js";
 import { formatRelativeTime } from "../panels/annotation-card-helpers.js";
 import { API_BASE } from "./fileUpload.js";
@@ -165,4 +166,63 @@ export function formatBackupSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export interface Comparison {
+  /** The document as the next save would write it. */
+  current: string;
+  /** The other version's text. */
+  other: string;
+  otherLabel: "disk" | "unsaved" | "disk-backup";
+  /** One side or both were cut at the server's cap. */
+  truncated: boolean;
+}
+
+export type CompareResult = { ok: true; comparison: Comparison } | { ok: false; message: string };
+
+/** How the compare view's legend names the other version. */
+export function comparisonLabel(label: Comparison["otherLabel"]): string {
+  return label === "disk"
+    ? "The file on disk"
+    : label === "unsaved"
+      ? "Your unsaved edits (backup)"
+      : "The file on disk (backup)";
+}
+
+/** `GET /api/document/compare`: the document now against the file on disk (`"disk"`) or a backup by name. */
+export async function compareDocument(documentId: string, against: string): Promise<CompareResult> {
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}${API_DOCUMENT_COMPARE}?documentId=${encodeURIComponent(documentId)}&against=${encodeURIComponent(against)}`,
+    );
+  } catch {
+    return { ok: false, message: "Couldn't reach Tandem." };
+  }
+  const body = (await res.json().catch(() => null)) as {
+    message?: unknown;
+    data?: Partial<Comparison>;
+  } | null;
+  const d = body?.data;
+  if (
+    !res.ok ||
+    typeof d?.current !== "string" ||
+    typeof d.other !== "string" ||
+    (d.otherLabel !== "disk" && d.otherLabel !== "unsaved" && d.otherLabel !== "disk-backup")
+  ) {
+    return {
+      ok: false,
+      message:
+        typeof body?.message === "string" ? body.message : "Couldn't compare these versions.",
+    };
+  }
+  return {
+    ok: true,
+    comparison: {
+      current: d.current,
+      other: d.other,
+      otherLabel: d.otherLabel,
+      truncated: d.truncated === true,
+    },
+  };
 }

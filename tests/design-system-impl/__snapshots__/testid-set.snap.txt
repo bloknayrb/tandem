@@ -98,6 +98,9 @@ clear-recent-files
 color-picker-close
 command-palette
 comment-thread
+compare-close
+compare-error
+compare-modal
 connection-banner
 connection-banner-live
 connection-banner-retry
@@ -167,6 +170,11 @@ decorations-settings-link
 default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
+diff-line
+diff-none
+diff-too-large
+diff-truncated
+diff-view
 dismiss-btn-{*}
 display-menu
 display-menu-measure-{*}
@@ -202,6 +210,7 @@ empty-state-start-fresh
 error-boundary-recover-btn
 error-boundary-reload-btn
 external-conflict-banner
+external-conflict-compare-btn
 external-conflict-keep-btn
 external-conflict-live
 external-conflict-reload-anyway-btn
@@ -627,6 +636,9 @@ updater-banner-live
 updater-banner-visible
 version-history-cancel
 version-history-close
+version-history-compare
+version-history-compare-back
+version-history-compare-view
 version-history-confirm
 version-history-empty
 version-history-error

@@ -3,6 +3,9 @@ import { tick, untrack } from "svelte";
 import {
   type BackupSnapshot,
   backupKindLabel,
+  type CompareResult,
+  compareDocument,
+  comparisonLabel,
   formatBackupAge,
   formatBackupSize,
   formatBackupTimestamp,
@@ -10,6 +13,7 @@ import {
   restoreBackup,
 } from "../utils/backups.js";
 import { trapTab } from "../utils/focus-trap.js";
+import DiffView from "./DiffView.svelte";
 import LiveRegion from "./LiveRegion.svelte";
 
 /**
@@ -49,6 +53,8 @@ let phase = $state<Phase>({ kind: "loading" });
 let confirming = $state<string | null>(null);
 /** The row whose restore is in flight; every Restore is disabled meanwhile. */
 let restoring = $state<string | null>(null);
+/** The backup being compared with the document now; `result` null while loading. */
+let comparing = $state<{ name: string; result: CompareResult | null } | null>(null);
 /** A row's failed restore. `backupFailed` offers "Restore anyway". */
 let rowError = $state<{ name: string; backupFailed: boolean; message: string } | null>(null);
 
@@ -104,6 +110,7 @@ $effect(() => {
     confirming = null;
     restoring = null;
     rowError = null;
+    comparing = null;
     void load(forDoc);
   });
 });
@@ -135,6 +142,10 @@ $effect(() => {
     e.preventDefault();
     e.stopPropagation();
     if (untrack(() => restoring) !== null) return;
+    if (untrack(() => comparing) !== null) {
+      comparing = null;
+      return;
+    }
     if (untrack(() => confirming) !== null || untrack(() => rowError) !== null) {
       confirming = null;
       rowError = null;
@@ -151,6 +162,18 @@ async function askConfirm(name: string) {
   confirming = name;
   await tick();
   dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-confirm"]')?.focus();
+}
+
+/** Show the difference between backup `name` and the document now, in place of the list. */
+async function openCompare(name: string) {
+  if (documentId === null) return;
+  const forDoc = documentId;
+  confirming = null;
+  rowError = null;
+  comparing = { name, result: null };
+  const result = await compareDocument(forDoc, name);
+  if (forDoc !== documentId || comparing?.name !== name) return;
+  comparing = { name, result };
 }
 
 const BACKUP_FAILED_FALLBACK =
@@ -230,6 +253,30 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
           Restoring a version replaces the document and writes it to the file. If the document has
           unsaved edits, they're kept as a backup first, so you can come back to them here.
         </p>
+        {#if comparing}
+          <div class="compare" data-testid="version-history-compare-view">
+            <button
+              type="button"
+              class="btn"
+              data-testid="version-history-compare-back"
+              onclick={() => (comparing = null)}
+            >
+              ← Back to the list
+            </button>
+            {#if comparing.result === null}
+              <p class="state">Comparing…</p>
+            {:else if !comparing.result.ok}
+              <p class="state state--error">{comparing.result.message}</p>
+            {:else}
+              <DiffView
+                current={comparing.result.comparison.current}
+                other={comparing.result.comparison.other}
+                otherLabel={comparisonLabel(comparing.result.comparison.otherLabel)}
+                truncated={comparing.result.comparison.truncated}
+              />
+            {/if}
+          </div>
+        {:else}
         {#if rowError && !(phase.kind === "ready" && phase.backups.some((b) => b.name === rowError?.name))}
           <p class="state state--error" data-testid="version-history-row-error">{rowError.message}</p>
         {/if}
@@ -286,6 +333,15 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
                     <button
                       type="button"
                       class="btn"
+                      data-testid="version-history-compare"
+                      disabled={restoring !== null}
+                      onclick={() => openCompare(b.name)}
+                    >
+                      Compare
+                    </button>
+                    <button
+                      type="button"
+                      class="btn"
                       data-testid="version-history-restore"
                       disabled={restoring !== null}
                       onclick={() => askConfirm(b.name)}
@@ -312,6 +368,7 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
               </li>
             {/each}
           </ul>
+        {/if}
         {/if}
       </div>
     </div>
@@ -450,6 +507,16 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
   .confirm-text {
     font-size: var(--tandem-text-sm);
     color: var(--tandem-fg);
+  }
+
+  .compare {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--tandem-space-3);
+  }
+  .compare :global([data-testid="diff-view"]) {
+    align-self: stretch;
   }
 
   .row-error {
