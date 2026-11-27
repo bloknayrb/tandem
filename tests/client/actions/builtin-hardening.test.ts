@@ -25,8 +25,6 @@ import {
 } from "../../../src/client/actions/executor.js";
 import { getActionsMap } from "../../../src/client/actions/registry.svelte.js";
 import {
-  API_BACKUPS,
-  API_BACKUPS_RESTORE,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
   API_LAUNCHER_START_FRESH,
@@ -76,8 +74,8 @@ function routes(table: Array<[string, () => Response]>): void {
   );
 }
 
-/** Drive the palette's "Restore a backup…" the way the palette does. */
-function runRestore(): void {
+/** Drive the palette's "Version history…" the way the palette does. */
+function runVersionHistory(): void {
   const action = getActionsMap().get("restore-backup");
   expect(action, "the restore-backup builtin must be registered").toBeDefined();
   action?.run();
@@ -97,95 +95,32 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Restore a backup — the data-recovery on-ramp
+// Version history — the data-recovery on-ramp
 // ---------------------------------------------------------------------------
 
-describe("restore backup", () => {
-  it("does NOT report a malformed backup list as 'no backups exist'", async () => {
-    // The worst failure in the file. Someone arrives here because a save told
-    // them "some content may not have been preserved — your original is backed
-    // up". Collapsing a parse failure into the reassuring branch tells them the
-    // backup does not exist. They stop looking; it is on disk the whole time.
+describe("version history (ADR-057 PR 2)", () => {
+  // The restore flow itself moved into VersionHistoryModal; its invariants
+  // (a malformed list is never "no backups", a restore is never reported as
+  // failed by a throwing toast, Cancel restores nothing) are pinned in
+  // tests/client/version-history-modal.test.ts.
+  it("opens the Version history for the active document", () => {
+    const openVersionHistory = vi.fn();
+    mount({ openVersionHistory, getActiveTabId: () => "doc-1" });
+
+    runVersionHistory();
+
+    expect(openVersionHistory).toHaveBeenCalledWith("doc-1");
+  });
+
+  it("says so when there is no active document", () => {
     const notify = vi.fn();
-    mount({ notify });
-    routes([[API_BACKUPS, truncated]]);
+    const openVersionHistory = vi.fn();
+    mount({ notify, openVersionHistory, getActiveTabId: () => null });
 
-    runRestore();
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    runVersionHistory();
 
-    const [severity, message] = notify.mock.calls[0];
-    expect(severity).toBe("error");
-    expect(String(message)).not.toContain("No backups exist");
-    expect(String(message)).toContain("Couldn't read");
-  });
-
-  it("still reports a genuinely empty list as empty", async () => {
-    // The other half of the split: narrowing the reassuring branch must not
-    // delete it, or the honest case starts reading like a failure.
-    const notify = vi.fn();
-    mount({ notify });
-    routes([[API_BACKUPS, () => json({ data: { backups: [] } })]]);
-
-    runRestore();
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-
-    expect(notify.mock.calls[0][0]).toBe("info");
-    expect(String(notify.mock.calls[0][1])).toContain("No backups exist");
-  });
-
-  it("does not say the restore FAILED when the toast is what threw", async () => {
-    // The file on disk has already been replaced by this point. Saying "Restore
-    // request failed" makes the user restore again, or give up believing their
-    // document was never recovered.
-    let calls = 0;
-    const notify = vi.fn((_severity: string, _message: string) => {
-      calls += 1;
-      // Only the success toast throws, so any "failed" message is a real one.
-      if (calls === 1) throw new Error("each_key_duplicate");
-    });
-    mount({ notify: notify as unknown as ActionDeps["notify"] });
-    vi.stubGlobal(
-      "confirm",
-      vi.fn(() => true),
-    );
-    routes([
-      [API_BACKUPS_RESTORE, () => json({ data: {} })],
-      [API_BACKUPS, () => json({ data: { backups: [{ name: "b1", timestamp: "2026-01-01" }] } })],
-    ]);
-
-    runRestore();
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 20));
-
-    const said = notify.mock.calls.map((c) => String(c[1])).join(" | ");
-    expect(said).not.toContain("Restore request failed");
-  });
-
-  it("labels each backup's kind in the confirm (ADR-057)", async () => {
-    mount({});
-    const confirm = vi.fn((_msg: string) => false);
-    vi.stubGlobal("confirm", confirm);
-    routes([
-      [
-        API_BACKUPS,
-        () =>
-          json({
-            data: {
-              backups: [
-                { name: "u1", timestamp: "2026-01-02", kind: "unsaved" },
-                { name: "d1", timestamp: "2026-01-01", kind: "disk" },
-              ],
-            },
-          }),
-      ],
-    ]);
-
-    runRestore();
-    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
-
-    const text = String(confirm.mock.calls[0][0]);
-    expect(text).toContain("your unsaved edits");
-    expect(text).toContain("the file on disk");
+    expect(openVersionHistory).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith("warning", "No active document.");
   });
 });
 
@@ -453,25 +388,5 @@ describe("an asynchronous (desktop) Cancel stops the action", () => {
     await vi.waitFor(() => expect(globalThis.confirm).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 30));
     expect(startFresh).not.toHaveBeenCalled();
-  });
-
-  it("restore leaves the document alone", async () => {
-    mount({});
-    asyncCancel();
-    const restores = vi.fn();
-    routes([
-      [
-        API_BACKUPS_RESTORE,
-        () => {
-          restores();
-          return json({ data: {} });
-        },
-      ],
-      [API_BACKUPS, () => json({ data: { backups: [{ name: "b1", timestamp: "2026-01-01" }] } })],
-    ]);
-    runRestore();
-    await vi.waitFor(() => expect(globalThis.confirm).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 30));
-    expect(restores).not.toHaveBeenCalled();
   });
 });

@@ -182,7 +182,20 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // 42 adds `backupKept` and `BACKUP_FAILED` to Error Recovery (ADR-057: a Claude force-open,
   // restore or close keeps the unsaved edits it discards), and rewords Hard Rule 6's force
   // clause to match. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*42$/m);
+  // 43 answers a user's comment in its own thread (#2360 PR C, the switch): `inProgress`,
+  // answered threads leaving the inbox, and the NOT_OWNED fallback; the in-thread "I'm on it"
+  // and the answer tracking are keyed on the tool's schema listing `inProgress`, which a dark
+  // server's does not. Outside the wake section.
+  // 44 is the multi-session ownership flip (#2358, ADR-054's flip amendment): INSIDE the wake
+  // section, the `/api/events?filter=wake` paragraph says an id-less `ownership-changed` frame
+  // means "call tandem_checkInbox" (every wake assertion below was re-read; none keys on that
+  // paragraph). Outside it: Multi-Document's default poll covers what is yours to answer, the
+  // NO_DOCUMENT bullet's no-document sentence, and three Error Recovery bullets (NOT_DOC_OWNER,
+  // DOCUMENT_BUSY, and an output-schema failure after an update: restart or reconnect).
+  // Still 44 (unreleased): smoke S7 found Claude Code never shows output-schema descriptions
+  // to a model, so Multi-Document also says `holding` is the truth and `changed` may be
+  // incomplete (Bryan, 2026-11-26, "Skill and description (Recommended)"; pinned below).
+  expect(skill).toMatch(/^version:\s*44$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -540,6 +553,21 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(workflow).toContain("heldFromExport");
   });
 
+  // Smoke S7 (#2358, 2026-11-26): Claude Code 2.1.332 shows a model a tool's name, top-level
+  // description and input schema only, so `ownership.changed`'s output-schema description
+  // (`CHANGED_FIELD_DESCRIPTION`) never reaches it. Bryan's pick, "Skill and description
+  // (Recommended)": the sentence lives in Multi-Document, beside `holding` and `notYours`.
+  it("Multi-Document says `holding` is the truth and `changed` may be incomplete (S7)", () => {
+    const section = namedSection(readShippedSkill().replace(/\r\n/g, "\n"), "Multi-Document");
+    const paragraph = section.split("\n\n").find((p) => p.includes("`ownership.notYours`")) ?? "";
+    expect(paragraph).toContain("`ownership.holding` is the truth");
+    expect(paragraph).toContain("`ownership.changed` only explains past changes to `holding`");
+    expect(paragraph).toContain(
+      "may be incomplete (after a Tandem restart, after a poll response that never reached you, and in other cases)",
+    );
+    expect(paragraph).toContain("it does not change what you may do");
+  });
+
   it("docs/workflows.md's Multi-Model Workflow names orchestrator-only polling (#1820)", () => {
     const doc = readRepoText("docs/workflows.md");
     const section = /^## Multi-Model Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(doc)?.[1];
@@ -572,7 +600,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "42", bodyHash: "312d5d083721" });
+    ).toEqual({ version: "44", bodyHash: "59c494ce3313" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -759,6 +787,57 @@ describe("shipped Tandem skill instruction contract", () => {
       /action: "dismiss"[\s\S]{0,120}withdraw|withdraw[\s\S]{0,160}action: "dismiss"/i,
     );
     expect(skill).toMatch(/resolvedBy/);
+  });
+
+  // #2360 PR C, the switch (Bryan's decision 6: "comments should get answered with replies to
+  // the comment directly, not in the chat"). Lands right before the ownership flip, so it
+  // describes the lit server; its NOT_OWNED fallback keeps it right against a dark one.
+  it("tells Claude to answer a user's comment in its own thread (#2360)", () => {
+    const skill = readShippedSkill();
+    const userComments = skill.split(/\n\n/).filter((p) => p.startsWith("**User comments.**"));
+    expect(userComments).toHaveLength(1);
+    const p = userComments[0] ?? "";
+    expect(p).toMatch(/Answer a user's comment in its own thread with `tandem_annotationReply`/);
+    // "I'm on it" in the thread, and that it answers nothing.
+    expect(p).toMatch(/`inProgress: true`[\s\S]{0,80}it answers nothing/);
+    // The skill ships while the server may be dark, whose schema strips an undeclared
+    // `inProgress` (an "I'm on it" would land as a final reply) and which tracks no answers.
+    // So both are keyed on a signal Claude can see: the schema listing `inProgress`. The
+    // condition must come BEFORE the instruction it governs.
+    const keyed = p.indexOf(
+      "**Only if `tandem_annotationReply`'s input schema lists `inProgress`**",
+    );
+    expect(keyed).toBeGreaterThan(-1);
+    expect(keyed).toBeLessThan(p.indexOf("`inProgress: true`"));
+    expect(keyed).toBeLessThan(p.indexOf("stop arriving in `tandem_checkInbox`"));
+    expect(p).toMatch(
+      /if it does not, send no separate "I'm on it" \(it would read as your answer\), and the answer tracking below does not apply/,
+    );
+    // Answered threads stop arriving; an edit or a new reply re-opens one.
+    expect(p).toMatch(/stop arriving in `tandem_checkInbox`/);
+    expect(p).toMatch(/editing the comment, or replying in the thread again, re-opens it/);
+    // The refusals that stay, and the fallback for a server that keeps NOT_OWNED.
+    expect(p).toMatch(/ANNOTATION_RESOLVED/);
+    expect(p).toMatch(/INVALID_ARGUMENT/);
+    // Keyed to a user-authored comment, so a legacy imported comment's NOT_OWNED does not
+    // read as "this Tandem takes no thread replies".
+    expect(p).toMatch(
+      /If it refuses a comment the user wrote \(`author: "user"`\) with `NOT_OWNED`/,
+    );
+    // A new reply re-opens with only that reply; a chat question about a Solo-held comment
+    // is still answered in chat.
+    expect(p).toMatch(/only the new reply, arrives again/);
+    expect(p).toMatch(/unless the user asked about it in chat; then answer in chat/);
+    // A Solo-held comment's NOT_FOUND is held, never answered with a fresh comment.
+    expect(p).toMatch(/`NOT_FOUND`: hold your answer until the mode is back to Tandem/);
+    // The selections paragraph no longer sends a comment's answer to chat.
+    expect(skill).not.toMatch(/\(chat messages, question annotations\)/);
+    expect(skill).toMatch(
+      /except an answer to a user's comment, which goes in that comment's thread/,
+    );
+    // The old rule is gone.
+    expect(skill).not.toMatch(/answering inside their thread is not your seat/);
+    expect(skill).not.toMatch(/is for continuing \*your own\* threads/);
   });
 
   it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {

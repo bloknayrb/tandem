@@ -3,7 +3,7 @@
  * ADR-054's 5a-3 amendment; ownership design §10.2, §10.3). PR 5b's badge,
  * popover and composer line read it; nothing in the client reads it yet.
  *
- * **Only a flag-on server writes any of it.** While ownership ships dark the
+ * **Only a flag-on server writes any of it.** While ownership is off the
  * `Y_MAP_OPEN_DOCUMENTS` entries carry none of these keys and `CTRL_ROOM`
  * holds no {@link OwnershipSummary}, so a client must read an absent `owner`
  * key as "ownership is off" (the native menu's Release and Assign leaves are

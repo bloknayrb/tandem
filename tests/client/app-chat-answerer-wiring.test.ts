@@ -89,7 +89,7 @@ describe("App wires who answers chat (R1.2, R5.5, R7, R8)", () => {
       expect(effect, call).toMatch(/untrack\(\(\) =>\s*\w+\(/);
     }
     expect(app).toMatch(
-      /createNotifications\(\{\s*onStreamNotice: \(n\) => noteNotifyNotice\(n\.dedupKey\)/,
+      /createNotifications\(\{\s*onStreamNotice: \(n\) => \{\s*noteNotifyNotice\(n\.dedupKey\);/,
     );
     // "Use it for chat", R6.2: the sink once, under its own flag check, whole:
     // the action, `dismiss` and `dismissActivity` all reach the notifications.

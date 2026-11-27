@@ -1,4 +1,4 @@
-import type { AnnotationReply } from "../../shared/types";
+import type { AgentIdentity, AnnotationReply } from "../../shared/types";
 
 /**
  * A Claude answer inside a user's comment thread (#2360): what the attention
@@ -15,6 +15,12 @@ export interface ThreadAnswer {
   replyId: string;
   text: string;
   timestamp: number;
+  /**
+   * The local model that wrote the answer (#1123 M3), copied from the reply.
+   * Absent on a real Claude answer. Only the notification wording reads it,
+   * to say "your local model" the way a chat reply's does.
+   */
+  agentIdentity?: AgentIdentity;
 }
 
 /** The parent fields the predicate reads (a `sanitizeAnnotation`d record). */
@@ -82,8 +88,8 @@ export function isThreadAnswer(
  *   that doc's baseline. The same doc never re-seeds: a reconnect delta, or a
  *   reload that deletes and re-inserts the same reply id, is announced at most
  *   once.
- * - **Only a thread answer becomes known** (announced, or skipped as history
- *   by time). Anything else is judged again
+ * - **Only a thread answer becomes known** (announced, skipped as an
+ *   in-progress acknowledgement, or skipped as history by time). Anything else is judged again
  *   on the next pass, so a reply that lands before its parent annotation is
  *   announced once the parent arrives instead of being dropped.
  */
@@ -113,6 +119,12 @@ export function createThreadAnswerDetector(): ThreadAnswerDetector {
         if (known.has(reply.id)) continue;
         if (!isThreadAnswer(reply, parents.get(reply.annotationId))) continue;
         known.add(reply.id);
+        // An "I'm on it" (`inProgress`, #2360) shows in the thread but never
+        // alerts: the answer that follows is the one to announce, as chat's
+        // `reply-detector.ts` skips its acknowledgement (Bryan, 2026-11-26).
+        // Known first, so a strip of the field later (an untrusted reload)
+        // cannot turn the same row into a fresh announcement.
+        if (reply.inProgress === true) continue;
         if (reply.timestamp < baseline.capturedAt) continue;
         fresh.push({
           documentId,
@@ -120,6 +132,7 @@ export function createThreadAnswerDetector(): ThreadAnswerDetector {
           replyId: reply.id,
           text: reply.text,
           timestamp: reply.timestamp,
+          ...(reply.agentIdentity !== undefined ? { agentIdentity: reply.agentIdentity } : {}),
         });
       }
       return fresh;

@@ -52,8 +52,13 @@ const matchesAny = (rel, globs) => globs.some((g) => globToRegExp(g).test(rel));
  * session created it earlier.
  */
 export function classify(rel, tiers, { created }) {
-  // Agent scratch inside the repo dir (plan files, worktrees, hook state) is
-  // not a change to the project; no tier applies.
+  // A file inside an agent's git worktree is a change to the project at the
+  // path below the worktree root: classify that, so an isolated-worktree
+  // agent editing src/ or a CLAUDE.md still gets the Tier A nudge.
+  const inWorktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(rel);
+  if (inWorktree) rel = inWorktree[1];
+  // Agent scratch inside the repo dir (plan files, worktree roots, hook
+  // state) is not a change to the project; no tier applies.
   if (matchesAny(rel, tiers.notAChange ?? [])) return "outside";
   if (matchesAny(rel, tiers.alwaysTierA)) return "A";
   if (matchesAny(rel, tiers.tierB)) return "B";

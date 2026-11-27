@@ -33,6 +33,8 @@ import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/re
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
+  CHECK_INBOX_DESCRIPTION,
+  CHECK_INBOX_DESCRIPTION_OWNED,
   documentLabelCallsForTests,
   handOverDocumentInbox,
   ownershipChatSide,
@@ -460,6 +462,28 @@ describe("R1: the field", () => {
     );
     expect(CAUSE_FIELD_DESCRIPTION).toBe(
       'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "a chat post of yours claimed it": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it; "Tandem\'s Claude took it back": Tandem\'s Claude took it from this session, when a run of it started or when it opened the document; "it was released": it was released from this session; "it was assigned to another session": it was assigned to another session; "it was assigned to this session": it was assigned to this session',
+    );
+  });
+
+  // Smoke S7 (#2358, 2026-11-26): Claude Code 2.1.332 shows a model a tool's name, top-level
+  // description and input schema, never an output-schema description, so the sentence above
+  // never reaches a model from the schema. Bryan's pick, "Skill and description
+  // (Recommended)": a one-line form goes into the lit tool description (the full sentence is
+  // in the shipped skill, pinned in tests/skill-instruction-contract.test.ts).
+  it("S7: the lit tool description carries the one-line form; the dark one is untouched", async () => {
+    const line =
+      "`holding` is the truth; `ownership.changed` only explains past changes to it, may be incomplete, and changes nothing you may do.";
+    expect(CHECK_INBOX_DESCRIPTION_OWNED).toContain(line);
+    // Right after the sentence that names `ownership.holding`, so `holding` has its referent.
+    expect(CHECK_INBOX_DESCRIPTION_OWNED).toContain(
+      `(\`ownership.holding\`; \`ownership.notYours\` lists those another session answers) and your chat. ${line}`,
+    );
+    expect(CHECK_INBOX_DESCRIPTION).not.toContain("ownership");
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === "tandem_checkInbox")?.description).toContain(line);
+    const { OWNERSHIP_FLIP_BLOCKERS } = await import("./ownership-flip-blockers.js");
+    expect(OWNERSHIP_FLIP_BLOCKERS.some((r) => /output-schema descriptions/.test(r.gap))).toBe(
+      false,
     );
   });
 

@@ -9,11 +9,12 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 - Workflow-nudge hooks emit stderr and never block.
 - Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days via `sessionstart-prune-state.sh`).
 
-## Inventory (19 scripts + 1 `.mjs` helper)
+## Inventory (19 scripts + 2 `.mjs` helpers)
 
 ### Shared / helper
 
 - **`_workflow-state.sh`** — Shared helpers for workflow-nudge hooks. Sourced, not executed.
+- **`review-tier.mjs`** — The ADR-058 tier classifier `nudge-plan-review.sh` calls: prints `A`, `B` or `outside` for a path against `.claude/review-tiers.json`, and `A` on any error. A file inside `.claude/worktrees/<name>/` is classified by its path below the worktree root.
 
 ### SessionStart
 

@@ -35,7 +35,7 @@ if [[ -n "$FILE_PATH" ]]; then
   CREATED_LIST="${STATE_DIR}/created-files"
   # Only a Write creates a file; an Edit of a missing path fails. (A Write the
   # user then denies is still recorded: accepted, ADR-058.)
-  if [[ "$EXISTED" == "0" ]] && printf '%s' "$INPUT" | grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Write"'; then
+  if [[ "$EXISTED" == "0" ]] && grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Write"' <<<"$INPUT"; then
     printf '%s\n' "$FILE_PATH" >> "$CREATED_LIST" 2>/dev/null || true
   fi
   TIER_MARK="${STATE_DIR}/nudged-tier-a"

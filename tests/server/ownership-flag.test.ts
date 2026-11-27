@@ -11,17 +11,21 @@ import {
 } from "./ownership-flip-blockers.js";
 
 /**
- * The ownership flag ships dark (#2358, ADR-054; ownership design §12).
+ * The ownership flag (#2358, ADR-054; ownership design §12). It shipped dark
+ * and is on since the flip (ADR-054's flip amendment).
  *
- * - Release builds never carry it on: the literal is `false`, declared once.
+ * - Release builds carry it on: the literal is `true`, declared once, and it
+ *   cannot be `true` while a flip-blocker row is open and not accepted.
  * - A shell export cannot make a half-on build: `tsup.config.ts` derives the
  *   define from that literal and reads no environment at all, and the
  *   identifier `ownership-flag.ts` reads is the key tsup injects.
- * - The default test run is flag-off: no vitest `test.env` and no setup file
- *   sets `TANDEM_OWNERSHIP` (this file is the one owner of that fact).
+ * - The default test run follows the literal: no vitest `test.env` and no
+ *   setup file sets `TANDEM_OWNERSHIP` (this file is the one owner of that
+ *   fact), so an unset variable gives the literal and a test that pins the
+ *   dark path stubs it `""`.
  *
  * What it cannot see is the built artifact; `scripts/ci/ownership-bundle-probe.mjs`
- * checks that, in `check` (off) and in `ownership-flag-on` (on).
+ * checks that, in `check` and in `ownership-flag-on` (both on since the flip).
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -34,7 +38,17 @@ afterEach(() => {
 });
 
 describe("ownershipEnabled() without a build define (tsx, vitest)", () => {
-  it("is on only for exactly TANDEM_OWNERSHIP=1, read on every call", () => {
+  it("follows the release literal while the variable is unset, read on every call", () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", undefined);
+    expect(process.env.TANDEM_OWNERSHIP).toBeUndefined();
+    expect(ownershipEnabled()).toBe(OWNERSHIP_ENABLED);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(ownershipEnabled()).toBe(false);
+    vi.stubEnv("TANDEM_OWNERSHIP", undefined);
+    expect(ownershipEnabled()).toBe(OWNERSHIP_ENABLED);
+  });
+
+  it("a set variable decides: on only for exactly TANDEM_OWNERSHIP=1, read on every call", () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     expect(ownershipEnabled()).toBe(false);
     vi.stubEnv("TANDEM_OWNERSHIP", "1");
@@ -47,18 +61,18 @@ describe("ownershipEnabled() without a build define (tsx, vitest)", () => {
 });
 
 describe("the release literal", () => {
-  // The flip-blocker check below is redundant with this pin until the flip PR
-  // edits it: while this says `false`, that check passes whatever the list
-  // holds. It bites at the moment someone changes this line.
-  it("is false", () => {
-    expect(OWNERSHIP_ENABLED).toBe(false);
+  // The flip (ADR-054's flip amendment). Setting it back to false is its own
+  // reviewed release: the shipped skill describes the lit server, and the
+  // CHANGELOG guard below turns red on an un-flip on purpose.
+  it("is true", () => {
+    expect(OWNERSHIP_ENABLED).toBe(true);
   });
 
   it("is declared exactly once, as a top-level boolean literal", () => {
     // Anchored and counted, so a commented-out or duplicated copy cannot answer.
     const src = stripLineComments(read("src/shared/constants.ts"));
     const matches = [...src.matchAll(/^export const OWNERSHIP_ENABLED\s*=\s*(true|false)\s*;/gm)];
-    expect(matches.map((m) => m[1])).toEqual(["false"]);
+    expect(matches.map((m) => m[1])).toEqual(["true"]);
   });
 });
 
@@ -99,11 +113,12 @@ describe("tsup.config.ts derives the define from the literal, and from nothing e
   });
 });
 
-describe("the default test run is flag-off", () => {
+describe("the default test run follows the release literal", () => {
   it("no vitest config and no setup file sets TANDEM_OWNERSHIP", () => {
-    // The root `test.env` beats the shell, so a key there would make every run
-    // flag-on and the ownership-flag-on job's anchor meaningless; a per-project
-    // `test.env` or a setup file could drop it from that job instead.
+    // The root `test.env` beats the shell, so a key there would pin every run
+    // to one side whatever the literal says, and a shell's
+    // `TANDEM_OWNERSHIP=` could no longer run the suite dark; a per-project
+    // `test.env` or a setup file could do the same to one project.
     const setupDir = path.join(ROOT, "tests/setup");
     const files = [
       "vitest.config.ts",
@@ -147,6 +162,7 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   it("the accepted rows are exactly these, word for word (a new acceptance, or an edit to one, edits this pin)", () => {
     const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
     expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
+      "The posts PR drops CTRL-doc update data left pending ",
       "The lone-session re-hand. With one session attached, ",
       "Flag on, a message's delivery round that no poll will",
       "A document claimed by a poll whose items its holder t",
@@ -155,8 +171,28 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
       "Acknowledged but unanswered chat is never started for",
       "Acknowledged but unanswered chat by the channel route",
       "Read but unacknowledged chat is never started for (3b",
+      "Claude Desktop is left out of 'another session' by it",
     ]);
     expect(acceptedRows).toEqual([
+      {
+        gap:
+          "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
+          "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
+          "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
+          "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
+          "dropped silently. Measured in Chromium only (smoke S8, 2026-11-26, results on " +
+          "#2358): no pending CTRL data in hundreds of transactions. Measured in WebView2 (the " +
+          "Windows desktop build, smoke S8, 2026-11-26, results on #2358, issuecomment-7209705011): " +
+          "the CTRL row held (chat and mode written offline arrived at reconnect; only writes " +
+          "reloaded away before reconnecting were lost, the known chat loss and an unsaved offline " +
+          "edit), and no `pendingStructs` was logged. WKWebView (macOS) is not measured.",
+        closedBy:
+          "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
+          "pending data after a tab's update, or a narrower drop.",
+        acceptedFor:
+          "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (Chromium " +
+          "and WebView2 held; macOS not run); tracked as #2358.",
+      },
       {
         gap:
           "The lone-session re-hand. With one session attached, a close and reopen of a tab it holds, " +
@@ -293,6 +329,23 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
           "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
           "as #2484.",
       },
+      {
+        gap:
+          "Claude Desktop is left out of 'another session' by its self-reported client name " +
+          "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
+          "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
+          "the name is open. Measured on Windows (smoke S6, 2026-11-26, Claude Desktop 6.28899.6.0, " +
+          "results on #2358, issuecomment-7209705011): Desktop's `tandem` entry registered as client " +
+          "'claude-ai' (owners show 'Claude Desktop'), and a comment on a document Tandem's Claude " +
+          "held started it with Desktop connected. The precondition, a document nobody holds, was " +
+          "not reached: Tandem's Claude's record outlives its run, so every open document had a holder.",
+        closedBy:
+          "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
+          "comment on an unheld document makes tandemWorkWaiting true.",
+        acceptedFor:
+          "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (the client " +
+          "name measured; the nobody-holds precondition unreachable); tracked as #2358.",
+      },
     ]);
   });
 
@@ -315,10 +368,85 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   });
 
   it("the source literal and the real list pass it", () => {
-    // The imported source literal, never `ownershipEnabled()`: the
-    // ownership-flag-on job turns the runtime flag on with the literal still
-    // `false`, and must stay green.
+    // The imported source literal, never `ownershipEnabled()`: a test run
+    // stubbing the variable must not change what this checks. Since the flip
+    // the literal is `true`, so this fails while any row is open and not
+    // accepted: that failure is the gate (ADR-054's flip amendment).
     expect(flipBlockerViolations(OWNERSHIP_ENABLED, OWNERSHIP_FLIP_BLOCKERS)).toEqual([]);
+  });
+
+  // #2360 PR C (Bryan's Q1, "Gate it, skill last"): the switch lands
+  // immediately before the flip, in the same release, and "if the flip slips
+  // past a cut, this PR must not be in that release". A cut moves Unreleased
+  // under a version header, so that is where this turns `check` red while the
+  // source literal is still dark. The literal, for the reason above. An
+  // emergency un-flip (a patch setting `OWNERSHIP_ENABLED` back to false after
+  // this entry is released) turns this red on purpose: it forces a decision on
+  // the released skill 43, which tells Claude to answer in threads a dark
+  // server refuses.
+  it("#2360's switch entry is never released while the literal is dark", () => {
+    const changelog = read("CHANGELOG.md");
+    const at = changelog.indexOf("**Claude answers your comment in its own thread (#2360).**");
+    expect(at).toBeGreaterThan(-1);
+    const header = changelog
+      .slice(0, at)
+      .match(/^## \[[^\]]+\]/gm)
+      ?.at(-1);
+    expect(header === "## [Unreleased]" || OWNERSHIP_ENABLED, header).toBe(true);
+  });
+
+  // The CHANGELOG entry is not what ships: the bundled skill is, and a cut that
+  // left the entry under Unreleased (or dropped it) would still ship skill 43.
+  // So tie the skill itself to the flag. A release, and only a release, moves
+  // `package.json`'s `version` (surface 1 of the release skill; npm, the
+  // desktop bundle and the plugin pins are all guarded to agree with it, and a
+  // version cannot be published twice). Skill 43 landed while it read
+  // `SKILL_43_LANDED_AT` (v0.32.0 shipped skill 40; 42 is ADR-057's), so `package.json` moving
+  // off that value while the literal is dark and the skill carries the
+  // thread-reply rule IS a release shipping skill 43 dark: red. Between
+  // releases the value stays put and this stays green; once the literal flips
+  // it is green whatever the version. The same emergency un-flip as above
+  // (a patch setting the literal back to false) is red here too, on purpose.
+  const SKILL_43_LANDED_AT = "0.32.0";
+  const THREAD_RULE = "Answer a user's comment in its own thread with `tandem_annotationReply`";
+
+  function shipsSkill43Dark(state: {
+    literal: boolean;
+    skill: string;
+    packageVersion: string;
+  }): boolean {
+    if (state.literal) return false;
+    const version = Number(/^version:\s*(\d+)\s*$/m.exec(state.skill)?.[1] ?? Number.NaN);
+    // An unreadable version counts as 43 or later: fail toward red.
+    const carriesRule = state.skill.includes(THREAD_RULE) || !(version < 43);
+    return carriesRule && state.packageVersion !== SKILL_43_LANDED_AT;
+  }
+
+  it("the shipped skill 43 is never released while the literal is dark", () => {
+    const skill = read("skills/tandem/SKILL.md");
+    const packageVersion = (JSON.parse(read("package.json")) as { version: string }).version;
+    // Not vacuous: the skill on this branch carries the rule this guards.
+    expect(skill).toContain(THREAD_RULE);
+    expect(
+      shipsSkill43Dark({ literal: OWNERSHIP_ENABLED, skill, packageVersion }),
+      `package.json is ${packageVersion}: a release would ship skill 43 (in-thread answers) ` +
+        "while OWNERSHIP_ENABLED is false. Flip the literal in this release, or take the " +
+        "thread-reply section out of skills/tandem/SKILL.md (and its version back below 43).",
+    ).toBe(false);
+  });
+
+  it("the skill release guard fires exactly on a version move with skill 43 dark", () => {
+    const lit = `---\nversion: 43\n---\n${THREAD_RULE}`;
+    const old = "---\nversion: 42\n---\nanswer it in chat";
+    const unbumped = `---\nversion: 42\n---\n${THREAD_RULE}`;
+    const later = "---\nversion: 44\n---\nreworded";
+    const cut = "0.33.0";
+    expect(shipsSkill43Dark({ literal: false, skill: lit, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: unbumped, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: later, packageVersion: cut })).toBe(true);
+    expect(shipsSkill43Dark({ literal: false, skill: lit, packageVersion: "0.32.0" })).toBe(false);
+    expect(shipsSkill43Dark({ literal: true, skill: lit, packageVersion: cut })).toBe(false);
+    expect(shipsSkill43Dark({ literal: false, skill: old, packageVersion: cut })).toBe(false);
   });
 
   // The gap (a) pins (its test's title exists, and a row names it) went with

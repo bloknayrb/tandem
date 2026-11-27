@@ -1,8 +1,9 @@
 /**
  * Build every tsup bundle with multi-session ownership forced ON (#2358, ADR-054).
  *
- * Ownership ships dark: `tsup.config.ts` injects `__OWNERSHIP_ENABLED__` from the
- * `OWNERSHIP_ENABLED` literal, which is `false`, and reads no environment
+ * Built while ownership shipped dark: `tsup.config.ts` injects `__OWNERSHIP_ENABLED__`
+ * from the `OWNERSHIP_ENABLED` literal (`true` since the flip, ADR-054's flip
+ * amendment, so this now builds what a release builds) and reads no environment
  * variable for it — so a shell export can never build a half-on bundle. The
  * `ownership-flag-on` CI job still needs a flag-on build to run the E2E suite
  * and the bundle probe against, and this is the only way to get one: load the

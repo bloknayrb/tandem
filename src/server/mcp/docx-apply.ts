@@ -545,7 +545,8 @@ export async function applyChangesCore(
  *
  * Lives HERE, in the tool's own response mapping, and never inside
  * `listDocBackups` — that function also serves GET /api/backups, which feeds
- * the palette action that restores `backups[0]`.
+ * the editor's Version history (whose `.docx` gap is moot while `.docx` ships
+ * dark, ADR-053).
  *
  * `lstat` + `isFile()` only: a symlinked sidecar is not listed. The named
  * restore refuses it too, at the open syscall.

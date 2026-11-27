@@ -78,14 +78,31 @@ describe("review tier classification", () => {
     expect(tier("tests/server/new-thing.test.ts", true)).toBe("B");
     expect(tier("tests/server/new-thing.test.ts", false)).toBe("A");
     expect(tier("tests/docs/new-claims.test.ts", true), "checks stay Tier A").toBe("A");
+    expect(tier("tests/e2e/new-flow.spec.ts", true)).toBe("B");
+    expect(tier("tests/client/thing.svelte.test.ts", true)).toBe("B");
   });
 
   it.each([
-    ".claude/plans/feature.md",
-    ".claude/worktrees/x/src/a.ts",
-    ".claude/.workflow-state/s/m",
-  ])("%s is agent scratch, not a change", (rel) => {
-    expect(tier(rel)).toBe("outside");
+    "tests/e2e/fixtures.ts",
+    "tests/server/local-model/harness/helpers.ts",
+    "tests/client/shared-setup.ts",
+  ])("a new helper beside the tests (%s) is Tier A, like tests/helpers/**", (rel) => {
+    expect(tier(rel, true)).toBe("A");
+  });
+
+  it.each([".claude/plans/feature.md", ".claude/worktrees/x", ".claude/.workflow-state/s/m"])(
+    "%s is agent scratch, not a change",
+    (rel) => {
+      expect(tier(rel)).toBe("outside");
+    },
+  );
+
+  it.each([
+    [".claude/worktrees/agent-1/src/server/index.ts", "A"],
+    [".claude/worktrees/agent-1/CLAUDE.md", "A"],
+    [".claude/worktrees/agent-1/docs/reviews/x.md", "B"],
+  ])("a file inside a worktree is classified by its path below the root: %s", (rel, want) => {
+    expect(tier(rel)).toBe(want);
   });
 
   it("resolves a symlinked checkout to the same repo-relative path", () => {
@@ -181,7 +198,7 @@ describe.skipIf(process.platform === "win32")("nudge-plan-review.sh tier branch"
   });
 
   it.each([
-    ["node is missing", ""],
+    ["node is missing (exits 127)", "#!/bin/sh\nexit 127\n"],
     ["node runs but prints nothing", "#!/bin/sh\nexit 0\n"],
     ["node prints something unexpected", "#!/bin/sh\necho maybe\n"],
   ])("fails toward Tier A when %s", (_label, stub) => {

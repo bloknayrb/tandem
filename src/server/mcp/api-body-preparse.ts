@@ -64,6 +64,7 @@ import express, { type Router } from "express";
 import {
   API_ANNOTATION_REPLY,
   API_APPLY_CHANGES,
+  API_BACKUPS_ACKNOWLEDGE,
   API_BACKUPS_RESTORE,
   API_CLOSE,
   API_CONVERT,
@@ -167,6 +168,7 @@ export const ROUTE_OWNED_BODY_PARSERS: Readonly<Record<string, RouteBodyKind>> =
   [API_CONVERT]: "small",
   [API_APPLY_CHANGES]: "small",
   [API_BACKUPS_RESTORE]: "small",
+  [API_BACKUPS_ACKNOWLEDGE]: "small",
   [API_EXTERNAL_CONFLICT_RESOLVE]: "small",
   [API_READ_ONLY_FILE_RESOLVE]: "small",
   [API_ANNOTATION_REPLY]: "small",

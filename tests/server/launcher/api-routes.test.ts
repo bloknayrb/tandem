@@ -1542,6 +1542,35 @@ describe("GET /api/launcher/status — standby (#2195)", () => {
     expect(lan.body).not.toHaveProperty("greetingLate");
   });
 
+  // Bryan, 2026-11-27, "401 only signs out (Recommended)": a 403 keeps the
+  // child running and is surfaced as `accessDenied`, loopback-only.
+  it("passes accessDenied to loopback callers beside a running child, never to the LAN", async () => {
+    const running = {
+      running: true,
+      reaperPid: 1,
+      cwd: "/x",
+      sessionId: "s",
+      resuming: false,
+      busy: false,
+      spawnedAt: 1,
+    } as const;
+    const denied: Supervisor = {
+      ...makeFakeSupervisor(),
+      status: () => ({ ...running, accessDenied: true }),
+    };
+    const loop = await request(makeApp(baseDeps(denied)).app, "GET", "/api/launcher/status");
+    expect(loop.body).toMatchObject({ running: true, accessDenied: true });
+    const lan = await request(
+      makeApp(baseDeps(denied), { remoteAddress: "192.168.1.50" }).app,
+      "GET",
+      "/api/launcher/status",
+    );
+    expect(lan.body).toEqual({ available: true, running: true });
+    const fine: Supervisor = { ...makeFakeSupervisor(), status: () => running };
+    const clean = await request(makeApp(baseDeps(fine)).app, "GET", "/api/launcher/status");
+    expect(clean.body).not.toHaveProperty("accessDenied");
+  });
+
   const IGNORED = { reason: "outside-home", workingDirectory: "/mnt/projects" } as const;
   it.each([
     [
