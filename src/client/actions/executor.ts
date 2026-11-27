@@ -137,6 +137,8 @@ export interface ActionDeps {
   aiNotice: () => AiNotice | null;
   /** Open the Settings modal (the single consolidated settings surface). */
   openSettings: () => void;
+  /** Open the Version history for a document (ADR-057 PR 2). App refuses over another modal or in source view. */
+  openVersionHistory: (documentId: string) => void;
   toggleSoloMode: () => void;
   openFindBar: () => void;
   openFindBarTabs: () => void;

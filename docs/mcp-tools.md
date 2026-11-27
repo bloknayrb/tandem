@@ -103,7 +103,7 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
 | `LICENSE_REQUIRED` | Tandem is unlicensed, so its AI features are off (#1521). No individual tool returns it: the `/mcp` transport refuses the session itself, as a JSON-RPC error with code `-32003` whose `data` is `{ error: "LICENSE_REQUIRED", kind, purchaseUrl? }` -- `kind` is `unlicensed` or `unverifiable`, and `purchaseUrl` appears only on `unlicensed`. A session already open is closed by its next request. `tandem_reply` can carry it too, as defence in depth. The editor itself is never refused. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
-| `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
+| `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. Also `tandem_open` with `force`, a `tandem_restoreBackup` restore and `tandem_close`: the document had unsaved edits and Tandem could not keep a backup of them, so it changed nothing ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)). |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
 | `NOT_RENAMABLE` | `tandem_rename` on a document with no on-disk file (a scratchpad or upload). Use Save As instead. |
 | `EXTENSION_MISMATCH` | `tandem_rename` was given a name with a different extension. Renaming does not convert formats. |
@@ -159,7 +159,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file to open. A relative path is refused with `INVALID_PATH` rather than resolved against the *server's* working directory. On a Windows server that includes a root-relative path with no drive letter (`\docs\a.md`, `/Users/me/a.md`), which would otherwise pick up the working directory's drive. That is a check on the argument, not containment. There is no root confinement either ([#1666](https://github.com/bloknayrb/tandem/issues/1666), open). |
-| `force` | boolean | no | Force reload from disk even if already open. Clears the in-memory annotations and the session; the durable annotation envelope survives and is re-merged on the same open, re-anchored where each record's `textSnapshot` still matches (#1813). |
+| `force` | boolean | no | Force reload from disk even if already open, discarding unsaved edits and the session. For an on-disk `.md`/`.txt` file, unsaved edits are first kept as a backup, reported as `backupKept` ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)). Annotations are kept and remapped onto the reloaded text (#2269); a record whose text changed comes back `degraded`. |
 | `authoredBy` | `"claude"` | no | Pass when you wrote the file wholesale before opening it, to stamp Claude authorship across its content. Idempotent, and only ever stamps Claude — it cannot forge user attribution. |
 
 **Returns:**
@@ -181,9 +181,11 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 }
 ```
 
+When a `force` reload discarded unsaved edits, the response also carries `backupKept: { name, timestamp }` and `backupKeptNote`, a sentence telling you to mention it to the user and how to restore it (`tandem_restoreBackup` with `backup: name`). The editor gets an `unsaved-edits-kept` notice at the same time. `POST /api/open` does neither: the backup is kept only for this tool.
+
 `wakeUrl` is omitted when no wake transport is running (stdio mode), and for a caller whose TCP connection does not come from the loopback address (#1952; a tunnel such as `ssh -L` arrives from loopback and still receives it). It is on the tool response only -- `POST /api/open` does not carry it.
 
-**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word: `EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `FORMAT_ERROR` (unsupported format, >50MB)
+**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word: `EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `FORMAT_ERROR` (unsupported format, >50MB), `BACKUP_FAILED` (`force` on a document with unsaved edits Tandem could not keep a backup of; nothing was reloaded)
 
 **Example:**
 ```
@@ -196,7 +198,7 @@ tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. A document that is read-only because the *user* asked for it (View Changelog, an explicit `readOnly` open) still reloads unconditionally — but a `.html`, read-only only because its format cannot be written back, gets the banner like any other dirty document (#1798). Its Y.Doc is the only copy of those edits, so reloading over them would destroy them.
-- Pass `force: true` to manually reload from disk. Clears the in-memory annotations and the session, then re-merges the durable envelope from disk (records whose `textSnapshot` no longer matches come back `degraded`, #1813). Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
+- Pass `force: true` to manually reload from disk. Discards unsaved edits and the session, keeping the edits first as an `unsaved`-kind backup ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)); annotations are kept and remapped onto the reloaded text, and records whose text changed come back `degraded` (#2269). Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
 
@@ -549,7 +551,7 @@ tandem_status({ text: "Done" })
 
 ### tandem_close
 
-Close a document's tab (the active document if no `documentId` is specified); if it was the active document, another open document, if any, becomes active. **Closing does not save:** edits not yet written by `tandem_save` or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened.
+Close a document's tab (the active document if no `documentId` is specified); if it was the active document, another open document, if any, becomes active. **Closing does not save:** edits not yet written by `tandem_save` or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened. For an on-disk `.md`/`.txt` file the discarded edits are first kept as a backup, reported as `backupKept` with a `backupKeptNote`, and restorable with `tandem_restoreBackup` once the file is reopened ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)). If that backup cannot be kept, the document stays open and the call answers `BACKUP_FAILED`. `POST /api/close`, which the editor confirms itself, keeps no backup.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -980,7 +982,7 @@ tandem_applyChanges({ author: "Claude Review" })
 
 ### tandem_restoreBackup
 
-Restore a document from a backup. Tandem copies a document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (`.md`/`.txt` verbatim text, `.docx` verbatim binary — byte-identical), up to 3 snapshots per document. Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
+Restore a document from a backup. Tandem keeps two kinds of snapshot under `{APP_DATA}/doc-backups/`, up to 3 of each per document, plus the run's first disk snapshot, which is never pruned while the server runs, and the snapshot a restore is reading, which that restore's own prune skips (so a document can briefly hold five disk-kind snapshots) ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)): `disk` — the document's on-disk bytes, copied before its first overwrite each server run and before every restore through this tool (`.md`/`.txt` verbatim text, `.docx` verbatim binary — byte-identical); and `unsaved` — unsaved edits that `tandem_open` with `force`, a restore or `tandem_close` discarded (`.md`/`.txt` only, as the next autosave would have written them). Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
 
 - **`.docx` sidecar** — the list also includes the `{name}.backup.docx` sidecar written by `tandem_applyChanges`, listed last (after the snapshots, and never re-sorted among them); restore it by name like any snapshot. When a sidecar is listed, `message` gains the sentence "The {name}.backup.docx sidecar is listed last and is not a Tandem-managed snapshot." — it is omitted when there is none, so a `.md`/`.txt` list never names a file that cannot exist. Calling without `backup` never restores anything, on any format.
 
@@ -994,7 +996,8 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 {
   "filePath": "/home/user/docs/thesis.md",
   "backups": [
-    { "name": "thesis-20260609-141500-ab12cd34.md", "timestamp": "2026-06-09T14:15:00.000Z", "size": 18234 }
+    { "name": "thesis-20260609-141500-ab12cd34.md", "timestamp": "2026-06-09T14:15:00.000Z", "size": 18234, "kind": "disk" },
+    { "name": "thesis-20260609-140200-9f8e7d6c-unsaved.md", "timestamp": "2026-06-09T14:02:00.000Z", "size": 18190, "kind": "unsaved" }
   ],
   "message": "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
 }
@@ -1005,12 +1008,15 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 { "message": "Restored thesis.md from backup thesis-20260609-141500-ab12cd34.md.", "restoredFrom": "…/doc-backups/<hash>/thesis-20260609-141500-ab12cd34.md", "filePath": "/home/user/docs/thesis.md" }
 ```
 
-**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for unsupported formats; `INVALID_PATH` for upload-source and scratchpad documents (list and restore mode alike), or when the named `.docx` sidecar is not a plain file Tandem could have written — a symbolic link, or a FIFO / directory / device node wearing that name (the sidecar is opened `O_NOFOLLOW|O_NONBLOCK` and the open handle is `fstat`ed, so a planted FIFO is refused rather than blocking the read forever); `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
+When the restore discarded unsaved edits, the response also carries `backupKept: { name, timestamp }` and `backupKeptNote`, as `tandem_open` does.
+
+**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for unsupported formats; `INVALID_PATH` for upload-source and scratchpad documents (list and restore mode alike), or when the named `.docx` sidecar is not a plain file Tandem could have written — a symbolic link, or a FIFO / directory / device node wearing that name (the sidecar is opened `O_NOFOLLOW|O_NONBLOCK` and the open handle is `fstat`ed, so a planted FIFO is refused rather than blocking the read forever); `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard; `BACKUP_FAILED` when the document has unsaved edits Tandem could not keep a backup of (nothing was written).
 
 **Notes:**
-- `.docx`: the `{name}.backup.docx` sidecar restores through the same reload lifecycle as a snapshot (#1768) — `readOnly` is honoured, the pre-restore bytes are snapshotted first, and the watcher's self-write filter is armed. It used to be a private copy-back on the no-`backup` call that took none of those. The sidecar is not deleted after restore — you can restore multiple times. `POST /api/backups/restore` accepts the sidecar name too; `GET /api/backups` deliberately still lists snapshots only, because the palette action restores `backups[0]`.
-- `.md`/`.txt`: the restore routes through the file-watcher reload lifecycle — the open document reloads in place, annotations are preserved and re-anchored, and Tandem's own write is not misread as an external edit. The pre-restore on-disk bytes are snapshotted first (when the once-per-run gate allows), so a restore is itself reversible.
-- The command palette action "Restore a backup of this document…" is a thin client of the same machinery (`GET /api/backups` + `POST /api/backups/restore`); it restores the most recent snapshot.
+- `.docx`: the `{name}.backup.docx` sidecar restores through the same reload lifecycle as a snapshot (#1768) — `readOnly` is honoured, the pre-restore bytes are snapshotted first, and the watcher's self-write filter is armed. It used to be a private copy-back on the no-`backup` call that took none of those. The sidecar is not deleted after restore — you can restore multiple times. `POST /api/backups/restore` accepts the sidecar name too; `GET /api/backups` still lists snapshots only (the editor's Version history therefore shows no sidecar row; `.docx` ships dark, ADR-053).
+- `.md`/`.txt`: the restore routes through the file-watcher reload lifecycle — the open document reloads in place, annotations are preserved and re-anchored, and Tandem's own write is not misread as an external edit. The pre-restore on-disk bytes are snapshotted first, so a restore is itself reversible: on every restore through this tool and through the editor's Version history (`POST /api/backups/restore`). Unsaved edits the tool's restore discards are kept before that snapshot (so a refusal writes nothing) and then marked newest, so they list first.
+- The editor's Version history (command palette: "Version history: restore a backup…"; the kept-edits banner's and the activity tray's View) is a client of the same machinery (`GET /api/backups` + `POST /api/backups/restore`). It lists every snapshot and restores the one the user picks. Its restore keeps the document's unsaved edits first, like this tool's (ADR-057, PR 2), but never records them in `kept-unseen.json`, so they raise no banner; it answers `404 FILE_NOT_FOUND` with editor wording for a snapshot gone since the list loaded, and `409 BACKUP_FAILED` when they cannot be kept; the user may then restore anyway (`discardUnsavedEdits: true`).
+- `GET /api/backups` also returns `keptNotice`: the `unsaved` snapshots a Claude action kept that the user has not dismissed (`{timestamp, names}` or `null`), which drives the editor's kept-edits banner. `POST /api/backups/acknowledge` records a dismissal in the document's `kept-unseen.json`. A restore of a kept snapshot, by Claude or in the editor, counts as seen too.
 
 ---
 
@@ -1350,8 +1356,8 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), `src/server/
 | `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin |
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
 | `POST /api/document/reload` | Reload the document from disk. | origin + loopback |
-| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback; list scrubs paths |
-| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback |
+| `GET /api/backups` · `POST /api/backups/restore` · `POST /api/backups/acknowledge` | List / restore snapshots (the Version history); dismiss the kept-edits banner. | origin + loopback on the POSTs; list scrubs paths |
+| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. Keep snapshots the version on disk first; Reload keeps the unsaved edits first, answering `409 BACKUP_FAILED` when it can't (then `discardUnsavedEdits: true`, a strict boolean valid only with Reload) (ADR-057 PR 3). | origin + loopback |
 | `POST /api/read-only-file/resolve` | Answer the read-only-file prompt (#2273): `overwrite` (POSIX only) or `dismiss`, naming the prompt's `documentId` and `detectedAt`. | origin + loopback |
 | `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** |
 | `POST /api/remove-annotation` | Delete an annotation. | **one layer** |
@@ -1468,7 +1474,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). |
+| `force` | boolean | no | Reload from disk even if already open (discards unsaved edits and the session; annotations are kept and remapped, #2269). Unlike `tandem_open`, keeps no backup of the edits: ADR-057 covers Claude's tools only. |
 | `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
