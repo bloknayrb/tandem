@@ -63,6 +63,9 @@ const cannotSave = $derived(!SAVEABLE_FORMATS.has(format));
  */
 const reloadKeepsEdits = $derived(keepsUnsavedEditsOnDiscard({ format, source, readOnly }));
 
+/** Whether Keep backs up the version on disk first: a real file Tandem may save over (as the server decides). */
+const keepKeepsDisk = $derived(!cannotSave && source === "file" && !readOnly);
+
 let conflict = $state<ExternalConflictState | null>(null);
 let pending = $state<"keep" | "reload" | "reload-anyway" | null>(null);
 let error = $state<string | null>(null);
@@ -131,7 +134,7 @@ const message = $derived.by(() => {
   if (conflict.kind === "external-edit") {
     return cannotSave
       ? `${fileName} changed on disk while you have unsaved edits. Tandem can't write this file type back to disk, so keeping your edits keeps them in this session only — the file itself will still hold the disk version. Reloading discards your unsaved edits.`
-      : `${fileName} changed on disk while you have unsaved edits. Keeping your edits means your next save overwrites the disk changes, which are kept in Version history first; ${
+      : `${fileName} changed on disk while you have unsaved edits. Keeping your edits means your next save overwrites the disk changes${keepKeepsDisk ? ", which are kept in Version history first" : ""}; ${
           reloadKeepsEdits
             ? "reloading keeps your unsaved edits in Version history."
             : "reloading discards your unsaved edits."

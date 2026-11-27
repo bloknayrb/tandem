@@ -312,18 +312,32 @@ describe("Keep keeps the version on disk first", () => {
     expect(disk).toContain("the external version\n");
   });
 
-  it("re-stats after the snapshot when the first stat failed (a transient lock)", async () => {
-    const { filePath, id, doc } = await conflicted("keep-lock.md");
+  it("falls back to a baseline taken before the snapshot when the stat failed (a transient lock)", async () => {
+    const { id, doc } = await conflicted("keep-lock.md");
     const spy = vi
       .spyOn(fs, "stat")
       .mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EBUSY" }));
+    const before = Date.now();
     try {
       await resolveExternalConflict(id, "keep");
     } finally {
       spy.mockRestore();
     }
-    const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION);
-    expect(savedAt).toBe((await fs.stat(filePath)).mtimeMs);
+    const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION) as number;
+    expect(savedAt).toBeGreaterThanOrEqual(before);
+    expect(savedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("reports no kept disk version, and no warning, when the file is gone", async () => {
+    const { filePath, id } = await conflicted("keep-gone.md");
+    await fs.rm(filePath);
+
+    const result = await resolveExternalConflict(id, "keep");
+
+    expect(result?.diskVersionKept).toBeUndefined();
+    expect(pushNotificationMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: `keep-disk-backup:${id}` }),
+    );
   });
 
   it("takes no disk backup for a read-only document, which has no next save", async () => {
@@ -351,8 +365,8 @@ describe("Keep keeps the version on disk first", () => {
       expect.objectContaining({
         severity: "warning",
         message: expect.stringContaining("could not be kept as a backup"),
-        // One tray row with the backup module's own size-cap notice.
-        dedupKey: "doc-backup:size-cap",
+        // Its own row: the module's size-cap notice is run-wide.
+        dedupKey: `keep-disk-backup:${id}`,
       }),
     );
   });

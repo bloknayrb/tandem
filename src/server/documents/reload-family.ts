@@ -51,7 +51,6 @@ import {
   docxSidecarBackupPath,
   markSnapshotNewest,
   snapshotBeforeFirstWrite,
-  snapshotFailureNoticeKey,
   snapshotKind,
 } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
@@ -731,7 +730,9 @@ export async function resolveExternalConflict(
     // (#1238).
     const canSave = canSaveToDisk(existing.format);
     // A read-only document has no next save to overwrite the disk version.
-    const keepDiskVersion = canSave && existing.readOnly !== true;
+    // Only a real file Tandem may save over has a disk version at risk: not a
+    // read-only document (no next save), not an upload or scratchpad (no file).
+    const keepDiskVersion = canSave && existing.readOnly !== true && existing.source === "file";
     // Safe FS sink (CodeQL js/path-injection): `resolvedFilePath` is derived
     // from `existing.filePath`, the OpenDoc registry's server-managed path
     // (only ever set by openFromDisk / resolveAndValidatePath / a validated
@@ -746,44 +747,29 @@ export async function resolveExternalConflict(
     // never be newer than the bytes the backup holds, or a write landing
     // between the two would pass the next save's mtime guard uncopied.
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
+    // When that stat failed (a transient read-lock), the baseline falls back
+    // to this time, taken before the snapshot reads the file, never a later
+    // stat: one after the read could carry a write the backup does not hold.
+    const beforeSnapshot = Date.now();
     // ADR-057, PR 3: the next save overwrites the version on disk, so keep it
     // first, every time (the run's once-per-path gate is usually spent by an
     // earlier save). Warn and proceed on failure — the in-memory edits are the
-    // newer data, the disk kind's contract — but say so here: the module's
-    // own warnings are latched once per run or per path.
+    // newer data, the disk kind's contract — but say so: the module's own
+    // warnings are latched once per run or per path.
     let diskVersionKept: boolean | undefined;
-    // The fallback baseline when the stat failed: no later than the snapshot's
-    // read, so a write landing after it can never pass the next save's guard.
-    const beforeSnapshot = Date.now();
     if (keepDiskVersion) {
       const snap = await snapshotBeforeFirstWrite(existing.filePath, {
         appDataDir: resolveAppDataDir(),
         documentId: safeId,
         ignoreRunGate: true,
       });
-      diskVersionKept =
-        snap === "written" || snap === "skipped-identical" || snap === "skipped-no-source";
-      if (!diskVersionKept) {
-        pushNotification({
-          id: generateNotificationId(),
-          type: "external-conflict",
-          severity: "warning",
-          message: `The version of ${path.basename(existing.filePath)} on disk could not be kept as a backup, so your next save will overwrite it without a copy.`,
-          documentId: safeId,
-          // The module announces the same failure (latched once per run or
-          // per path); sharing its key makes this one row, in Keep's words.
-          dedupKey: snapshotFailureNoticeKey(
-            existing.filePath,
-            snap === "skipped-size-cap" ? "skipped-size-cap" : "failed",
-          ),
-          timestamp: Date.now(),
-        });
+      // No file on disk: no version to keep, nothing for a save to overwrite.
+      if (snap !== "skipped-no-source") {
+        diskVersionKept = snap === "written" || snap === "skipped-identical";
       }
     }
-    // A stat that failed (a transient read-lock) gets one more try now that
-    // the snapshot has read the file.
-    const baseline = stat ?? (canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null);
     const liveDoc = getDocument(safeId) ?? doc;
+    let resolved = false;
     withInternal(liveDoc, () => {
       // Guarded, not unconditional (review finding): the awaits above were
       // async, so the file watcher could have flagged a NEWER conflict while
@@ -793,15 +779,30 @@ export async function resolveExternalConflict(
       if (sameEpisode()) {
         const meta = liveMeta();
         meta.delete(Y_MAP_EXTERNAL_CONFLICT);
-        // Date.now() fallback when the file is transiently unreadable (e.g. a
-        // Word read-lock): clearing the flag without re-baselining would hide
-        // the banner while the external-modification guard kept blocking every
+        // Fallback when the file is transiently unreadable (e.g. a Word
+        // read-lock): clearing the flag without re-baselining would hide the
+        // banner while the external-modification guard kept blocking every
         // subsequent save until the document was closed and reopened.
         if (canSave) {
-          meta.set(Y_MAP_SAVED_AT_VERSION, baseline ? baseline.mtimeMs : beforeSnapshot);
+          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : beforeSnapshot);
         }
+        resolved = true;
       }
     });
+    // Only once this click resolved its conflict does a next save exist to
+    // warn about. Its own key: sharing the module's would replace that notice
+    // (the size-cap one is run-wide) with this per-document one.
+    if (resolved && diskVersionKept === false) {
+      pushNotification({
+        id: generateNotificationId(),
+        type: "external-conflict",
+        severity: "warning",
+        message: `The version of ${path.basename(existing.filePath)} on disk could not be kept as a backup, so your next save will overwrite it without a copy.`,
+        documentId: safeId,
+        dedupKey: `keep-disk-backup:${safeId}`,
+        timestamp: Date.now(),
+      });
+    }
     return diskVersionKept === undefined ? {} : { diskVersionKept };
   }
 
