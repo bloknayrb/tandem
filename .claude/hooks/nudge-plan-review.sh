@@ -25,7 +25,7 @@ FILE_PATH=$(printf '%s' "$INPUT" | node -e "
   });
 " 2>/dev/null) || exit 0
 
-# ADR-057 review tiers: a Tier A edit (anything off the Tier B allowlist in
+# ADR-058 review tiers: a Tier A edit (anything off the Tier B allowlist in
 # .claude/review-tiers.json) in a session that has written no plan gets one
 # warning per session. Never blocks. Files this session creates are recorded,
 # so a new test file stays Tier B when it is edited again.
@@ -34,7 +34,7 @@ if [[ -n "$FILE_PATH" ]]; then
   [[ -e "$FILE_PATH" ]] || EXISTED=0
   CREATED_LIST="${STATE_DIR}/created-files"
   # Only a Write creates a file; an Edit of a missing path fails. (A Write the
-  # user then denies is still recorded: accepted, ADR-057.)
+  # user then denies is still recorded: accepted, ADR-058.)
   if [[ "$EXISTED" == "0" ]] && printf '%s' "$INPUT" | grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Write"'; then
     printf '%s\n' "$FILE_PATH" >> "$CREATED_LIST" 2>/dev/null || true
   fi
@@ -42,7 +42,7 @@ if [[ -n "$FILE_PATH" ]]; then
   if [[ ! -f "${STATE_DIR}/${_WS_MARK_PLAN_WRITE}" && ! -f "$TIER_MARK" ]] \
     && _ws_is_tier_a_edit "$FILE_PATH" "$EXISTED" "$CREATED_LIST"; then
     : > "$TIER_MARK"
-    REMINDER="Tier A edit with no plan this session: ${FILE_PATH}. Per CLAUDE.md's workflow (ADR-057), a change touching anything off the Tier B allowlist in .claude/review-tiers.json gets a plan and adversarial agent review before code. (One-shot reminder for this session.)"
+    REMINDER="Tier A edit with no plan this session: ${FILE_PATH}. Per CLAUDE.md's workflow (ADR-058), a change touching anything off the Tier B allowlist in .claude/review-tiers.json gets a plan and adversarial agent review before code. (One-shot reminder for this session.)"
     # As real context for the model (hookSpecificOutput.additionalContext on
     # stdout), not stderr, which Claude Code does not show the model on exit 0.
     # Same pattern and jq fallback as stop-cycle-check.sh.

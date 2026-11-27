@@ -106,7 +106,7 @@ _ws_is_source_edit() {
   return 0
 }
 
-# Return 0 if editing path $1 is a Tier A change (ADR-057): anything not on the
+# Return 0 if editing path $1 is a Tier A change (ADR-058): anything not on the
 # Tier B allowlist in .claude/review-tiers.json. $2 is "0" when the file did not
 # exist before this edit, "1" when it did; $3 is the per-session list of files
 # this session created. A path outside the repo is not Tier A. If the classifier

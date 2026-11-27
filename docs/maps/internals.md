@@ -92,7 +92,7 @@ Every ADR lives in [decisions.md](../decisions.md). Grouped by what they govern:
   [ADR-049](../decisions.md#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames) the self-armed wake,
   [ADR-013](../decisions.md#adr-013-chat-persistence-via-json-files-not-crdt) and
   [ADR-048](../decisions.md#adr-048-chat-stays-global-ctrl_room-scoped-not-document-scoped) chat.
-- **Workflow:** [ADR-057](../decisions.md#adr-057-checks-over-prose-review-tiered-by-risk) checks over prose, and review tiered by risk.
+- **Workflow:** [ADR-058](../decisions.md#adr-058-checks-over-prose-review-tiered-by-risk) checks over prose, and review tiered by risk.
 - **Security:** [ADR-050](../decisions.md#adr-050-api-is-loopback-only-for-non-get-enforced-at-the-mount)
   loopback-only mutations, [ADR-030](../decisions.md#adr-030-windows-code-signing-via-azure-trusted-signing--oidc) Windows signing.
 - **Dark gates:** [ADR-040](../decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) licensing,

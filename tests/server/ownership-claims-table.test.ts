@@ -887,6 +887,9 @@ const DOCX_MARKS = [
   "INVALID_PATH",
   "READ_ONLY",
   "<noDocumentError>",
+  // ADR-057: a restore refused because its document was closed during the
+  // backups, its message kept so it names the backup already made.
+  "NO_DOCUMENT",
   "<noDocumentError>",
   "INVALID_PATH",
   "FORMAT_ERROR",

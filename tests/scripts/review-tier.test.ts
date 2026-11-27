@@ -12,11 +12,11 @@ import {
 } from "../../.claude/hooks/review-tier.mjs";
 
 /**
- * ADR-057 review tiers. `.claude/review-tiers.json` decides which changes may
+ * ADR-058 review tiers. `.claude/review-tiers.json` decides which changes may
  * skip plan review; this pins that the allowlist stays narrow and fails closed,
  * and that `nudge-plan-review.sh` warns on a Tier A edit made with no plan.
  *
- * Enforcement is a nudge, never a block (ADR-057 names the residuals: the
+ * Enforcement is a nudge, never a block (ADR-058 names the residuals: the
  * agent classifies its own work, and Bash writes never reach the hook).
  */
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Classify a path into a review tier (ADR-057), from .claude/review-tiers.json.
+ * Classify a path into a review tier (ADR-058), from .claude/review-tiers.json.
  *
  *   node .claude/hooks/review-tier.mjs <path> <existed-before:0|1> [created-list-file]
  *
