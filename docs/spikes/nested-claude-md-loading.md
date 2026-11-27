@@ -3,16 +3,21 @@
 **Date:** 2026-11-27
 **Claude Code:** `2.1.332 (Claude Code)`, headless (`claude -p --output-format stream-json --verbose`), `--model haiku`
 **Platform:** linux/x64 (cloud container)
-**Answers:** precondition 0 of step 9 in the CLAUDE.md slimming plan (ADR-058): rule (b) moves a rule into
-`D/CLAUDE.md` only if the file is in context whenever the rule can be broken. This records which
-actions actually put it there.
+**Answers:** a precondition of a planned slimming of the root `CLAUDE.md` (the review-tier decision
+that frames it is ADR-058, proposed in #2589). The plan lets a rule leave the auto-loaded root
+`CLAUDE.md` for a per-directory `D/CLAUDE.md` only when every way to break the rule goes through a
+file under `D`, so that the directory's file is in context exactly when the mistake becomes
+possible. That holds only for the actions that actually load `D/CLAUDE.md`, and this spike records
+which those are.
 
 ## Method
 
-A throwaway repo outside the session scratchpad, so its instructions load (the 2026-11-27 context
-audit found that nothing under `/tmp/claude-0/…` loads a CLAUDE.md, trusted or not; see section 8
-of `docs/reviews/2026-11-27-context-audit-2481-baseline.md`, added by #2592).
-It had no trust entry.
+A throwaway repo under `/home/user`, outside both the checkout and the session scratchpad, with no
+trust entry. The location matters. Earlier the same day, a probe found that a three-line
+`CLAUDE.md` holding a marker word never loaded in a copy under the session scratchpad
+(`/tmp/claude-0/…`). That held whether or not the folder was trusted and whether or not it had a
+`.git`. The same copy moved under `/home/user` loaded at once. That probe is written up in the
+context-audit baseline report that #2592 adds.
 
 ```
 CLAUDE.md             "ROOTMARK-7731: root instructions file."
@@ -34,7 +39,8 @@ control cases never echoed it. Every case echoed `ROOTMARK-7731`.
 | c1 | `Read src/server/a.ts` | **yes** |
 | c2 | `Edit src/server/a.ts` (the Edit tool requires a Read first, so it ran Read then Edit) | **yes** |
 | c3 | `Write` creating the new file `src/server/new.ts`, nothing read | **yes** |
-| c4, c4b | Bash `cat src/server/a.ts`, then `cat src/server/b.ts` | **yes** (both runs) |
+| c4 | Bash `cat src/server/a.ts` | **yes** |
+| c4b | Bash `cat src/server/b.ts`, in its own fresh session (a repeat of c4 on the other file) | **yes** |
 | c13 | Bash `sed -n 1p src/server/a.ts` | **yes** |
 | c14 | Bash `head -1 src/server/a.ts` | **yes** |
 | c5 | `Grep` pattern `export`, path `src/server` | no |
@@ -42,7 +48,7 @@ control cases never echoed it. Every case echoed `ROOTMARK-7731`.
 | c10, c10b | Bash `sed -i 's/1/5/' src/server/a.ts` (a write) | no (both runs) |
 | c11 | Bash `grep -rn export src/server` | no |
 | c12 | Bash `ls src/server` | no |
-| c7 | a general-purpose subagent runs `Read src/server/b.ts` | **yes, in the subagent's context** (the parent read nothing, so it has the file only if it reads under the directory itself) |
+| c7 | a general-purpose subagent runs `Read src/server/b.ts` | **yes, in the subagent's context**. Observed from the subagent's own final report, which arrives in the parent's stream as the Agent tool's result and ends `MARKERS: ROOTMARK-7731, NESTMARK-4419`. The parent made no file call itself. |
 | c8 | no tool, cwd = `src/server` | **yes, at startup** |
 | c9 | control: `Read src/client/c.ts` | no |
 
@@ -56,8 +62,11 @@ control cases never echoed it. Every case echoed `ROOTMARK-7731`.
     codemods, `eslint --fix`, heredoc rewrites, `git apply`);
   - **Grep, Glob and multi-file Bash searches** (`grep -r`, `ls`). These only find code, but an
     agent that edits from what a search returned, without a Read, never sees the rules;
-  - **a parent session whose subagent did the reading.** The rules reach the subagent's context
-    and not the parent's, so a parent that then edits on the subagent's report has not seen them.
+  - **a parent session whose subagent did the reading.** The file is attached in the subagent's
+    context. [Inference] The parent gets only what the subagent's report repeats. In c7 that was
+    the marker, because the prompt asked for it, but an ordinary report need not carry the rules.
+    A parent that edits on such a report without a Read of its own has not been shown them. This
+    run did not test what the parent's context holds beyond the relayed text.
 - [Inference] Claude Code appears to recognise a single file path in a read-only Bash command and
   attach the nested CLAUDE.md for it. Commands that write, or take a directory, get nothing. This is
   observed behaviour on one build, not documented behaviour, so step 9 must treat it as liable to
