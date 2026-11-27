@@ -24,12 +24,25 @@ import { rustSources } from "./rust-sources.js";
  *
  * **Both sides are derived from source**, never listed here. A test seeded with
  * the command names someone remembered would only confirm the list against
- * itself, which is the failure this file exists to prevent.
+ * itself, which is the failure this file exists to prevent. The one hand-kept
+ * list, `UNINVOKED_ALLOWLIST`, does not seed either side: it records the
+ * *exceptions* to the dead-IPC check, and is compared both ways against the
+ * derived set, so it cannot drift from the code.
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const LIB_RS = join(REPO_ROOT, "src-tauri", "src", "lib.rs");
 const CLIENT_SRC = join(REPO_ROOT, "src", "client");
+
+/**
+ * Registered commands that no client code invokes, each with the reason it
+ * stays registered. The reverse check below compares the derived uninvoked set
+ * against these keys exactly, so an entry that gains a caller must be removed
+ * here too — the list can only describe the present, never the past.
+ */
+// Empty since 2026-11-27: the five Cowork commands this check found with no
+// caller were deleted (ADR-055's amendment of that date).
+const UNINVOKED_ALLOWLIST: Record<string, string> = {};
 
 /** Drop `//` and block comments, so a name merely discussed in prose is not read as a call. */
 function stripComments(src: string): string {
@@ -87,7 +100,21 @@ function invokedCommands(): { names: Set<string>; unresolved: string[] } {
     for (const m of src.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*"([a-z_0-9]+)"/g)) {
       consts.set(m[1], m[2]);
     }
-    for (const m of src.matchAll(/\binvoke(?:<[^>]*>)?\(\s*([^,)]+)/g)) {
+    // Every `invoke<` / `invoke(` site must parse, or it is reported rather
+    // than skipped: a generic the pattern cannot read (say, three levels of
+    // nesting) would otherwise vanish from both the parity check and the
+    // dead-IPC check, and the latter would then blame the command for having
+    // no caller.
+    const call = /invoke(?:<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>)?\(\s*([^,)]+)/y;
+    for (const site of src.matchAll(/\binvoke\s*[<(]/g)) {
+      call.lastIndex = site.index;
+      const m = call.exec(src);
+      if (!m) {
+        unresolved.push(
+          `${rel}: unparsed invoke call near "${src.slice(site.index, site.index + 60)}"`,
+        );
+        continue;
+      }
       const arg = m[1].trim();
       const literal = arg.match(/^"([a-z_0-9]+)"$/);
       if (literal) {
@@ -157,9 +184,9 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
 
   it("registers every command the crate defines, invoked from the client or not", () => {
     // The other direction, and the one the client-driven check above cannot
-    // reach. Five of the eleven Cowork commands are invoked from nowhere in
-    // `src/client` — they are called from the integration wizard's own flow and
-    // from tests — so dropping any of them from `generate_handler!` during a
+    // reach. Five of the Cowork commands are invoked from nowhere at all — no
+    // `invoke()` in `src/client`, no other caller (see UNINVOKED_ALLOWLIST
+    // below) — so dropping any of them from `generate_handler!` during a
     // module move compiles clean and passes every suite in the repo, including
     // the parity check above. That is precisely the edit Unit 11 makes over and
     // over: 11d alone re-qualified eleven entries in one commit.
@@ -198,6 +225,38 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
           `check above to catch. If it is deliberately unregistered, this list is the place ` +
           `to say so.`,
       ).toBe(true);
+    }
+  });
+
+  it("invokes every registered command from the client, or says why not", () => {
+    // The dead-IPC direction. A registered command nothing calls is attack
+    // surface the WebView can reach (and that `capabilities/default.json` may
+    // grant) with no product reason, and it is invisible to every check above:
+    // it compiles, it is registered, and no `invoke()` exists to disagree with.
+    // Any new command must either gain a caller or an entry here with its reason.
+    //
+    // Honest limit: "invoked" means an `invoke()` call exists in client source,
+    // not that the UI reaches it. A command whose only call sits in an exported
+    // wrapper nothing imports (the shape of `src/client/cowork/cowork-invoke.ts`)
+    // passes. Closing that needs an import-graph walk; `knip` is the tool aimed
+    // at dead exports.
+    const { names } = invokedCommands();
+    const registered = registeredCommands();
+    const allowlisted = new Set(Object.keys(UNINVOKED_ALLOWLIST));
+    const uninvoked = registered.filter((name) => !names.has(name));
+    expect(
+      uninvoked.filter((name) => !allowlisted.has(name)).sort(),
+      "A command registered in tauri::generate_handler! is invoked from nowhere in src/client. " +
+        "Either call it, delete it (and its capability grant), or add it to " +
+        "UNINVOKED_ALLOWLIST with the reason it must stay registered.",
+    ).toEqual([]);
+    expect(
+      [...allowlisted].filter((name) => !uninvoked.includes(name)).sort(),
+      "These UNINVOKED_ALLOWLIST entries are stale: the command now has a client caller " +
+        "or is no longer registered. Delete the entry.",
+    ).toEqual([]);
+    for (const [name, reason] of Object.entries(UNINVOKED_ALLOWLIST)) {
+      expect(reason.trim(), `UNINVOKED_ALLOWLIST["${name}"] needs a reason`).not.toBe("");
     }
   });
 

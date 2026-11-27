@@ -72,6 +72,7 @@ mod cowork_atomic_json;
 /// Shared across `cowork_installer` and `cowork_workspace_scan` test modules so
 /// they serialize against each other and do not race on the env var.
 #[cfg(test)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) static COWORK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(target_os = "windows")]
 mod cowork_workspace_scan;
@@ -1834,15 +1835,10 @@ pub fn run() {
             native_theme::get_app_theme,
             native_theme::set_native_theme,
             sentry_enabled,
-            cowork_commands::cowork_scan_workspaces,
             cowork_commands::cowork_toggle_integration,
             cowork_commands::cowork_rescan,
             cowork_commands::cowork_get_status,
-            cowork_commands::cowork_get_meta,
             cowork_commands::cowork_detect_vethernet_subnet,
-            cowork_commands::cowork_apply_token,
-            cowork_commands::cowork_install_into_workspace,
-            cowork_commands::cowork_uninstall_from_workspace,
             cowork_commands::cowork_set_lan_ip_override,
             cowork_commands::cowork_retry_admin_elevation,
             sidecar::restart_sidecar,
@@ -2474,6 +2470,7 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 /// the calling thread waiting for the OS dialog. This is safe because:
 /// 1. Tauri uses a multi-threaded Tokio runtime (default)
 /// 2. This is only called from spawned async tasks, never the main thread
+///
 /// Do NOT make this async — `blocking_show()` on an async runtime thread will deadlock.
 fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -2860,6 +2857,10 @@ async fn resolve_update_route(app: &tauri::AppHandle) -> (UpdateRoute, bool) {
 /// `build_updater` logged the `&'static str` and returned a bare `None` -- so
 /// both callers could only show one fixed sentence for two unrelated states.
 /// The reason already exists in `UpdateRoute`; this just stops dropping it.
+// Built once per update check and consumed immediately, so the size gap between
+// `Serve` (which carries the whole `Updater`) and `Withheld` costs nothing worth
+// a `Box`.
+#[allow(clippy::large_enum_variant)]
 enum UpdateOutcome {
     /// Check this updater. Built from the `Public` or `Licensed` arm.
     ///
@@ -4096,6 +4097,7 @@ mod classify_opened_url_tests {
     ///   - Unix accepts `/foo` as an absolute path, which then reaches the
     ///     shared path validator and fails it (no extension) ->
     ///     `Err(PathRejected(UnsupportedExtension))`.
+    ///
     /// CI runs both arms (ubuntu + windows), so each is exercised.
     #[test]
     fn empty_host_file_url_classification_is_platform_dependent() {
