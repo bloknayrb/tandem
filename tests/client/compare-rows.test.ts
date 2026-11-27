@@ -17,6 +17,10 @@ describe("buildDiffRows", () => {
     expect(buildDiffRows("a\nb\n", "a\nb\n")).toEqual([]);
   });
 
+  it("a difference only in the final newline is no difference", () => {
+    expect(buildDiffRows("a\nb", "a\nb\n")).toEqual([]);
+  });
+
   it("marks lines only in the other version as removed and only in the document as added", () => {
     const rows = buildDiffRows("keep\nold only\n", "keep\nnew only\nextra\n");
     expect(rows).toEqual(

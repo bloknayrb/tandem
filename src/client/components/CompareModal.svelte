@@ -23,9 +23,14 @@ let result = $state<CompareResult | null>(null);
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 let seq = 0;
+/** Bumped by Refresh: the file on disk may have changed again since opening. */
+let refreshes = $state(0);
+/** True only for a click whose press also began on the backdrop, not a text-selection drag out of the dialog. */
+let pressedOnBackdrop = false;
 
 $effect(() => {
   if (documentId === null) return;
+  void refreshes;
   const forDoc = documentId;
   const mine = ++seq;
   untrack(() => {
@@ -68,7 +73,15 @@ $effect(() => {
 </script>
 
 {#if open}
-  <div role="presentation" class="modal-backdrop" onclick={onClose}>
+  <div
+    role="presentation"
+    class="modal-backdrop"
+    onpointerdown={(e) => (pressedOnBackdrop = e.target === e.currentTarget)}
+    onclick={(e) => {
+      if (e.target === e.currentTarget && pressedOnBackdrop) onClose();
+      pressedOnBackdrop = false;
+    }}
+  >
     <div
       role="dialog"
       aria-modal="true"
@@ -85,6 +98,15 @@ $effect(() => {
     >
       <header class="modal-header">
         <h2 id="compare-title">Compare with the file on disk: {fileName}</h2>
+        <button
+          type="button"
+          class="modal-refresh"
+          data-testid="compare-refresh"
+          disabled={result === null}
+          onclick={() => refreshes++}
+        >
+          Refresh
+        </button>
         <button
           type="button"
           class="modal-close"
@@ -143,6 +165,26 @@ $effect(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .modal-refresh {
+    margin-left: auto;
+    flex: 0 0 auto;
+    background: none;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-sm);
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .modal-refresh:disabled {
+    cursor: default;
+    color: var(--tandem-fg-subtle);
+  }
+  .modal-refresh:hover:not(:disabled),
+  .modal-refresh:focus-visible {
+    background: var(--tandem-surface-sunk);
   }
 
   .modal-close {

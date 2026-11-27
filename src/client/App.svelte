@@ -2,7 +2,12 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
+import {
+  BYO_MODELS_ENABLED,
+  COWORK_ENABLED,
+  canCompareWithDisk,
+  Y_MAP_ANNOTATIONS,
+} from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
@@ -1698,8 +1703,10 @@ let showHelp = $state(false);
 // active tab must not retarget a restore. Null when closed.
 let versionHistoryDocId = $state<string | null>(null);
 const versionHistoryOpen = $derived(versionHistoryDocId !== null);
-const versionHistoryFileName = $derived(
-  yjsSync.tabs.find((t) => t.id === versionHistoryDocId)?.fileName ?? "",
+const versionHistoryTab = $derived(yjsSync.tabs.find((t) => t.id === versionHistoryDocId));
+const versionHistoryFileName = $derived(versionHistoryTab?.fileName ?? "");
+const versionHistoryCanCompare = $derived(
+  versionHistoryTab !== undefined && canCompareWithDisk(versionHistoryTab),
 );
 
 /**
@@ -3524,17 +3531,18 @@ function dismissModelPicker() {
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
-    <!-- The server's own "Restored … from backup" notice (same dedupKey)
-         coalesces with this toast in the tray. -->
     <CompareModal
       documentId={compareDocId}
       fileName={compareFileName}
       onClose={() => (compareDocId = null)}
     />
 
+    <!-- The server's own "Restored … from backup" notice (same dedupKey)
+         coalesces with this toast in the tray. -->
     <VersionHistoryModal
       documentId={versionHistoryDocId}
       fileName={versionHistoryFileName}
+      canCompare={versionHistoryCanCompare}
       onClose={() => (versionHistoryDocId = null)}
       onRestored={(editsKept) => {
         // The server's notice also re-reads the banner, but not while the

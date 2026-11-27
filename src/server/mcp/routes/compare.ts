@@ -76,6 +76,22 @@ function capText(text: string, max: number): { text: string; truncated: boolean 
   return { text: text.slice(0, end), truncated: true };
 }
 
+/**
+ * When either side was cut at the cap, cut both at the same place: the last
+ * line break within the shorter side. The two caps are in different units (raw
+ * bytes before CRLF folding on disk, UTF-16 code units for the document), so
+ * left alone they stop at different points of the same text and the diff
+ * reports the longer side's tail as only on that side.
+ */
+function alignCuts(a: string, b: string): [string, string] {
+  const limit = Math.min(a.length, b.length);
+  const cut = (text: string): string => {
+    const nl = text.lastIndexOf("\n", limit - 1);
+    return nl >= 0 ? text.slice(0, nl + 1) : capText(text, limit).text;
+  };
+  return [cut(a), cut(b)];
+}
+
 function isEnoent(err: unknown): boolean {
   return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
@@ -166,12 +182,11 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     toLf(stripBom(adapter.save(getOrCreateDocument(safeId)))),
     COMPARE_MAX_BYTES,
   );
-  res.json({
-    data: {
-      current: current.text,
-      other: toLf(other.text),
-      otherLabel,
-      truncated: current.truncated || other.truncated,
-    },
-  });
+  // A byte cut can split a multi-byte character, which decodes as U+FFFD.
+  const otherText = toLf(other.truncated ? other.text.replace(/\uFFFD+$/, "") : other.text);
+  const truncated = current.truncated || other.truncated;
+  const [currentShown, otherShown] = truncated
+    ? alignCuts(current.text, otherText)
+    : [current.text, otherText];
+  res.json({ data: { current: currentShown, other: otherShown, otherLabel, truncated } });
 }

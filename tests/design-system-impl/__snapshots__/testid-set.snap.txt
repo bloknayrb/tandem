@@ -101,6 +101,7 @@ comment-thread
 compare-close
 compare-error
 compare-modal
+compare-refresh
 connection-banner
 connection-banner-live
 connection-banner-retry

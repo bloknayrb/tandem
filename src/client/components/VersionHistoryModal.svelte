@@ -36,9 +36,11 @@ interface Props {
   onClose: () => void;
   /** A restore landed. `editsKept`: the document's unsaved edits were kept first. */
   onRestored: (editsKept: boolean) => void;
+  /** Rows offer Compare: the document is one `canCompareWithDisk` admits. */
+  canCompare?: boolean;
 }
 
-let { documentId, fileName, onClose, onRestored }: Props = $props();
+let { documentId, fileName, onClose, onRestored, canCompare = false }: Props = $props();
 
 const open = $derived(documentId !== null);
 
@@ -61,19 +63,25 @@ let rowError = $state<{ name: string; backupFailed: boolean; message: string } |
 const status = $derived(
   !open
     ? ""
-    : restoring !== null
-      ? "Restoring…"
-      : rowError
-        ? rowError.message
-        : phase.kind === "error"
-          ? phase.message
-          : phase.kind === "ready"
-            ? phase.backups.length === 0
-              ? "No backups yet."
-              : phase.backups.length === 1
-                ? "1 backup."
-                : `${phase.backups.length} backups.`
-            : "",
+    : comparing !== null
+      ? comparing.result === null
+        ? "Comparing…"
+        : comparing.result.ok
+          ? "Comparison shown."
+          : comparing.result.message
+      : restoring !== null
+        ? "Restoring…"
+        : rowError
+          ? rowError.message
+          : phase.kind === "error"
+            ? phase.message
+            : phase.kind === "ready"
+              ? phase.backups.length === 0
+                ? "No backups yet."
+                : phase.backups.length === 1
+                  ? "1 backup."
+                  : `${phase.backups.length} backups.`
+              : "",
 );
 
 let dialogEl: HTMLElement | null = $state(null);
@@ -142,7 +150,7 @@ $effect(() => {
     e.stopPropagation();
     if (untrack(() => restoring) !== null) return;
     if (untrack(() => comparing) !== null) {
-      comparing = null;
+      void closeCompare();
       return;
     }
     if (untrack(() => confirming) !== null || untrack(() => rowError) !== null) {
@@ -170,10 +178,28 @@ async function openCompare(name: string) {
   confirming = null;
   rowError = null;
   comparing = { name, result: null };
+  // The row's button is gone with the list; keep focus inside the dialog.
+  await tick();
+  dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-compare-back"]')?.focus();
   const result = await compareDocument(forDoc, name);
   if (forDoc !== documentId || comparing?.name !== name) return;
   comparing = { name, result };
 }
+
+/** Back to the list, focus on the row that was being compared. */
+async function closeCompare() {
+  const name = comparing?.name;
+  comparing = null;
+  await tick();
+  const buttons = dialogEl?.querySelectorAll<HTMLElement>(
+    '[data-testid="version-history-compare"]',
+  );
+  const row = [...(buttons ?? [])].find((b) => b.dataset.backup === name);
+  (row ?? dialogEl)?.focus();
+}
+
+/** True only for a click whose press also began on the backdrop, not a text-selection drag out of the dialog. */
+let pressedOnBackdrop = false;
 
 const BACKUP_FAILED_FALLBACK =
   "Couldn't keep a backup of your unsaved edits first, so nothing was restored.";
@@ -216,8 +242,10 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
   <div
     role="presentation"
     class="modal-backdrop"
-    onclick={() => {
-      if (restoring === null) onClose();
+    onpointerdown={(e) => (pressedOnBackdrop = e.target === e.currentTarget)}
+    onclick={(e) => {
+      if (e.target === e.currentTarget && pressedOnBackdrop && restoring === null) onClose();
+      pressedOnBackdrop = false;
     }}
   >
     <div
@@ -258,7 +286,7 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
               type="button"
               class="btn"
               data-testid="version-history-compare-back"
-              onclick={() => (comparing = null)}
+              onclick={closeCompare}
             >
               ← Back to the list
             </button>
@@ -318,15 +346,18 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
                       Cancel
                     </button>
                   {:else}
-                    <button
-                      type="button"
-                      class="btn"
-                      data-testid="version-history-compare"
-                      disabled={restoring !== null}
-                      onclick={() => openCompare(b.name)}
-                    >
-                      Compare
-                    </button>
+                    {#if canCompare}
+                      <button
+                        type="button"
+                        class="btn"
+                        data-testid="version-history-compare"
+                        data-backup={b.name}
+                        disabled={restoring !== null}
+                        onclick={() => openCompare(b.name)}
+                      >
+                        Compare
+                      </button>
+                    {/if}
                     <button
                       type="button"
                       class="btn"

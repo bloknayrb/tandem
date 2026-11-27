@@ -71,8 +71,11 @@ export function buildDiffRows(
   current: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): DiffRow[] | null {
+  // A difference only in the final newline is not shown: the rows drop the
+  // newline, so it would read as a line removed and re-added unchanged.
   const changes: ChangeObject<string>[] | undefined = diffLines(other, current, {
     timeout: timeoutMs,
+    ignoreNewlineAtEof: true,
   });
   if (changes === undefined) return null;
   if (!changes.some((c) => c.added || c.removed)) return [];

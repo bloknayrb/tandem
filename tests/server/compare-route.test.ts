@@ -214,8 +214,34 @@ describe("GET /api/document/compare", () => {
     await fs.writeFile(filePath, "x".repeat(COMPARE_MAX_BYTES + 10));
     const res = await call({ documentId: id, against: "disk" });
     expect(res._status).toBe(200);
-    expect(data(res).other.length).toBe(COMPARE_MAX_BYTES);
     expect(data(res).truncated).toBe(true);
+    // Both sides stop at the same point: the shorter side's length here.
+    expect(data(res).other).toBe("xxxxxx");
+    expect(data(res).current).toBe("small\n");
+  });
+
+  it("cuts both sides of an over-cap CRLF file at the same line, so an unchanged file shows no difference", async () => {
+    // Few long lines keep the open fast; 25 x 100k chars is past the 2 MB cap.
+    const lines = Array.from({ length: 25 }, (_, i) => `${i}`.padEnd(100_000, "a"));
+    const crlf = `${lines.join("\r\n")}\r\n`;
+    expect(Buffer.byteLength(crlf)).toBeGreaterThan(COMPARE_MAX_BYTES);
+    const { id } = await opened("crlf.txt", crlf);
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(200);
+    const d = data(res);
+    expect(d.truncated).toBe(true);
+    expect(d.other.endsWith("\n")).toBe(true);
+    expect(d.current).toBe(d.other);
+  });
+
+  it("drops a character split by the byte cut", async () => {
+    // 3-byte characters: the byte cap lands mid-character.
+    const text = "\u4e2d".repeat(Math.ceil(COMPARE_MAX_BYTES / 3) + 10);
+    const { id } = await opened("cjk.md", "small\n");
+    const filePath = path.join(tmpDir, "cjk.md");
+    await fs.writeFile(filePath, text);
+    const res = await call({ documentId: id, against: "disk" });
+    expect(data(res).other).not.toContain("\uFFFD");
   });
 });
 
