@@ -1,0 +1,502 @@
+{
+  "src/cli/annotation-store-scan.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/cli/doctor.ts": {
+    "complexity": {
+      "count": 5
+    }
+  },
+  "src/cli/license.ts": {
+    "complexity": {
+      "count": 5
+    }
+  },
+  "src/cli/mcp-stdio.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/cli/rotate-token.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/cli/setup.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/cli/uninstall-scrub.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/actions/builtin.svelte.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/components/integration-wizard-helpers.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/components/toast-focus.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/editor/context-menu/dispatch.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/editor/extensions/annotation.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/editor/extensions/authorship.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "src/client/editor/extensions/awareness.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/editor/utils/markdown-paste.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/editor/utils/paste-whitespace.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/hooks/useAiReadiness.svelte.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/client/hooks/useAppShortcuts.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/hooks/useChatAnswerer.svelte.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/hooks/useDocumentWorkspace.svelte.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/hooks/useIntegrationWizard.svelte.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/hooks/useRadioGroup.svelte.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/hooks/useTandemSettings.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/client/notifications/chimes.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/ownership/owner-view.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/panels/annotation-context-menu-host.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/panels/chat-pickup.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/panels/marginPressure.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/panels/useAnnotationReview.svelte.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/status/status-ai-view.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/client/tabs/tab-context-menu.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/utils/fuzzy-match.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/utils/menuKeys.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/client/utils/word-diff.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/annotations/lifecycle.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/annotations/rename-recovery.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/annotations/schema.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/annotations/sync.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/annotations/write-arbiter.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/documents/open.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/documents/reload-family.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/documents/reload-remap.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/events/delivery-state.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/events/observers/annotations.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/events/observers/ctrl-chat.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/events/observers/ctrl-meta.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/events/queue.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/doc-backup.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/file-io/docx-apply.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "src/server/file-io/docx-comment-export.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/docx-comments.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/server/file-io/docx-export.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/file-io/docx-html.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/docx-lost-features.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/docx-walker.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/file-io/docx.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/mdast-ydoc.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/server/file-io/plaintext-flatten.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/short-names.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/file-io/spike-docx-export.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/index.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/integrations/api-routes.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/integrations/apply.ts": {
+    "complexity": {
+      "count": 8
+    }
+  },
+  "src/server/integrations/install-claude-cli.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/integrations/node-binary.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/launcher/api-routes.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/launcher/run-files.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/launcher/settings.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/launcher/supervisor.ts": {
+    "complexity": {
+      "count": 13
+    }
+  },
+  "src/server/license/license-state.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/local-model/collaborator.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "src/server/local-model/loop.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/local-model/ollama-client.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/local-model/tools.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/annotations.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/awareness.ts": {
+    "complexity": {
+      "count": 6
+    }
+  },
+  "src/server/mcp/channel-routes.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/convert.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/document-model.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/document-service.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/server/mcp/document.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/server/mcp/docx-apply.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/mcp/inbox-cursor.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/owned-op.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/routes/_shared.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/mcp/routes/external-conflict.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/routes/info.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/routes/ownership.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/routes/save.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/mcp/server.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/models/chat-answerer.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "src/server/models/local-model-announced.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/server/positions.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/sessions/ownership-refusal.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/server/sessions/ownership.ts": {
+    "complexity": {
+      "count": 8
+    }
+  },
+  "src/shared/events/types.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/shared/integrations/claude-code-entry.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/shared/integrations/detect-claude-cli.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/shared/sanitize.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/shared/sse-consumer.ts": {
+    "complexity": {
+      "count": 1
+    }
+  }
+}
