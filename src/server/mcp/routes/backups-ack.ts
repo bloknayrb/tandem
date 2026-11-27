@@ -65,10 +65,17 @@ export async function handleAcknowledgeKeptEdits(req: Request, res: Response): P
     res.json({ data: { acknowledged: false } });
     return;
   }
-  const acknowledged = await acknowledgeKeptEdits(
-    docState.filePath,
-    resolveAppDataDir(),
-    backups as string[],
-  );
-  res.json({ data: { acknowledged } });
+  try {
+    const acknowledged = await acknowledgeKeptEdits(
+      docState.filePath,
+      resolveAppDataDir(),
+      backups as string[],
+    );
+    res.json({ data: { acknowledged } });
+  } catch (err) {
+    // Not recorded: say so, so the banner can show its error rather than
+    // vanish and come straight back.
+    console.error("[Backups] could not record a dismissed kept-edits notice:", err);
+    res.status(500).json({ error: "ACK_FAILED", message: "The dismissal could not be saved." });
+  }
 }

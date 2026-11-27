@@ -65,7 +65,9 @@ const status = $derived(
           : phase.kind === "ready"
             ? phase.backups.length === 0
               ? "No backups yet."
-              : `${phase.backups.length} backups.`
+              : phase.backups.length === 1
+                ? "1 backup."
+                : `${phase.backups.length} backups.`
             : "",
 );
 

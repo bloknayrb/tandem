@@ -1722,8 +1722,9 @@ function openVersionHistory(documentId: string): void {
     return;
   }
   // A restore from source view would be undone by the stale draft's next
-  // commit (see the conflict banner's mount comment below).
-  if (documentWorkspace.inSourceView) {
+  // commit (see the conflict banner's mount comment below). Source view is the
+  // active tab's state, so it only matters for the active document.
+  if (documentId === yjsSync.activeTabId && documentWorkspace.inSourceView) {
     notifications.push({
       id: "version-history-source-view",
       type: "general-error",

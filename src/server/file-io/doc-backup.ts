@@ -884,26 +884,32 @@ function withUnseenLock<T>(subdir: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Update a subdir's unseen set under its lock. Never throws; a failure is logged. */
-async function updateUnseen(
+/**
+ * Update a subdir's unseen set under its lock. Resolves whether `change`
+ * changed it; rejects when the change could not be written.
+ */
+function updateUnseen(subdir: string, change: (unseen: Set<string>) => boolean): Promise<boolean> {
+  return withUnseenLock(subdir, async () => {
+    const unseen = await readUnseen(subdir);
+    if (!change(unseen)) return false;
+    // Entries for snapshots that are gone are dropped on every write.
+    const present = new Set(await listSnapshots(subdir, "unsaved"));
+    await writeUnseen(
+      subdir,
+      [...unseen].filter((n) => present.has(n)),
+    );
+    return true;
+  });
+}
+
+/** `updateUnseen` for a keep, where the edits are kept either way: a failure is logged. */
+async function updateUnseenBestEffort(
   subdir: string,
   change: (unseen: Set<string>) => boolean,
-): Promise<boolean> {
-  try {
-    return await withUnseenLock(subdir, async () => {
-      const unseen = await readUnseen(subdir);
-      if (!change(unseen)) return false;
-      // Entries for snapshots that are gone are dropped on every write.
-      const present = new Set(await listSnapshots(subdir, "unsaved"));
-      await writeUnseen(
-        subdir,
-        [...unseen].filter((n) => present.has(n)),
-      );
-      return true;
-    });
-  } catch (err) {
-    console.error("[DocBackup] could not update the unseen kept edits in %s:", subdir, err);
-    return false;
-  }
+): Promise<void> {
+  await updateUnseen(subdir, change).catch((err: unknown) => {
+    console.error("[DocBackup] could not record unseen kept edits in %s:", subdir, err);
+  });
 }
 
 /** `names` (newest first) with the unseen ones moved ahead, each group keeping its order. */
@@ -941,7 +947,8 @@ export async function keptEditsNotice(
  * The user has been shown the kept edits `names` of `filePath` (a Dismiss), or
  * they are back in the document (a restore of that snapshot). Names are only
  * compared with the stored set's strings, so caller-supplied text never
- * reaches the file system. Returns whether any name was unseen. Never throws.
+ * reaches the file system. Resolves whether any name was unseen; rejects when
+ * the change could not be written, so a Dismiss can say it did not take.
  */
 export async function acknowledgeKeptEdits(
   filePath: string,
@@ -1016,7 +1023,9 @@ export async function snapshotUnsavedEdits(
       const timestamp = touched
         ? now.toISOString()
         : new Date((await fs.stat(path.join(subdir, identical))).mtimeMs).toISOString();
-      if (opts.unseen) await updateUnseen(subdir, (u) => !u.has(identical) && !!u.add(identical));
+      if (opts.unseen) {
+        await updateUnseenBestEffort(subdir, (u) => !u.has(identical) && !!u.add(identical));
+      }
       return { outcome: "skipped-identical", name: identical, timestamp };
     }
 
@@ -1044,7 +1053,7 @@ export async function snapshotUnsavedEdits(
     const st = await fs.stat(snapshotPath);
     if (opts.unseen) {
       const name = path.basename(snapshotPath);
-      await updateUnseen(subdir, (u) => !!u.add(name));
+      await updateUnseenBestEffort(subdir, (u) => !!u.add(name));
     }
     console.error(
       `[DocBackup] Kept unsaved edits of ${path.basename(filePath)} -> ${snapshotPath}`,

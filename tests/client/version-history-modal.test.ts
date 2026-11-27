@@ -252,6 +252,8 @@ describe("backups formatting", () => {
     const a = formatBackupAge("2026-06-01T09:00:00Z", now);
     const c = formatBackupAge("2026-06-01T17:00:00Z", now);
     expect(a).not.toBe(c);
+    // The cutoff and the wording read the same clock.
+    expect(formatBackupAge("2026-06-02T10:00:00Z", now)).toBe("2h ago");
   });
 
   it("sizes", () => {

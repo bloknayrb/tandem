@@ -400,6 +400,22 @@ describe('restoreDocumentFromBackup with actor: "user"', () => {
     expect(await noticeFor(filePath)).toBeNull();
   });
 
+  it("a restore that fails after writing a kept snapshot back still marks it seen", async () => {
+    const { filePath, id } = await openWithUnsavedEdits("late.md", "disk\n", "edits\n");
+    const kept = await claudeForceOpen(filePath);
+    const watcher = await import("../../src/server/documents/watcher.js");
+    const spy = vi.spyOn(watcher, "reloadFromDisk").mockResolvedValue(false);
+    try {
+      await expect(
+        restoreDocumentFromBackup(id, kept, { keepUnsavedEdits: true, actor: "user" }),
+      ).rejects.toMatchObject({ code: "RELOAD_IN_PROGRESS" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(filePath, "utf-8")).toContain("edits");
+    expect(await noticeFor(filePath)).toBeNull();
+  });
+
   it("a Claude restore's keep still raises the banner", async () => {
     const { filePath, good } = await withGoodSnapshot("claude.md");
     const { id } = await openWithUnsavedEdits("claude.md", "good\n", "edits\n");
@@ -581,6 +597,23 @@ describe("POST /api/backups/acknowledge", () => {
       await handleAcknowledgeKeptEdits(req({ body } as Partial<Request>), res);
       expect(res._status, JSON.stringify(body)).toBe(status);
     }
+  });
+
+  it("answers 500 when the dismissal cannot be saved, so the banner can say so", async () => {
+    const { filePath, id } = await openWithUnsavedEdits("ackfail.md", "disk\n", "edits\n");
+    const kept = await claudeForceOpen(filePath);
+    const spy = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EPERM" }));
+    try {
+      const res = mockRes();
+      await handleAcknowledgeKeptEdits(req({ body: { documentId: id, backups: [kept] } }), res);
+      expect(res._status).toBe(500);
+      expect((res._json as { error: string }).error).toBe("ACK_FAILED");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await noticeFor(filePath)).toMatchObject({ names: [kept] });
   });
 
   it("an unknown name acknowledges nothing", async () => {

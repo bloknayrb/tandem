@@ -156,7 +156,8 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
         error: "BACKUP_FAILED",
         message:
           "Couldn't keep a backup of your unsaved edits first, so nothing was restored. " +
-          "Tandem's backup folder may be full or not writable.",
+          "Tandem's backup folder may be full or not writable; if it is full, restoring " +
+          "anyway can't keep a copy of the file's current version either.",
       });
       return;
     }

@@ -541,6 +541,17 @@ export async function restoreDocumentFromBackup(
     } finally {
       rearmWatch(existing.filePath);
     }
+    // Kept edits a banner may be pointing at are in the file now, whoever
+    // restored them, and stay there if the reload below fails. Before any
+    // notice goes out, so a client re-reading on it finds them seen. (The
+    // Version history's own keeps were never unseen.) Best-effort: the
+    // restore does not depend on it.
+    if (snapshotKind(backupName) === "unsaved" && !useSidecar) {
+      await acknowledgeKeptEdits(existing.filePath, appDataDir, [backupName]).catch(
+        (ackErr: unknown) =>
+          console.error("[Restore] could not mark %s as seen:", backupName, ackErr),
+      );
+    }
     // The early reloadInProgress check above closes the common case, but a
     // watcher reload can still start during the awaits since that check. A
     // silent skip here would report success while the Y.Doc still holds
@@ -599,13 +610,6 @@ export async function restoreDocumentFromBackup(
           )
         : undefined) ?? keptBefore)
     : undefined;
-
-  // Kept edits a banner may be pointing at are back in the document, whoever
-  // restored them. Before any notice goes out, so a client re-reading on it
-  // finds them seen. (The Version history's own keeps were never unseen.)
-  if (snapshotKind(backupName) === "unsaved" && !useSidecar) {
-    await acknowledgeKeptEdits(existing.filePath, appDataDir, [backupName]);
-  }
 
   if (unsavedEditsKept && actor === "claude") {
     // The kept-edits notice replaces the plain one: it says the same thing and

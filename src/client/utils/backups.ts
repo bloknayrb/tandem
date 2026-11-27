@@ -151,7 +151,7 @@ export function formatBackupTimestamp(iso: string): string {
 export function formatBackupAge(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
-  return now - t < 24 * 60 * 60 * 1000 ? formatRelativeTime(t) : formatBackupTimestamp(iso);
+  return now - t < 24 * 60 * 60 * 1000 ? formatRelativeTime(t, now) : formatBackupTimestamp(iso);
 }
 
 /** A size for a row: bytes under 1 KB, else KB or MB with one decimal. */
