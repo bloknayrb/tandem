@@ -684,19 +684,21 @@ describe("a follow-up in a thread Claude answered starts Claude (#2360 PR B; Bry
 });
 
 describe("the flip-blocker rows PR B closes (#2360)", () => {
-  it("rows H and W and the chat replyTo row are gone; the PR A document-room row stays", async () => {
+  it("rows H and W and the chat replyTo row are gone; so is the PR A document-room row (guard dropped 2026-11-26)", async () => {
     const { OWNERSHIP_FLIP_BLOCKERS } = await import("./ownership-flip-blockers.js");
     const rows = OWNERSHIP_FLIP_BLOCKERS.map((r) => r.gap);
     for (const closed of [
       "The handled filter for comment threads",
       "Answered work starts Tandem's Claude",
       "A Claude chat row forged by a browser client",
+      "#2360 PR A drops update data",
     ]) {
       expect(
         rows.some((g) => g.startsWith(closed)),
         closed,
       ).toBe(false);
     }
-    expect(rows.some((g) => g.startsWith("#2360 PR A drops update data"))).toBe(true);
+    // The CTRL pending row stays, accepted for the flip (S8: WKWebView not run).
+    expect(rows.some((g) => g.startsWith("The posts PR drops CTRL-doc update data"))).toBe(true);
   });
 });

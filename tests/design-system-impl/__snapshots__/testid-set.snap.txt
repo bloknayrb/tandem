@@ -550,6 +550,7 @@ settings-modal-solo-rail-hidden-toggle
 settings-modal-tab-{*}
 settings-modal-tandem-claude
 settings-modal-tandem-claude-absent
+settings-modal-tandem-claude-access-denied
 settings-modal-tandem-claude-bind-failed
 settings-modal-tandem-claude-bound-transport
 settings-modal-tandem-claude-bound-transports

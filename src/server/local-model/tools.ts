@@ -103,6 +103,26 @@ export interface ToolOutcome {
     | { kind: "refused"; tool: string; errorCode: "EDITING_OFF" | "UNKNOWN_TOOL" };
 }
 
+/** `reply_to_annotation`'s description while the local model may not reply
+ *  in a user's thread: byte-identical to the text before #2360. */
+const REPLY_DESCRIPTION_OWN =
+  "Reply to a pending comment thread you or another AI authored, by its annotation id. Comments written by the user cannot be replied to (NOT_OWNED, or INVALID_ARGUMENT for a private one); leave a new comment_on_quote instead.";
+
+/** With ownership on, a user's shared comment takes the local model's reply
+ *  too (#2360, Bryan's Q2), so the description stops saying it is refused. */
+const REPLY_DESCRIPTION_USER_THREADS =
+  "Reply to a pending comment thread by its annotation id: one you or another AI authored, or one the user wrote and shared with you. A private note or comment, or a highlight an AI authored, returns INVALID_ARGUMENT, and an imported record or the user's highlight NOT_OWNED; leave a new comment_on_quote instead.";
+
+/**
+ * `reply_to_annotation`'s description (#2360 PR C), decided by the gate its
+ * dispatch passes to the seam (`clientWritesUndoneGrant()`, fail-closed), so
+ * what the model is told matches what it is allowed. Dark, or unwired, it is
+ * the text from before #2360, byte for byte.
+ */
+export function replyToAnnotationDescription(): string {
+  return clientWritesUndoneGrant() ? REPLY_DESCRIPTION_USER_THREADS : REPLY_DESCRIPTION_OWN;
+}
+
 export const TOOLS: ToolSchema[] = [
   {
     name: "get_outline",
@@ -167,8 +187,11 @@ export const TOOLS: ToolSchema[] = [
   },
   {
     name: "reply_to_annotation",
-    description:
-      "Reply to a pending comment thread you or another AI authored, by its annotation id. Comments written by the user cannot be replied to (NOT_OWNED, or INVALID_ARGUMENT for a private one); leave a new comment_on_quote instead.",
+    // #2360 PR C: read at each access (`toOpenAITools` reads it per request),
+    // so it follows the same gate as the dispatch below. Never cached.
+    get description() {
+      return replyToAnnotationDescription();
+    },
     parameters: {
       type: "object",
       properties: {

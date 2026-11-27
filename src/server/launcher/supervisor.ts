@@ -79,11 +79,17 @@ import {
   deleteRunFile,
   ensureLauncherDir,
   launcherDirFor,
+  listInstalledTandemPluginKeys,
   loopbackBaseUrl,
+  type PluginListLookup,
   type RunFileAcl,
   RunFileError,
+  type RunFileReadBackReason,
   realRunFileAcl,
+  runFileReadsBack,
+  runFileText,
   sweepRunFiles,
+  TANDEM_PLUGIN_KEY_MAX_LENGTH,
   writeRunFile,
 } from "./run-files.js";
 import {
@@ -380,6 +386,18 @@ interface SupervisorOpts {
   stdioBridgeScript?: string;
   /** Test-only override for `os.homedir()` when finding the user settings file. */
   claudeSettingsHome?: string;
+  /**
+   * The installed-plugin lookup run before each spawn's run files are written
+   * (smoke S1 on Windows; Bryan, 2026-11-26, "Ask Claude Code
+   * (Recommended)"). Defaults to `listInstalledTandemPluginKeys`, which runs
+   * `<claudeBin> plugin list --json`. A seam so a spawn test answers it
+   * without running a CLI. Never passed by `index.ts`. Ownership on only.
+   */
+  listInstalledPlugins?: (opts: {
+    claudeBin: string;
+    env: NodeJS.ProcessEnv;
+    cwd: string;
+  }) => Promise<PluginListLookup>;
   /** Test-only: the run files' 32-hex name suffix, so a test can plant a file
    * or a link at the name. Never passed by `index.ts`. */
   runFileNameSuffix?: (kind: "mcp" | "settings") => string;
@@ -458,8 +476,24 @@ interface SpawnRun {
   readonly bind: SpawnBind;
   readonly mcpConfigPath: string;
   readonly settingsPath: string;
+  /** What each file was written to hold, for the pre-spawn read-back. */
+  readonly mcpConfigText: string;
+  readonly settingsText: string;
   readonly args: readonly string[];
   discard(): void;
+}
+
+/** A spawn refused by the pre-spawn read-back of its run files (`spawnOnce`).
+ * Its message names the file's kind and the closed-set reason, never its path
+ * or contents. */
+export class RunFileGuardError extends Error {
+  constructor(
+    readonly kind: "MCP config" | "settings file",
+    readonly reason: RunFileReadBackReason,
+  ) {
+    super(`the run ${kind} does not read back as written (${reason})`);
+    this.name = "RunFileGuardError";
+  }
 }
 
 /** Why a spawn was torn down (#2358 PR 3b-1, Terms). The first set wins. */
@@ -821,6 +855,88 @@ const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sess
  * differently this does not match, which fails soft to the old behaviour.
  */
 const NOT_SIGNED_IN_RESULT = /^Not logged in\b/;
+
+/** The one HTTP status an `api_error_status` reports for a credential that
+ * is not valid: 401 (Bryan, 2026-11-27, "401 only signs out (Recommended)"). */
+const AUTH_FAILURE_STATUS = 401;
+/** The status of a valid credential refused access (Bryan, 2026-11-27): an
+ * access error, surfaced, never a sign-out (`accessErrorOf`). */
+const ACCESS_DENIED_STATUS = 403;
+
+/**
+ * Which sign-in failure, if any, a `result` envelope reports (#1780; smoke S3
+ * on #2358, Bryan's "Treat it like signed out (Recommended)", 2026-11-26,
+ * narrowed by his "401 only signs out (Recommended)", 2026-11-27). Both end
+ * presence the same way; only the log line differs.
+ *
+ * - `not-signed-in`: the never-signed-in refusal, `NOT_SIGNED_IN_RESULT`.
+ * - `auth-refused`: any other `is_error` result whose `api_error_status` is
+ *   401 (S3 measured an invalid API key on Windows, Claude Code 2.1.332:
+ *   `{"type":"result","subtype":"success","is_error":true,"result":
+ *   "Invalid API key · Fix external API key","terminal_reason":"api_error",
+ *   "api_error_status":401}`). Keyed on the status, not the text, so an expired
+ *   or revoked credential worded differently still matches. A 403 is NOT a
+ *   sign-in failure: the credential was accepted and the request refused
+ *   (an organization or permission rule), so signing in again cannot fix it;
+ *   `accessErrorOf` reports it instead. Any other API error, a 529 overload
+ *   or a 500 among them, does not match either: the next turn may succeed.
+ *
+ * `is_error` must be exactly `true`: a successful answer that quotes either
+ * never matches. The envelope is the child's untyped JSON, so every field is
+ * type-checked before use.
+ */
+export function signInFailureOf(parsed: {
+  is_error?: unknown;
+  result?: unknown;
+  api_error_status?: unknown;
+}): "not-signed-in" | "auth-refused" | null {
+  if (parsed.is_error !== true) return null;
+  if (typeof parsed.result === "string" && NOT_SIGNED_IN_RESULT.test(parsed.result)) {
+    return "not-signed-in";
+  }
+  if (parsed.api_error_status === AUTH_FAILURE_STATUS) return "auth-refused";
+  return null;
+}
+
+/** The longest result text an access error's log line carries. */
+export const ACCESS_ERROR_TEXT_MAX = 200;
+
+/**
+ * An access error (Bryan, 2026-11-27, "401 only signs out (Recommended)"):
+ * an `is_error` result whose `api_error_status` is 403, answered with its
+ * result text made safe to log, or `null` for any other envelope. Tandem's
+ * Claude keeps running — no trip, no breaker, no sign-in remedy — and the
+ * status shows `accessDenied` until a turn succeeds or the next spawn.
+ *
+ * The text is Claude Code's, so it is treated as untrusted: control and
+ * bidi-formatting characters become spaces, anything shaped like a key (`sk-…`, or 24 or more
+ * key characters in a row) becomes `[redacted]` BEFORE the cut, so a key
+ * never survives partly, and it is cut to {@link ACCESS_ERROR_TEXT_MAX}.
+ */
+export function accessErrorOf(parsed: {
+  is_error?: unknown;
+  result?: unknown;
+  api_error_status?: unknown;
+}): string | null {
+  if (parsed.is_error !== true || parsed.api_error_status !== ACCESS_DENIED_STATUS) return null;
+  if (typeof parsed.result !== "string") return "(no message)";
+  const text = parsed.result
+    // Bidi marks, overrides and isolates too (U+200E/F, U+202A-E,
+    // U+2066-9): they would let the untrusted text reorder how the rest of
+    // the log line reads.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, " ")
+    .replace(/\bsk-[A-Za-z0-9_-]*/g, "[redacted]")
+    .replace(/[A-Za-z0-9_+/=-]{24,}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text === "") return "(no message)";
+  if (text.length <= ACCESS_ERROR_TEXT_MAX) return text;
+  // Never end on half a surrogate pair: a lone high surrogate is not text.
+  const cut = text.slice(0, ACCESS_ERROR_TEXT_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  return `${last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut}…`;
+}
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
  * an attacker-controlled value flowing into `--resume` could hijack
@@ -1061,6 +1177,9 @@ export type SupervisorStatus =
       greetingLate?: true;
       /** Not woken while a local model answers chat (#1123 A2, R4.5). */
       heldForLocalModel?: true;
+      /** The last API error was a 403 and no turn has succeeded since — see
+       * `LauncherStatus`. */
+      accessDenied?: true;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -1612,6 +1731,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const getBoundMcpAddress = opts.getBoundMcpAddress ?? (() => null);
   const storeLockHeld = opts.storeLockHeld ?? isStoreLockHeld;
   const runFileAcl = opts.runFileAcl ?? realRunFileAcl;
+  const listInstalledPlugins = opts.listInstalledPlugins ?? listInstalledTandemPluginKeys;
   /** The boot sweep runs once per supervisor (R1.9). */
   let runFilesSwept = false;
   /** Run-file deletions still in flight (#2358 PR 3a review, item 9). A
@@ -2388,6 +2508,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let opLock: Promise<void> = Promise.resolve();
   /** Last fatal error message — surfaced via status() when running=false. */
   let lastError: LauncherErrorCode | undefined;
+  /** The current child's last API error was a 403 (`accessErrorOf`), and no
+   * turn has succeeded since. Not a `lastError`: that is a stopped Claude's
+   * diagnosis, and this one keeps running. Cleared by every spawn. */
+  let accessDenied = false;
   function withLock<T>(fn: () => Promise<T>): Promise<T> {
     const next = opLock.then(fn, fn);
     opLock = next.then(
@@ -2397,7 +2521,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return next;
   }
 
-  // --- Tandem's Claude's run state (#2358 PR 3b-1, ships dark) -------------
+  // --- Tandem's Claude's run state (#2358 PR 3b-1) -------------
   //
   // Computed here and consumed by nothing yet (3b-2 is its first reader).
   // Every write below is flag-on only: flag off no spawn record exists, no
@@ -3167,8 +3291,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * usable bridge script, a bound address that is not a loopback literal, or
    * any fail-closed step of R1.6. One line names the failed step, never a
    * file's contents, and nothing is left behind.
+   *
+   * The settings file's keys include every `tandem@…` key Claude Code itself
+   * reports installed (`claudeBin plugin list --json`, smoke S1 on Windows: an
+   * account-synced `tandem@synced` is in no settings file). The lookup runs
+   * beside the directory checks, before the settings reads and any write, and
+   * is bounded by `PLUGIN_LIST_DEADLINE_MS`. It falls back to S1's pre-fix
+   * state, not to safety: no answer writes only the keys the settings files and
+   * `ALWAYS_DISABLED_PLUGIN_KEY` give, after one line naming the reason, so an
+   * account-synced key it would have found stays enabled for that run.
    */
-  async function prepareRun(plan: SpawnPlan): Promise<SpawnRun | null> {
+  async function prepareRun(plan: SpawnPlan, claudeBin: string): Promise<SpawnRun | null> {
     const baseUrl = loopbackBaseUrl(getBoundMcpAddress());
     if (baseUrl === null) {
       console.error(
@@ -3213,11 +3346,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         },
       });
       const dir = launcherDirFor(opts.integrationsBase);
+      const env = childEnv();
+      // Started first, awaited after the directory checks: it never rejects,
+      // so leaving it in flight when a check throws loses nothing.
+      const installedLookup = listInstalledPlugins({ claudeBin, env, cwd: plan.cwd }).catch(
+        (): PluginListLookup => ({ ok: false, reason: "spawn" }),
+      );
       await ensureLauncherDir(dir, { create: true, acl: runFileAcl });
+      const installed = await installedLookup;
+      if (!installed.ok) {
+        console.error(
+          `[Launcher] Could not list Claude Code's installed plugins (${installed.reason}) — disabling only the Tandem plugin keys its settings files name`,
+        );
+      } else if (installed.dropped > 0) {
+        // A count, never a key: the ids are Claude Code's, unscreened.
+        console.error(
+          `[Launcher] Claude Code listed ${installed.dropped} Tandem plugin id(s) over ${TANDEM_PLUGIN_KEY_MAX_LENGTH} characters — not disabling them`,
+        );
+      }
       const keys = await collectTandemPluginKeys({
-        env: childEnv(),
+        env,
         cwd: plan.cwd,
         ...(opts.claudeSettingsHome !== undefined ? { home: opts.claudeSettingsHome } : {}),
+        ...(installed.ok ? { installed: installed.keys } : {}),
       });
       // #2440: the two files' per-file checks (on Windows each a PowerShell
       // `Get-Acl` read) run at the same time. Everything that could throw is
@@ -3252,6 +3403,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         bind,
         mcpConfigPath,
         settingsPath,
+        mcpConfigText: runFileText(mcpValue),
+        settingsText: runFileText(settingsValue),
         args: ["--mcp-config", mcpConfigPath, "--settings", settingsPath],
         discard,
       };
@@ -3325,14 +3478,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   /** `claudeBin` is the caller's `resolveCommand()` answer — absolute, never a
    * bare name (#2199). The caller resolves it, so a missing CLI is answered on
    * its own terms (`cli-unusable`) rather than as a spawn failure. */
+  /** `fromRespawn`: called by `respawn` (a Relaunch, Start fresh or Start, or
+   * a start nobody clicked that takes the same path). A run-file refusal then
+   * schedules no restart — the caller reports the throw (the route's 500, or
+   * `recordStartThrow`), as it does every other throw out of `respawn`, so the
+   * answer and the status chip agree and the breaker counts nothing. */
   async function spawnOnce(
     plan: SpawnPlan,
     idleLimitMs: number | null,
     claudeBin: string,
     run: SpawnRun | null = null,
+    fromRespawn = false,
   ): Promise<ChildProcess> {
     // A throw before `spawn()` returns ends this spawn's run state (R4.4):
-    // "already running", a missing reaper, a synchronous spawn throw.
+    // "already running", a missing reaper, the run files' read-back, a
+    // synchronous spawn throw.
     if (child) {
       run?.discard();
       throw new Error("Supervisor already running — call stop() first");
@@ -3355,6 +3515,41 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const claudeArgs = buildClaudeArgs(plan, run ?? undefined);
 
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
+
+    // The run files' read-back (smoke S1; Bryan, 2026-11-26, "Guard it before
+    // the flip (Recommended)"): Claude Code silently ignores a `--settings`
+    // file it cannot parse, so the plugin's Tandem toolset would load beside
+    // the launcher's. Synchronous and as late as it can be, with no `await`
+    // from here to `spawn()`. It cannot see a file changed after this point
+    // and before Claude Code reads it, about half a second after start
+    // (`runFileReadsBack`'s TOCTOU paragraph). A read held by another process
+    // (EBUSY, EPERM, EACCES) is retried once there, after a synchronous wait of
+    // at most 100 ms, so the invariant holds. A refusal is one line naming the
+    // kind and the closed-set reason, then the crash path the long-lived
+    // "error" handler below takes for a failed spawn: `spawn-failed` and a
+    // restart under the breaker, unless a stop is under way or the spawn came
+    // from `respawn` (`fromRespawn`: its caller reports the throw, and a
+    // restart a moment later would contradict that report — #2599 review).
+    // The throw ends this spawn's run state like any other throw before
+    // `spawn()` (R4.4).
+    if (run) {
+      const mcpCheck = runFileReadsBack(run.mcpConfigPath, run.mcpConfigText);
+      const settingsCheck = mcpCheck.ok
+        ? runFileReadsBack(run.settingsPath, run.settingsText)
+        : mcpCheck;
+      const err = !mcpCheck.ok
+        ? new RunFileGuardError("MCP config", mcpCheck.reason)
+        : !settingsCheck.ok
+          ? new RunFileGuardError("settings file", settingsCheck.reason)
+          : null;
+      if (err !== null) {
+        run.discard();
+        console.error(`[Launcher] Not spawning: ${err.message}`);
+        setLastError("spawn-failed");
+        if (!stopRequested && !fromRespawn) scheduleRestart();
+        throw err;
+      }
+    }
 
     console.error(
       `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${sessionIdForLog(plan.sessionId)} resuming=${plan.resuming}`,
@@ -3446,6 +3641,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
     setLastError(undefined);
+    accessDenied = false;
     lastRefusal = null;
     deliveryKillAt = undefined;
     setStandby(undefined);
@@ -4010,6 +4206,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         is_error?: boolean;
         errors?: string[];
         result?: unknown;
+        api_error_status?: unknown;
         permission_denials?: unknown;
       };
       try {
@@ -4089,12 +4286,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // retrying cannot help, and the pending wake's write would only earn
         // another refusal, so return before `flushPendingWake`. The kill does
         // not go through `onStdinGone`, so it never counts toward the
-        // wake-delivery streak.
-        if (
-          parsed.is_error === true &&
-          typeof parsed.result === "string" &&
-          NOT_SIGNED_IN_RESULT.test(parsed.result)
-        ) {
+        // wake-delivery streak. A credential that is not valid (a 401, smoke
+        // S3) is treated the same way (`signInFailureOf`): same code, same
+        // trip, same not-present; only its one log line differs. A 403 is not
+        // (`accessErrorOf`, below).
+        const signInFailure = signInFailureOf(parsed);
+        if (signInFailure !== null) {
           if (child === spawned) {
             // The sign-in trip (#2358 PR 3b-1, amendment 2): its cause first,
             // and its not-present at once, identified by this site.
@@ -4105,7 +4302,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             loginRecheckOwed = true;
             persistLoginRecheck(plan.sessionId, true);
             console.error(
-              "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
+              signInFailure === "not-signed-in"
+                ? "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again."
+                : "[Launcher] Claude Code's sign-in or API key is not valid (HTTP 401) — not retrying. Fix the sign-in or API key Claude Code uses (run `claude` in a terminal), then use Check again.",
             );
             // Its handle stops binding now, not when the exit arrives (R4.4).
             run?.discard();
@@ -4122,6 +4321,32 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         if (child === spawned && loginRecheckOwed) {
           loginRecheckOwed = false;
           persistLoginRecheck(plan.sessionId, false);
+        }
+
+        // An access error, a 403 (Bryan, 2026-11-27, "401 only signs out
+        // (Recommended)"): the credential was accepted and the request
+        // refused, so signing in again cannot help. Tandem's Claude keeps
+        // running — no trip, no breaker, no sign-in chip — and the turn ends
+        // as any other. Logged once until a turn succeeds (each wake would
+        // otherwise repeat it), and shown in Settings through the status's
+        // `accessDenied`.
+        if (child === spawned) {
+          const accessError = accessErrorOf(parsed);
+          if (accessError !== null) {
+            if (!accessDenied) {
+              console.error(
+                `[Launcher] Claude Code's API access was refused (HTTP 403): "${accessError}" — Tandem's Claude keeps running. Check the account, organization or API key permissions Claude Code uses.`,
+              );
+            }
+            accessDenied = true;
+          } else if (
+            parsed.is_error !== true &&
+            !(typeof parsed.subtype === "string" && parsed.subtype.startsWith("error"))
+          ) {
+            // A turn that succeeded: the same "errored" test the greeting
+            // uses above, so an `error_*` subtype does not count as one.
+            accessDenied = false;
+          }
         }
 
         // NOTE (#1267): `errors` was not seen during the spike; the #2358 S2
@@ -4728,7 +4953,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // a failed write awaited too, and a stop can have landed during it.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      run = await prepareRun(plan);
+      run = await prepareRun(plan, claudeBin);
       const why =
         child !== null
           ? "a Claude started meanwhile"
@@ -4764,6 +4989,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run);
       armBackoffReset(spawned);
     } catch (err) {
+      // The run files' read-back has logged its one line and taken the crash
+      // path already (`spawnOnce`).
+      if (err instanceof RunFileGuardError) return;
       console.error("[Launcher] Spawn failed:", err);
       // A synchronous `spawn()` throw sets no code anywhere else (#2145), so a
       // boot or crash-restart start would read as a clean stop. Same idiom as
@@ -5081,7 +5309,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // the lock) and the licence can move. Flag off, nothing here runs.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      run = await prepareRun(plan);
+      run = await prepareRun(plan, claudeBin);
       const refusal = decideRefusal();
       if (refusal) {
         run?.discard();
@@ -5107,7 +5335,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return { spawned: false, why: "held-by-local-model" };
       }
     }
-    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run));
+    armBackoffReset(
+      await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run, true),
+    );
     return { spawned: true };
   }
 
@@ -5391,6 +5621,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
           : {}),
         ...(bindFailed() ? { bindFailed: true as const } : {}),
+        ...(accessDenied ? { accessDenied: true as const } : {}),
       };
     }
     // A `cli-unusable` with no crash behind it (#2199) is a reading of the
@@ -5578,7 +5809,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return;
     }
     if (child === null && lastError === undefined) setLastError("spawn-failed");
-    console.error(`[Launcher] ${label}:`, err);
+    // The run files' read-back has logged its one line already (`spawnOnce`).
+    if (!(err instanceof RunFileGuardError)) console.error(`[Launcher] ${label}:`, err);
   }
 
   async function refreshConfigured(): Promise<void> {

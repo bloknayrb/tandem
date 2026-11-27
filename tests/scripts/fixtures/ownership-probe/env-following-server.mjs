@@ -1,10 +1,11 @@
 // A stand-in for dist/server/index.js, booted by scripts/ci/ownership-bundle-probe.mjs
 // through its `--entry` test seam (tests/scripts/ownership-flag-on-wiring.test.ts).
 //
-// It behaves like a bundle WITHOUT the ownership define: it hashes session ids
-// in its log line exactly when TANDEM_OWNERSHIP=1 is in its environment. So the
-// probe's `--expect off` must FAIL against it (the probe gives the child the
-// variable) and `--expect on` must FAIL too (the probe gives it none). It also
+// It behaves like a bundle WITHOUT the ownership define, as `ownershipEnabled()`
+// falls back since the flip: it hashes session ids in its log line when
+// TANDEM_OWNERSHIP is unset (the bundled `true` literal) or exactly "1". So the
+// probe's `--expect off` must FAIL against it (the probe gives the child "1")
+// and `--expect on` must FAIL too (the probe gives it "0"). It also
 // refuses to start unless the probe isolated its home, so a probe that started
 // inheriting the parent's environment fails here.
 import { createHash, randomUUID } from "node:crypto";
@@ -15,7 +16,7 @@ if (!home.includes("tandem-ownership-probe-") || process.env.TANDEM_AUTH_TOKEN !
   process.stderr.write(`fixture: environment not isolated (HOME=${home})\n`);
   process.exit(2);
 }
-const hashed = process.env.TANDEM_OWNERSHIP === "1";
+const hashed = process.env.TANDEM_OWNERSHIP === undefined || process.env.TANDEM_OWNERSHIP === "1";
 const show = (id) =>
   hashed ? `#${createHash("sha256").update(id).digest("hex").slice(0, 8)}` : id;
 

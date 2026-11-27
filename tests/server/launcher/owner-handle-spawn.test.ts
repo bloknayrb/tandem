@@ -20,14 +20,19 @@ import type { IntegrationsFile } from "../../../src/server/integrations/schema.j
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
   deleteRunFile,
+  listInstalledTandemPluginKeys,
+  type PluginListExec,
+  RUN_FILE_READ_BACK_REASONS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
+  TANDEM_PLUGIN_KEY_MAX_LENGTH,
 } from "../../../src/server/launcher/run-files.js";
 import {
   buildClaudeArgs,
   childEnv,
   createSupervisor as createRealSupervisor,
   LicenseRefusedError,
+  RunFileGuardError,
   type Supervisor,
 } from "../../../src/server/launcher/supervisor.js";
 import type { AiRefusal } from "../../../src/server/license/ai-refusal.js";
@@ -332,6 +337,105 @@ describe("each spawn gets a handle and its run files (R1)", () => {
     expect(records("spawn-")).toEqual([]);
     expect(fs.existsSync(launcherDir())).toBe(false);
     expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+});
+
+// Smoke S1 on Windows (#2358, 2026-11-26; Bryan's "Ask Claude Code
+// (Recommended)"): an account-synced `tandem@synced` is in no settings file,
+// so only Claude Code's own plugin list names it.
+describe("the installed-plugin lookup before the write (smoke S1, Windows)", () => {
+  async function settingsOfFirstSpawn() {
+    const [spawnRec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn record");
+    const run = await waitFor(() => runRecordFor(spawnRec.pid), "the run-files record");
+    return { spawnRec, run };
+  }
+
+  it("a tandem@synced key only the lookup reports is disabled; the lookup gets the child's binary, cwd and environment", async () => {
+    const asked: { claudeBin: string; env: NodeJS.ProcessEnv; cwd: string }[] = [];
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async (o) => {
+        asked.push(o);
+        return { ok: true, keys: ["tandem@synced"], dropped: 0 };
+      },
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({
+      enabledPlugins: { "tandem@synced": false, "tandem@tandem-editor": false },
+    });
+    expect(asked).toHaveLength(1);
+    expect(asked[0].claudeBin).toBe(process.env.TANDEM_CLAUDE_CMD);
+    expect(asked[0].cwd).toBe(spawnDir);
+    expect(asked[0].env).toEqual(childEnv());
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([]);
+  });
+
+  it("a failed lookup still spawns with the known key, after one line naming the reason", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async () => ({ ok: false, reason: "timeout" }),
+    });
+    await sup.startFresh(spawnDir);
+    const { spawnRec, run } = await settingsOfFirstSpawn();
+    expect(flagsIn(spawnRec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([
+      "[Launcher] Could not list Claude Code's installed plugins (timeout) — disabling only the Tandem plugin keys its settings files name",
+    ]);
+  });
+
+  it("a lookup that rejects (a broken seam) falls back the same way", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: () => Promise.reject(new Error("boom")),
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(errors().filter((l) => l.includes("installed plugins"))).toHaveLength(1);
+  });
+
+  // Review of #2599, item 1: `prepareRun` awaits the lookup under the
+  // supervisor lock, so a runner that never calls back (a grandchild holding
+  // stdout) blocked every start. The real lookup's own deadline settles it.
+  it("a runner that never calls back settles at the lookup's deadline and the spawn proceeds", async () => {
+    const errors = captureErrors();
+    let destroyed = 0;
+    const neverAnswers: PluginListExec = () => ({
+      stdout: { destroy: () => destroyed++ },
+    });
+    const sup = makeSupervisor({
+      listInstalledPlugins: (o) =>
+        listInstalledTandemPluginKeys({ ...o, deadlineMs: 20, exec: neverAnswers }),
+    });
+    await sup.startFresh(spawnDir);
+    const { spawnRec, run } = await settingsOfFirstSpawn();
+    expect(flagsIn(spawnRec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(destroyed).toBe(1);
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([
+      "[Launcher] Could not list Claude Code's installed plugins (timeout) — disabling only the Tandem plugin keys its settings files name",
+    ]);
+  });
+
+  // Review of #2599, item 4: a dropped id is counted in the log, never named.
+  it("ids the lookup dropped are counted in one line, never named", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async () => ({ ok: true, keys: ["tandem@synced"], dropped: 2 }),
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({
+      enabledPlugins: { "tandem@synced": false, "tandem@tandem-editor": false },
+    });
+    expect(errors().filter((l) => l.includes("plugin id"))).toEqual([
+      `[Launcher] Claude Code listed 2 Tandem plugin id(s) over ${TANDEM_PLUGIN_KEY_MAX_LENGTH} characters — not disabling them`,
+    ]);
   });
 });
 
@@ -897,6 +1001,156 @@ describe("teardown on every exit path (R4)", () => {
       ).not.toBeNull();
     },
   );
+});
+
+/**
+ * The run files' read-back before the spawn (smoke S1, Claude Code 2.1.332 on
+ * Linux: a truncated `--settings` file is ignored silently, so the plugin's
+ * Tandem toolset loads beside the launcher's; Bryan, 2026-11-26, "Guard it
+ * before the flip (Recommended)"). The hold damages the first spawn's files
+ * after the write and before the spawn; the crash restart's are left alone.
+ */
+describe("the run files are read back before the spawn (S1)", () => {
+  const GUARD_LINE = (kind: string, reason: string) =>
+    `[Launcher] Not spawning: the run ${kind} does not read back as written (${reason})`;
+
+  type Damage = "delete" | "truncate" | "swap" | "none";
+  /** Damage the first spawn's file of `kind` (`"mcp"` or `"settings"`). */
+  function damageOnce(kind: "mcp" | "settings", how: Damage) {
+    let calls = 0;
+    return async () => {
+      calls += 1;
+      if (calls > 1 || how === "none") return;
+      const name = runFilesOnDisk().find((n) => n.startsWith(`tandem-run-${kind}-`));
+      if (!name) throw new Error(`no ${kind} run file to damage`);
+      const file = path.join(launcherDir(), name);
+      const text = fs.readFileSync(file, "utf8");
+      if (how === "delete") fs.unlinkSync(file);
+      else if (how === "truncate") fs.writeFileSync(file, text.slice(0, text.length >> 1));
+      // Same length, other bytes: the last newline becomes a space.
+      else fs.writeFileSync(file, `${text.slice(0, -1)} `);
+    };
+  }
+
+  /**
+   * Boot (`start()`, the `startInternal` path): the first spawn is refused with
+   * exactly one launcher line and no child, its files are deleted and its handle
+   * ended, `spawn-failed` with a restart pending; the restart then spawns a
+   * child whose run files read whole.
+   */
+  async function refusedThenRestarted(
+    kind: "mcp" | "settings",
+    how: Exclude<Damage, "none">,
+    label: string,
+    reason: string,
+  ) {
+    const logs = captureErrors();
+    const sup = makeSupervisor({
+      runFileWriteHold: damageOnce(kind, how),
+      restartBackoffsMs: [400],
+    });
+    await sup.start();
+    expect(records("spawn-")).toEqual([]);
+    // Its handle ended with the refusal (`discard` is synchronous).
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    expect(sup.status()).toMatchObject({
+      running: false,
+      lastError: "spawn-failed",
+      restartPending: true,
+    });
+    const launcherLines = logs().filter(
+      (l) => l.includes("Not spawning") || l.includes("Spawn failed"),
+    );
+    expect(launcherLines).toEqual([GUARD_LINE(label, reason)]);
+    // Never the file's contents or its path: no handle, no run-file name, no
+    // part of the app-data directory.
+    const all = logs().join("\n");
+    expect(all).not.toMatch(/th_[A-Za-z0-9_-]{32}|tandem-run-/);
+    expect(all).not.toContain(tmpDir);
+    await waitFor(() => runFilesOnDisk().length === 0, "the refused spawn's files deleted");
+
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the restart's spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    const run = await waitFor(() => runRecordFor(rec.pid), "the restart's run files");
+    expect(run.mcp?.ok).toBe(true);
+    expect(run.settings?.ok).toBe(true);
+  }
+
+  it("a missing settings file refuses the spawn (missing), then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "delete", "settings file", "missing");
+  });
+
+  it("a truncated settings file refuses the spawn (size), then the restart spawns", async () => {
+    await refusedThenRestarted("settings", "truncate", "settings file", "size");
+  });
+
+  it("a truncated MCP config refuses the spawn (size), then the restart spawns", async () => {
+    await refusedThenRestarted("mcp", "truncate", "MCP config", "size");
+  });
+
+  it("a same-length settings file with other bytes refuses the spawn (content)", async () => {
+    await refusedThenRestarted("settings", "swap", "settings file", "content");
+  });
+
+  it.each(RUN_FILE_READ_BACK_REASONS)(
+    "the refusal line for reason %s names the kind and the reason, and nothing else",
+    (reason) => {
+      const err = new RunFileGuardError("settings file", reason);
+      expect(`[Launcher] Not spawning: ${err.message}`).toBe(GUARD_LINE("settings file", reason));
+      expect(err.message).not.toMatch(/[/\\]/);
+    },
+  );
+
+  it("a valid pair spawns at once, with both flags, and no guard line", async () => {
+    const logs = captureErrors();
+    const sup = makeSupervisor({ runFileWriteHold: damageOnce("settings", "none") });
+    await sup.start();
+    const [rec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn");
+    expect(flagsIn(rec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    const run = await waitFor(() => runRecordFor(rec.pid), "the run files");
+    expect(run.settings?.ok).toBe(true);
+    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([]);
+  });
+
+  // Review of #2599, item 3: a user start used to throw (the route's 500) AND
+  // schedule the crash restart, so Claude started a moment after the failure
+  // was reported. Now the throw is the whole answer: no restart, no breaker
+  // attempt, and a status that says stopped with `spawn-failed`, as the route
+  // does.
+  it.each([
+    ["Start fresh", (sup: Supervisor) => sup.startFresh(spawnDir)],
+    ["Relaunch", (sup: Supervisor) => sup.relaunch(spawnDir)],
+    ["Start", (sup: Supervisor) => sup.startByUser()],
+  ])("a user %s throws the guard's error and schedules no restart", async (_label, act) => {
+    const logs = captureErrors();
+    const sup = makeSupervisor({
+      runFileWriteHold: damageOnce("settings", "truncate"),
+      restartBackoffsMs: [50],
+    });
+    await expect(act(sup)).rejects.toBeInstanceOf(RunFileGuardError);
+    expect(records("spawn-")).toEqual([]);
+    expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([
+      GUARD_LINE("settings file", "size"),
+    ]);
+    const status = sup.status();
+    expect(status).toEqual(expect.objectContaining({ running: false, lastError: "spawn-failed" }));
+    expect(status).not.toHaveProperty("restartPending");
+    // Well past the 50 ms backoff a scheduled restart would have used.
+    await sleep(400);
+    expect(records("spawn-")).toEqual([]);
+    expect(sup.status()).toEqual(
+      expect.objectContaining({ running: false, lastError: "spawn-failed" }),
+    );
+    // The user's next try is not held back by the refused one: it spawns.
+    await sup.startByUser();
+    await waitFor(() => records<SpawnRecord>("spawn-")[0], "the next user start's spawn");
+  });
 });
 
 describe("the remaining R4.4 exit paths", () => {

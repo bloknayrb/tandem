@@ -489,19 +489,22 @@ jobs:
         shell: bash
         run: src-tauri/binaries/node-sidecar-x86_64-pc-windows-msvc.exe --version
 
-  # Multi-session ownership ships dark (#2358, ADR-054; ownership design §12).
-  # This job runs everything flag-on, so the dark code is exercised on every
-  # push while a release build stays byte-for-byte flag-off.
+  # Multi-session ownership (#2358, ADR-054; ownership design §12). Built while
+  # ownership shipped dark, this job ran everything flag-on while a release
+  # build stayed flag-off. Since the flip (ADR-054's flip amendment) the
+  # release literal is on, so `check` builds and tests the same thing and this
+  # job duplicates it.
   #
-  # It is a REQUIRED check on master while ownership is dark (in branch
-  # protection since 2026-11-08, #2377), so its guarantees are enforced twice:
-  # by protection and by the wiring test in `check`. It is dropped from the
-  # required set at the flip (PR 6).
+  # It was a REQUIRED check on master while ownership was dark (in branch
+  # protection since 2026-11-08, #2377). The flip drops it from the required
+  # set, which is a branch-protection change made by hand; it stays in this
+  # file, unchanged, until that is done, so no open PR waits on a required
+  # check that never reports. Removing it afterwards is its own PR.
   #
   #  - The build forces __OWNERSHIP_ENABLED__ on through tsup's API
   #    (scripts/ci/build-ownership-on.ts); tsup.config.ts itself reads no
   #    environment, so nothing else can.
-  #  - The probe boots that bundle with NO TANDEM_OWNERSHIP and checks it is
+  #  - The probe boots that bundle with TANDEM_OWNERSHIP=0 and checks it is
   #    ownership-ON, so the define, not the env fallback, did it.
   #  - The Test and E2E steps carry TANDEM_OWNERSHIP=1, so the suites run
   #    flag-on whether the code under test is bundled or loaded by tsx/vitest.
@@ -646,16 +649,18 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Multi-session ownership ships dark (#2358, ADR-054). This boots the
-      # bundle just built with TANDEM_OWNERSHIP=1 in its environment and checks
-      # it still behaves ownership-OFF (session ids printed raw in its log): a
-      # release must ignore the variable, and a define dropped from
-      # tsup.config.ts, or an identifier ownership-flag.ts reads under another
-      # name, would let it through. The probe builds the child's environment
-      # itself, so this step sets none. Its `ownership-flag-on` twin expects ON.
-      # tests/scripts/ownership-flag-on-wiring.test.ts pins this step whole.
-      - name: Release bundle ignores TANDEM_OWNERSHIP
-        run: node scripts/ci/ownership-bundle-probe.mjs --expect off
+      # Multi-session ownership (#2358, ADR-054), on since the flip. This boots
+      # the bundle just built with TANDEM_OWNERSHIP=0 in its environment and
+      # checks it behaves ownership-ON (session ids hashed in its log, a second
+      # session's write refused): only the define can have turned it on, so a
+      # define dropped from tsup.config.ts, or an identifier ownership-flag.ts
+      # reads under another name, fails here. (Set, not absent: an unset
+      # variable follows the bundled `true` literal, which would pass too.) Before the flip this step ran
+      # `--expect off` with the variable set, to prove a release ignored it.
+      # The probe builds the child's environment itself, so this step sets
+      # none. tests/scripts/ownership-flag-on-wiring.test.ts pins this step whole.
+      - name: Release bundle is ownership-on
+        run: node scripts/ci/ownership-bundle-probe.mjs --expect on
         timeout-minutes: 2
 
       # The development allowance (#2410): a release build tells itself from a

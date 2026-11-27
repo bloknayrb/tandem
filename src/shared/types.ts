@@ -214,7 +214,7 @@ export interface AnnotationReply {
    */
   suggestedText?: string;
   /**
-   * #2360 (ships dark behind `OWNERSHIP_ENABLED`): on a FINAL Claude reply, the
+   * #2360 (written only with `OWNERSHIP_ENABLED` on): on a FINAL Claude reply, the
    * thread entries it answers — `c:<editedAt>` for the user's comment at that
    * version, `r:<replyId>` for a user reply. Server-only: computed in the reply
    * seam from what was visible to, handed to and acknowledged by the replying
@@ -224,7 +224,7 @@ export interface AnnotationReply {
    */
   answers?: string[];
   /**
-   * #2360 (ships dark): an "I'm on it" Claude reply. It settles nothing, sets no
+   * #2360 (ownership on only): an "I'm on it" Claude reply. It settles nothing, sets no
    * answerer and is not written into a `.docx`. Server-only, like `answers`.
    */
   inProgress?: boolean;
@@ -534,7 +534,7 @@ export interface SessionData {
    */
   dirty?: boolean;
   /**
-   * #2360 (ships dark): written only by a build with ownership on, whose
+   * #2360: written only by a build with ownership on, whose
    * replies-map undo keeps client writes out. Absent, `restoreYDoc` strips the
    * restored reply rows' server-only `answers` / `inProgress`.
    */
@@ -873,7 +873,7 @@ export interface ChatMessage {
   localRun?: LocalRunState;
   /**
    * Set only server-side (`withMcp`), on a real Claude **final** reply that
-   * `tandem_reply` wrote (#2358, the posts PR, R3.4; ships dark behind the
+   * `tandem_reply` wrote (#2358, the posts PR, R3.4; behind the
    * ownership flag): the earlier user messages of the same batch that this
    * reply also answers, within its sender's scope. With the flag on, a user
    * message is handled when a final reply names it in `replyTo` or lists it

@@ -402,7 +402,7 @@ export type ReplySuggestion = { kind: "none" } | { kind: "replacement"; suggeste
  * Which parents a Claude-side reply may land on (#2360). **A required
  * discriminant, and the seam reads no flag**: the MCP handler and the local
  * model each pass `ownershipOn() ? "claude-facing-comment" : "own"`, so the
- * permission ships dark with ownership and this file gains no flag import
+ * permission is gated with ownership and this file gains no flag import
  * (`tests/server/ownership-module-seam.test.ts`).
  *
  * - `"own"`: a parent Claude authored (#1770, master's rule).
@@ -1539,7 +1539,7 @@ function writeReply(
     // `replyForClaude`, which screens that range first; `addUserReply` passes
     // nothing, so the key is omitted entirely on the user path.
     ...(suggestedText !== undefined ? { suggestedText } : {}),
-    // #2360 (ships dark): only `replyForClaude` passes these, and only with
+    // #2360 (ownership on): only `replyForClaude` passes these, and only with
     // ownership on. Bounded here, at the single record builder, by the same
     // constants the durable schema reads.
     ...(thread === undefined
@@ -1709,7 +1709,7 @@ function replyForClaude(
     // so a promoted note or imported Word comment is NOT repliable by Claude.
     // The replacement is `tandem_reply` (chat) or a fresh `tandem_comment`.
     //
-    // #2360 (ships dark): with `parents: "claude-facing-comment"` a USER
+    // #2360 (ownership on): with `parents: "claude-facing-comment"` a USER
     // `comment` is repliable too. Only here, after the privacy guard, so it is
     // reached only by a Claude-facing (outbound) comment; `"import"` and every
     // other type keep `not-owned`, so a user highlight still answers it.

@@ -173,8 +173,9 @@ files from `git ls-files`, plus untracked files that are not ignored, so it need
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
 queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
-macOS and Windows, each running `cargo test`), `windows-acl-proof` and, while multi-session
-ownership ships dark, `ownership-flag-on`; `coverage`, CodeQL and `vitest-windows`
+macOS and Windows, each running `cargo test`), `windows-acl-proof` and `ownership-flag-on`, which multi-session ownership
+made required while it shipped dark and which leaves the required set once branch protection is
+changed after the flip; `coverage`, CodeQL and `vitest-windows`
 report but do not block. `vitest-windows` is advisory: it runs the build and the full vitest suite on Windows, which
 `check` does not, so read it even though it cannot stop a merge. Compare a red one with the job's
 latest run on `master`: a failure `master` also has is not yours. A new one usually is, and a test

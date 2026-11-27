@@ -458,4 +458,47 @@ describe("SettingsTandemClaudeSection — the failed bind and the bound transpor
     expect(has(container, "settings-modal-tandem-claude-bind-failed")).toBe(false);
     expect(has(container, "settings-modal-tandem-claude-bound-transports")).toBe(false);
   });
+
+  // Bryan, 2026-11-27, "401 only signs out (Recommended)": a 403 is an access
+  // error on a running Claude, never the sign-in remedy.
+  it("a running status with accessDenied shows an access error, never sign-in, with no button", async () => {
+    statusIs({ ...RUNNING, accessDenied: true });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    const note = q(container, "settings-modal-tandem-claude-access-denied");
+    const text = (note.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain("refused it access");
+    expect(text).toContain("not a sign-in problem");
+    expect(text).not.toMatch(/\bsign in\b|run claude/i);
+    expect(note.querySelector("button")).toBeNull();
+  });
+
+  it("no accessDenied, or a stopped status carrying one, renders no access error", async () => {
+    statusIs({ ...RUNNING });
+    const plain = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(has(plain.container, "settings-modal-tandem-claude-access-denied")).toBe(false);
+    cleanup();
+    statusIs({ available: true, running: false, lastError: "needs-login", accessDenied: true });
+    const stopped = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(has(stopped.container, "settings-modal-tandem-claude-access-denied")).toBe(false);
+  });
+
+  it("re-reads while the access error is shown, so a turn that succeeds clears it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      statusIs({ ...RUNNING, accessDenied: true });
+      const { container } = render(SettingsTandemClaudeSection);
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-access-denied")).toBe(true);
+      statusIs({ ...RUNNING });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await tick();
+      expect(has(container, "settings-modal-tandem-claude-access-denied")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
