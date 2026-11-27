@@ -1893,13 +1893,13 @@ export async function closeDocumentById(
     if (!sessionWillBeKept) {
       try {
         const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
-        if (edits !== null) {
-          // Compared with the file, as the force-open and restore compare with
-          // what replaces the edits: a dirty flag over text that already
-          // matches disk loses nothing, so it keeps (and announces) nothing.
-          const onDisk = await fs.readFile(docState.filePath, "utf-8").catch(() => undefined);
-          unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits, onDisk);
-        }
+        // Not compared with the file first (as force-open and restore compare
+        // with what replaces the edits): that would be a new read of a path
+        // reached from the caller's document id, a CodeQL js/path-injection
+        // sink. The cost is a backup, and a notice, for a dirty flag over text
+        // that already matches disk — harmless, and the byte-identical skip
+        // keeps a repeat from writing again.
+        if (edits !== null) unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
       } catch (err) {
         // A failed snapshot, the size cap, or edits the serializer could not
         // write: all `BACKUP_FAILED`, the code the skill keys on.
