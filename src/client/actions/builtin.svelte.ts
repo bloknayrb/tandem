@@ -1158,6 +1158,13 @@ interface BackupSnapshot {
   name: string;
   timestamp: string;
   size: number;
+  /** `disk`: the file before an overwrite. `unsaved`: edits a Claude action discarded (ADR-057). Absent from an older server. */
+  kind?: "disk" | "unsaved";
+}
+
+/** How the confirm names a backup's kind. */
+function backupKindLabel(b: BackupSnapshot): string {
+  return b.kind === "unsaved" ? "your unsaved edits" : "the file on disk";
 }
 
 let restoreBackupInflight = false;
@@ -1168,7 +1175,9 @@ function formatBackupTimestamp(iso: string): string {
 }
 
 /**
- * Minimal restore flow: list the document's snapshots (max 3, newest first),
+ * Minimal restore flow: list the document's snapshots (newest first, each
+ * labelled with its kind: up to 3 of the file on disk, one more kept from the
+ * run's first write, and up to 3 of unsaved edits a Claude action discarded),
  * confirm, and restore the MOST RECENT one. The command palette has no
  * dynamic-sublist support, so older snapshots are surfaced in the confirm text
  * and restorable via Claude (`tandem_restoreBackup`) — the MCP tool is the
@@ -1217,17 +1226,17 @@ async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
     if (backups.length === 0) {
       d.notify(
         "info",
-        "No backups exist for this document yet. Tandem snapshots the on-disk file before its first overwrite each session.",
+        "No backups exist for this document yet. Tandem snapshots the on-disk file before its first overwrite each session, and keeps your unsaved edits when Claude reloads, restores or closes the document.",
       );
       return;
     }
     const newest = backups[0];
     const lines = backups
-      .map((b, i) => `  ${i + 1}. ${formatBackupTimestamp(b.timestamp)}`)
+      .map((b, i) => `  ${i + 1}. ${formatBackupTimestamp(b.timestamp)} (${backupKindLabel(b)})`)
       .join("\n");
     const ok = await confirmDialog(
       `Available backups (newest first):\n${lines}\n\n` +
-        `Restore the most recent backup (${formatBackupTimestamp(newest.timestamp)})? ` +
+        `Restore the most recent backup (${formatBackupTimestamp(newest.timestamp)}, ${backupKindLabel(newest)})? ` +
         "The document reloads with the backup's content; annotations are preserved.\n\n" +
         "Older backups can be restored by asking Claude (tandem_restoreBackup).",
     );
