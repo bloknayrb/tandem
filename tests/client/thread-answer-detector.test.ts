@@ -176,6 +176,32 @@ describe("createThreadAnswerDetector (#2360)", () => {
     ).toEqual(["b"]);
   });
 
+  it("never announces an in-progress acknowledgement, only the answer after it (Bryan, 2026-11-26)", () => {
+    const detector = createThreadAnswerDetector();
+    const doc = {};
+    const ack = reply("ack", { inProgress: true });
+    expect(observeIds(detector, { doc, replies: [ack] })).toEqual([]);
+    // The ack is known: a later strip of the field (an untrusted reload) does
+    // not turn the same row into a fresh announcement.
+    const { inProgress: _stripped, ...strippedAck } = ack;
+    expect(observeIds(detector, { doc, replies: [strippedAck] })).toEqual([]);
+    const answer = reply("answer", { timestamp: SYNCED_AT + 20 });
+    expect(observeIds(detector, { doc, replies: [strippedAck, answer] })).toEqual(["answer"]);
+  });
+
+  it("carries a local model's identity so the wording can say whose answer it is", () => {
+    const detector = createThreadAnswerDetector();
+    const agentIdentity = { provider: "local-ollama" as const, displayName: "Llama" };
+    const [answer] = detector.observe({
+      doc: {},
+      documentId: DOC_ID,
+      baseline: baseline(),
+      replies: [reply("a", { agentIdentity })],
+      parents: PARENTS,
+    });
+    expect(answer.agentIdentity).toEqual(agentIdentity);
+  });
+
   it("returns content-free routing data plus the text the dispatcher may preview", () => {
     const detector = createThreadAnswerDetector();
     const [answer] = detector.observe({

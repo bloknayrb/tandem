@@ -1,8 +1,15 @@
 /**
  * Pre-overwrite document backup routes (#1086).
  *
- * GET  /api/backups          — list restorable snapshots for a document
+ * GET  /api/backups          — list restorable snapshots for a document, and
+ *                              the kept edits the user has not been told about
  * POST /api/backups/restore  — restore one snapshot through the reload lifecycle
+ *                              (the editor's Version history: keeps the
+ *                              document's unsaved edits first, ADR-057)
+ *
+ * The acknowledge route lives in `backups-ack.ts`, one module per mutating
+ * handler, because `tests/docs/loopback-gate-claims.test.ts` resolves gates
+ * per module.
  *
  * Both routes ride the standard `apiMiddleware` (Host-header DNS-rebinding
  * check + CORS Origin allowlist). The GET strips the absolute filePath to a
@@ -16,14 +23,19 @@ import type { Request, Response } from "express";
 import { API_BACKUPS_RESTORE } from "../../../shared/api-paths.js";
 import { hasDoc } from "../../documents/registry.js";
 import { restoreDocumentFromBackup } from "../../documents/reload-family.js";
-import { listDocBackups } from "../../file-io/doc-backup.js";
+import { keptEditsNotice, listDocBackups } from "../../file-io/doc-backup.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
-import { isValidDocumentId, scrubPathForCaller, sendApiError } from "./_shared.js";
+import {
+  isValidDocumentId,
+  scrubPathForCaller,
+  sendApiError,
+  sendEditorBackupFailed,
+} from "./_shared.js";
 
 export async function handleListBackups(req: Request, res: Response): Promise<void> {
   const raw = req.query.documentId;
@@ -38,7 +50,7 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
   }
   // upload:// / scratchpad docs have no on-disk path, hence no backups.
   if (docState.source !== "file") {
-    res.json({ data: { filePath: null, backups: [] } });
+    res.json({ data: { filePath: null, backups: [], keptNotice: null } });
     return;
   }
   // Strip the absolute path to a basename for non-loopback callers (#1121 F5):
@@ -47,8 +59,11 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
   // below cannot drift apart again — that drift is what created #1294.
   const filePath = scrubPathForCaller(req, docState.filePath);
   try {
-    const backups = await listDocBackups(docState.filePath, resolveAppDataDir());
-    res.json({ data: { filePath, backups } });
+    const appDataDir = resolveAppDataDir();
+    const backups = await listDocBackups(docState.filePath, appDataDir);
+    // Never throws: an unreadable ack file reads as "nothing acknowledged".
+    const keptNotice = await keptEditsNotice(docState.filePath, appDataDir, backups);
+    res.json({ data: { filePath, backups, keptNotice } });
   } catch (err) {
     sendApiError(res, err);
   }
@@ -57,9 +72,17 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
 export async function handleRestoreBackup(req: Request, res: Response): Promise<void> {
   if (assertOriginAllowlisted(req, res, API_BACKUPS_RESTORE)) return;
   if (assertLoopbackForMutation(req, res)) return;
-  const { backup } = (req.body ?? {}) as Record<string, unknown>;
+  const { backup, discardUnsavedEdits } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof backup !== "string" || backup.length === 0) {
     res.status(400).json({ error: "BAD_REQUEST", message: "backup must be a non-empty string" });
+    return;
+  }
+  // Strict: only a literal `true` discards. Absent keeps the edits (ADR-057);
+  // a truthy string such as "false" must never read as consent to lose them.
+  if (discardUnsavedEdits !== undefined && typeof discardUnsavedEdits !== "boolean") {
+    res
+      .status(400)
+      .json({ error: "BAD_REQUEST", message: "discardUnsavedEdits must be a boolean" });
     return;
   }
   // path.basename strips any directory components from the caller-supplied
@@ -101,7 +124,15 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
     return;
   }
   try {
-    const result = await restoreDocumentFromBackup(docState.id, safeBackup);
+    // Keeps the unsaved edits first unless the user chose "Restore anyway"
+    // after a refused keep. `actor` is fixed here, never read from the body.
+    // `discardUnsavedEdits` is not a new destructive capability (#2027's
+    // class): it is this route's behaviour before ADR-057's PR 2, and it sits
+    // behind the same origin and loopback gates.
+    const result = await restoreDocumentFromBackup(docState.id, safeBackup, {
+      keepUnsavedEdits: discardUnsavedEdits !== true,
+      actor: "user",
+    });
     // #1294: the read twin above already basenames `filePath` for non-loopback
     // callers; this mutating twin returned `restoredFrom` and `filePath`
     // verbatim. Same route family, same disclosure — scrub both identically.
@@ -113,6 +144,26 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
       },
     });
   } catch (err) {
+    // The snapshot named is gone (pruned or swept after the list loaded); the
+    // shared message is addressed to Claude's tool.
+    if ((err as { code?: unknown }).code === "FILE_NOT_FOUND") {
+      res.status(404).json({
+        error: "FILE_NOT_FOUND",
+        message: "That backup no longer exists. The list has been refreshed.",
+      });
+      return;
+    }
+    if (
+      sendEditorBackupFailed(
+        res,
+        err,
+        "Couldn't keep a backup of your unsaved edits first, so nothing was restored. " +
+          "Tandem's backup folder may be full or not writable; if it is full, restoring " +
+          "anyway can't keep a copy of the file's current version either.",
+      )
+    ) {
+      return;
+    }
     sendApiError(res, err);
   }
 }

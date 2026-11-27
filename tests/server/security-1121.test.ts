@@ -20,6 +20,7 @@ const {
   isLoopbackMock,
   getCurrentDoc,
   listDocBackups,
+  keptEditsNotice,
   resolveAppDataDir,
   restoreDocumentFromBackup,
   reloadDocumentFromMarkdown,
@@ -30,6 +31,7 @@ const {
   isLoopbackMock: vi.fn((_req: unknown) => true),
   getCurrentDoc: vi.fn(),
   listDocBackups: vi.fn(),
+  keptEditsNotice: vi.fn(async () => null),
   resolveAppDataDir: vi.fn(() => "/tmp/app-data"),
   restoreDocumentFromBackup: vi.fn(),
   reloadDocumentFromMarkdown: vi.fn(),
@@ -44,7 +46,10 @@ vi.mock(import("../../src/server/auth/middleware.js"), async (importOriginal) =>
 });
 
 vi.mock(import("../../src/server/mcp/document-service.js"), () => ({ getCurrentDoc }));
-vi.mock(import("../../src/server/file-io/doc-backup.js"), () => ({ listDocBackups }));
+vi.mock(import("../../src/server/file-io/doc-backup.js"), () => ({
+  listDocBackups,
+  keptEditsNotice,
+}));
 vi.mock(import("../../src/server/platform.js"), () => ({
   resolveAppDataDir,
   // apply.ts reads it at import (#2358 PR 2b: sidecar provenance is argv).

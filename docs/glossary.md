@@ -283,8 +283,8 @@ only and refuses a non-loopback bind host. See [LAN exposure](configuration.md#l
 
 ## Multi-session document ownership
 
-Letting each open document belong to at most one AI session, so two Claude sessions don't write
-over each other. It ships dark: a release build creates no owners and refuses nothing for it. See
+Letting each open document, and each chat message, belong to at most one AI session, so two Claude
+sessions don't answer or write over each other. It shipped dark and is on since the flip. See
 [ADR-054](decisions.md#adr-054-multi-session-document-ownership--identity-and-shipping-dark).
 
 ## Hocuspocus

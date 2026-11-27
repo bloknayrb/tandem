@@ -8,7 +8,7 @@
  * user's own surface and never meet a check
  * (`tests/server/ownership-api-no-context.test.ts`).
  *
- * **Ships dark.** With ownership off every helper here is a passthrough: the
+ * **Flag-gated** (on since the flip). With ownership off every helper here is a passthrough: the
  * tool's body runs directly, with the arguments it was given, exactly as
  * before this file existed. There is no queue and nothing is claimed.
  *

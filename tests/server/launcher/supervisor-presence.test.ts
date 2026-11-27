@@ -138,6 +138,9 @@ class FakeChild extends EventEmitter {
     this.exitCode = code;
     this.signalCode = signal;
     this.emit("exit", code, signal);
+    // A real child's output streams end after its exit (#2358 S2).
+    this.stdout.end();
+    this.stderr.end();
   }
 }
 
@@ -153,6 +156,16 @@ const NOT_SIGNED_IN = {
   result: "Not logged in · Please run /login",
 };
 const RESULT_OK = { type: "result", subtype: "success", is_error: false, result: "done" };
+/** Smoke S3 on #2358 (Windows, Claude Code 2.1.332, 2026-11-26), verbatim:
+ * an invalid API key's result envelope. */
+const AUTH_REFUSED = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  result: "Invalid API key · Fix external API key",
+  terminal_reason: "api_error",
+  api_error_status: 401,
+};
 
 function pushJson(child: FakeChild, obj: Record<string, unknown>): void {
   child.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -324,6 +337,8 @@ function makeSupervisor(extra: ExtraOpts = {}): {
   const opts = {
     probeCliUsable: () => true,
     resolveClaudeCommand: () => process.execPath,
+    // Not `node plugin list --json` in a real subprocess on every spawn.
+    listInstalledPlugins: async () => ({ ok: true as const, keys: [], dropped: 0 }),
     restartBackoffsMs: [0],
     homeOverride: home,
     claudeSettingsHome: home,
@@ -421,6 +436,13 @@ async function boundFreshRun(h: ReturnType<typeof makeSupervisor>): Promise<Fake
   expect(await bind(c1)).toBe(true);
   expect(h.log).toEqual(["present", "run-start"]);
   return c1;
+}
+
+/** A resumed spawn's Claude says the conversation is not there (#2358 S2): what
+ * makes its exit 1 the #1169 shape rather than a crash. */
+async function sayNoConversation(child: FakeChild): Promise<void> {
+  child.stderr.write(`No conversation found with session ID: ${argAfter(child, "--resume")}\n`);
+  await settle();
 }
 
 /** After a bound run, crash it; the restart resumes (child 2), writing no turn. */
@@ -673,17 +695,56 @@ describe("R1.4 site (b): fault kills torn down by a Start or an Off before their
     c2.holdExit = true;
     c2.stdin.emit("error", EPIPE());
     await until(() => c2.killed, "the fault kill");
-    c2.releaseExit(1); // the #1169 shape: resuming, code 1, unconfirmed
+    await sayNoConversation(c2);
+    c2.releaseExit(1); // the #1169 shape: resuming, the message, code 1, unconfirmed
     await settle();
     await h.sup.updateSettings({ startMode: "off" });
     await settle();
     expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual([]);
   });
 
+  it("the #1169 shape whose message is read only after the exit: still never judged", async () => {
+    // #2358 S2: Node may emit `exit` before the last stream data is read. The
+    // verdict, and with it site (a), waits for both streams to end.
+    const h = makeSupervisor();
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    h.emit(annotationEvent()); // its wake: the window runs
+    await settle();
+    c2.exitCode = 1;
+    c2.emit("exit", 1, null); // the exit first, its streams still open
+    await settle();
+    c2.stderr.write(`No conversation found with session ID: ${argAfter(c2, "--resume")}\n`);
+    c2.stdout.end();
+    c2.stderr.end();
+    await settle();
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual([]);
+  });
+
+  it("the same fault kill ending in exit 1 without Claude's message (a Windows kill) is a crash, not the #1169 shape: judged at site (a), once", async () => {
+    // #2358 S2: on Windows a killed Claude exits 1. Without the no-conversation
+    // message the session is kept once (`shouldClearSession`), and site (a)
+    // shares that verdict.
+    const h = makeSupervisor();
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    h.emit(annotationEvent());
+    c2.holdExit = true;
+    c2.stdin.emit("error", EPIPE());
+    await until(() => c2.killed, "the fault kill");
+    c2.releaseExit(1);
+    await settle();
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual(["failed:torn-down-unbound"]);
+    expect(failedLines()).toBe(1);
+  });
+
   it("the same fault kill relayed by the Linux reaper as code 143 is a signal death, not the #1169 shape: judged at site (a), once", async () => {
     // The reaper forwards the kill's SIGTERM and exits 128 + 15, so the code is
-    // not null. `shouldClearSession` reads it as a signal death (#2358), which
-    // is how a null code (macOS, Windows) was already judged.
+    // not null. `shouldClearSession` keeps it once as an unexplained exit
+    // (#2358), and site (a) judges it as a null code (macOS, Windows) was
+    // already judged.
     const h = makeSupervisor();
     const c2 = await crashToResumed(await boundFreshRun(h));
     h.emit(annotationEvent());
@@ -788,6 +849,7 @@ describe("R1: judged at most once, and only the latest spawn", () => {
     await settle();
     expect(argAfter(c2, "--resume")).toBeDefined();
     expect(c2.stdin.writes.length).toBeGreaterThan(0); // its wake: the window runs
+    await sayNoConversation(c2);
     c2.exitWith(1, null);
     await settle();
     advance(1);
@@ -924,6 +986,31 @@ describe("R2.3: when each change is announced", () => {
     pushJson(c1, NOT_SIGNED_IN);
     await settle();
     expect(h.log).toEqual(["present", "run-start", "not-present"]);
+  });
+
+  // Smoke S3 (Bryan, 2026-11-26, "Treat it like signed out (Recommended)"): a
+  // refused credential ends presence exactly as "Not logged in" does, so work
+  // routes away from a Claude that cannot answer.
+  it("a refused API key (S3's envelope) on a present Tandem's Claude: not present at once, needs-login", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, AUTH_REFUSED);
+    await until(() => c1.signalCode !== null, "the trip's kill");
+    await settle();
+    expect(h.log).toEqual(["present", "run-start", "not-present"]);
+    expect(h.sup.status()).toMatchObject({ running: false, lastError: "needs-login" });
+  });
+
+  // Bryan, 2026-11-27, "401 only signs out (Recommended)": a 403 is an access
+  // error, not a sign-out, so a present Tandem's Claude stays present.
+  it("a 403 on a present Tandem's Claude: still present, running, accessDenied", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, { ...AUTH_REFUSED, result: "Forbidden", api_error_status: 403 });
+    await settle();
+    expect(c1.signalCode).toBeNull();
+    expect(h.log).toEqual(["present", "run-start"]);
+    expect(h.sup.status()).toMatchObject({ running: true, accessDenied: true });
   });
 
   describe("Check again while still signed out (both orders; which a real child takes is not measured)", () => {

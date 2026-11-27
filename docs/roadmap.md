@@ -21,7 +21,7 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 i
 
 ### Where v1.0 stands
 
-One feature programme is still being built: document ownership (#2358). After it, what
+Document ownership (#2358) is built, and its flip's gate passes since the Windows smoke. After it, what
 remains is the licence gate's last checks, the commercial setup, hardware verification, and
 the flag flips.
 
@@ -34,30 +34,28 @@ Bryan, not changed by him), Claude's replies inside a user's comment thread (#23
 status (#2167) travel with the ownership series. Commercial readiness and the hardware matrix
 below still stand before v1.0 either way.
 
-0. **Document ownership (#2358): one Claude answers each comment.** Status 2026-11-23, from
-   the Shipping table of [the plan](plans/2358-ownership.md#shipping) and master. Merged
-   and dark: design v5, PR 1a (identity), 1c (enforcement), every PR 2 row (inbox and
-   replies) and 3a. In 3b (Tandem's own Claude binding, presence, starts and wakes), 3b-1
-   to 3b-2d are merged, with 3b-2c (the greeting) and 3b-2d (the `/api/wake` frame)
-   landing 2026-11-23. Merged and live: 1b (#1952) and 2b (#2370, v0.31.0). **Still to
-   build:**
-   - **3b-2e**: 3b-2e1 (the failed-bind reason in `status()` and the Settings list of
-     bound transports) merged as #2534 and 3b-2e2 (the stall banner) as #2536, both on
-     2026-11-23. Left: #2167's attribution.
-   - **PR 4**: push scope and the shim's permit, plus 4a's `ownership-changed` push event.
-   - **PR 5**: controls (routes, badge, popover, native menu, Assign and Release), the
-     labels on `tandem_getAnnotations` and `tandem_listDocuments`, the pickup and stall
-     clock, and the owners entry in `docs/security.md`.
-   - **#2360's switch** (Claude replying inside a user's comment thread) with the handled
-     filter. Its "later reply" rule needs rework first. It merges right before the flip
-     and ships in the same release.
-   - **PR 6, the flip.** It waits on every row of `tests/server/ownership-flip-blockers.ts`
-     being closed or accepted by Bryan. At the end of 2026-11-23 that file held 34 rows: 8
-     accepted, **26 open**. About half close with PR 4, PR 5 or #2360. The rest need a hand check
-     on a real Claude Code or Claude Desktop session, a smoke run, or a decision of
-     Bryan's. #2439 was decided on 2026-11-25 ("Keep it accepted (Recommended)") and its row
-     closed, and the stall-banner row closed on Bryan's review the same day. The plan's manual
-     check runs after both flips, before that release.
+0. **Document ownership (#2358): one Claude answers each comment.** Status 2026-11-26: every
+   PR of the series is built, and #2360's switch (PR C) is the commit before the flip. **The
+   flip PR (PR 6)** sets `OWNERSHIP_ENABLED = true`, ships skill 44 and the lit
+   `tandem_checkInbox` text, and closes the three flip-blocker rows that named it (ADR-054's
+   flip amendment). Its gate passes: `tests/server/ownership-flip-blockers.ts` holds 10 rows,
+   **all accepted, none open**, so `tests/server/ownership-flag.test.ts` is green with the literal
+   `true`. The six the
+   [consolidated hardware smoke](plans/2358-ownership.md#consolidated-pre-flip-hardware-smoke)
+   left (S1 to S4, S6 and S8) were settled on 2026-11-26 by Bryan's Windows run (on #2358) and
+   his picks: S1 closed by the Linux and Windows measurements and a fix (the launcher now asks
+   `claude plugin list --json` and disables every `tandem@` plugin key, because an account-synced
+   `tandem@synced` plugin loaded beside its bridge), with one accepted residual (a run file deleted
+   before its ACL step launches unbound and silent); S2 and S4 closed by the measurements on both
+   OSes; S3 closed by a fix (a 401 result ends presence as "Not logged in" does; since 2026-11-27 a
+   403 is an access error that keeps Tandem's Claude running and shows in Settings); S6
+   (Claude Desktop's client name `claude-ai` measured, the nobody-holds precondition unreachable)
+   and S8's CTRL row (Chromium and WebView2 held; macOS not run) accepted for the flip. Earlier the
+   same day S8's document-room row closed when Bryan dropped that guard, S7 closed measured, with
+   the sentence moved into the skill and the tool description, and S5 closed measured. Still
+   Bryan's: dropping `ownership-flag-on` from branch protection's required checks, and the
+   plan's manual check, which runs after both flips, before that release. Separate, not the
+   flip's: the launcher's early-crash session clear on Windows, where a killed child exits 1.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key.
@@ -89,6 +87,11 @@ before relying on it.
 - **#2510** (document headings follow the user's editor font) is open.
 - **Dependabot:** #2506 (npm group), #2511, #2512 and #2513 (libloading 0.9, a major).
 - **Not v1.0 work:** reply sounds for chat notifications (#2168) merged as #2537.
+- **Not v1.0 work (2026-11-26):** undo, not ask ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)).
+  A Claude force-open, restore or close now keeps the unsaved edits it discards as a backup.
+  Follow-ups: the Version history picker with a durable "your edits were kept" banner, whose
+  restore keeps the unsaved edits too (2026-11-27, ADR-057 amendment); the same undo for the conflict
+  banner's Keep/Reload (ADR-057 PR 3), and the compare view (PR 4). All four are done.
 
 ### Decisions still owed
 

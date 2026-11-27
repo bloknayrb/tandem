@@ -230,7 +230,9 @@ describe("EmptyState", () => {
       const props = makeProps({ connected: true, aiChip: "sign-in" });
       const { container } = render(EmptyState, { props });
 
-      expect(container.textContent).toContain("needs to be signed in");
+      expect(container.textContent).toContain(
+        "isn't signed in, or the API key it uses isn't valid",
+      );
       const recheck = byTestId(container, "empty-state-sign-in-recheck");
       expect(recheck).toBeTruthy();
       expect(recheck?.getAttribute("data-ai-chip")).toBe("sign-in");

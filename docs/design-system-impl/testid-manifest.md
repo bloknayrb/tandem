@@ -319,10 +319,24 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   ships dark, ADR-053)
 - `external-conflict-banner`, `external-conflict-keep-btn`,
   `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
-  write; every format since #1238)
+  write; every format since #1238), `external-conflict-reload-anyway-btn`
+  (ADR-057 PR 3 — shown only after Reload was refused because the unsaved
+  edits could not be kept)
 - `read-only-file-banner`, `read-only-file-overwrite-btn` (absent on Windows),
   `read-only-file-dismiss-btn`, `read-only-file-live` (#2273 — ask before
   overwriting a file that is read-only on disk)
+- `kept-edits-banner`, `kept-edits-banner-view`, `kept-edits-banner-dismiss`,
+  `kept-edits-live` (ADR-057 PR 2 — Claude kept this document's unsaved edits)
+- `version-history-modal`, `version-history-close`, `version-history-row`,
+  `version-history-restore`, `version-history-confirm`, `version-history-cancel`,
+  `version-history-row-error`, `version-history-restore-anyway`,
+  `version-history-error`, `version-history-retry`, `version-history-empty`,
+  `version-history-live` (ADR-057 PR 2 — every backup of a document, restorable by name),
+  `version-history-compare`, `version-history-compare-view`, `version-history-compare-back`
+  (PR 4 — compare a backup with the document now)
+- `diff-view`, `diff-line` (`data-kind` add/remove/same/gap), `diff-none`, `diff-truncated`,
+  `diff-too-large`, `diff-more`, `compare-modal`, `compare-close`, `compare-error`, `compare-refresh`, `compare-live`, `diff-md-note`,
+  `external-conflict-compare-btn` (ADR-057 PR 4 — the compare view)
 - `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
   minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`
   it is a projection of live state rather than an event, so it erases itself
@@ -364,6 +378,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   — the list of connections bound to the running Claude's run, one
   `settings-modal-tandem-claude-bound-transport` row each (`data-kind` is `bridge` or
   `direct-http`)
+- `settings-modal-tandem-claude-access-denied` — Tandem's Claude is running and its last API
+  error was a 403, an access error and not a sign-in one, with no button (driven by the
+  loopback-only `accessDenied` on `GET /api/launcher/status`; Bryan, 2026-11-27, "401 only
+  signs out (Recommended)")
 - `settings-modal-solo-rail-hidden-toggle`,
   `settings-modal-dwell-time-slider`,
   `settings-modal-selection-toolbar-toggle`,

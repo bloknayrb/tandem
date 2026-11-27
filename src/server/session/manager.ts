@@ -227,7 +227,7 @@ export async function saveSession(
     // Conditional spread, not `readOnly`, so a writable document's record stays
     // byte-identical to the shape it had before this field existed.
     ...(readOnly ? { readOnly: true } : {}),
-    // #2360 (ships dark): only a lit build marks the file; see `restoreYDoc`.
+    // #2360 (ownership on): only a lit build marks the file; see `restoreYDoc`.
     ...(clientWritesUndoneGrant() ? { threadFieldsTrusted: true as const } : {}),
   };
 
@@ -992,7 +992,7 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     ydocState,
     lastAccessed: Date.now(),
     ...(localPeriod ? { localPeriod } : {}),
-    // #2360 (ships dark): the chat side of the load sweep. Only a lit build
+    // #2360 (ownership on): the chat side of the load sweep. Only a lit build
     // marks the file, and only a lit build's CTRL doc undoes client writes, so
     // a marked file's `settles` / `superseded` were written by the server.
     // Dark, absent: the file is byte-identical to before.

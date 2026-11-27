@@ -1,3 +1,4 @@
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
 import type { ChatMessage } from "../../shared/types";
 import type { ChatNotificationContent } from "../hooks/useTandemSettings";
 import { NOTIFICATION_KIND_COMMENT } from "../tauri/notifications-invoke";
@@ -34,6 +35,7 @@ export function toCommentAnswerItem(answer: ThreadAnswer): CommentAnswerItem {
     read: false,
     documentId: answer.documentId,
     annotationId: answer.annotationId,
+    ...(answer.agentIdentity !== undefined ? { agentIdentity: answer.agentIdentity } : {}),
   };
 }
 
@@ -57,8 +59,23 @@ export function buildCommentNotificationText(
     content !== "generic" && documentIds.size === 1 && last?.documentId
       ? documentName(last.documentId)
       : null;
+  // A local model's answer (it carries `agentIdentity`, which only the local
+  // model writes) is "your local model", never by name, and a mixed batch is
+  // "N new replies" — the same wording rule as a chat reply
+  // (`buildNotificationText`, #1123 part B R9.2, Ruling B-b).
+  const localCount = BYO_MODELS_ENABLED
+    ? items.filter((item) => item.agentIdentity !== undefined).length
+    : 0;
   const lead =
-    count > 1 ? `Claude sent ${count} replies to your comments` : "Claude replied to your comment";
+    localCount === 0
+      ? count > 1
+        ? `Claude sent ${count} replies to your comments`
+        : "Claude replied to your comment"
+      : localCount === count
+        ? count > 1
+          ? `Your local model sent ${count} replies to your comments`
+          : "Your local model replied to your comment"
+        : `${count} new replies to your comments`;
   const title = name ? `${lead} in ${name}` : lead;
   const body = content === "preview" && last ? previewText(last.text) : "";
   return {

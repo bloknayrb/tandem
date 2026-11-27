@@ -32,6 +32,7 @@ const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
 import {
   CWD_DEPENDENT_CHECKS,
+  DIRECT_HTTP_OWNERSHIP_COST,
   describeHealthSession,
   detectEnabledTandemPluginKey,
   evaluateAbsentChannelEntry,
@@ -3857,6 +3858,12 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
       expect(warn?.message).toContain("older direct-HTTP entry");
       expect(warn?.fix).toContain(want);
       if (verdict !== "bridge") expect(warn?.fix).not.toMatch(/setup --apply/);
+      // With ownership on (every release since the flip, ADR-054): each arm
+      // ends with what the entry costs while it stays direct HTTP, and none
+      // states the dark-era cost (Tandem's own Claude unconfirmed), which the
+      // launcher's own run config made false.
+      expect(warn?.fix?.endsWith(DIRECT_HTTP_OWNERSHIP_COST)).toBe(true);
+      expect(warn?.fix).not.toMatch(/confirm its own Claude|earlier connection lingers/);
     },
   );
 
@@ -3875,6 +3882,7 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
       expect(warn?.message).toContain("older direct-HTTP entry");
       expect(warn?.fix).toContain("An npm install of Tandem switches this entry");
       expect(warn?.fix).not.toContain("Restart Tandem (it switches this entry when it starts)");
+      expect(warn?.fix?.endsWith(DIRECT_HTTP_OWNERSHIP_COST)).toBe(true);
     },
   );
 
