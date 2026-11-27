@@ -1027,9 +1027,20 @@ export async function snapshotUnsavedEdits(
       return { outcome: "skipped-size-cap" };
     }
 
-    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, "unsaved", existing, [
-      opts.protect,
-    ]);
+    // A keep that is not Claude's (the Version history's) never prunes a
+    // Claude keep the user has not been shown: those are pinned for its prune,
+    // so the edits the banner names cannot vanish under the user's own
+    // restores. A Claude keep prunes normally (unseen ones last), so the kind
+    // stays bounded: at most `MAX_DOC_BACKUPS` unseen plus the cap.
+    const pinned = opts.unseen ? [opts.protect] : [opts.protect, ...(await readUnseen(subdir))];
+    const snapshotPath = await writeSnapshotFile(
+      subdir,
+      filePath,
+      bytes,
+      "unsaved",
+      existing,
+      pinned,
+    );
     const st = await fs.stat(snapshotPath);
     if (opts.unseen) {
       const name = path.basename(snapshotPath);

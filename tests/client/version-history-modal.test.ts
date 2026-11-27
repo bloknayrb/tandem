@@ -199,6 +199,28 @@ describe("VersionHistoryModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("re-reads the list after a failed restore, and shows the error even when its row is gone", async () => {
+    let lists = 0;
+    routes(
+      () => {
+        lists++;
+        return lists === 1 ? TWO() : json({ data: { backups: [], keptNotice: null } });
+      },
+      () => json({ error: "FILE_NOT_FOUND", message: "That backup no longer exists." }, 404),
+    );
+    const { container } = open();
+    await settle();
+    await fireEvent.click(container.querySelectorAll(RESTORE)[1]);
+    await settle();
+    await fireEvent.click(container.querySelector(CONFIRM)!);
+    await settle();
+    expect(lists).toBe(2);
+    expect(container.querySelectorAll(ROW)).toHaveLength(0);
+    expect(
+      container.querySelector("[data-testid='version-history-row-error']")?.textContent,
+    ).toContain("That backup no longer exists.");
+  });
+
   it("Escape closes an open confirm first, then the modal", async () => {
     routes(TWO);
     const { container, onClose } = open();
@@ -225,6 +247,11 @@ describe("backups formatting", () => {
     expect(formatBackupAge(new Date().toISOString())).toBe("just now");
     expect(formatBackupAge(new Date(Date.now() - 5 * 60_000).toISOString())).toBe("5m ago");
     expect(formatBackupAge("not a date")).toBe("not a date");
+    // Past a day: the full date and time, so same-day backups differ.
+    const now = Date.parse("2026-06-02T12:00:00Z");
+    const a = formatBackupAge("2026-06-01T09:00:00Z", now);
+    const c = formatBackupAge("2026-06-01T17:00:00Z", now);
+    expect(a).not.toBe(c);
   });
 
   it("sizes", () => {

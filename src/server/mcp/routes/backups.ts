@@ -142,6 +142,15 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
     // Answered here, not in the shared table, which maps BACKUP_FAILED to 500
     // for `/api/apply-changes`' different meaning (its sidecar copy). The
     // message is the editor's own: the server's is addressed to Claude.
+    // The snapshot named is gone (pruned or swept after the list loaded); the
+    // shared message is addressed to Claude's tool.
+    if ((err as { code?: unknown }).code === "FILE_NOT_FOUND") {
+      res.status(404).json({
+        error: "FILE_NOT_FOUND",
+        message: "That backup no longer exists. The list has been refreshed.",
+      });
+      return;
+    }
     if ((err as { code?: unknown }).code === "BACKUP_FAILED") {
       res.status(409).json({
         error: "BACKUP_FAILED",

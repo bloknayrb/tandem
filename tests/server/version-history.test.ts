@@ -255,7 +255,7 @@ describe("kept-unseen.json", () => {
     expect(docBackupSnapshotPath("/x/doc.md", "/app", "kept-unseen.json.abcdef12.tmp")).toBeNull();
   });
 
-  it("the unsaved prune removes the user's own keeps before an unseen Claude keep", async () => {
+  it("the user's own keeps prune among themselves; an unseen Claude keep is kept beyond the cap", async () => {
     const filePath = path.join(tmpDir, "prune.md");
     await fs.writeFile(filePath, "x\n");
     const claude = await snapshotUnsavedEdits(filePath, "claude kept this\n", {
@@ -270,9 +270,31 @@ describe("kept-unseen.json", () => {
       if (r.outcome !== "written") throw new Error("expected a write");
     }
     const unsaved = (await listDocBackups(filePath, appData())).filter((b) => b.kind === "unsaved");
-    expect(unsaved).toHaveLength(MAX_DOC_BACKUPS);
+    expect(unsaved).toHaveLength(MAX_DOC_BACKUPS + 1);
     expect(unsaved.map((b) => b.name)).toContain(claude.name);
     expect(await noticeFor(filePath)).toMatchObject({ names: [claude.name] });
+  });
+
+  it("a user keep never prunes an unseen Claude keep, even when all three older ones are unseen", async () => {
+    const filePath = path.join(tmpDir, "full-unseen.md");
+    await fs.writeFile(filePath, "x\n");
+    const claude: string[] = [];
+    for (let i = 0; i < MAX_DOC_BACKUPS; i++) {
+      const r = await snapshotUnsavedEdits(filePath, `claude ${i}\n`, {
+        appDataDir: appData(),
+        unseen: true,
+      });
+      if (r.outcome !== "written") throw new Error("expected a write");
+      claude.push(r.name);
+    }
+    const user = await snapshotUnsavedEdits(filePath, "user edits\n", { appDataDir: appData() });
+    if (user.outcome !== "written") throw new Error("expected a write");
+
+    const names = (await listDocBackups(filePath, appData()))
+      .filter((b) => b.kind === "unsaved")
+      .map((b) => b.name);
+    expect(names).toEqual(expect.arrayContaining([...claude, user.name]));
+    expect((await noticeFor(filePath))?.names.sort()).toEqual([...claude].sort());
   });
 
   it("the sweep removes the file, and a stray temp of it, with the emptied directory", async () => {
@@ -483,6 +505,21 @@ describe("POST /api/backups/restore", () => {
       spy.mockRestore();
     }
     expect(extractText(doc)).toContain("precious");
+  });
+});
+
+describe("POST /api/backups/restore — a snapshot gone since the list loaded", () => {
+  it("answers 404 in the editor's voice", async () => {
+    const { id } = await openWithUnsavedEdits("gone.md", "disk\n", "edits\n");
+    const res = mockRes();
+    await handleRestoreBackup(
+      req({ body: { documentId: id, backup: "gone-20200101-000000-abcdef12.md" } }),
+      res,
+    );
+    expect(res._status).toBe(404);
+    const body = res._json as { error: string; message: string };
+    expect(body.error).toBe("FILE_NOT_FOUND");
+    expect(body.message).not.toMatch(/tandem_/);
   });
 });
 

@@ -3500,13 +3500,16 @@ function dismissModelPicker() {
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
-    <!-- The server's own "Restored … from backup" notice (same dedupKey) both
-         re-reads the banner and coalesces with this toast in the tray. -->
+    <!-- The server's own "Restored … from backup" notice (same dedupKey)
+         coalesces with this toast in the tray. -->
     <VersionHistoryModal
       documentId={versionHistoryDocId}
       fileName={versionHistoryFileName}
       onClose={() => (versionHistoryDocId = null)}
       onRestored={(editsKept) => {
+        // The server's notice also re-reads the banner, but not while the
+        // stream is down; a second read is coalesced by the banner's sequence.
+        bumpBackupsRevision();
         const docId = versionHistoryDocId;
         notifications.push({
           id: generateNotificationId(),

@@ -143,10 +143,15 @@ export function formatBackupTimestamp(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-/** "just now", "5m ago", "3h ago", then a date: the annotation cards' wording. */
-export function formatBackupAge(iso: string): string {
+/**
+ * "just now", "5m ago", "3h ago" (the annotation cards' wording) within a day;
+ * the full date and time after, so two backups from the same day never read
+ * alike.
+ */
+export function formatBackupAge(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso);
-  return Number.isNaN(t) ? iso : formatRelativeTime(t);
+  if (Number.isNaN(t)) return iso;
+  return now - t < 24 * 60 * 60 * 1000 ? formatRelativeTime(t) : formatBackupTimestamp(iso);
 }
 
 /** A size for a row: bytes under 1 KB, else KB or MB with one decimal. */

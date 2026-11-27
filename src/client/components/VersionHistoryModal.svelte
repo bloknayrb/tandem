@@ -177,8 +177,12 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
           message:
             r.reason === "network"
               ? "Couldn't reach Tandem. Nothing was restored."
-              : `Restore failed: ${r.message ?? "the request failed"}.`,
+              : `Restore failed: ${r.message ?? "the request failed"}`,
         };
+  // Anything but a refused keep may have changed the list (a failure after the
+  // write leaves new backups; a missing snapshot is gone): re-read it. The
+  // error stays, on its row, or above the list if that row is gone.
+  if (r.reason !== "backup-failed") void load(forDoc);
 }
 </script>
 
@@ -224,6 +228,9 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
           Restoring a version replaces the document and writes it to the file. If the document has
           unsaved edits, they're kept as a backup first, so you can come back to them here.
         </p>
+        {#if rowError && !(phase.kind === "ready" && phase.backups.some((b) => b.name === rowError?.name))}
+          <p class="state state--error" data-testid="version-history-row-error">{rowError.message}</p>
+        {/if}
         {#if phase.kind === "loading"}
           <p class="state">Loading…</p>
         {:else if phase.kind === "error"}
