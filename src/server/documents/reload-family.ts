@@ -46,6 +46,7 @@ import {
 import { withInternal } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import {
+  acknowledgeKeptEdits,
   docBackupSnapshotPath,
   docxSidecarBackupPath,
   markSnapshotNewest,
@@ -65,6 +66,7 @@ import { ensureAutoSave } from "./autosave.js";
 import { readPendingConflict } from "./conflict.js";
 import {
   captureAtSwap,
+  type KeepActor,
   type KeptBackup,
   keepEditsCapturedAtSwap,
   keepUnsavedEdits,
@@ -364,8 +366,16 @@ export async function restoreDocumentFromBackup(
      * that cannot be kept throws `BACKUP_FAILED` before the file is written.
      */
     keepUnsavedEdits?: boolean;
+    /**
+     * Who asked (`KeepActor`). `user` is the editor's Version history: no
+     * Claude-voiced notice, and what it keeps is not recorded as unseen (it
+     * is no news to the user, so it raises no kept-edits banner). Default
+     * `claude`.
+     */
+    actor?: KeepActor;
   },
 ): Promise<RestoreBackupResult> {
+  const actor: KeepActor = opts?.actor ?? "claude";
   const existing = getOpenDocs().get(id);
   if (!existing) {
     throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
@@ -447,38 +457,24 @@ export async function restoreDocumentFromBackup(
   const protect = useSidecar ? undefined : backupName;
   const keptBefore =
     editsBefore !== null
-      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming, protect)
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming, protect, actor)
       : undefined;
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
-  // is itself reversible (first overwrite per path per run; never throws — a
-  // skip or snapshot failure must not block the restore). A Claude restore
-  // snapshots every time (ADR-057): after a Claude force-open the bytes on disk
-  // can be an external version an earlier autosave's once-per-run snapshot
-  // never saw. Not the browser's: its palette restores the newest snapshot, so
-  // an every-time snapshot would make a second Restore bring back the version
-  // the first one replaced.
-  // The browser's restore also snapshots every time when what it writes back
-  // is an `unsaved` snapshot: after a Claude force-open that restore lands on
-  // an external version Claude reloaded, which the once-per-run gate (often
-  // spent by an earlier autosave) would leave with no copy. Restoring a disk
-  // snapshot keeps the gate, for the "second Restore" reason above.
+  // is itself reversible (never throws — a skip or snapshot failure must not
+  // block the restore). Every restore, not only the run's first overwrite
+  // (ADR-057): after a Claude force-open the bytes on disk can be an external
+  // version an earlier autosave's once-per-run snapshot never saw, and a
+  // restore picked by name from the Version history is undone from that list.
   await snapshotBeforeFirstWrite(existing.filePath, {
     appDataDir,
     documentId: id,
-    ignoreRunGate: keepEdits || snapshotKind(backupName) === "unsaved",
+    ignoreRunGate: true,
     ...(protect !== undefined ? { protect } : {}),
   });
-  // The browser's gate-ignoring restore of an `unsaved` snapshot just made the
-  // overwritten bytes the newest backup; mark what it restores newest again,
-  // so a second palette Restore returns the same version instead of toggling
-  // back (the reason the gate exists for disk-snapshot restores).
-  if (!keepEdits && snapshotKind(backupName) === "unsaved") {
-    await markSnapshotNewest(existing.filePath, appDataDir, backupName);
-  }
   // The edits were kept before that disk snapshot; make them the newest backup
-  // again, so the palette's "restore the most recent backup" brings them back.
-  // The reported time is the one the listing will show.
+  // again, so they list first. The reported time is the one the listing will
+  // show.
   if (keptBefore) {
     const markedAt = await markSnapshotNewest(existing.filePath, appDataDir, keptBefore.name);
     if (markedAt !== undefined) keptBefore.timestamp = markedAt;
@@ -501,6 +497,7 @@ export async function restoreDocumentFromBackup(
       existing.filePath,
       "restore",
       keptBefore,
+      { actor },
     );
   }
   let fileWritten = false;
@@ -544,6 +541,17 @@ export async function restoreDocumentFromBackup(
     } finally {
       rearmWatch(existing.filePath);
     }
+    // Kept edits a banner may be pointing at are in the file now, whoever
+    // restored them, and stay there if the reload below fails. Before any
+    // notice goes out, so a client re-reading on it finds them seen. (The
+    // Version history's own keeps were never unseen.) Best-effort: the
+    // restore does not depend on it.
+    if (snapshotKind(backupName) === "unsaved" && !useSidecar) {
+      await acknowledgeKeptEdits(existing.filePath, appDataDir, [backupName]).catch(
+        (ackErr: unknown) =>
+          console.error("[Restore] could not mark %s as seen:", backupName, ackErr),
+      );
+    }
     // The early reloadInProgress check above closes the common case, but a
     // watcher reload can still start during the awaits since that check. A
     // silent skip here would report success while the Y.Doc still holds
@@ -576,9 +584,10 @@ export async function restoreDocumentFromBackup(
             editsBefore,
             incoming,
             protect,
+            actor,
           )
         : undefined) ?? keptBefore;
-    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept);
+    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept, { actor });
   }
 
   // The restored bytes are the new saved baseline. Without this, the autosave
@@ -597,11 +606,12 @@ export async function restoreDocumentFromBackup(
             editsBefore,
             incoming,
             protect,
+            actor,
           )
         : undefined) ?? keptBefore)
     : undefined;
 
-  if (unsavedEditsKept) {
+  if (unsavedEditsKept && actor === "claude") {
     // The kept-edits notice replaces the plain one: it says the same thing and
     // where the discarded edits went.
     notifyUnsavedEditsKept(id, existing.filePath, "restore", unsavedEditsKept);
@@ -610,7 +620,9 @@ export async function restoreDocumentFromBackup(
       id: generateNotificationId(),
       type: "file-reloaded",
       severity: "info",
-      message: `Restored ${path.basename(existing.filePath)} from backup.`,
+      message: unsavedEditsKept
+        ? `Restored ${path.basename(existing.filePath)} from backup. Your unsaved edits were kept as a backup.`
+        : `Restored ${path.basename(existing.filePath)} from backup.`,
       documentId: id,
       dedupKey: `restore-backup:${id}`,
       timestamp: Date.now(),

@@ -4,8 +4,8 @@
  * `tandem_restoreBackup` restore arm (`restoreDocumentFromBackup`'s
  * `keepUnsavedEdits`) and `tandem_close` (`closeDocumentById`'s
  * `keepUnsavedEdits`). If the backup cannot be kept, the action is refused with
- * the document untouched. The browser's paths, which pass no option, are
- * unchanged.
+ * the document untouched. The editor's Version history restore (`actor:
+ * "user"`) is pinned in version-history.test.ts.
  */
 
 import fs from "fs/promises";
@@ -322,21 +322,6 @@ describe("tandem_restoreBackup keeps unsaved edits", () => {
         "utf-8",
       ),
     ).toContain("my edits");
-  });
-
-  it("the browser's restore keeps the once-per-run gate, so a second Restore does not undo the first", async () => {
-    const filePath = path.join(tmpDir, "browser.md");
-    await fs.writeFile(filePath, "good\n");
-    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
-    const [good] = await listDocBackups(filePath, resolveAppDataDir());
-    await fs.writeFile(filePath, "mangled\n");
-    const opened = await openFromDisk(filePath);
-
-    await restoreDocumentFromBackup(opened.documentId, good.name);
-
-    const all = await listDocBackups(filePath, resolveAppDataDir());
-    expect(all).toHaveLength(1);
-    expect(all[0].name).toBe(good.name);
   });
 
   it("names the kept backup when the restore fails after keeping it", async () => {
@@ -740,7 +725,7 @@ describe("third cloud review (829de9c)", () => {
 });
 
 describe("second local review (8fa1493)", () => {
-  it("the browser's restore of an unsaved backup snapshots the version it overwrites, gate or no gate", async () => {
+  it("a restore of an unsaved backup snapshots the version it overwrites, gate or no gate", async () => {
     const filePath = path.join(tmpDir, "browser-unsaved.md");
     const { id } = await openWithUnsavedEdits("browser-unsaved.md", "first\n", "my edits\n");
     // An earlier save spent the run's gate.
@@ -750,7 +735,7 @@ describe("second local review (8fa1493)", () => {
     const holder: UnsavedEditsHolder = {};
     await openFromDisk(filePath, { force: true, keepUnsavedEdits: holder });
 
-    // The browser's Restore (no option) writes the kept edits back.
+    // A restore with no option writes the kept edits back.
     await restoreDocumentFromBackup(id, holder.kept!.name);
 
     const disk = (await listDocBackups(filePath, resolveAppDataDir())).filter(
@@ -813,21 +798,5 @@ describe("fourth cloud review (8073f94)", () => {
       spy.mockRestore();
     }
     expect(getOpenDocs().has(id)).toBe(false);
-  });
-
-  it("the browser's Restore of kept edits, run twice, restores the same edits both times", async () => {
-    const filePath = path.join(tmpDir, "twice.md");
-    const { id, doc } = await openWithUnsavedEdits("twice.md", "first\n", "my edits\n");
-    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
-    await fs.writeFile(filePath, "external\n");
-    const holder: UnsavedEditsHolder = {};
-    await openFromDisk(filePath, { force: true, keepUnsavedEdits: holder });
-
-    for (let i = 0; i < 2; i++) {
-      const [newest] = await listDocBackups(filePath, resolveAppDataDir());
-      expect(newest.name).toBe(holder.kept!.name);
-      await restoreDocumentFromBackup(id, newest.name);
-      expect(extractText(doc)).toContain("my edits");
-    }
   });
 });
