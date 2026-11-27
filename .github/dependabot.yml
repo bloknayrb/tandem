@@ -101,6 +101,13 @@ updates:
       # Minors and patches of 7.x still ride in the npm group.
       - dependency-name: "undici"
         update-types: ["version-update:semver-major"]
+      # REVIEW by 2027-02-27 per #2600. Every version, not just majors: knip
+      # gates `check` through the knip ratchet (scripts/ci/knip-ratchet.mjs
+      # against scripts/knip-baseline.json), and any release can change what
+      # it reports, so a bump riding in the npm group turns the whole group
+      # red until someone runs `--prune`. Bump knip by hand, in its own PR
+      # that also prunes the baseline.
+      - dependency-name: "knip"
 
   # Split by update-type for the same reason as npm above. Cargo has not yet hit
   # the hostage failure, but the shape is identical -- and a Rust major is worse

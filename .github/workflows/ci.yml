@@ -540,6 +540,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # knip as a ratchet: fails on NEW dead code (unused files, exports,
+      # dependencies), and on a frozen finding that has been fixed but not
+      # pruned. The findings that existed when this landed are frozen in
+      # scripts/knip-baseline.json. Pinned by tests/scripts/knip-ratchet.test.ts.
+      - name: Dead-code ratchet (knip)
+        run: node scripts/ci/knip-ratchet.mjs
+
       - name: Biome format check
         run: npx biome check .
 
