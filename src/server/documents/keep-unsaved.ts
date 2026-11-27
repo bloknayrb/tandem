@@ -109,15 +109,20 @@ export function backupFailedError(filePath: string): Error & { code: "BACKUP_FAI
  * Keep `edits` as an `unsaved` snapshot unless they equal `incoming` (the
  * content about to replace them, when known), in which case nothing would be
  * lost and nothing is kept. Throws `BACKUP_FAILED` when the snapshot could not
- * be written or the backup folder is at its size limit.
+ * be written or the backup folder is at its size limit. `protect`: a snapshot
+ * name the prune must not remove (the one a restore is writing back).
  */
 export async function keepUnsavedEdits(
   filePath: string,
   edits: string,
   incoming?: string,
+  protect?: string,
 ): Promise<KeptBackup | undefined> {
   if (incoming !== undefined && edits === incoming) return undefined;
-  const r = await snapshotUnsavedEdits(filePath, edits, { appDataDir: resolveAppDataDir() });
+  const r = await snapshotUnsavedEdits(filePath, edits, {
+    appDataDir: resolveAppDataDir(),
+    ...(protect !== undefined ? { protect } : {}),
+  });
   if (r.outcome === "written" || r.outcome === "skipped-identical") {
     return { name: r.name, timestamp: r.timestamp };
   }
@@ -175,10 +180,11 @@ export async function keepEditsCapturedAtSwap(
   atSwap: string | null,
   before: string | null,
   incoming?: string,
+  protect?: string,
 ): Promise<KeptBackup | undefined> {
   if (atSwap === null || atSwap === before || atSwap === incoming) return undefined;
   try {
-    return await keepUnsavedEdits(filePath, atSwap, incoming);
+    return await keepUnsavedEdits(filePath, atSwap, incoming, protect);
   } catch (err) {
     console.error(
       "[KeepUnsaved] edits typed during the action could not be kept for %s:",

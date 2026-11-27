@@ -440,9 +440,13 @@ export async function restoreDocumentFromBackup(
   const restoreDoc = getOrCreateDocument(id);
   const editsBefore = keepEdits ? unsavedEditsOf(id, restoreDoc, existing) : null;
   const incoming = typeof content === "string" ? content : undefined;
+  // The snapshot being restored is protected from both kinds' prunes: it is
+  // the version this restore writes back, and pruning it would leave that
+  // version on disk alone, for the next overwrite to destroy.
+  const protect = useSidecar ? undefined : backupName;
   const keptBefore =
     editsBefore !== null
-      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming)
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming, protect)
       : undefined;
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
@@ -457,12 +461,14 @@ export async function restoreDocumentFromBackup(
     appDataDir,
     documentId: id,
     ignoreRunGate: keepEdits,
+    ...(protect !== undefined ? { protect } : {}),
   });
   // The edits were kept before that disk snapshot; make them the newest backup
   // again, so the palette's "restore the most recent backup" brings them back.
+  // The reported time is the one the listing will show.
   if (keptBefore) {
-    await markSnapshotNewest(existing.filePath, appDataDir, keptBefore.name);
-    keptBefore.timestamp = new Date().toISOString();
+    const markedAt = await markSnapshotNewest(existing.filePath, appDataDir, keptBefore.name);
+    if (markedAt !== undefined) keptBefore.timestamp = markedAt;
   }
   const swap = keepEdits ? captureAtSwap(id, existing) : undefined;
   // Whether anything the edits lived in has changed yet: the file once the
@@ -535,7 +541,13 @@ export async function restoreDocumentFromBackup(
     // swap but not yet kept, and they are gone from the document now.
     const kept =
       (swap
-        ? await keepEditsCapturedAtSwap(existing.filePath, swap.text, editsBefore, incoming)
+        ? await keepEditsCapturedAtSwap(
+            existing.filePath,
+            swap.text,
+            editsBefore,
+            incoming,
+            protect,
+          )
         : undefined) ?? keptBefore;
     throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept);
   }
@@ -550,7 +562,13 @@ export async function restoreDocumentFromBackup(
 
   const unsavedEditsKept = keepEdits
     ? ((swap
-        ? await keepEditsCapturedAtSwap(existing.filePath, swap.text, editsBefore, incoming)
+        ? await keepEditsCapturedAtSwap(
+            existing.filePath,
+            swap.text,
+            editsBefore,
+            incoming,
+            protect,
+          )
         : undefined) ?? keptBefore)
     : undefined;
 

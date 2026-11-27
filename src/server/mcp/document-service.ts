@@ -1893,7 +1893,13 @@ export async function closeDocumentById(
     if (!sessionWillBeKept) {
       try {
         const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
-        if (edits !== null) unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
+        if (edits !== null) {
+          // Compared with the file, as the force-open and restore compare with
+          // what replaces the edits: a dirty flag over text that already
+          // matches disk loses nothing, so it keeps (and announces) nothing.
+          const onDisk = await fs.readFile(docState.filePath, "utf-8").catch(() => undefined);
+          unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits, onDisk);
+        }
       } catch (err) {
         // A failed snapshot, the size cap, or edits the serializer could not
         // write: all `BACKUP_FAILED`, the code the skill keys on.
@@ -1955,8 +1961,13 @@ export async function closeDocumentById(
     isDirty(safeId) &&
     (hasReadOnlyFileEpisode(safeId) ||
       (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
+  // The skipped-backup case keeps the session only while there is still
+  // something to keep: a conflict the user answered with Reload during this
+  // call's awaits leaves a clean document, whose kept session would only
+  // reopen a closed tab at the next start.
+  const keptForSkippedBackup = backupSkippedForKeptSession && isDirty(safeId);
   const keepSession =
-    conflictAtClose !== undefined || readOnlyBlockedAtClose || backupSkippedForKeptSession;
+    conflictAtClose !== undefined || readOnlyBlockedAtClose || keptForSkippedBackup;
   if (keepSession) {
     try {
       await saveSession(docState.filePath, docState.format, closingDoc, {
@@ -2035,7 +2046,11 @@ export async function closeDocumentById(
     console.warn(
       "[Tandem] Keeping the session for %s: closed with %s, so the session holds the only copy of its unsaved edits.",
       path.basename(closedPath),
-      conflictAtClose ? "an unresolved external conflict" : "edits a read-only file refused",
+      conflictAtClose
+        ? "an unresolved external conflict"
+        : readOnlyBlockedAtClose
+          ? "edits a read-only file refused"
+          : "unsaved edits that were not backed up",
     );
   } else {
     try {

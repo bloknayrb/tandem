@@ -281,6 +281,23 @@ describe("doc-backup", () => {
       expect(allSnapshots().find((s) => s.name === disk[0].name)?.content).toBe("disk version\n");
     });
 
+    it("never prunes the snapshot named by `protect` (the one a restore writes back)", async () => {
+      const first = await snapshotUnsavedEdits(docPath, "oldest edits\n", { appDataDir });
+      if (first.outcome !== "written") throw new Error("unreachable");
+      // Age it, so it is the one the prune would remove first.
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(docBackupSnapshotPath(docPath, appDataDir, first.name) as string, old, old);
+      for (let i = 0; i < MAX_DOC_BACKUPS + 1; i++) {
+        await snapshotUnsavedEdits(docPath, `edit ${i}\n`, { appDataDir, protect: first.name });
+      }
+
+      const unsaved = (await listDocBackups(docPath, appDataDir)).filter(
+        (b) => b.kind === "unsaved",
+      );
+      expect(unsaved.map((b) => b.name)).toContain(first.name);
+      expect(unsaved).toHaveLength(MAX_DOC_BACKUPS + 1);
+    });
+
     it("reports the size cap rather than writing, and raises no notification itself", async () => {
       const r = await snapshotUnsavedEdits(docPath, "0123456789", { appDataDir, maxTotalBytes: 5 });
 

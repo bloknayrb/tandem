@@ -501,6 +501,12 @@ export async function snapshotBeforeFirstWrite(
      * The byte-identical skip still applies, so repeats cost nothing.
      */
     ignoreRunGate?: boolean;
+    /**
+     * A snapshot name the prune must not remove: the one a restore is about to
+     * write back. Without it, restoring the oldest snapshot would prune the very
+     * version being restored, leaving it on disk alone for the next overwrite.
+     */
+    protect?: string;
   },
 ): Promise<SnapshotOutcome> {
   const maxTotalBytes = opts.maxTotalBytes ?? MAX_DOC_BACKUP_BYTES;
@@ -586,14 +592,10 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    const snapshotPath = await writeSnapshotFile(
-      subdir,
-      filePath,
-      original,
-      "disk",
-      existing,
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, original, "disk", existing, [
       pinnedFirstSnapshot.get(pathKey),
-    );
+      opts.protect,
+    ]);
     if (!pinnedFirstSnapshot.has(pathKey)) {
       pinnedFirstSnapshot.set(pathKey, path.basename(snapshotPath));
     }
@@ -637,13 +639,15 @@ export async function snapshotBeforeFirstWrite(
 /**
  * Set a snapshot's mtime to now (or `when`). Best-effort: the bytes are kept
  * either way, so a refused touch (antivirus, a read-only attribute) is logged
- * and never turns a kept backup into a failure.
+ * and never turns a kept backup into a failure. Returns whether it took.
  */
-async function touchBestEffort(subdir: string, name: string, when = new Date()): Promise<void> {
+async function touchBestEffort(subdir: string, name: string, when = new Date()): Promise<boolean> {
   try {
     await fs.utimes(path.join(subdir, name), when, when);
+    return true;
   } catch (err) {
     console.error("[DocBackup] could not refresh the time of %s (continuing):", name, err);
+    return false;
   }
 }
 
@@ -651,15 +655,17 @@ async function touchBestEffort(subdir: string, name: string, when = new Date()):
  * Mark an `unsaved` snapshot as the newest backup of `filePath`: a restore
  * keeps the edits BEFORE its disk snapshot (so a refusal comes before anything
  * is written or pruned), then calls this, so "restore the most recent backup"
- * still returns the edits (ADR-057). Best-effort, never throws.
+ * still returns the edits (ADR-057). Best-effort, never throws. Returns the
+ * time it set, as ISO 8601 (the time `listDocBackups` will report), or
+ * undefined when the touch did not take.
  */
 export async function markSnapshotNewest(
   filePath: string,
   appDataDir: string,
   name: string,
-): Promise<void> {
+): Promise<string | undefined> {
   const resolved = docBackupSnapshotPath(filePath, appDataDir, name);
-  if (resolved === null) return;
+  if (resolved === null) return undefined;
   const subdir = path.dirname(resolved);
   const leaf = path.basename(resolved);
   // Strictly later than every other snapshot here, not just "now": a file
@@ -675,7 +681,8 @@ export async function markSnapshotNewest(
       // Raced away — not a rival.
     }
   }
-  await touchBestEffort(subdir, leaf, new Date(Math.max(Date.now(), latestOther + 1)));
+  const when = new Date(Math.max(Date.now(), latestOther + 1));
+  return (await touchBestEffort(subdir, leaf, when)) ? when.toISOString() : undefined;
 }
 
 /**
@@ -742,8 +749,11 @@ async function writeSnapshotFile(
   bytes: Buffer,
   kind: DocBackupKind,
   existing: string[],
-  /** A snapshot the prune must keep beyond the cap (the run's first-write copy). */
-  pinned?: string,
+  /**
+   * Snapshots the prune must keep beyond the cap: the run's first-write copy,
+   * and the one a restore is writing back.
+   */
+  pinned: ReadonlyArray<string | undefined> = [],
 ): Promise<string> {
   // 0o700 mode on the per-path subdir. Windows ignores it; the root's
   // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
@@ -776,10 +786,10 @@ async function writeSnapshotFile(
   // falls to the random uuid8, which could rank it "oldest". The older ones ARE
   // ordered by mtime, for the same reason: name order can rank a newer one
   // below an older one taken in the same second. Per kind, so neither kind can
-  // evict the other (ADR-057). The pinned snapshot is kept beyond the cap and
-  // does not count toward it.
+  // evict the other (ADR-057). The pinned snapshots are kept beyond the cap and
+  // do not count toward it.
   const olderNewestFirst = await sortByMtimeNewestFirst(subdir, existing);
-  const all = [snapshotName, ...olderNewestFirst].filter((name) => name !== pinned);
+  const all = [snapshotName, ...olderNewestFirst].filter((name) => !pinned.includes(name));
   for (const name of all.slice(MAX_DOC_BACKUPS)) {
     await fs
       .rm(path.join(subdir, name), { force: true })
@@ -810,7 +820,7 @@ export type UnsavedEditsOutcome =
 export async function snapshotUnsavedEdits(
   filePath: string,
   content: string,
-  opts: { appDataDir: string; maxTotalBytes?: number },
+  opts: { appDataDir: string; maxTotalBytes?: number; protect?: string },
 ): Promise<UnsavedEditsOutcome> {
   const maxTotalBytes = opts.maxTotalBytes ?? MAX_DOC_BACKUP_BYTES;
   try {
@@ -842,7 +852,9 @@ export async function snapshotUnsavedEdits(
       return { outcome: "skipped-size-cap" };
     }
 
-    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, "unsaved", existing);
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, "unsaved", existing, [
+      opts.protect,
+    ]);
     const st = await fs.stat(snapshotPath);
     console.error(
       `[DocBackup] Kept unsaved edits of ${path.basename(filePath)} -> ${snapshotPath}`,
