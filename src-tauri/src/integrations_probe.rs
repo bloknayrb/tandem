@@ -219,7 +219,7 @@ fn hardlink_count(meta: &std::fs::Metadata) -> Option<u64> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        return Some(meta.nlink());
+        Some(meta.nlink())
     }
     #[cfg(not(unix))]
     {

@@ -1306,7 +1306,7 @@ mod tests {
         let roots = found.roots;
         assert_eq!(roots.len(), 2, "expected MSIX + Roaming roots: {roots:?}");
         assert!(roots.iter().any(|r| r.starts_with(&packages)), "{roots:?}");
-        assert!(roots.iter().any(|r| *r == roaming_sessions), "{roots:?}");
+        assert!(roots.contains(&roaming_sessions), "{roots:?}");
         assert!(
             !roots.iter().any(|r| r.to_string_lossy().contains("EvilCorp")),
             "foreign package must not contribute a root: {roots:?}"
