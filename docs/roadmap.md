@@ -93,7 +93,7 @@ before relying on it.
   A Claude force-open, restore or close now keeps the unsaved edits it discards as a backup.
   Follow-ups: the Version history picker with a durable "your edits were kept" banner, whose
   restore keeps the unsaved edits too (2026-11-27, ADR-057 amendment); the same undo for the conflict
-  banner's Keep/Reload (ADR-057 PR 3); still planned, a compare view.
+  banner's Keep/Reload (ADR-057 PR 3), and the compare view (PR 4). All four are done.
 
 ### Decisions still owed
 

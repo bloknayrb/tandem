@@ -2,6 +2,7 @@
 import type * as Y from "yjs";
 import { API_EXTERNAL_CONFLICT_RESOLVE } from "../../shared/api-paths";
 import {
+  canCompareWithDisk,
   keepsUnsavedEditsOnDiscard,
   SAVEABLE_FORMATS,
   Y_MAP_DOCUMENT_META,
@@ -43,9 +44,14 @@ interface Props {
   /** With `readOnly`, decides whether Reload keeps the unsaved edits (ADR-057 PR 3). */
   source: string;
   readOnly: boolean;
+  /** Open the compare view (ADR-057 PR 4): the file on disk against the document now. */
+  onCompare?: (documentId: string) => void;
 }
 
-const { ydoc, documentId, fileName, format, source, readOnly }: Props = $props();
+const { ydoc, documentId, fileName, format, source, readOnly, onCompare }: Props = $props();
+
+/** Compare reads plain text on both sides: a `.md`/`.txt` file. */
+const canCompare = $derived(canCompareWithDisk({ source, format, readOnly }));
 
 /**
  * Formats with NO path back to disk — the server refuses every save for them.
@@ -255,6 +261,17 @@ async function resolve(choice: "keep" | "reload", discardUnsavedEdits = false) {
     >
       {pending === "reload" ? "Reloading…" : "Reload from file"}
     </button>
+    {#if canCompare && onCompare}
+      <button
+        type="button"
+        class="tandem-banner__cta"
+        data-testid="external-conflict-compare-btn"
+        onclick={() => onCompare(documentId)}
+        disabled={pending !== null}
+      >
+        Compare
+      </button>
+    {/if}
     {#if backupFailed}
       <button
         type="button"
