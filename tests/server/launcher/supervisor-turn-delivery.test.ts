@@ -753,6 +753,11 @@ describe("#1868 — consecutive stdin-error kills trip their own breaker", () =>
     expect(texts(child3)).toEqual([SUPERVISOR_WAKE_PROMPT]);
     pushJson(child3, INIT);
     pushJson(child3, RESULT_OK);
+    // An exit that clears the saved session, so child 4 is fresh and has its
+    // bootstrap turn to fail.
+    const argv3 = vi.mocked(spawn).mock.calls[2][1] as string[];
+    const id3 = argv3[argv3.indexOf("--resume") + 1];
+    child3.stderr.write(`No conversation found with session ID: ${id3}\n`);
     await settle();
     exitChild(child3, 1);
 
@@ -1436,15 +1441,144 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
     expect(logText()).not.toContain("clearing saved session");
   });
 
-  // The control: the exit the gate exists for still clears at once.
-  it("a doomed resume (exit 1) still clears the saved session and goes fresh", async () => {
+  // The control: the exit the gate exists for still clears at once. #2358 S2
+  // (Windows 11, Claude Code 2.1.332): under stream-json a doomed resume says
+  // so in the `result` envelope's `errors` (the smoke logged it as
+  // `[Claude] Output error: No conversation found with session ID: …`), then
+  // exits 1.
+  const doomedResult = (id: string) => ({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: [`No conversation found with session ID: ${id}`],
+  });
+
+  it("a doomed resume (its message in the result envelope, exit 1) clears at once and goes fresh", async () => {
     const { child2, id } = await resumedChild();
+    pushJson(child2, doomedResult(id));
+    await settle();
     exitChild(child2, 1);
 
     await nthChild(3);
-    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(logText()).toContain(
+      `[Claude] Output error: No conversation found with session ID: ${id}`,
+    );
+    expect(logText()).toContain(
+      "Resume failed before confirmation — clearing saved session (Claude has no such conversation)",
+    );
     expect(isFresh(3)).toBe(true);
     expect(claudeArgs(3)).not.toContain(id);
+  });
+
+  it("a doomed resume whose message is the result envelope's `result` clears at once too", async () => {
+    // Not measured; read in case a build moves the text, as the sign-in
+    // refusal already arrives there.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      is_error: true,
+      result: `No conversation found with session ID: ${id}`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(isFresh(3)).toBe(true);
+  });
+
+  it("a doomed resume whose message comes on stderr clears at once too", async () => {
+    // Where text mode prints it (docs/spikes/cli-session-resume-spike.md).
+    const { child2, id } = await resumedChild();
+    child2.stderr.write(`No conversation found with session ID: ${id}\n`);
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(logText()).toContain("clearing saved session (Claude has no such conversation)");
+    expect(isFresh(3)).toBe(true);
+  });
+
+  it("the message is read only for this spawn's own id", async () => {
+    const { child2, id } = await resumedChild();
+    pushJson(child2, doomedResult("99999999-2222-4333-8444-555555555555"));
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a successful turn's reply quoting the message is not Claude's verdict", async () => {
+    // A `success` result's `result` is Claude's own answer, which can quote a
+    // pasted launcher log naming this very id.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: `The log says: No conversation found with session ID: ${id}`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  // On Windows, which has no signals, a `taskkill`'d or crashed Claude also
+  // exits 1, so before #2358 S2's fix a kill early in a resumed run lost the
+  // conversation.
+  it("a Windows-style kill (exit 1, no message) early in a resumed run keeps the session", async () => {
+    const { child2, id } = await resumedChild();
+    pushJson(child2, INIT);
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(savedId()).toBe(id);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("an exit 1 without the message is kept once, then cleared on the second", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 1);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+
+    exitChild(child3, 1);
+    await nthChild(4);
+    expect(logText()).toContain("clearing saved session (code=1)");
+    expect(isFresh(4)).toBe(true);
+    expect(claudeArgs(4)).not.toContain(id);
+  });
+
+  it("a crash relayed as 137 and then an exit 1 share the one retry", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 137);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 1);
+    await nthChild(4);
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("a confirmed resume resets the allowance an exit 1 used", async () => {
+    const { child2, id } = await resumedChild({ resumeConfirmMs: 40 });
+    exitChild(child2, 1); // kept, allowance used
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    await sleep(80); // child 3 confirms: the id loads
+    exitChild(child3, 1); // after confirmation: kept regardless
+    const child4 = await nthChild(4);
+    resumes(4, id);
+    exitChild(child4, 1); // unconfirmed again, but the first since the reset
+    await nthChild(5);
+    resumes(5, id);
+    expect(logText()).not.toContain("clearing saved session");
   });
 });
 

@@ -423,6 +423,13 @@ async function boundFreshRun(h: ReturnType<typeof makeSupervisor>): Promise<Fake
   return c1;
 }
 
+/** A resumed spawn's Claude says the conversation is not there (#2358 S2): what
+ * makes its exit 1 the #1169 shape rather than a crash. */
+async function sayNoConversation(child: FakeChild): Promise<void> {
+  child.stderr.write(`No conversation found with session ID: ${argAfter(child, "--resume")}\n`);
+  await settle();
+}
+
 /** After a bound run, crash it; the restart resumes (child 2), writing no turn. */
 async function crashToResumed(c1: FakeChild): Promise<FakeChild> {
   c1.exitWith(1, null);
@@ -673,11 +680,30 @@ describe("R1.4 site (b): fault kills torn down by a Start or an Off before their
     c2.holdExit = true;
     c2.stdin.emit("error", EPIPE());
     await until(() => c2.killed, "the fault kill");
-    c2.releaseExit(1); // the #1169 shape: resuming, code 1, unconfirmed
+    await sayNoConversation(c2);
+    c2.releaseExit(1); // the #1169 shape: resuming, the message, code 1, unconfirmed
     await settle();
     await h.sup.updateSettings({ startMode: "off" });
     await settle();
     expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual([]);
+  });
+
+  it("the same fault kill ending in exit 1 without Claude's message (a Windows kill) is a crash, not the #1169 shape: judged at site (a), once", async () => {
+    // #2358 S2: on Windows a killed Claude exits 1. Without the no-conversation
+    // message the session is kept once (`shouldClearSession`), and site (a)
+    // shares that verdict.
+    const h = makeSupervisor();
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    h.emit(annotationEvent());
+    c2.holdExit = true;
+    c2.stdin.emit("error", EPIPE());
+    await until(() => c2.killed, "the fault kill");
+    c2.releaseExit(1);
+    await settle();
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual(["failed:torn-down-unbound"]);
+    expect(failedLines()).toBe(1);
   });
 
   it("the same fault kill relayed by the Linux reaper as code 143 is a signal death, not the #1169 shape: judged at site (a), once", async () => {
@@ -788,6 +814,7 @@ describe("R1: judged at most once, and only the latest spawn", () => {
     await settle();
     expect(argAfter(c2, "--resume")).toBeDefined();
     expect(c2.stdin.writes.length).toBeGreaterThan(0); // its wake: the window runs
+    await sayNoConversation(c2);
     c2.exitWith(1, null);
     await settle();
     advance(1);

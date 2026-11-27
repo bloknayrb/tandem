@@ -1097,11 +1097,47 @@ function isCommandedRelayedKill(code: number | null, commandedKill: boolean): bo
 }
 
 /**
+ * Did Claude say it has no conversation under `sessionId`? This is the CLI's
+ * own verdict that a `--resume` is doomed, and the only exit evidence that
+ * tells a doomed resume from a crash on Windows, where both exit 1 (a
+ * `taskkill`'d or crashed Claude relays as 1; measured on Windows 11, Claude
+ * Code 2.1.332, #2358 smoke row S2).
+ *
+ * The text, as measured: `No conversation found with session ID: <id>` — on
+ * stderr in text mode (2.1.143, docs/spikes/cli-session-resume-spike.md) and,
+ * under the launcher's stream-json flags, as an entry of the `result`
+ * envelope's `errors` (2.1.332, logged as `[Claude] Output error: …`). The
+ * spawn checks both streams.
+ *
+ * The match is loose where wording drift is cheap and strict where a false
+ * match is not:
+ *   - case-insensitive and unanchored, so a change of capitals, an `Error: `
+ *     prefix or a colour code in front of it does not defeat it;
+ *   - the same text must also name THIS spawn's session id, so only a verdict
+ *     about the conversation being resumed can clear it. A false match loses
+ *     a live conversation; a miss costs one retry.
+ * If Claude Code rewords the message, this stops matching and a doomed
+ * resume's exit 1 reads as a crash: kept once, then cleared on the second
+ * consecutive one (`shouldClearSession`). That fails safe, at the price of one
+ * doomed retry and its backoff.
+ */
+export function saysNoConversation(text: string, sessionId: string): boolean {
+  return (
+    /no conversation found with session id/i.test(text) &&
+    text.toLowerCase().includes(sessionId.toLowerCase())
+  );
+}
+
+/**
  * Pure decision: should the saved session be cleared after a spawn exits?
  * Exported for unit testing. Never, unless the spawn was a resume (`resuming`)
  * that exited non-zero before running long enough to count as resumed
  * (`resumeConfirmed`). Then, by exit shape:
  *   - `code === null` (the reaper itself died by a signal): keep.
+ *   - Claude said it has no such conversation (`noConversationFound`, see
+ *     `saysNoConversation`): clear at once, whatever the code. That is the
+ *     doomed `--resume` this gate exists for, and the message is the CLI's
+ *     own word on it, so even an exit we caused cannot make it wrong.
  *   - a relayed signal death an intentional kill of ours caused
  *     (`isCommandedRelayedKill`: `commandedKill` — Restart, relaunch, stop,
  *     Off, idle stop, the sign-in kill — AND the code is our SIGTERM's 143 or
@@ -1109,15 +1145,19 @@ function isCommandedRelayedKill(code: number | null, commandedKill: boolean): bo
  *     whether the conversation exists.
  *   - any other relayed signal death (a crash, the OOM killer, an outside
  *     kill, and a delivery or fault kill, which follows a death rather than
- *     causing one): keep ONCE, so a one-off crash resumes the same
- *     conversation; clear when an earlier resume of the same session id
+ *     causing one), and an exit 1 without the message (on Windows, which has
+ *     no signals, a `taskkill`'d or crashed Claude and the reaper's own setup
+ *     failures; anywhere, a JS crash, or a doomed resume whose message this
+ *     build no longer matches): keep ONCE, so a one-off crash resumes the
+ *     same conversation; clear when an earlier resume of the same session id
  *     already died that way (`priorUncommandedDeaths >= 1`). Keeping it
  *     unconditionally loops forever on a session that kills Claude every
- *     time it loads (a V8 abort on a huge transcript, 134): each death lands
- *     inside the confirm window, so the backoff never resets and the
- *     breaker's window never fills.
- *   - any other non-zero code, chiefly a doomed `--resume`'s 1 ("No
- *     conversation found"): clear.
+ *     time it loads (a V8 abort on a huge transcript, 134), or that fails to
+ *     load for a reason the message does not name: each death lands inside
+ *     the confirm window, so the backoff never resets and the breaker's
+ *     window never fills.
+ *   - any other non-zero code (127, the reaper's failed exec of a command
+ *     resolved moments earlier; 128; above 192): clear.
  */
 export function shouldClearSession(opts: {
   resuming: boolean;
@@ -1125,33 +1165,36 @@ export function shouldClearSession(opts: {
   resumeConfirmed: boolean;
   /** The supervisor ended this reaper on purpose (see `isCommandedRelayedKill`). */
   commandedKill: boolean;
-  /** Consecutive earlier resumes of this session id that died unconfirmed by a
-   * relayed signal death that was not an intentional kill of ours (a fault
-   * kill counts: it follows a death rather than causing one). */
+  /** This spawn's Claude printed the no-conversation message naming its own
+   * session id (`saysNoConversation`). */
+  noConversationFound: boolean;
+  /** Consecutive earlier resumes of this session id that died unconfirmed in a
+   * shape kept on the one-retry allowance (`isUncommandedResumeDeath`). */
   priorUncommandedDeaths: number;
 }): boolean {
   if (!opts.resuming || opts.resumeConfirmed || opts.code === null || opts.code === 0) {
     return false;
   }
-  if (!isRelayedSignalDeath(opts.code)) return true;
-  if (isCommandedRelayedKill(opts.code, opts.commandedKill)) return false;
-  return opts.priorUncommandedDeaths >= 1;
+  if (opts.noConversationFound) return true;
+  if (isUncommandedResumeDeath(opts)) return opts.priorUncommandedDeaths >= 1;
+  // What is left of the relayed range is our own kill.
+  return !isRelayedSignalDeath(opts.code);
 }
 
-/** The uncommanded-signal-death half of `shouldClearSession`: true when this
- * exit is kept only on the one-retry allowance, so the caller counts it. */
+/** The one-retry half of `shouldClearSession`: true when this exit is kept
+ * only on that allowance, so the caller counts it. A relayed signal death that
+ * was not an intentional kill of ours, or an exit 1 without the
+ * no-conversation message. */
 function isUncommandedResumeDeath(opts: {
   resuming: boolean;
   code: number | null;
   resumeConfirmed: boolean;
   commandedKill: boolean;
+  noConversationFound: boolean;
 }): boolean {
-  return (
-    opts.resuming &&
-    !opts.resumeConfirmed &&
-    isRelayedSignalDeath(opts.code) &&
-    !isCommandedRelayedKill(opts.code, opts.commandedKill)
-  );
+  if (!opts.resuming || opts.resumeConfirmed || opts.noConversationFound) return false;
+  if (opts.code === 1) return true;
+  return isRelayedSignalDeath(opts.code) && !isCommandedRelayedKill(opts.code, opts.commandedKill);
 }
 
 /** Contents of `launcher-session.json`. */
@@ -1655,7 +1698,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let confirmTimer: NodeJS.Timeout | null = null;
   /** Consecutive resumes of `sessionId` that died unconfirmed by a relayed
    * signal death that was not an intentional kill of ours, fault kills
-   * included (`isUncommandedResumeDeath`). Feeds
+   * included, or by an exit 1 without the no-conversation message
+   * (`isUncommandedResumeDeath`). Feeds
    * `shouldClearSession`'s one-retry allowance. Reset by a confirmed resume of
    * that id, by a fresh spawn, when the session is cleared, and by an explicit
    * user Start or Restart (`resetCrashAllowance`), so only back-to-back
@@ -3401,6 +3445,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // saved session. The timer is cancelled in the exit handler and in
     // stopInternal() so it never fires on a deliberate stop.
     let resumeConfirmed = !plan.resuming;
+    /** Claude said it has no conversation under this spawn's id
+     * (`saysNoConversation`), on stderr or in a `result` envelope. Read once,
+     * by the exit handler. Node may emit `exit` before the last stream data is
+     * read; a message that loses that race reads as a plain exit 1, which is
+     * kept once and cleared on the next doomed resume — the same fail-safe
+     * path as a reworded message. */
+    let noConversationFound = false;
+    const noteNoConversation = (text: string): void => {
+      if (!noConversationFound && saysNoConversation(text, plan.sessionId)) {
+        noConversationFound = true;
+      }
+    };
     if (plan.resuming) {
       // The callback nulls the SHARED slot only while it still owns it (#1995):
       // a superseded spawn's leaked timer would otherwise clear the successor's
@@ -3928,6 +3984,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // binary (spike, 2026-08-04): `result` follows every turn, and `init` is
       // re-emitted per turn rather than per session.
       if (parsed.type === "result") {
+        // A doomed `--resume` reports itself here under stream-json, as an
+        // `errors` entry (#2358 S2). `result` too, in case a build moves it.
+        // Each checked for type: the envelope is the child's untyped JSON.
+        // Errored envelopes only: a successful turn's `result` is Claude's
+        // own reply, which can quote the message (a pasted launcher log), and
+        // a false match clears a live conversation.
+        const resultErrored =
+          parsed.is_error === true ||
+          (typeof parsed.subtype === "string" && parsed.subtype.startsWith("error"));
+        if (resultErrored) {
+          if (Array.isArray(parsed.errors)) {
+            for (const e of parsed.errors) if (typeof e === "string") noteNoConversation(e);
+          }
+          if (typeof parsed.result === "string") noteNoConversation(parsed.result);
+        }
         clearLatch();
         // A completed turn is the proof of healthy delivery that ends a
         // wake-delivery kill streak (#1868). Deliberately `result` only: `init`
@@ -4003,11 +4074,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           persistLoginRecheck(plan.sessionId, false);
         }
 
-        // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
-        // `result` envelope — it can only be settled against a running `claude`
-        // binary, and no `is_error` result was produced during the spike. Left
-        // as-is deliberately; the branch is inert if the field never appears,
-        // so guessing a different shape would be strictly worse. Note this is
+        // NOTE (#1267): `errors` was not seen during the spike; the #2358 S2
+        // smoke (Windows, 2.1.332) logged a doomed resume's message through
+        // this line, so the field exists at least on that failure. Note this is
         // logging only — it must not gate `clearLatch()` above, or an
         // unrecognised result shape would wedge wakes permanently.
         if (parsed.is_error && Array.isArray(parsed.errors)) {
@@ -4046,7 +4115,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     spawned.stderr?.setEncoding("utf8");
     const stderrFramer = createLineFramer((line) => {
       const text = line.trimEnd();
-      if (text) console.error(`[Claude] ${text}`);
+      if (!text) return;
+      console.error(`[Claude] ${text}`);
+      // Where a text-mode `--resume` prints its no-conversation message.
+      noteNoConversation(text);
     });
     spawned.stderr?.on("data", (text: string) => stderrFramer.push(text));
     spawned.stderr?.on("end", () => stderrFramer.flush());
@@ -4123,6 +4195,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         code,
         resumeConfirmed,
         commandedKill: commandedKills.has(spawned),
+        noConversationFound,
       };
       const priorUncommandedDeaths =
         uncommandedDeaths?.sessionId === plan.sessionId ? uncommandedDeaths.count : 0;
@@ -4142,21 +4215,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
 
         // If the resume failed before being confirmed, drop the stale session so
-        // the next restart goes fresh. A signal death keeps it: the reaper's own
+        // the next restart goes fresh: at once when Claude said the
+        // conversation is not there. A signal death keeps it: the reaper's own
         // (`code` null) and a relayed one from an intentional kill of ours (143
         // on a Restart) always, any other relayed death — a fault kill's among
-        // them — once (`shouldClearSession`).
+        // them — and an exit 1 without the message (a Windows kill or crash)
+        // once (`shouldClearSession`).
         // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
         // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
         // was set (5 s), so the session was never cleared (issue #1169).
         if (clearSession) {
-          console.error("[Launcher] Resume failed before confirmation — clearing saved session");
+          console.error(
+            `[Launcher] Resume failed before confirmation — clearing saved session (${
+              noConversationFound ? "Claude has no such conversation" : `code=${code}`
+            })`,
+          );
           clearSavedSession();
           uncommandedDeaths = null;
         } else if (isUncommandedResumeDeath(exitShape)) {
           uncommandedDeaths = { sessionId: plan.sessionId, count: priorUncommandedDeaths + 1 };
           console.error(
-            `[Launcher] Resumed Claude died by a signal before confirmation (code=${code}) — keeping the saved session for one more resume`,
+            `[Launcher] Resumed Claude died before confirmation (code=${code}) without saying the conversation is missing — keeping the saved session for one more resume`,
           );
         }
       }
@@ -4165,8 +4244,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // (`shouldClearSession`) — is never judged; its record is torn down now,
       // so no later release judges it either. An exit that keeps the session
       // (a null code, an intentional kill of ours relayed as 143, or a first
-      // relayed crash — a fault kill's 143 on Linux among them) is not that
-      // shape and is judged.
+      // relayed crash — a fault kill's 143 on Linux among them — or a first
+      // exit 1 without the no-conversation message, a Windows kill among
+      // them) is not that shape and is judged.
       if (record !== null && judgeable(record) && !clearSession) {
         try {
           failBind(record, "torn-down-unbound");
