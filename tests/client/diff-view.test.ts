@@ -63,4 +63,11 @@ describe("DiffView", () => {
       "That backup no longer exists.",
     );
   });
+
+  it("announces the outcome it draws", () => {
+    const { container } = render(DiffView, props("same\n", "same\n"));
+    expect(container.querySelector("[data-testid='compare-live']")?.textContent).toBe(
+      "No differences.",
+    );
+  });
 });

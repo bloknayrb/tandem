@@ -93,12 +93,23 @@ export function buildDiffRows(
   if (changes === undefined) return null;
   if (!changes.some((c) => c.added || c.removed)) return [];
 
+  // Rows past `MAX_DIFF_ROWS` are only counted, never built.
   const rows: DiffRow[] = [];
+  let hidden = 0;
+  const emit = (row: DiffRow) => {
+    if (rows.length < MAX_DIFF_ROWS) rows.push(row);
+    else hidden += row.kind === "gap" || row.kind === "more" ? row.count : 1;
+  };
   let wordBudget = WORD_DIFF_BUDGET_CHARS;
   let wordDeadline = Date.now() + wordTimeoutMs;
   for (let i = 0; i < changes.length; i++) {
     const c = changes[i];
     const lines = linesOf(c.value);
+    if (rows.length >= MAX_DIFF_ROWS) {
+      // Full: every line from here on is hidden, whatever its kind.
+      hidden += lines.length;
+      continue;
+    }
     if (c.removed) {
       // An equal-sized added block right after is paired line by line for
       // word-level highlighting.
@@ -116,32 +127,28 @@ export function buildDiffRows(
           if (seg === undefined) wordDeadline = 0;
           return seg;
         });
-        lines.forEach((text, k) => rows.push({ kind: "remove", text, segments: pairs[k]?.[0] }));
-        added.forEach((text, k) => rows.push({ kind: "add", text, segments: pairs[k]?.[1] }));
+        lines.forEach((text, k) => emit({ kind: "remove", text, segments: pairs[k]?.[0] }));
+        added.forEach((text, k) => emit({ kind: "add", text, segments: pairs[k]?.[1] }));
         i++;
         continue;
       }
-      for (const text of lines) rows.push({ kind: "remove", text });
+      for (const text of lines) emit({ kind: "remove", text });
     } else if (c.added) {
-      for (const text of lines) rows.push({ kind: "add", text });
+      for (const text of lines) emit({ kind: "add", text });
     } else {
       // An unchanged run: keep the context next to a change on each side.
       const keepBefore = i === 0 ? 0 : DIFF_CONTEXT_LINES;
       const keepAfter = i === changes.length - 1 ? 0 : DIFF_CONTEXT_LINES;
       if (lines.length > keepBefore + keepAfter + 1) {
-        for (const text of lines.slice(0, keepBefore)) rows.push({ kind: "same", text });
-        rows.push({ kind: "gap", count: lines.length - keepBefore - keepAfter });
-        for (const text of lines.slice(lines.length - keepAfter)) rows.push({ kind: "same", text });
+        for (const text of lines.slice(0, keepBefore)) emit({ kind: "same", text });
+        emit({ kind: "gap", count: lines.length - keepBefore - keepAfter });
+        for (const text of lines.slice(lines.length - keepAfter)) emit({ kind: "same", text });
       } else {
-        for (const text of lines) rows.push({ kind: "same", text });
+        for (const text of lines) emit({ kind: "same", text });
       }
     }
   }
 
-  if (rows.length <= MAX_DIFF_ROWS) return rows;
-  const shown = rows.slice(0, MAX_DIFF_ROWS);
-  let hidden = 0;
-  for (const r of rows.slice(MAX_DIFF_ROWS)) hidden += r.kind === "gap" ? r.count : 1;
-  shown.push({ kind: "more", count: hidden });
-  return shown;
+  if (hidden > 0) rows.push({ kind: "more", count: hidden });
+  return rows;
 }

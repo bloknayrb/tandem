@@ -68,7 +68,8 @@ async function readTextBounded(
       if (r.bytesRead === 0) break;
       bytesRead += r.bytesRead;
     }
-    const truncated = st.size > max;
+    // Short of `length`: the file shrank after the stat, so this may be cut too.
+    const truncated = st.size > max || bytesRead < length;
     // A cut through a multi-byte character would decode as U+FFFD; end on a
     // character boundary instead, so a real U+FFFD in the file is kept.
     const end = truncated ? utf8Boundary(buf, bytesRead) : bytesRead;

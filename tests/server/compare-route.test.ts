@@ -298,6 +298,26 @@ describe("GET /api/document/compare", () => {
     expect(d.other).not.toContain("CHANGED");
   });
 
+  it("reports a file that shrank after its size was read as cut", async () => {
+    const { filePath, id } = await opened("shrunk.txt", "x\n");
+    await fs.writeFile(filePath, "\u4e2d\u4e2d\u4e2d\n");
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      const realStat = handle.stat.bind(handle);
+      // The stat saw a larger file than the read then finds.
+      handle.stat = (async () => {
+        const st = await realStat();
+        return Object.assign(st, { size: st.size + 100 });
+      }) as typeof handle.stat;
+      return handle;
+    });
+    const d = data(await call({ documentId: id, against: "disk" }));
+    spy.mockRestore();
+    expect(d.truncated).toBe(true);
+    expect(d.other).not.toContain("\uFFFD");
+  });
+
   it("keeps a real U+FFFD that ends exactly at the cut", async () => {
     const { filePath, id } = await opened("fffd.txt", "small\n");
     // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.

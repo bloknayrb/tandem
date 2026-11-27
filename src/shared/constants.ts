@@ -804,8 +804,10 @@ export function canCompareWithDisk(doc: {
   source: string;
   readOnly?: boolean;
 }): boolean {
-  // Not read-only: its side is "as saving would write it", and it is never saved.
-  return doc.source === "file" && doc.readOnly !== true && AUTO_SAVE_FORMATS.has(doc.format);
+  // The same documents, by construction: Compare shows "the document as saving
+  // would write it" against what a discard would keep, so it exists exactly
+  // where those backups do (not read-only, which is never saved).
+  return keepsUnsavedEditsOnDiscard(doc);
 }
 
 /**

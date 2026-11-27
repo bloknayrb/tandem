@@ -64,11 +64,7 @@ const status = $derived(
   !open
     ? ""
     : comparing !== null
-      ? comparing.result === null
-        ? "Comparing…"
-        : comparing.result.ok
-          ? "Comparison shown."
-          : comparing.result.message
+      ? "" // DiffView announces the comparison itself, outcome included.
       : restoring !== null
         ? "Restoring…"
         : rowError

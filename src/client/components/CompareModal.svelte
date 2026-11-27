@@ -3,7 +3,6 @@ import { untrack } from "svelte";
 import { type CompareResult, compareDocument } from "../utils/backups.js";
 import { trapTab } from "../utils/focus-trap.js";
 import DiffView from "./DiffView.svelte";
-import LiveRegion from "./LiveRegion.svelte";
 
 /**
  * Compare the file on disk with the document now (ADR-057, PR 4), opened from
@@ -24,10 +23,6 @@ let result = $state<CompareResult | null>(null);
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 let seq = 0;
-/** What the screen reader hears as the comparison loads, fails or refreshes. */
-const status = $derived(
-  !open ? "" : result === null ? "Comparing…" : result.ok ? "Comparison shown." : result.message,
-);
 /** Bumped by Refresh: the file on disk may have changed again since opening. */
 let refreshes = $state(0);
 /** True only for a click whose press also began on the backdrop, not a text-selection drag out of the dialog. */
@@ -83,8 +78,6 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler, { capture: true });
 });
 </script>
-
-<LiveRegion srOnly message={status} data-testid="compare-live" />
 
 {#if open}
   <div

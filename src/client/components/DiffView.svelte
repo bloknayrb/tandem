@@ -1,6 +1,7 @@
 <script lang="ts">
 import { type CompareResult, comparisonLabel } from "../utils/backups.js";
 import { buildDiffRows } from "../utils/compare.js";
+import LiveRegion from "./LiveRegion.svelte";
 import { SR_ONLY_STYLE } from "./live-region";
 
 /**
@@ -20,7 +21,27 @@ const { result }: Props = $props();
 const comparison = $derived(result?.ok ? result.comparison : null);
 const otherLabel = $derived(comparison ? comparisonLabel(comparison.otherLabel) : "");
 const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.current) : null);
+
+/**
+ * What the screen reader hears. Announced here, where the outcome is known: an
+ * ok fetch can still be "too different to compare" once the diff gives up.
+ */
+const status = $derived(
+  result === null
+    ? "Comparing…"
+    : !result.ok
+      ? result.message
+      : rows === null
+        ? "These versions are too different to compare here."
+        : rows.length === 0
+          ? result.comparison.truncated
+            ? "No differences in the part compared."
+            : "No differences."
+          : "Comparison shown.",
+);
 </script>
+
+<LiveRegion srOnly message={status} data-testid="compare-live" />
 
 {#if result === null}
   <p class="note">Comparing…</p>
