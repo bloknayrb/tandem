@@ -31,6 +31,25 @@ const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const LIB_RS = join(REPO_ROOT, "src-tauri", "src", "lib.rs");
 const CLIENT_SRC = join(REPO_ROOT, "src", "client");
 
+/**
+ * Registered commands that no client code invokes, each with the reason it
+ * stays registered. The reverse check below compares the derived uninvoked set
+ * against these keys exactly, so an entry that gains a caller must be removed
+ * here too — the list can only describe the present, never the past.
+ */
+const COWORK_DARK_NO_CALLER =
+  "Cowork setup ships dark (ADR-055, COWORK_ENABLED) and nothing calls this " +
+  "command; whether to delete it — along with its capability grant, its " +
+  "cowork-dark-gate row and, for the workspace writers, the #433 hardening — " +
+  "is a separate, Tier A decision for Bryan, not a side effect of this check.";
+const UNINVOKED_ALLOWLIST: Record<string, string> = {
+  cowork_scan_workspaces: COWORK_DARK_NO_CALLER,
+  cowork_get_meta: COWORK_DARK_NO_CALLER,
+  cowork_apply_token: COWORK_DARK_NO_CALLER,
+  cowork_install_into_workspace: COWORK_DARK_NO_CALLER,
+  cowork_uninstall_from_workspace: COWORK_DARK_NO_CALLER,
+};
+
 /** Drop `//` and block comments, so a name merely discussed in prose is not read as a call. */
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -157,9 +176,9 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
 
   it("registers every command the crate defines, invoked from the client or not", () => {
     // The other direction, and the one the client-driven check above cannot
-    // reach. Five of the eleven Cowork commands are invoked from nowhere in
-    // `src/client` — they are called from the integration wizard's own flow and
-    // from tests — so dropping any of them from `generate_handler!` during a
+    // reach. Five of the Cowork commands are invoked from nowhere at all — no
+    // `invoke()` in `src/client`, no other caller (see UNINVOKED_ALLOWLIST
+    // below) — so dropping any of them from `generate_handler!` during a
     // module move compiles clean and passes every suite in the repo, including
     // the parity check above. That is precisely the edit Unit 11 makes over and
     // over: 11d alone re-qualified eleven entries in one commit.
@@ -198,6 +217,28 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
           `check above to catch. If it is deliberately unregistered, this list is the place ` +
           `to say so.`,
       ).toBe(true);
+    }
+  });
+
+  it("invokes every registered command from the client, or says why not", () => {
+    // The dead-IPC direction. A registered command nothing calls is attack
+    // surface the WebView can reach (and that `capabilities/default.json` may
+    // grant) with no product reason, and it is invisible to every check above:
+    // it compiles, it is registered, and no `invoke()` exists to disagree with.
+    // Any new command must either gain a caller or an entry here with its reason.
+    const { names } = invokedCommands();
+    const registered = registeredCommands();
+    const uninvoked = registered.filter((name) => !names.has(name)).sort();
+    expect(
+      uninvoked,
+      "A command registered in tauri::generate_handler! is invoked from nowhere in src/client. " +
+        "Either call it, delete it (and its capability grant), or add it to " +
+        "UNINVOKED_ALLOWLIST with the reason it must stay registered.",
+    ).toEqual(Object.keys(UNINVOKED_ALLOWLIST).sort());
+    for (const [name, reason] of Object.entries(UNINVOKED_ALLOWLIST)) {
+      expect(reason.trim().length, `UNINVOKED_ALLOWLIST["${name}"] needs a reason`).toBeGreaterThan(
+        20,
+      );
     }
   });
 
