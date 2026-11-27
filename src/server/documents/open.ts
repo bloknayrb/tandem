@@ -489,6 +489,21 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
       const incoming = typeof reloadBuffer === "string" ? reloadBuffer : undefined;
       const keptBefore =
         editsBefore !== null ? await keepUnsavedEdits(resolved, editsBefore, incoming) : undefined;
+      // The disk read and the backup awaited I/O, long enough for the tab to be
+      // closed (`POST /api/close` is not queued). Reloading now would bring a
+      // closed document back half set up (no dirty observer, no store), so
+      // refuse, naming any backup already kept (ADR-057).
+      if (keepHolder && getOpenDocs().get(existingId) !== existing) {
+        throw reportKeptBackupOnFailure(
+          Object.assign(new Error("The document was closed while it was being reloaded."), {
+            code: "NO_DOCUMENT",
+          }),
+          existingId,
+          resolved,
+          "reload",
+          keptBefore,
+        );
+      }
       // Edits typed during the awaits between that capture and the swap are
       // read inside the swap's own transaction and kept after it.
       const swap = keepHolder ? captureAtSwap(existingId, existing) : undefined;

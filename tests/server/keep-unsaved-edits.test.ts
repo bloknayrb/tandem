@@ -791,3 +791,43 @@ describe("second local review (8fa1493)", () => {
     expect(await fs.readFile(filePath, "utf-8")).toBe("current\n");
   });
 });
+
+describe("fourth cloud review (8073f94)", () => {
+  it("a force-open whose document is closed during its backup reloads nothing and names the backup", async () => {
+    const { filePath, id } = await openWithUnsavedEdits("force-closed.md", "disk\n", "edits\n");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const real = store.snapshotUnsavedEdits;
+    const spy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      const r = await real(...args);
+      await closeDocumentById(id); // the browser closes the tab meanwhile
+      return r;
+    });
+    try {
+      const err = await openFromDisk(filePath, { force: true, keepUnsavedEdits: {} }).then(
+        () => null,
+        (e: Error & { code?: string }) => e,
+      );
+      expect(err?.code).toBe("NO_DOCUMENT");
+      expect(err?.message).toMatch(/-unsaved\.md/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(getOpenDocs().has(id)).toBe(false);
+  });
+
+  it("the browser's Restore of kept edits, run twice, restores the same edits both times", async () => {
+    const filePath = path.join(tmpDir, "twice.md");
+    const { id, doc } = await openWithUnsavedEdits("twice.md", "first\n", "my edits\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    await fs.writeFile(filePath, "external\n");
+    const holder: UnsavedEditsHolder = {};
+    await openFromDisk(filePath, { force: true, keepUnsavedEdits: holder });
+
+    for (let i = 0; i < 2; i++) {
+      const [newest] = await listDocBackups(filePath, resolveAppDataDir());
+      expect(newest.name).toBe(holder.kept!.name);
+      await restoreDocumentFromBackup(id, newest.name);
+      expect(extractText(doc)).toContain("my edits");
+    }
+  });
+});

@@ -736,6 +736,11 @@ export function registerDocumentTools(server: McpServer): void {
       if (e.code === "BACKUP_FAILED") {
         return mcpError("BACKUP_FAILED", e.message);
       }
+      // A force-reload whose document was closed during its backup (ADR-057):
+      // nothing was reloaded, and the message names any backup kept.
+      if (e.code === "NO_DOCUMENT") {
+        return mcpError("NO_DOCUMENT", e.message);
+      }
       if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
         return mcpError("FORMAT_ERROR", e.message);
       }

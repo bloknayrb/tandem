@@ -1882,13 +1882,19 @@ export async function closeDocumentById(
   // close below then keeps it whatever its own later probe says, so a file
   // made writable in between cannot leave the edits with neither (ADR-057).
   let backupSkippedForKeptSession = false;
+  // The writability probe's answer when this block took it, reused below so no
+  // await falls between the identity re-check and the teardown (ADR-057).
+  let probedNotWritable: boolean | undefined;
   if (opts?.keepUnsavedEdits) {
     const closingDocForBackup = getOrCreateDocument(safeId);
+    const notWritable = async (): Promise<boolean> => {
+      probedNotWritable = !(await isWritableOnDisk(docState.filePath));
+      return probedNotWritable;
+    };
     const sessionWillBeKept =
       readPendingConflict(closingDocForBackup) !== undefined ||
       (isDirty(safeId) &&
-        (hasReadOnlyFileEpisode(safeId) ||
-          (docState.source === "file" && !(await isWritableOnDisk(docState.filePath)))));
+        (hasReadOnlyFileEpisode(safeId) || (docState.source === "file" && (await notWritable()))));
     backupSkippedForKeptSession = sessionWillBeKept;
     if (!sessionWillBeKept) {
       try {
@@ -1957,10 +1963,13 @@ export async function closeDocumentById(
   // Probed as well as remembered: after a restart the episode is gone until
   // the next save attempt, and a restored tab closed in that window would
   // otherwise lose the edits the previous close kept.
+  // A Claude close reuses the probe its backup step took, so nothing awaits
+  // between that step's identity re-check and the teardown (ADR-057).
   const readOnlyBlockedAtClose =
     isDirty(safeId) &&
     (hasReadOnlyFileEpisode(safeId) ||
-      (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
+      (docState.source === "file" &&
+        (probedNotWritable ?? !(await isWritableOnDisk(docState.filePath)))));
   // The skipped-backup case keeps the session only while there is still
   // something to keep: a conflict the user answered with Reload during this
   // call's awaits leaves a clean document, whose kept session would only

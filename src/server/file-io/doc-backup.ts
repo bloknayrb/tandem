@@ -841,8 +841,13 @@ export async function snapshotUnsavedEdits(
       // snapshot a restore just wrote, so "restore the most recent backup"
       // still returns them, and last in line for the prune.
       const now = new Date();
-      await touchBestEffort(subdir, identical, now);
-      return { outcome: "skipped-identical", name: identical, timestamp: now.toISOString() };
+      const touched = await touchBestEffort(subdir, identical, now);
+      // A refused touch leaves the old mtime, which is what the listing shows:
+      // report that, never a time the file does not carry.
+      const timestamp = touched
+        ? now.toISOString()
+        : new Date((await fs.stat(path.join(subdir, identical))).mtimeMs).toISOString();
+      return { outcome: "skipped-identical", name: identical, timestamp };
     }
 
     if ((await totalTreeBytes(root)) + bytes.length > maxTotalBytes) {

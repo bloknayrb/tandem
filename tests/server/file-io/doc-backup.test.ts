@@ -376,6 +376,22 @@ describe("doc-backup", () => {
       expect(first).toMatchObject({ name: u.name, kind: "unsaved" });
     });
 
+    it("a refused mtime refresh reports the snapshot's real time, not now", async () => {
+      const first = await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+      if (first.outcome !== "written") throw new Error("unreachable");
+      const old = new Date(Date.now() - 60_000);
+      const snap = allSnapshots()[0];
+      utimesSync(join(docBackupsRoot(appDataDir), snap.subdir, snap.name), old, old);
+      const spy = vi.spyOn(fs, "utimes").mockRejectedValue(new Error("EPERM"));
+      try {
+        const again = await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
+        if (again.outcome !== "skipped-identical") throw new Error("unreachable");
+        expect(Math.abs(new Date(again.timestamp).getTime() - old.getTime())).toBeLessThan(1000);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("a refused mtime refresh never turns kept edits into a failure", async () => {
       await snapshotUnsavedEdits(docPath, "same\n", { appDataDir });
       const spy = vi.spyOn(fs, "utimes").mockRejectedValue(new Error("EPERM"));

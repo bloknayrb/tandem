@@ -469,6 +469,13 @@ export async function restoreDocumentFromBackup(
     ignoreRunGate: keepEdits || snapshotKind(backupName) === "unsaved",
     ...(protect !== undefined ? { protect } : {}),
   });
+  // The browser's gate-ignoring restore of an `unsaved` snapshot just made the
+  // overwritten bytes the newest backup; mark what it restores newest again,
+  // so a second palette Restore returns the same version instead of toggling
+  // back (the reason the gate exists for disk-snapshot restores).
+  if (!keepEdits && snapshotKind(backupName) === "unsaved") {
+    await markSnapshotNewest(existing.filePath, appDataDir, backupName);
+  }
   // The edits were kept before that disk snapshot; make them the newest backup
   // again, so the palette's "restore the most recent backup" brings them back.
   // The reported time is the one the listing will show.

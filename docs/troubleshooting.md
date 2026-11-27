@@ -630,7 +630,7 @@ Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it co
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
-- up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), plus one more while Tandem runs: the copy taken before its first write that run,
+- up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), plus one more while Tandem runs: the copy taken before its first write that run (and, during a restore, the copy being restored is never removed either),
 - up to 3 copies of unsaved edits, named the same way with `-unsaved` before the extension, e.g. `thesis-20260609-142200-9f8e7d6c-unsaved.md`, and
 - a `source.txt` recording the original file's full path.
 
