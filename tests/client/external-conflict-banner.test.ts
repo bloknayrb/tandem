@@ -311,4 +311,38 @@ describe("ExternalConflictBanner", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("offers Compare for a .md file and calls back with its document", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 9 });
+    const calls: string[] = [];
+    const { container } = render(ExternalConflictBanner, {
+      props: { ...baseProps(ydoc).props, onCompare: (id: string) => calls.push(id) },
+    });
+    await tick();
+    (
+      container.querySelector("[data-testid='external-conflict-compare-btn']") as HTMLButtonElement
+    ).click();
+    expect(calls).toEqual(["d1"]);
+  });
+
+  it("offers no Compare for a format without plain text on both sides", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 9 });
+    const { container } = render(ExternalConflictBanner, {
+      props: { ...baseProps(ydoc, "page.html", "html").props, onCompare: () => {} },
+    });
+    await tick();
+    expect(container.querySelector("[data-testid='external-conflict-compare-btn']")).toBeNull();
+  });
+
+  it("offers no Compare for a read-only document, which is never saved", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 9 });
+    const { container } = render(ExternalConflictBanner, {
+      props: { ...baseProps(ydoc).props, readOnly: true, onCompare: () => {} },
+    });
+    await tick();
+    expect(container.querySelector("[data-testid='external-conflict-compare-btn']")).toBeNull();
+  });
 });

@@ -331,7 +331,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `version-history-restore`, `version-history-confirm`, `version-history-cancel`,
   `version-history-row-error`, `version-history-restore-anyway`,
   `version-history-error`, `version-history-retry`, `version-history-empty`,
-  `version-history-live` (ADR-057 PR 2 — every backup of a document, restorable by name)
+  `version-history-live` (ADR-057 PR 2 — every backup of a document, restorable by name),
+  `version-history-compare`, `version-history-compare-view`, `version-history-compare-back`
+  (PR 4 — compare a backup with the document now)
+- `diff-view`, `diff-line` (`data-kind` add/remove/same/gap), `diff-none`, `diff-truncated`,
+  `diff-too-large`, `diff-more`, `compare-modal`, `compare-close`, `compare-error`, `compare-refresh`, `compare-live`, `diff-md-note`,
+  `external-conflict-compare-btn` (ADR-057 PR 4 — the compare view)
 - `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
   minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`
   it is a projection of live state rather than an event, so it erases itself

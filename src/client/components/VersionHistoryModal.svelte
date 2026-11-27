@@ -3,6 +3,8 @@ import { tick, untrack } from "svelte";
 import {
   type BackupSnapshot,
   backupKindLabel,
+  type CompareResult,
+  compareDocument,
   formatBackupAge,
   formatBackupSize,
   formatBackupTimestamp,
@@ -10,6 +12,7 @@ import {
   restoreBackup,
 } from "../utils/backups.js";
 import { trapTab } from "../utils/focus-trap.js";
+import DiffView from "./DiffView.svelte";
 import LiveRegion from "./LiveRegion.svelte";
 
 /**
@@ -33,9 +36,11 @@ interface Props {
   onClose: () => void;
   /** A restore landed. `editsKept`: the document's unsaved edits were kept first. */
   onRestored: (editsKept: boolean) => void;
+  /** Rows offer Compare: the document is one `canCompareWithDisk` admits. */
+  canCompare?: boolean;
 }
 
-let { documentId, fileName, onClose, onRestored }: Props = $props();
+let { documentId, fileName, onClose, onRestored, canCompare = false }: Props = $props();
 
 const open = $derived(documentId !== null);
 
@@ -49,6 +54,8 @@ let phase = $state<Phase>({ kind: "loading" });
 let confirming = $state<string | null>(null);
 /** The row whose restore is in flight; every Restore is disabled meanwhile. */
 let restoring = $state<string | null>(null);
+/** The backup being compared with the document now; `result` null while loading. */
+let comparing = $state<{ name: string; result: CompareResult | null } | null>(null);
 /** A row's failed restore. `backupFailed` offers "Restore anyway". */
 let rowError = $state<{ name: string; backupFailed: boolean; message: string } | null>(null);
 
@@ -56,19 +63,21 @@ let rowError = $state<{ name: string; backupFailed: boolean; message: string } |
 const status = $derived(
   !open
     ? ""
-    : restoring !== null
-      ? "Restoring…"
-      : rowError
-        ? rowError.message
-        : phase.kind === "error"
-          ? phase.message
-          : phase.kind === "ready"
-            ? phase.backups.length === 0
-              ? "No backups yet."
-              : phase.backups.length === 1
-                ? "1 backup."
-                : `${phase.backups.length} backups.`
-            : "",
+    : comparing !== null
+      ? "" // DiffView announces the comparison itself, outcome included.
+      : restoring !== null
+        ? "Restoring…"
+        : rowError
+          ? rowError.message
+          : phase.kind === "error"
+            ? phase.message
+            : phase.kind === "ready"
+              ? phase.backups.length === 0
+                ? "No backups yet."
+                : phase.backups.length === 1
+                  ? "1 backup."
+                  : `${phase.backups.length} backups.`
+              : "",
 );
 
 let dialogEl: HTMLElement | null = $state(null);
@@ -98,12 +107,19 @@ async function load(forDoc: string) {
 }
 
 $effect(() => {
-  if (documentId === null) return;
+  if (documentId === null) {
+    // Cleared on close, so a later open never mounts (and diffs) a stale comparison.
+    untrack(() => {
+      comparing = null;
+    });
+    return;
+  }
   const forDoc = documentId;
   untrack(() => {
     confirming = null;
     restoring = null;
     rowError = null;
+    comparing = null;
     void load(forDoc);
   });
 });
@@ -135,6 +151,10 @@ $effect(() => {
     e.preventDefault();
     e.stopPropagation();
     if (untrack(() => restoring) !== null) return;
+    if (untrack(() => comparing) !== null) {
+      void closeCompare();
+      return;
+    }
     if (untrack(() => confirming) !== null || untrack(() => rowError) !== null) {
       confirming = null;
       rowError = null;
@@ -152,6 +172,40 @@ async function askConfirm(name: string) {
   await tick();
   dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-confirm"]')?.focus();
 }
+
+/** Bumped per compare request; only the latest may land (Back then Compare again). */
+let compareSeq = 0;
+
+/** Show the difference between backup `name` and the document now, in place of the list. */
+async function openCompare(name: string) {
+  if (documentId === null) return;
+  const forDoc = documentId;
+  confirming = null;
+  rowError = null;
+  const mine = ++compareSeq;
+  comparing = { name, result: null };
+  // The row's button is gone with the list; keep focus inside the dialog.
+  await tick();
+  dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-compare-back"]')?.focus();
+  const result = await compareDocument(forDoc, name);
+  if (mine !== compareSeq || forDoc !== documentId || comparing?.name !== name) return;
+  comparing = { name, result };
+}
+
+/** Back to the list, focus on the row that was being compared. */
+async function closeCompare() {
+  const name = comparing?.name;
+  comparing = null;
+  await tick();
+  const buttons = dialogEl?.querySelectorAll<HTMLElement>(
+    '[data-testid="version-history-compare"]',
+  );
+  const row = [...(buttons ?? [])].find((b) => b.dataset.backup === name);
+  (row ?? dialogEl)?.focus();
+}
+
+/** True only for a click whose press also began on the backdrop, not a text-selection drag out of the dialog. */
+let pressedOnBackdrop = false;
 
 const BACKUP_FAILED_FALLBACK =
   "Couldn't keep a backup of your unsaved edits first, so nothing was restored.";
@@ -194,8 +248,10 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
   <div
     role="presentation"
     class="modal-backdrop"
-    onclick={() => {
-      if (restoring === null) onClose();
+    onpointerdown={(e) => (pressedOnBackdrop = e.target === e.currentTarget)}
+    onclick={(e) => {
+      if (e.target === e.currentTarget && pressedOnBackdrop && restoring === null) onClose();
+      pressedOnBackdrop = false;
     }}
   >
     <div
@@ -230,6 +286,19 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
           Restoring a version replaces the document and writes it to the file. If the document has
           unsaved edits, they're kept as a backup first, so you can come back to them here.
         </p>
+        {#if comparing}
+          <div class="compare" data-testid="version-history-compare-view">
+            <button
+              type="button"
+              class="btn"
+              data-testid="version-history-compare-back"
+              onclick={closeCompare}
+            >
+              ← Back to the list
+            </button>
+            <DiffView result={comparing.result} />
+          </div>
+        {:else}
         {#if rowError && !(phase.kind === "ready" && phase.backups.some((b) => b.name === rowError?.name))}
           <p class="state state--error" data-testid="version-history-row-error">{rowError.message}</p>
         {/if}
@@ -283,6 +352,18 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
                       Cancel
                     </button>
                   {:else}
+                    {#if canCompare}
+                      <button
+                        type="button"
+                        class="btn"
+                        data-testid="version-history-compare"
+                        data-backup={b.name}
+                        disabled={restoring !== null}
+                        onclick={() => openCompare(b.name)}
+                      >
+                        Compare
+                      </button>
+                    {/if}
                     <button
                       type="button"
                       class="btn"
@@ -312,6 +393,7 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
               </li>
             {/each}
           </ul>
+        {/if}
         {/if}
       </div>
     </div>
@@ -450,6 +532,16 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
   .confirm-text {
     font-size: var(--tandem-text-sm);
     color: var(--tandem-fg);
+  }
+
+  .compare {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--tandem-space-3);
+  }
+  .compare :global([data-testid="diff-view"]) {
+    align-self: stretch;
   }
 
   .row-error {
