@@ -1,6 +1,6 @@
 <script lang="ts">
 import { untrack } from "svelte";
-import { type CompareResult, compareDocument, comparisonLabel } from "../utils/backups.js";
+import { type CompareResult, compareDocument } from "../utils/backups.js";
 import { trapTab } from "../utils/focus-trap.js";
 import DiffView from "./DiffView.svelte";
 
@@ -96,18 +96,7 @@ $effect(() => {
         </button>
       </header>
       <div class="modal-content">
-        {#if result === null}
-          <p class="state">Comparing…</p>
-        {:else if !result.ok}
-          <p class="state state--error" data-testid="compare-error">{result.message}</p>
-        {:else}
-          <DiffView
-            current={result.comparison.current}
-            other={result.comparison.other}
-            otherLabel={comparisonLabel(result.comparison.otherLabel)}
-            truncated={result.comparison.truncated}
-          />
-        {/if}
+        <DiffView {result} />
       </div>
     </div>
   </div>
@@ -183,14 +172,5 @@ $effect(() => {
     min-height: 0;
     overflow-y: auto;
     padding: 16px 24px 24px;
-  }
-
-  .state {
-    margin: 0;
-    font-size: var(--tandem-text-sm);
-    color: var(--tandem-fg-muted);
-  }
-  .state--error {
-    color: var(--tandem-error-fg-strong);
   }
 </style>

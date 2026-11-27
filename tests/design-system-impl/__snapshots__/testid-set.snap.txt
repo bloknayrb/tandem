@@ -171,6 +171,7 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 diff-line
+diff-more
 diff-none
 diff-too-large
 diff-truncated

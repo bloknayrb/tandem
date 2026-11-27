@@ -12,7 +12,12 @@ import DiffView from "../../src/client/components/DiffView.svelte";
 afterEach(() => cleanup());
 
 const props = (other: string, current: string, truncated = false) => ({
-  props: { current, other, otherLabel: "The file on disk", truncated },
+  props: {
+    result: {
+      ok: true as const,
+      comparison: { current, other, otherLabel: "disk" as const, truncated },
+    },
+  },
 });
 
 describe("DiffView", () => {
@@ -38,5 +43,17 @@ describe("DiffView", () => {
   it("says when the versions were cut at the cap", () => {
     const { container } = render(DiffView, props("a\n", "b\n", true));
     expect(container.querySelector("[data-testid='diff-truncated']")).toBeTruthy();
+  });
+
+  it("shows loading, then a failed fetch's message as text", () => {
+    const loading = render(DiffView, { props: { result: null } });
+    expect(loading.container.textContent).toContain("Comparing");
+    loading.unmount();
+    const failed = render(DiffView, {
+      props: { result: { ok: false as const, message: "That backup no longer exists." } },
+    });
+    expect(failed.container.querySelector("[data-testid='compare-error']")?.textContent).toBe(
+      "That backup no longer exists.",
+    );
   });
 });

@@ -5,7 +5,6 @@ import {
   backupKindLabel,
   type CompareResult,
   compareDocument,
-  comparisonLabel,
   formatBackupAge,
   formatBackupSize,
   formatBackupTimestamp,
@@ -263,18 +262,7 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
             >
               ← Back to the list
             </button>
-            {#if comparing.result === null}
-              <p class="state">Comparing…</p>
-            {:else if !comparing.result.ok}
-              <p class="state state--error">{comparing.result.message}</p>
-            {:else}
-              <DiffView
-                current={comparing.result.comparison.current}
-                other={comparing.result.comparison.other}
-                otherLabel={comparisonLabel(comparing.result.comparison.otherLabel)}
-                truncated={comparing.result.comparison.truncated}
-              />
-            {/if}
+            <DiffView result={comparing.result} />
           </div>
         {:else}
         {#if rowError && !(phase.kind === "ready" && phase.backups.some((b) => b.name === rowError?.name))}

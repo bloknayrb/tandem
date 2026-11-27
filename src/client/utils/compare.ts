@@ -3,9 +3,12 @@
  * another version (a backup, or the file on disk) against the document as it
  * is now. Pure, so it is tested without a DOM.
  *
- * Bounded twice: `diffLines` gives up after `timeoutMs` (it then answers
- * `null`, "too different to compare here"), and word-level highlighting is
- * only worked out for a changed line pair short enough to be cheap.
+ * Bounded three times: `diffLines` gives up after `timeoutMs` (it then
+ * answers `null`, "too different to compare here"); word-level highlighting
+ * is worked out only for a line pair short enough to be cheap, and only until
+ * a total budget is spent; and at most `MAX_DIFF_ROWS` rows are returned,
+ * the rest counted in a final `more` row, so the view never mounts an
+ * unbounded number of lines.
  */
 
 import { type ChangeObject, diffLines, diffWordsWithSpace } from "diff";
@@ -24,12 +27,18 @@ export type DiffRow =
   /** Only in the document now. */
   | { kind: "add"; text: string; segments?: DiffSegment[] }
   /** `count` unchanged lines not shown. */
-  | { kind: "gap"; count: number };
+  | { kind: "gap"; count: number }
+  /** `count` further rows past `MAX_DIFF_ROWS`, not shown. */
+  | { kind: "more"; count: number };
 
 /** Unchanged lines kept around each change. */
 export const DIFF_CONTEXT_LINES = 3;
+/** The most rows returned; the rest are counted in one `more` row. */
+export const MAX_DIFF_ROWS = 2000;
 /** A line pair longer than this gets no word-level highlight. */
 const WORD_DIFF_MAX_CHARS = 2000;
+/** Characters word-diffed in total; past it, changed lines are shown whole. */
+const WORD_DIFF_BUDGET_CHARS = 200_000;
 /** How long the line diff may run before giving up. */
 const DEFAULT_TIMEOUT_MS = 1500;
 
@@ -41,12 +50,10 @@ function linesOf(value: string): string[] {
 }
 
 /** Word segments for a removed/added line pair, one side each. */
-function wordSegments(oldLine: string, newLine: string): [DiffSegment[], DiffSegment[]] | null {
-  if (oldLine.length + newLine.length > WORD_DIFF_MAX_CHARS) return null;
-  const parts = diffWordsWithSpace(oldLine, newLine);
+function wordSegments(oldLine: string, newLine: string): [DiffSegment[], DiffSegment[]] {
   const before: DiffSegment[] = [];
   const after: DiffSegment[] = [];
-  for (const p of parts) {
+  for (const p of diffWordsWithSpace(oldLine, newLine)) {
     if (!p.added) before.push({ text: p.value, changed: Boolean(p.removed) });
     if (!p.removed) after.push({ text: p.value, changed: Boolean(p.added) });
   }
@@ -68,69 +75,49 @@ export function buildDiffRows(
     timeout: timeoutMs,
   });
   if (changes === undefined) return null;
+  if (!changes.some((c) => c.added || c.removed)) return [];
 
-  // Flatten into rows, pairing an equal-sized removed block with the added
-  // block right after it for word-level highlighting.
   const rows: DiffRow[] = [];
+  let wordBudget = WORD_DIFF_BUDGET_CHARS;
   for (let i = 0; i < changes.length; i++) {
     const c = changes[i];
     const lines = linesOf(c.value);
     if (c.removed) {
+      // An equal-sized added block right after is paired line by line for
+      // word-level highlighting.
       const next = changes[i + 1];
       const added = next?.added ? linesOf(next.value) : null;
       if (added && added.length === lines.length) {
-        const removedRows: DiffRow[] = [];
-        const addedRows: DiffRow[] = [];
-        lines.forEach((line, k) => {
-          const seg = wordSegments(line, added[k]);
-          removedRows.push(
-            seg ? { kind: "remove", text: line, segments: seg[0] } : { kind: "remove", text: line },
-          );
-          addedRows.push(
-            seg
-              ? { kind: "add", text: added[k], segments: seg[1] }
-              : { kind: "add", text: added[k] },
-          );
+        const pairs = lines.map((line, k) => {
+          const size = line.length + added[k].length;
+          if (size > WORD_DIFF_MAX_CHARS || size > wordBudget) return undefined;
+          wordBudget -= size;
+          return wordSegments(line, added[k]);
         });
-        rows.push(...removedRows, ...addedRows);
+        lines.forEach((text, k) => rows.push({ kind: "remove", text, segments: pairs[k]?.[0] }));
+        added.forEach((text, k) => rows.push({ kind: "add", text, segments: pairs[k]?.[1] }));
         i++;
         continue;
       }
-      for (const line of lines) rows.push({ kind: "remove", text: line });
+      for (const text of lines) rows.push({ kind: "remove", text });
     } else if (c.added) {
-      for (const line of lines) rows.push({ kind: "add", text: line });
+      for (const text of lines) rows.push({ kind: "add", text });
     } else {
-      for (const line of lines) rows.push({ kind: "same", text: line });
+      // An unchanged run: keep the context next to a change on each side.
+      const keepBefore = i === 0 ? 0 : DIFF_CONTEXT_LINES;
+      const keepAfter = i === changes.length - 1 ? 0 : DIFF_CONTEXT_LINES;
+      if (lines.length > keepBefore + keepAfter + 1) {
+        for (const text of lines.slice(0, keepBefore)) rows.push({ kind: "same", text });
+        rows.push({ kind: "gap", count: lines.length - keepBefore - keepAfter });
+        for (const text of lines.slice(lines.length - keepAfter)) rows.push({ kind: "same", text });
+      } else {
+        for (const text of lines) rows.push({ kind: "same", text });
+      }
     }
   }
 
-  if (!rows.some((r) => r.kind !== "same")) return [];
-  return collapseUnchanged(rows);
-}
-
-/** Replace unchanged runs longer than the context on both sides with a gap row. */
-function collapseUnchanged(rows: DiffRow[]): DiffRow[] {
-  const out: DiffRow[] = [];
-  let i = 0;
-  while (i < rows.length) {
-    if (rows[i].kind !== "same") {
-      out.push(rows[i]);
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < rows.length && rows[j].kind === "same") j++;
-    const run = rows.slice(i, j);
-    const keepBefore = i === 0 ? 0 : DIFF_CONTEXT_LINES;
-    const keepAfter = j === rows.length ? 0 : DIFF_CONTEXT_LINES;
-    if (run.length > keepBefore + keepAfter + 1) {
-      out.push(...run.slice(0, keepBefore));
-      out.push({ kind: "gap", count: run.length - keepBefore - keepAfter });
-      out.push(...run.slice(run.length - keepAfter));
-    } else {
-      out.push(...run);
-    }
-    i = j;
-  }
-  return out;
+  if (rows.length <= MAX_DIFF_ROWS) return rows;
+  const shown = rows.slice(0, MAX_DIFF_ROWS);
+  shown.push({ kind: "more", count: rows.length - MAX_DIFF_ROWS });
+  return shown;
 }

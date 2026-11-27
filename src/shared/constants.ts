@@ -794,6 +794,16 @@ export function keepsUnsavedEditsOnDiscard(doc: {
 }
 
 /**
+ * True when the compare view can show this document beside the file on disk
+ * or a backup (ADR-057 PR 4): plain text on both sides, from a real file. The
+ * server's `GET /api/document/compare` and the conflict banner's Compare
+ * button read this one predicate.
+ */
+export function canCompareWithDisk(doc: { format: string; source: string }): boolean {
+  return doc.source === "file" && AUTO_SAVE_FORMATS.has(doc.format);
+}
+
+/**
  * True when a document may be holding edits that are not on disk — so it keeps
  * the synthesized restore prompt and the dirty external-conflict flag.
  *

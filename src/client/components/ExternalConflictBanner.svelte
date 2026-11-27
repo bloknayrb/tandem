@@ -2,6 +2,7 @@
 import type * as Y from "yjs";
 import { API_EXTERNAL_CONFLICT_RESOLVE } from "../../shared/api-paths";
 import {
+  canCompareWithDisk,
   keepsUnsavedEditsOnDiscard,
   SAVEABLE_FORMATS,
   Y_MAP_DOCUMENT_META,
@@ -50,7 +51,7 @@ interface Props {
 const { ydoc, documentId, fileName, format, source, readOnly, onCompare }: Props = $props();
 
 /** Compare reads plain text on both sides: a `.md`/`.txt` file. */
-const canCompare = $derived(source === "file" && (format === "md" || format === "txt"));
+const canCompare = $derived(canCompareWithDisk({ source, format }));
 
 /**
  * Formats with NO path back to disk — the server refuses every save for them.

@@ -335,7 +335,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `version-history-compare`, `version-history-compare-view`, `version-history-compare-back`
   (PR 4 — compare a backup with the document now)
 - `diff-view`, `diff-line` (`data-kind` add/remove/same/gap), `diff-none`, `diff-truncated`,
-  `diff-too-large`, `compare-modal`, `compare-close`, `compare-error`,
+  `diff-too-large`, `diff-more`, `compare-modal`, `compare-close`, `compare-error`,
   `external-conflict-compare-btn` (ADR-057 PR 4 — the compare view)
 - `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
   minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`

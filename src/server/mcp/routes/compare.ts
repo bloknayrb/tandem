@@ -26,25 +26,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { Request, Response } from "express";
+import { canCompareWithDisk } from "../../../shared/constants.js";
 import { isLoopback } from "../../auth/middleware.js";
-import { docBackupSnapshotPath, listDocBackups } from "../../file-io/doc-backup.js";
+import { getOpenDocs } from "../../documents/registry.js";
+import { docBackupSnapshotPath, snapshotKind } from "../../file-io/doc-backup.js";
 import { getAdapter } from "../../file-io/index.js";
-import { stripBom } from "../../file-io/line-endings.js";
+import { stripBom, toLf } from "../../file-io/line-endings.js";
 import { resolveAppDataDir } from "../../platform.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import { getCurrentDoc } from "../document-service.js";
 import { isValidDocumentId } from "./_shared.js";
 
 /** Each side is compared up to this many bytes (UTF-8 on disk, UTF-16 code units for the document). */
 export const COMPARE_MAX_BYTES = 2 * 1024 * 1024;
-
-/** Formats with plain text on both sides. */
-const COMPARE_FORMATS: ReadonlySet<string> = new Set(["md", "txt"]);
-
-/** `\r\n` and lone `\r` as `\n`, so a CRLF file does not differ on every line. */
-function normalizeNewlines(text: string): string {
-  return text.replace(/\r\n?/g, "\n");
-}
 
 /**
  * Read at most `max` bytes of the regular file at `filePath`, as UTF-8 with
@@ -101,15 +94,15 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     res.status(400).json({ error: "BAD_REQUEST", message: "against must be a single name." });
     return;
   }
-  // The house CodeQL sanitizer after the shape check; an explicit id never
-  // falls back to the active document. `safeId` is used for every later call.
+  // The house CodeQL sanitizer after the shape check. `safeId` is used for
+  // every later call.
   const safeId = path.basename(documentId);
-  const docState = getCurrentDoc(safeId);
-  if (!docState || docState.id !== safeId) {
+  const docState = getOpenDocs().get(safeId);
+  if (!docState) {
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
   }
-  if (docState.source !== "file" || !COMPARE_FORMATS.has(docState.format)) {
+  if (!canCompareWithDisk(docState)) {
     res
       .status(400)
       .json({ error: "BAD_REQUEST", message: "Compare is available for .md and .txt files." });
@@ -117,8 +110,12 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
   }
 
   const adapter = getAdapter(docState.format);
-  const serialized = adapter.save ? adapter.save(getOrCreateDocument(safeId)) : "";
-  const current = capText(normalizeNewlines(stripBom(serialized)), COMPARE_MAX_BYTES);
+  if (!adapter.save) {
+    // Every compared format has a serializer; comparing against "" would
+    // report the whole other side as removed.
+    res.status(500).json({ error: "INTERNAL", message: "Couldn't read the document." });
+    return;
+  }
 
   let other: { text: string; truncated: boolean } | "not-a-file";
   let otherLabel: "disk" | "unsaved" | "disk-backup";
@@ -132,23 +129,18 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
       // Same disposition as document-service.ts's sinks; dismiss per #1042.
       other = await readTextBounded(docState.filePath, COMPARE_MAX_BYTES);
     } else {
-      const appDataDir = resolveAppDataDir();
-      // Matched by equality against the folder's own listing; the read joins
-      // the listing's entry, a `readdir` result, never the caller's text.
-      const entry = (await listDocBackups(docState.filePath, appDataDir)).find(
-        (b) => b.name === against,
-      );
-      const snapshotPath = entry
-        ? docBackupSnapshotPath(docState.filePath, appDataDir, entry.name)
-        : null;
-      if (!entry || snapshotPath === null) {
+      // Resolved as the restore path resolves it (`restoreDocumentFromBackup`):
+      // a name that is not a snapshot's own basename is refused, and a missing
+      // one is the ENOENT below.
+      const snapshotPath = docBackupSnapshotPath(docState.filePath, resolveAppDataDir(), against);
+      if (snapshotPath === null) {
         res.status(404).json({ error: "NOT_FOUND", message: "That backup no longer exists." });
         return;
       }
-      otherLabel = entry.kind === "unsaved" ? "unsaved" : "disk-backup";
+      otherLabel = snapshotKind(against) === "unsaved" ? "unsaved" : "disk-backup";
       // Safe FS sink (CodeQL js/path-injection): the registry path (above) and
-      // a `readdir` entry name re-checked by `docBackupSnapshotPath`'s
-      // basename and `SNAPSHOT_TAIL_RE`.
+      // the `path.basename` result `docBackupSnapshotPath` joins (#1882),
+      // checked against `SNAPSHOT_TAIL_RE`. Dismiss per #1042.
       other = await readTextBounded(snapshotPath, COMPARE_MAX_BYTES);
     }
   } catch (err) {
@@ -169,10 +161,15 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     return;
   }
 
+  // Serialized only once the other side is known to exist.
+  const current = capText(
+    toLf(stripBom(adapter.save(getOrCreateDocument(safeId)))),
+    COMPARE_MAX_BYTES,
+  );
   res.json({
     data: {
       current: current.text,
-      other: normalizeNewlines(other.text),
+      other: toLf(other.text),
       otherLabel,
       truncated: current.truncated || other.truncated,
     },

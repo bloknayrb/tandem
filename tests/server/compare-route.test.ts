@@ -34,6 +34,7 @@ import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   _resetDocBackupGateForTests,
+  docBackupSnapshotPath,
   docBackupsRoot,
   listDocBackups,
   snapshotBeforeFirstWrite,
@@ -146,19 +147,35 @@ describe("GET /api/document/compare", () => {
     expect(data(res)).toMatchObject({ other: "the original\n", otherLabel: "disk-backup" });
   });
 
-  it("answers 404 for an unknown or traversal-looking backup name, without reading it", async () => {
+  it("answers 404 for a name that is not a snapshot, without opening anything", async () => {
     const { filePath, id } = await opened("names.md", "x\n");
     await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
     const spy = vi.spyOn(fs, "open");
     for (const against of [
-      "nope-20260101-000000-abcdef12.md",
       "../../../etc/passwd",
+      "a/b-20260101-000000-abcdef12.md",
       "source.txt",
     ]) {
       const res = await call({ documentId: id, against });
       expect(res._status, against).toBe(404);
     }
     expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("answers 404 for a snapshot name that is not in this document's folder", async () => {
+    const { filePath, id } = await opened("missing.md", "x\n");
+    const spy = vi.spyOn(fs, "open");
+    const res = await call({ documentId: id, against: "nope-20260101-000000-abcdef12.md" });
+    expect(res._status).toBe(404);
+    expect((res._json as { message?: string }).message).toBe("That backup no longer exists.");
+    // Resolved as restore resolves it: only ever inside this document's own folder.
+    const snapshot = docBackupSnapshotPath(
+      filePath,
+      resolveAppDataDir(),
+      "nope-20260101-000000-abcdef12.md",
+    );
+    expect(spy.mock.calls.map(([p]) => String(p))).toEqual([snapshot]);
     spy.mockRestore();
   });
 

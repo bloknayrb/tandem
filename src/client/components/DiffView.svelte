@@ -1,34 +1,38 @@
 <script lang="ts">
+import { type CompareResult, comparisonLabel } from "../utils/backups.js";
 import { buildDiffRows } from "../utils/compare.js";
+import { SR_ONLY_STYLE } from "./live-region";
 
 /**
  * A read-only unified diff of another version of a document against the
- * document as it is now (ADR-057, PR 4). Pure view: the caller fetches both
- * texts (`GET /api/document/compare`).
+ * document as it is now (ADR-057, PR 4), with the fetch's loading and error
+ * states, so both compare views (Version history, and the conflict banner's
+ * Compare) show them alike. The caller fetches (`compareDocument`); `result`
+ * is null while it runs.
  */
 
 interface Props {
-  /** The document as it is now: what a restore or reload would replace. */
-  current: string;
-  /** The other version: a backup, or the file on disk. */
-  other: string;
-  /** How the legend names the other version, e.g. "The file on disk". */
-  otherLabel: string;
-  /** The server cut one side or both at its size cap. */
-  truncated: boolean;
+  result: CompareResult | null;
 }
 
-const { current, other, otherLabel, truncated }: Props = $props();
+const { result }: Props = $props();
 
-const rows = $derived(buildDiffRows(other, current));
+const comparison = $derived(result?.ok ? result.comparison : null);
+const otherLabel = $derived(comparison ? comparisonLabel(comparison.otherLabel) : "");
+const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.current) : null);
 </script>
 
+{#if result === null}
+  <p class="note">Comparing…</p>
+{:else if !result.ok}
+  <p class="note note--error" data-testid="compare-error">{result.message}</p>
+{:else}
 <div class="diff-view" data-testid="diff-view">
   <p class="legend">
     <span class="legend-remove">− {otherLabel}</span>
     <span class="legend-add">+ The document now</span>
   </p>
-  {#if truncated}
+  {#if result.comparison.truncated}
     <p class="note" data-testid="diff-truncated">
       These versions are large, so only their beginnings are compared.
     </p>
@@ -44,6 +48,10 @@ const rows = $derived(buildDiffRows(other, current));
           <div class="line line--gap" role="listitem" data-testid="diff-line" data-kind="gap">
             {row.count} unchanged {row.count === 1 ? "line" : "lines"}
           </div>
+        {:else if row.kind === "more"}
+          <div class="line line--gap" role="listitem" data-testid="diff-more">
+            {row.count} more {row.count === 1 ? "line" : "lines"} not shown
+          </div>
         {:else}
           <div
             class="line line--{row.kind}"
@@ -54,7 +62,7 @@ const rows = $derived(buildDiffRows(other, current));
             <span class="marker" aria-hidden="true"
               >{row.kind === "add" ? "+" : row.kind === "remove" ? "−" : " "}</span
             >
-            <span class="sr-only"
+            <span style={SR_ONLY_STYLE}
               >{row.kind === "add"
                 ? "Only in the document now: "
                 : row.kind === "remove"
@@ -76,6 +84,7 @@ const rows = $derived(buildDiffRows(other, current));
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
   .diff-view {
@@ -104,6 +113,9 @@ const rows = $derived(buildDiffRows(other, current));
     font-size: var(--tandem-text-sm);
     color: var(--tandem-fg-muted);
   }
+  .note--error {
+    color: var(--tandem-error-fg-strong);
+  }
 
   .lines {
     font-family: var(--tandem-font-mono, monospace);
@@ -116,6 +128,7 @@ const rows = $derived(buildDiffRows(other, current));
   }
 
   .line {
+    position: relative;
     display: flex;
     gap: var(--tandem-space-2);
     padding: 0 var(--tandem-space-2);
@@ -152,12 +165,4 @@ const rows = $derived(buildDiffRows(other, current));
     font-weight: 600;
   }
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
 </style>

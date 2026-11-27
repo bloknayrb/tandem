@@ -4,7 +4,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildDiffRows, DIFF_CONTEXT_LINES } from "../../src/client/utils/compare.js";
+import {
+  buildDiffRows,
+  DIFF_CONTEXT_LINES,
+  MAX_DIFF_ROWS,
+} from "../../src/client/utils/compare.js";
 
 const kinds = (rows: ReturnType<typeof buildDiffRows>) => rows?.map((r) => r.kind);
 
@@ -57,5 +61,16 @@ describe("buildDiffRows", () => {
     const b = Array.from({ length: 3000 }, (_, i) => `b${i}`).join("\n");
     // A zero budget: the line diff is abandoned before it finishes.
     expect(buildDiffRows(a, b, 0)).toBeNull();
+  });
+
+  it("returns at most MAX_DIFF_ROWS rows and counts the rest in one more row", () => {
+    const n = MAX_DIFF_ROWS + 500;
+    const other = Array.from({ length: n }, (_, i) => `x${i}`).join("\n");
+    const current = Array.from({ length: n }, (_, i) => (i % 2 ? `x${i}` : `y${i}`)).join("\n");
+    const rows = buildDiffRows(other, current, 10_000) ?? [];
+    expect(rows).toHaveLength(MAX_DIFF_ROWS + 1);
+    const last = rows[rows.length - 1];
+    expect(last.kind).toBe("more");
+    expect(last.kind === "more" && last.count).toBeGreaterThan(0);
   });
 });
