@@ -738,3 +738,56 @@ describe("third cloud review (829de9c)", () => {
     );
   });
 });
+
+describe("second local review (8fa1493)", () => {
+  it("the browser's restore of an unsaved backup snapshots the version it overwrites, gate or no gate", async () => {
+    const filePath = path.join(tmpDir, "browser-unsaved.md");
+    const { id } = await openWithUnsavedEdits("browser-unsaved.md", "first\n", "my edits\n");
+    // An earlier save spent the run's gate.
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    // Claude force-opens onto an external version, keeping the edits.
+    await fs.writeFile(filePath, "external version\n");
+    const holder: UnsavedEditsHolder = {};
+    await openFromDisk(filePath, { force: true, keepUnsavedEdits: holder });
+
+    // The browser's Restore (no option) writes the kept edits back.
+    await restoreDocumentFromBackup(id, holder.kept!.name);
+
+    const disk = (await listDocBackups(filePath, resolveAppDataDir())).filter(
+      (b) => b.kind === "disk",
+    );
+    const texts = await Promise.all(
+      disk.map((b) =>
+        fs.readFile(docBackupSnapshotPath(filePath, resolveAppDataDir(), b.name)!, "utf-8"),
+      ),
+    );
+    expect(texts).toContain("external version\n");
+  });
+
+  it("a restore whose document is closed during its backup writes nothing and names the kept backup", async () => {
+    const filePath = path.join(tmpDir, "closed-mid.md");
+    await fs.writeFile(filePath, "good\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [good] = await listDocBackups(filePath, resolveAppDataDir());
+    const { id } = await openWithUnsavedEdits("closed-mid.md", "good\n", "edits\n");
+    await fs.writeFile(filePath, "current\n");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const real = store.snapshotUnsavedEdits;
+    const spy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      const r = await real(...args);
+      await closeDocumentById(id); // the browser closes the tab meanwhile
+      return r;
+    });
+    try {
+      const err = await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true }).then(
+        () => null,
+        (e: Error & { code?: string }) => e,
+      );
+      expect(err?.code).toBe("NO_DOCUMENT");
+      expect(err?.message).toMatch(/-unsaved\.md/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(filePath, "utf-8")).toBe("current\n");
+  });
+});

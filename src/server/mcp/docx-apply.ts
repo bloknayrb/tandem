@@ -766,7 +766,12 @@ export function registerApplyTools(server: McpServer): void {
             ...(unsavedEditsKept ? backupKeptFields(unsavedEditsKept, "restore") : {}),
           });
         } catch (err) {
-          const e = err as Error & { code?: string };
+          const e = err as Error & { code?: string; keptBackupNote?: string };
+          // A document closed mid-restore after its edits were kept (ADR-057):
+          // the fixed message would drop the backup's name.
+          if (e.code === "NO_DOCUMENT" && e.keptBackupNote) {
+            return noClaim(mcpError("NO_DOCUMENT", e.message));
+          }
           if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
           if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
           // An upload or scratchpad source has no on-disk location to restore

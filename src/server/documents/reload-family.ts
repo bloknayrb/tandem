@@ -50,6 +50,7 @@ import {
   docxSidecarBackupPath,
   markSnapshotNewest,
   snapshotBeforeFirstWrite,
+  snapshotKind,
 } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
@@ -457,10 +458,15 @@ export async function restoreDocumentFromBackup(
   // never saw. Not the browser's: its palette restores the newest snapshot, so
   // an every-time snapshot would make a second Restore bring back the version
   // the first one replaced.
+  // The browser's restore also snapshots every time when what it writes back
+  // is an `unsaved` snapshot: after a Claude force-open that restore lands on
+  // an external version Claude reloaded, which the once-per-run gate (often
+  // spent by an earlier autosave) would leave with no copy. Restoring a disk
+  // snapshot keeps the gate, for the "second Restore" reason above.
   await snapshotBeforeFirstWrite(existing.filePath, {
     appDataDir,
     documentId: id,
-    ignoreRunGate: keepEdits,
+    ignoreRunGate: keepEdits || snapshotKind(backupName) === "unsaved",
     ...(protect !== undefined ? { protect } : {}),
   });
   // The edits were kept before that disk snapshot; make them the newest backup
@@ -474,6 +480,22 @@ export async function restoreDocumentFromBackup(
   // Whether anything the edits lived in has changed yet: the file once the
   // write lands, the document once the swap runs. A failure before either
   // discards nothing, so it reports no backup.
+  // The awaits above (the backups) are long enough for the tab to be closed —
+  // `POST /api/close` is not queued. Writing now would overwrite the file of a
+  // document no longer open and recreate its Y.Doc in `reloadFromDisk`; refuse
+  // instead, naming any backup already kept (the close may have dropped the
+  // edits it holds).
+  if (getOpenDocs().get(id) !== existing) {
+    throw reportKeptBackupOnFailure(
+      Object.assign(new Error("Document was closed while it was being restored."), {
+        code: "NO_DOCUMENT",
+      }),
+      id,
+      existing.filePath,
+      "restore",
+      keptBefore,
+    );
+  }
   let fileWritten = false;
   try {
     // #1310: validate BEFORE the write, not during the reload below.

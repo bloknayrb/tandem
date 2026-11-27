@@ -743,9 +743,13 @@ export function registerDocumentTools(server: McpServer): void {
       // as EPERM and only the syscall differs (`lockOrPermissionCode`).
       const lockOrPermission = lockOrPermissionCode(e);
       if (lockOrPermission === "FILE_LOCKED") {
+        // A force-reload that failed after keeping the unsaved edits (ADR-057)
+        // names the backup on the error; the fixed message must not drop it.
+        const keptNote = (e as { keptBackupNote?: unknown }).keptBackupNote;
         return mcpError(
           "FILE_LOCKED",
-          `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`,
+          `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.` +
+            (typeof keptNote === "string" ? ` ${keptNote}` : ""),
         );
       }
       if (lockOrPermission === "PERMISSION_DENIED") {

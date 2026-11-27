@@ -34,7 +34,7 @@ import path from "path";
 import type * as Y from "yjs";
 import { AUTO_SAVE_FORMATS } from "../../shared/constants.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { snapshotUnsavedEdits } from "../file-io/doc-backup.js";
+import { markSnapshotNewest, snapshotUnsavedEdits } from "../file-io/doc-backup.js";
 import { getAdapter } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -184,7 +184,17 @@ export async function keepEditsCapturedAtSwap(
 ): Promise<KeptBackup | undefined> {
   if (atSwap === null || atSwap === before || atSwap === incoming) return undefined;
   try {
-    return await keepUnsavedEdits(filePath, atSwap, incoming, protect);
+    const kept = await keepUnsavedEdits(filePath, atSwap, incoming, protect);
+    // This copy is a superset of the first capture's, and it is the one the
+    // result names. On a coarse filesystem clock both can carry the same mtime
+    // (and a restore pushes the first one's ahead of its disk snapshot), so
+    // the listing would rank them by the random uuid8: mark this one newest,
+    // so "restore the most recent backup" returns it.
+    if (kept) {
+      const markedAt = await markSnapshotNewest(filePath, resolveAppDataDir(), kept.name);
+      if (markedAt !== undefined) kept.timestamp = markedAt;
+    }
+    return kept;
   } catch (err) {
     console.error(
       "[KeepUnsaved] edits typed during the action could not be kept for %s:",
@@ -251,9 +261,19 @@ export function reportKeptBackupOnFailure(
   if (!kept) return err;
   if (!alreadyNotified) notifyUnsavedEditsKept(documentId, filePath, action, kept, "failed");
   if (err instanceof Error) {
-    err.message +=
-      ` The document's unsaved edits had been kept first as backup ${JSON.stringify(kept.name)}; ` +
-      "tell the user, and restore it with tandem_restoreBackup if they want it.";
+    const note = keptBackupFailureNote(kept);
+    err.message += ` ${note}`;
+    // Also carried on its own, for an error mapping that replaces the message
+    // with a fixed one (`tandem_open`'s FILE_LOCKED): the note must survive it.
+    (err as Error & { keptBackupNote?: string }).keptBackupNote = note;
   }
   return err;
+}
+
+/** The sentence a failed Claude action's error carries when its backup was kept. */
+function keptBackupFailureNote(kept: KeptBackup): string {
+  return (
+    `The document's unsaved edits had been kept first as backup ${JSON.stringify(kept.name)}; ` +
+    "tell the user, and restore it with tandem_restoreBackup if they want it."
+  );
 }
