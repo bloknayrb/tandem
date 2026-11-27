@@ -28,7 +28,7 @@ export type DiffRow =
   | { kind: "add"; text: string; segments?: DiffSegment[] }
   /** `count` unchanged lines not shown. */
   | { kind: "gap"; count: number }
-  /** `count` further rows past `MAX_DIFF_ROWS`, not shown. */
+  /** `count` further lines past `MAX_DIFF_ROWS` rows, not shown (a hidden gap counts its lines). */
   | { kind: "more"; count: number };
 
 /** Unchanged lines kept around each change. */
@@ -121,6 +121,8 @@ export function buildDiffRows(
 
   if (rows.length <= MAX_DIFF_ROWS) return rows;
   const shown = rows.slice(0, MAX_DIFF_ROWS);
-  shown.push({ kind: "more", count: rows.length - MAX_DIFF_ROWS });
+  let hidden = 0;
+  for (const r of rows.slice(MAX_DIFF_ROWS)) hidden += r.kind === "gap" ? r.count : 1;
+  shown.push({ kind: "more", count: hidden });
   return shown;
 }

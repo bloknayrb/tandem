@@ -45,6 +45,13 @@ describe("DiffView", () => {
     expect(container.querySelector("[data-testid='diff-truncated']")).toBeTruthy();
   });
 
+  it("never says plainly 'No differences.' of a comparison that was cut", () => {
+    const { container } = render(DiffView, props("a\n", "a\n", true));
+    expect(container.querySelector("[data-testid='diff-none']")?.textContent?.trim()).toBe(
+      "No differences in the part compared.",
+    );
+  });
+
   it("shows loading, then a failed fetch's message as text", () => {
     const loading = render(DiffView, { props: { result: null } });
     expect(loading.container.textContent).toContain("Comparing");

@@ -58,13 +58,26 @@ async function readTextBounded(
     const length = Math.min(st.size, max);
     const buf = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buf, 0, length, 0);
-    return {
-      text: stripBom(buf.subarray(0, bytesRead).toString("utf-8")),
-      truncated: st.size > max,
-    };
+    const truncated = st.size > max;
+    // A cut through a multi-byte character would decode as U+FFFD; end on a
+    // character boundary instead, so a real U+FFFD in the file is kept.
+    const end = truncated ? utf8Boundary(buf, bytesRead) : bytesRead;
+    return { text: stripBom(buf.subarray(0, end).toString("utf-8")), truncated };
   } finally {
     await handle.close();
   }
+}
+
+/** The largest `n <= length` at which `buf[0..n)` ends on a whole UTF-8 character. */
+function utf8Boundary(buf: Buffer, length: number): number {
+  let i = length;
+  // Step back over continuation bytes (10xxxxxx) to the last lead byte.
+  while (i > 0 && i > length - 4 && (buf[i - 1] & 0xc0) === 0x80) i--;
+  if (i === 0) return length;
+  const lead = buf[i - 1];
+  const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  // The character starting at i - 1 is complete only if all its bytes fit.
+  return length - (i - 1) >= need ? length : i - 1;
 }
 
 /** Cut `text` at the cap without splitting a surrogate pair. */
@@ -76,20 +89,37 @@ function capText(text: string, max: number): { text: string; truncated: boolean 
   return { text: text.slice(0, end), truncated: true };
 }
 
+/** `text` up to and including its last line break; all of it when it has none. */
+function toLastLine(text: string): string {
+  const nl = text.lastIndexOf("\n");
+  return nl >= 0 ? text.slice(0, nl + 1) : text;
+}
+
 /**
- * When either side was cut at the cap, cut both at the same place: the last
- * line break within the shorter side. The two caps are in different units (raw
- * bytes before CRLF folding on disk, UTF-16 code units for the document), so
- * left alone they stop at different points of the same text and the diff
- * reports the longer side's tail as only on that side.
+ * Make the cut sides comparable. A side cut at the cap is taken back to its
+ * last full line. Then neither side runs past the shortest cut side, because
+ * beyond that point the other version is unknown, not different. A complete
+ * side shorter than that is never cut: it really does end there, and what the
+ * other side holds past it is a real difference. The caps count different
+ * units (raw bytes before CRLF folding on disk, UTF-16 code units for the
+ * document), so without this the same text stops at different points.
  */
-function alignCuts(a: string, b: string): [string, string] {
-  const limit = Math.min(a.length, b.length);
+function alignCuts(
+  a: { text: string; truncated: boolean },
+  b: { text: string; truncated: boolean },
+): [string, string] {
+  const at = a.truncated ? toLastLine(a.text) : a.text;
+  const bt = b.truncated ? toLastLine(b.text) : b.text;
+  const limit = Math.min(
+    a.truncated ? at.length : Number.POSITIVE_INFINITY,
+    b.truncated ? bt.length : Number.POSITIVE_INFINITY,
+  );
   const cut = (text: string): string => {
+    if (text.length <= limit) return text;
     const nl = text.lastIndexOf("\n", limit - 1);
     return nl >= 0 ? text.slice(0, nl + 1) : capText(text, limit).text;
   };
-  return [cut(a), cut(b)];
+  return [cut(at), cut(bt)];
 }
 
 function isEnoent(err: unknown): boolean {
@@ -184,11 +214,10 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     toLf(stripBom(adapter.save(getOrCreateDocument(safeId)))),
     COMPARE_MAX_BYTES,
   );
-  // A byte cut can split a multi-byte character, which decodes as U+FFFD.
-  const otherText = toLf(other.truncated ? other.text.replace(/\uFFFD+$/, "") : other.text);
+  const otherSide = { text: toLf(other.text), truncated: other.truncated };
   const truncated = current.truncated || other.truncated;
   const [currentShown, otherShown] = truncated
-    ? alignCuts(current.text, otherText)
-    : [current.text, otherText];
+    ? alignCuts(current, otherSide)
+    : [current.text, otherSide.text];
   res.json({ data: { current: currentShown, other: otherShown, otherLabel, truncated } });
 }

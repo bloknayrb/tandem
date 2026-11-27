@@ -30,7 +30,7 @@ const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.cu
 <div class="diff-view" data-testid="diff-view">
   <p class="legend">
     <span class="legend-remove">− {otherLabel}</span>
-    <span class="legend-add">+ The document now</span>
+    <span class="legend-add">+ The document now, as saving would write it</span>
   </p>
   {#if result.comparison.truncated}
     <p class="note" data-testid="diff-truncated">
@@ -40,7 +40,9 @@ const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.cu
   {#if rows === null}
     <p class="note" data-testid="diff-too-large">These versions are too different to compare here.</p>
   {:else if rows.length === 0}
-    <p class="note" data-testid="diff-none">No differences.</p>
+    <p class="note" data-testid="diff-none">
+      {result.comparison.truncated ? "No differences in the part compared." : "No differences."}
+    </p>
   {:else}
     <div class="lines" role="list">
       {#each rows as row, i (i)}

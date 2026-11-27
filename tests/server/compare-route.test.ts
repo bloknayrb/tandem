@@ -209,9 +209,35 @@ describe("GET /api/document/compare", () => {
     const res = await call({ documentId: id, against: "disk" });
     expect(res._status).toBe(200);
     expect(data(res).truncated).toBe(true);
-    // Both sides stop at the same point: the shorter side's length here.
-    expect(data(res).other).toBe("xxxxxx");
+    // One unbroken line: the cut side keeps all it read; the complete side is whole.
+    expect(data(res).other.length).toBe(COMPARE_MAX_BYTES);
     expect(data(res).current).toBe("small\n");
+  });
+
+  it("never hides what a cut file has past a complete, shorter document", async () => {
+    const extra = Array.from({ length: 40 }, (_, i) => `${i}`.padEnd(100_000, "b")).join("\n");
+    for (const [name, doc] of [
+      ["short.md", "small\n"],
+      ["empty.txt", ""],
+    ] as const) {
+      const { filePath, id } = await opened(name, doc);
+      await fs.writeFile(filePath, `${doc}${extra}\n`);
+      const d = data(await call({ documentId: id, against: "disk" }));
+      expect(d.truncated, name).toBe(true);
+      expect(d.current, name).toBe(doc);
+      // The disk side runs to its last full line within the cap, far past the document.
+      expect(d.other.startsWith(doc), name).toBe(true);
+      expect(d.other.length, name).toBeGreaterThan(COMPARE_MAX_BYTES - 100_100);
+      expect(d.other.endsWith("\n"), name).toBe(true);
+    }
+  });
+
+  it("keeps a real U+FFFD that ends exactly at the cut", async () => {
+    const { filePath, id } = await opened("fffd.txt", "small\n");
+    // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.
+    await fs.writeFile(filePath, `${"a".repeat(COMPARE_MAX_BYTES - 3)}\uFFFDtail`);
+    const d = data(await call({ documentId: id, against: "disk" }));
+    expect(d.other.endsWith("\uFFFD")).toBe(true);
   });
 
   it("cuts both sides of an over-cap CRLF file at the same line, so an unchanged file shows no difference", async () => {

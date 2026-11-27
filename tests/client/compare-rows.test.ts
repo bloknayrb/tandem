@@ -77,4 +77,15 @@ describe("buildDiffRows", () => {
     expect(last.kind).toBe("more");
     expect(last.kind === "more" && last.count).toBeGreaterThan(0);
   });
+
+  it("counts the hidden lines behind a gap past the cap, not just its row", () => {
+    const head = Array.from({ length: 1100 }, (_, i) => `h${i}`);
+    const same = Array.from({ length: 5000 }, (_, i) => `s${i}`);
+    const other = [...head, ...same, "end old"].join("\n");
+    const current = [...head.map((l) => `${l}!`), ...same, "end new"].join("\n");
+    const rows = buildDiffRows(other, current, 10_000) ?? [];
+    const last = rows[rows.length - 1];
+    // 200 added rows, 3 context + a 4,994-line gap + 3 context, then the final pair.
+    expect(last).toEqual({ kind: "more", count: 200 + 3 + 4994 + 3 + 2 });
+  });
 });
