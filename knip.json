@@ -8,6 +8,7 @@
     "src/stdio-bridge/index.ts",
     "src/client/main.ts",
     "scripts/*.{ts,mjs,js}",
+    "scripts/ci/*.{ts,mjs,js}",
     "tests/**/*.{test,spec}.ts",
     "tests/e2e/**/*.spec.ts"
   ],
