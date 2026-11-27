@@ -1,8 +1,0 @@
-# Clippy's MSRV for `incompatible_msrv`. Cargo.toml declares rust-version
-# 1.77.2, but the default build cannot compile below 1.90:
-# tauri-plugin-notification 2.6 declares 1.90 (see its comment in Cargo.toml),
-# and CI builds on stable. Linting against 1.77.2 would fail the pinned clippy
-# step (-D warnings) on std APIs the crate can already use, such as
-# std::sync::LazyLock. Keep this at the real floor of the DEFAULT build; clippy
-# prints a one-line notice that the two values differ, which is expected.
-msrv = "1.90.0"

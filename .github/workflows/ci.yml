@@ -120,7 +120,7 @@ jobs:
       # Linux clippy. Not linted: macOS-only code, and code behind a Cargo
       # feature (`devtools`, `ui-inspector`), since this runs default features.
       # It compiles on a second toolchain, so each leg builds the crate twice.
-      # MSRV for `incompatible_msrv` is set in src-tauri/clippy.toml. Pinned by
+      # `incompatible_msrv` reads Cargo.toml's rust-version. Pinned by
       # tests/scripts/clippy-wiring.test.ts.
       - name: Clippy (pinned, warnings denied)
         if: matrix.os != 'macos-latest'
