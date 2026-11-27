@@ -4232,9 +4232,9 @@ Bryan chose (2026-11-27) to adopt the checks, the bug-class discipline and coloc
 3. **Both tiers keep** the cloud-review merge gate (#1831) and the #1602 blocking-finding rule.
 4. **Enforcement is a nudge.** `nudge-plan-review.sh` warns once per session on a Tier A edit made before any plan was written. It never blocks. `block-plan-without-agent-review` stays fail-closed, so a Tier B task should not enter plan mode.
 
-**Accepted residuals.** The agent classifies its own work, and a write made through Bash (a redirect, `sed -i`, `git apply`) never reaches the Edit/Write hook, so the nudge cannot see it. CHANGELOG.md ships to users in the npm and desktop bundles and is Tier B, as a consequence of Bryan's decision not to require human-owned copy.
+**Accepted residuals.** The agent classifies its own work; a Write the user denies still counts its path as session-created; and a write made through Bash (a redirect, `sed -i`, `git apply`) never reaches the Edit/Write hook, so the nudge cannot see it. CHANGELOG.md ships to users in the npm and desktop bundles and is Tier B, as a consequence of Bryan's decision not to require human-owned copy.
 
-**Enforced by:** `tests/scripts/review-tier.test.ts` (the tier lists, the classifier, the hook's warning) and the ratchet tests named in CONTRIBUTING.md.
+**Enforced by:** `tests/scripts/review-tier.test.ts` (the tier lists, the classifier, the hook's warning). The ratchets in decision 1 and the bug-class rule land in their own PRs (#2583–#2588) and are enforced once merged; until then decision 1 is a direction, not a gate.
 
 **Cross-references:** ADR-051 (an advisory guarantee is enforced inside `check`), #1602, #1604, #1831, `docs/spikes/ai-debugging-blind-spots-audit.md`.
 

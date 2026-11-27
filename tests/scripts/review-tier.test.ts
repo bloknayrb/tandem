@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   classify,
   globToRegExp,
   loadTiers,
+  realpathish,
   toRepoRelative,
 } from "../../.claude/hooks/review-tier.mjs";
 
@@ -78,6 +80,34 @@ describe("review tier classification", () => {
     expect(tier("tests/docs/new-claims.test.ts", true), "checks stay Tier A").toBe("A");
   });
 
+  it.each([
+    ".claude/plans/feature.md",
+    ".claude/worktrees/x/src/a.ts",
+    ".claude/.workflow-state/s/m",
+  ])("%s is agent scratch, not a change", (rel) => {
+    expect(tier(rel)).toBe("outside");
+  });
+
+  it("resolves a symlinked checkout to the same repo-relative path", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "review-tier-link-"));
+    try {
+      const link = path.join(dir, "repo");
+      symlinkSync(ROOT, link);
+      expect(toRepoRelative(path.join(link, "src", "server", "index.ts"))).toBe(
+        "src/server/index.ts",
+      );
+      // A file that does not exist yet resolves through its nearest existing ancestor.
+      expect(toRepoRelative(path.join(link, "tests", "server", "not-yet.test.ts"))).toBe(
+        "tests/server/not-yet.test.ts",
+      );
+      expect(realpathish(path.join(link, "no", "such", "dir", "f.ts"))).toBe(
+        path.join(ROOT, "no", "such", "dir", "f.ts"),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("alwaysTierA beats every Tier B glob", () => {
     expect(tier("docs/reviews/CLAUDE.md")).toBe("A");
   });
@@ -100,6 +130,17 @@ describe.skipIf(process.platform === "win32")("nudge-plan-review.sh tier branch"
         tool_input: { file_path: file },
       }),
     });
+  const hasJq = spawnSync("bash", ["-c", "command -v jq"]).status === 0;
+  /** The reminder the model would see: stdout JSON, or the stderr fallback without jq. */
+  const reminder = (run: ReturnType<typeof runHook>): string => {
+    if (!hasJq) return run.stderr;
+    if (run.stdout.trim() === "") return "";
+    const out = JSON.parse(run.stdout) as {
+      hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+    };
+    expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+    return out.hookSpecificOutput?.additionalContext ?? "";
+  };
 
   it("warns once on a Tier A edit with no plan, and never on Tier B", () => {
     const session = `vitest-tier-${process.pid}`;
@@ -107,14 +148,19 @@ describe.skipIf(process.platform === "win32")("nudge-plan-review.sh tier branch"
     try {
       const b = runHook(session, "Edit", path.join(ROOT, "docs", "reviews", "x.md"));
       expect(b.status).toBe(0);
-      expect(b.stderr).not.toContain("Tier A");
+      expect(reminder(b)).not.toContain("Tier A");
+
+      const plan = runHook(session, "Write", path.join(ROOT, ".claude", "plans", "p.md"));
+      expect(reminder(plan), "writing the plan itself is not a Tier A edit").not.toContain(
+        "Tier A",
+      );
 
       const a = runHook(session, "Edit", path.join(ROOT, "src", "server", "index.ts"));
       expect(a.status, "the nudge never blocks").toBe(0);
-      expect(a.stderr).toContain("Tier A edit with no plan this session");
+      expect(reminder(a)).toContain("Tier A edit with no plan this session");
 
       const again = runHook(session, "Edit", path.join(ROOT, "src", "server", "index.ts"));
-      expect(again.stderr, "one-shot per session").not.toContain("Tier A");
+      expect(reminder(again), "one-shot per session").not.toContain("Tier A");
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
@@ -125,29 +171,38 @@ describe.skipIf(process.platform === "win32")("nudge-plan-review.sh tier branch"
     const stateDir = path.join(ROOT, ".claude", ".workflow-state", session);
     try {
       // Same marker track-workflow-events.sh writes after a plan-file write.
-      spawnSync("bash", ["-c", `mkdir -p "${stateDir}" && : > "${stateDir}/last-plan-write"`]);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(path.join(stateDir, "last-plan-write"), "");
       const a = runHook(session, "Edit", path.join(ROOT, "src", "server", "index.ts"));
-      expect(a.stderr).not.toContain("Tier A");
+      expect(reminder(a)).not.toContain("Tier A");
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("fails toward Tier A when the classifier cannot run", () => {
-    const dir = mkdtempSync(path.join(ROOT, ".claude", ".workflow-state", "vitest-tierfail-"));
+  it.each([
+    ["node is missing", ""],
+    ["node runs but prints nothing", "#!/bin/sh\nexit 0\n"],
+    ["node prints something unexpected", "#!/bin/sh\necho maybe\n"],
+  ])("fails toward Tier A when %s", (_label, stub) => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), "review-tier-bin-"));
     try {
+      if (stub) {
+        writeFileSync(path.join(bin, "node"), stub);
+        chmodSync(path.join(bin, "node"), 0o755);
+      }
+      // A Tier B path, so only a classifier failure can make this say A.
       const run = spawnSync(
         "bash",
         [
           "-c",
-          'source .claude/hooks/_workflow-state.sh; PATH=/nonexistent _ws_is_tier_a_edit "docs/reviews/x.md" 1 "" && echo A || echo B',
+          'source .claude/hooks/_workflow-state.sh; _ws_is_tier_a_edit "docs/reviews/x.md" 1 "" && echo A || echo B',
         ],
-        { cwd: ROOT, encoding: "utf8" },
+        { cwd: ROOT, encoding: "utf8", env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` } },
       );
-      // With no node on PATH the classifier cannot run; the predicate must say A.
       expect(run.stdout.trim()).toBe("A");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
     }
   });
 });

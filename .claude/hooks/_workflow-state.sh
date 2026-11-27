@@ -116,5 +116,6 @@ _ws_is_tier_a_edit() {
   [[ -n "$p" ]] || return 1
   local tier
   tier=$(node "$(dirname "${BASH_SOURCE[0]}")/review-tier.mjs" "$p" "${2:-1}" "${3:-}" 2>/dev/null) || tier="A"
-  [[ "$tier" == "A" ]]
+  # Name the non-A answers, so empty or unexpected output means Tier A.
+  [[ "$tier" != "B" && "$tier" != "outside" ]]
 }

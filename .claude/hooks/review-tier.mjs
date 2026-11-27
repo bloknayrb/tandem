@@ -17,7 +17,10 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+// Real path: import.meta.url is already resolved by the ESM loader, and the
+// edited path is resolved the same way below, so a symlinked checkout compares
+// like with like.
+const ROOT = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."));
 
 /** `**` spans directories, `*` stays within one. Everything else is literal. */
 export function globToRegExp(glob) {
@@ -49,15 +52,37 @@ const matchesAny = (rel, globs) => globs.some((g) => globToRegExp(g).test(rel));
  * session created it earlier.
  */
 export function classify(rel, tiers, { created }) {
+  // Agent scratch inside the repo dir (plan files, worktrees, hook state) is
+  // not a change to the project; no tier applies.
+  if (matchesAny(rel, tiers.notAChange ?? [])) return "outside";
   if (matchesAny(rel, tiers.alwaysTierA)) return "A";
   if (matchesAny(rel, tiers.tierB)) return "B";
   if (created && matchesAny(rel, tiers.tierBNewFilesOnly)) return "B";
   return "A";
 }
 
+/**
+ * `file` with symlinks resolved, through its nearest existing ancestor: the
+ * file itself may not exist yet (a Write that creates it).
+ */
+export function realpathish(file) {
+  let head = path.resolve(file);
+  const tail = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(head), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) return path.resolve(file);
+      tail.push(path.basename(head));
+      head = parent;
+    }
+  }
+}
+
 /** Repo-relative and forward-slashed, or null for a path outside the repo. */
 export function toRepoRelative(file, root = ROOT) {
-  const abs = path.resolve(root, file.replace(/\\/g, "/"));
+  const abs = realpathish(path.resolve(root, file.replace(/\\/g, "/")));
   const rel = path.relative(root, abs).replace(/\\/g, "/");
   if (rel === "" || rel.startsWith("../") || path.isAbsolute(rel)) return null;
   return rel;

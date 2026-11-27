@@ -33,19 +33,26 @@ if [[ -n "$FILE_PATH" ]]; then
   EXISTED=1
   [[ -e "$FILE_PATH" ]] || EXISTED=0
   CREATED_LIST="${STATE_DIR}/created-files"
-  if [[ "$EXISTED" == "0" ]]; then
+  # Only a Write creates a file; an Edit of a missing path fails. (A Write the
+  # user then denies is still recorded: accepted, ADR-057.)
+  if [[ "$EXISTED" == "0" ]] && printf '%s' "$INPUT" | grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Write"'; then
     printf '%s\n' "$FILE_PATH" >> "$CREATED_LIST" 2>/dev/null || true
   fi
   TIER_MARK="${STATE_DIR}/nudged-tier-a"
   if [[ ! -f "${STATE_DIR}/${_WS_MARK_PLAN_WRITE}" && ! -f "$TIER_MARK" ]] \
     && _ws_is_tier_a_edit "$FILE_PATH" "$EXISTED" "$CREATED_LIST"; then
     : > "$TIER_MARK"
-    cat >&2 <<EOF
-⚠ Tier A edit with no plan this session: ${FILE_PATH}
-   Per CLAUDE.md's workflow (ADR-057), a change touching anything off the Tier B
-   allowlist in .claude/review-tiers.json gets a plan and adversarial agent review
-   before code. (One-shot reminder for this session.)
-EOF
+    REMINDER="Tier A edit with no plan this session: ${FILE_PATH}. Per CLAUDE.md's workflow (ADR-057), a change touching anything off the Tier B allowlist in .claude/review-tiers.json gets a plan and adversarial agent review before code. (One-shot reminder for this session.)"
+    # As real context for the model (hookSpecificOutput.additionalContext on
+    # stdout), not stderr, which Claude Code does not show the model on exit 0.
+    # Same pattern and jq fallback as stop-cycle-check.sh.
+    if command -v jq >/dev/null 2>&1 \
+      && jq -n --arg ctx "$REMINDER" \
+        '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$ctx}}'; then
+      :
+    else
+      printf '%s\n' "$REMINDER" >&2
+    fi
   fi
 fi
 
