@@ -34,7 +34,8 @@ const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.cu
   </p>
   {#if result.comparison.truncated}
     <p class="note" data-testid="diff-truncated">
-      These versions are large, so only their beginnings are compared.
+      These versions are large, so only their beginnings are compared, and a change near the
+      end of the compared part may only be where the cut fell.
     </p>
   {/if}
   {#if rows === null}

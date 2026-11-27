@@ -102,8 +102,11 @@ $effect(() => {
           type="button"
           class="modal-refresh"
           data-testid="compare-refresh"
-          disabled={result === null}
-          onclick={() => refreshes++}
+          aria-disabled={result === null}
+          onclick={() => {
+            // aria-disabled, not disabled: a disabled button drops keyboard focus.
+            if (result !== null) refreshes++;
+          }}
         >
           Refresh
         </button>
@@ -178,11 +181,11 @@ $effect(() => {
     padding: 4px 10px;
     cursor: pointer;
   }
-  .modal-refresh:disabled {
+  .modal-refresh[aria-disabled="true"] {
     cursor: default;
     color: var(--tandem-fg-subtle);
   }
-  .modal-refresh:hover:not(:disabled),
+  .modal-refresh:hover:not([aria-disabled="true"]),
   .modal-refresh:focus-visible {
     background: var(--tandem-surface-sunk);
   }

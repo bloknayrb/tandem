@@ -33,7 +33,7 @@ import { docBackupSnapshotPath, listDocBackups } from "../../file-io/doc-backup.
 import { getAdapter } from "../../file-io/index.js";
 import { stripBom, toLf } from "../../file-io/line-endings.js";
 import { resolveAppDataDir } from "../../platform.js";
-import { getOrCreateDocument } from "../../yjs/provider.js";
+import { getDocument } from "../../yjs/provider.js";
 import { isValidDocumentId } from "./_shared.js";
 
 /** Each side is compared up to this many bytes (UTF-8 on disk, UTF-16 code units for the document). */
@@ -57,7 +57,13 @@ async function readTextBounded(
     if (!st.isFile()) return "not-a-file";
     const length = Math.min(st.size, max);
     const buf = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buf, 0, length, 0);
+    // One read may return short (network filesystems, interrupted reads).
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const r = await handle.read(buf, bytesRead, length - bytesRead, bytesRead);
+      if (r.bytesRead === 0) break;
+      bytesRead += r.bytesRead;
+    }
     const truncated = st.size > max;
     // A cut through a multi-byte character would decode as U+FFFD; end on a
     // character boundary instead, so a real U+FFFD in the file is kept.
@@ -209,11 +215,16 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     return;
   }
 
-  // Serialized only once the other side is known to exist.
-  const current = capText(
-    toLf(stripBom(adapter.save(getOrCreateDocument(safeId)))),
-    COMPARE_MAX_BYTES,
-  );
+  // Serialized only once the other side is known to exist, and only if the
+  // document is still open after those awaits: a tab closed meanwhile must
+  // answer 404, never compare against (and leave behind) an empty Y.Doc.
+  const stillOpen = [...getOpenDocs().values()].some((d) => d.id === safeId);
+  const ydoc = stillOpen ? getDocument(safeId) : undefined;
+  if (!ydoc) {
+    res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
+    return;
+  }
+  const current = capText(toLf(stripBom(adapter.save(ydoc))), COMPARE_MAX_BYTES);
   const otherSide = { text: toLf(other.text), truncated: other.truncated };
   const truncated = current.truncated || other.truncated;
   const [currentShown, otherShown] = truncated

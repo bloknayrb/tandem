@@ -232,6 +232,37 @@ describe("GET /api/document/compare", () => {
     }
   });
 
+  it("answers 404 when the document closes while its other side is being read", async () => {
+    const { id } = await opened("closing.md", "on disk\n");
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      removeDoc(id); // the tab closes mid-request
+      return realOpen(...(args as Parameters<typeof fs.open>));
+    });
+    const res = await call({ documentId: id, against: "disk" });
+    spy.mockRestore();
+    expect(res._status).toBe(404);
+  });
+
+  it("reads the whole file across short reads", async () => {
+    const body = `${"line of text\n".repeat(5000)}`;
+    const { filePath, id } = await opened("short-reads.txt", "x\n");
+    await fs.writeFile(filePath, body);
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      const realRead = handle.read.bind(handle);
+      // At most 1,000 bytes per call, as a network filesystem may answer.
+      handle.read = ((buf: Buffer, offset: number, length: number, position: number) =>
+        realRead(buf, offset, Math.min(length, 1000), position)) as typeof handle.read;
+      return handle;
+    });
+    const d = data(await call({ documentId: id, against: "disk" }));
+    spy.mockRestore();
+    expect(d.other).toBe(body);
+    expect(d.truncated).toBe(false);
+  });
+
   it("keeps a real U+FFFD that ends exactly at the cut", async () => {
     const { filePath, id } = await opened("fffd.txt", "small\n");
     // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.
