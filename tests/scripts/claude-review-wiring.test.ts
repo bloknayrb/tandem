@@ -282,11 +282,16 @@ describe("workspace", () => {
     // or renamed one is not recreated), and a copy that cannot be read (a link
     // whose target is outside the sparse set) is skipped, never fatal under
     // GitHub's `bash -e`.
-    expect(loop).toContain('if [ ! -d "$(dirname "$f")" ]; then');
+    expect(loop).toContain('if [ ! -d "${f%/*}" ]; then');
     expect(loop).toContain('elif ! cp -L "../trusted/$f" "$f"; then');
     expect(loop).not.toContain("mkdir");
+    // Its own `exit 1`: as the left of `&&` under `bash -e` it would fail the
+    // step only while it happened to be the last line.
     expect(loop, "the root copy must exist, as a regular file, after the loop").toContain(
-      "test -f CLAUDE.md && test ! -L CLAUDE.md",
+      "if [ ! -f CLAUDE.md ] || [ -L CLAUDE.md ]; then",
+    );
+    expect(loop.slice(loop.indexOf("if [ ! -f CLAUDE.md ]"))).toMatch(
+      /^if [^\n]*\n[^\n]*\n\s*exit 1\n/,
     );
     expect(links).toBeGreaterThanOrEqual(0);
     expect(names).toBeGreaterThan(links);
