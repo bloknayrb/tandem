@@ -54,7 +54,11 @@ import { handleResolveExternalConflict } from "../../src/server/mcp/routes/exter
 import { pushNotification } from "../../src/server/notifications.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_DOCUMENT_META, Y_MAP_EXTERNAL_CONFLICT } from "../../src/shared/constants.js";
+import {
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../src/shared/constants.js";
 import { withMcp } from "../../src/shared/origins.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
@@ -224,6 +228,51 @@ describe("Reload keeps the unsaved edits first", () => {
     expect(extractText(doc)).toContain("the external version");
   });
 
+  it("refuses NO_DOCUMENT, pointing at Version history, when the tab closes during the keep", async () => {
+    const { id } = await conflicted("closed.md");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const { closeDocumentById } = await import("../../src/server/mcp/document-service.js");
+    const real = store.snapshotUnsavedEdits;
+    const spy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      const r = await real(...args);
+      await closeDocumentById(id);
+      return r;
+    });
+    let err: (Error & { code?: string }) | null = null;
+    try {
+      err = await resolveExternalConflict(id, "reload").then(
+        () => null,
+        (e: Error & { code?: string }) => e,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err?.code).toBe("NO_DOCUMENT");
+    expect(err?.message).toContain("Version history");
+  });
+
+  it("a failure after the swap still keeps what was captured there, and says where", async () => {
+    const { id, doc } = await conflicted("after-swap.md");
+    const watcher = await import("../../src/server/documents/watcher.js");
+    const spy = vi
+      .spyOn(watcher, "reloadFromDisk")
+      .mockImplementation(async (_id, _path, _format, opts) => {
+        opts?.atSwap?.(doc);
+        throw new Error("apply blew up");
+      });
+    let err: Error | null = null;
+    try {
+      err = await resolveExternalConflict(id, "reload").then(
+        () => null,
+        (e: Error) => e,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err?.message).toContain("apply blew up");
+    expect(err?.message).toContain("Version history");
+  });
+
   it("a reload skipped for one already in flight reports no kept edits", async () => {
     const { id } = await conflicted("skipped.md");
     const watcher = await import("../../src/server/documents/watcher.js");
@@ -261,6 +310,20 @@ describe("Keep keeps the version on disk first", () => {
     expect(result?.diskVersionKept).toBe(true);
     const disk = (await kinds(filePath)).filter((b) => b.kind === "disk").map((b) => b.text);
     expect(disk).toContain("the external version\n");
+  });
+
+  it("re-stats after the snapshot when the first stat failed (a transient lock)", async () => {
+    const { filePath, id, doc } = await conflicted("keep-lock.md");
+    const spy = vi
+      .spyOn(fs, "stat")
+      .mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EBUSY" }));
+    try {
+      await resolveExternalConflict(id, "keep");
+    } finally {
+      spy.mockRestore();
+    }
+    const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION);
+    expect(savedAt).toBe((await fs.stat(filePath)).mtimeMs);
   });
 
   it("takes no disk backup for a read-only document, which has no next save", async () => {
