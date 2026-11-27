@@ -651,6 +651,20 @@ describe("the installed-plugin lookup (smoke S1, Windows)", () => {
     expect(tandemKeysFromPluginList("[]")).toEqual({ keys: [], dropped: 0 });
   });
 
+  // Bryan's Windows run (#2599, 2026-11-27, Claude Code 2.1.332): the same id
+  // listed once per scope, disabled in both, beside the enabled synced plugin.
+  it("takes an id listed once per scope as one key (the Windows run's shape)", () => {
+    const windows = JSON.stringify([
+      { id: "tandem@tandem-desktop", version: "0.6.2", scope: "user", enabled: false },
+      { id: "tandem@tandem-desktop", version: "0.6.2", scope: "local", enabled: false },
+      { id: "tandem@synced", version: "0.32.0", scope: "synced", enabled: true },
+    ]);
+    expect(tandemKeysFromPluginList(windows)).toEqual({
+      keys: ["tandem@synced", "tandem@tandem-desktop"],
+      dropped: 0,
+    });
+  });
+
   // Review of #2599, item 4: the lookup's filter was narrower than the
   // settings path's, so an id the settings path would disable was dropped.
   it("one predicate: the lookup and the settings files keep exactly the same keys", async () => {

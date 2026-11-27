@@ -311,7 +311,8 @@ function withDeadline<T>(
 
 /** How long the installed-plugin lookup may take before the spawn goes on
  * without it (smoke S1 on Windows; Bryan, 2026-11-26). Measured at about 0.6 s
- * on Linux (Claude Code 2.1.332, 18 plugins). */
+ * on Linux (Claude Code 2.1.332, 18 plugins) and 0.93 to 1.06 s on Windows
+ * (Bryan, 2026-11-27, 80 plugins, warm disk cache). */
 export const PLUGIN_LIST_DEADLINE_MS = 5_000;
 /** How long past the runner's timeout ({@link PLUGIN_LIST_DEADLINE_MS}) the
  * lookup's own deadline waits before answering `timeout` without the runner.
