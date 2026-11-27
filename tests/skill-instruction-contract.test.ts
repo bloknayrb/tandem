@@ -179,7 +179,10 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // section.
   // 41 drops "or an unrecognized extension" from Hard Rule 4: `tandem_open` refuses an
   // unrecognized extension, so it never reaches the plaintext path. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*41$/m);
+  // 42 adds `backupKept` and `BACKUP_FAILED` to Error Recovery (ADR-057: a Claude force-open,
+  // restore or close keeps the unsaved edits it discards), and rewords Hard Rule 6's force
+  // clause to match. Outside the wake section.
+  expect(skill).toMatch(/^version:\s*42$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -569,7 +572,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "41", bodyHash: "c668b0068fd2" });
+    ).toEqual({ version: "42", bodyHash: "312d5d083721" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

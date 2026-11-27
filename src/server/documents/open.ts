@@ -126,6 +126,15 @@ import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
 import {
+  captureAtSwap,
+  type KeptBackup,
+  keepEditsCapturedAtSwap,
+  keepUnsavedEdits,
+  notifyUnsavedEditsKept,
+  reportKeptBackupOnFailure,
+  unsavedEditsOf,
+} from "./keep-unsaved.js";
+import {
   clearAndReload,
   evictPartialDocState,
   loadContentIntoDoc,
@@ -366,9 +375,22 @@ export async function openFromDisk(
      * Passed by `tandem_open`'s wrapper alone, and only with ownership on.
      */
     expectTargetId?: string;
+    /**
+     * Keep the document's unsaved edits as a backup before a force-reload
+     * discards them, and report the backup here (ADR-057). Passed by
+     * `tandem_open` alone, so `/api/open` (the browser, Replay tutorial) is
+     * unchanged. A backup that cannot be kept throws `BACKUP_FAILED` before
+     * anything is reloaded.
+     */
+    keepUnsavedEdits?: UnsavedEditsHolder;
   },
 ): Promise<OpenSuccess> {
   return openValidated(filePath, options);
+}
+
+/** Filled by a force-reload that kept the document's unsaved edits (`openFromDisk`'s `keepUnsavedEdits`). */
+export interface UnsavedEditsHolder {
+  kept?: KeptBackup;
 }
 
 /**
@@ -411,6 +433,8 @@ interface OpenOptions {
   fromRestore?: boolean;
   /** See `openFromDisk`. */
   expectTargetId?: string;
+  /** See `openFromDisk`. */
+  keepUnsavedEdits?: UnsavedEditsHolder;
 }
 
 async function openValidated(filePath: string, options?: OpenOptions): Promise<OpenSuccess> {
@@ -455,43 +479,99 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
       // CodeQL traces the sanitizer cross-line within a function but not
       // across function boundaries.
       const doc = getDocument(existingId) ?? getOrCreateDocument(existingId);
+      const keepHolder = options?.keepUnsavedEdits;
+      // ADR-057: read the unsaved edits before the disk read's await, and keep
+      // them before anything irreversible — a failed backup throws here, with
+      // the document untouched.
+      const editsBefore = keepHolder ? unsavedEditsOf(existingId, doc, existing) : null;
       const reloadBuffer =
         format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-      const remap = await clearAndReload(
-        existingId,
-        doc,
-        resolved,
-        format,
-        existing,
-        reloadBuffer,
-        { readOnly },
-      );
-      await openDocumentWhenReady(
-        { id: existingId, filePath: resolved, format, readOnly, source: "file" },
-        async () => {
-          // `clearAndReload` kept the annotation map and remapped every record
-          // onto the new content (#2269). Disk content differing from the
-          // in-memory doc is the whole REASON to force, so "the text moved" is
-          // this path's normal case. The merge persists the remapped map; where
-          // the envelope's copy of a record wins instead, that copy holds
-          // pre-reload coordinates and `afterMerge` remaps it too.
-          await wireAnnotationStore(existingId, doc, resolved, {
-            afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
-          });
-        },
-      );
-      // Settings > Replay tutorial force-opens welcome.md. The reload keeps
-      // every seed still in the map (and the merge above then persists it, a
-      // map-only record), but a seed the user DELETED is gone and nothing else
-      // re-creates it, so replay here, past any tombstone those deletions left
-      // (#1696). A re-created tombstoned seed is persisted, or the envelope's
-      // tombstone deletes it again on the first reopen that has no session file
-      // to carry it.
-      if (
-        isWelcomeDoc(resolved) &&
-        injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
-      ) {
-        await persistEnvelopeNow(existingId, doc, resolved);
+      const incoming = typeof reloadBuffer === "string" ? reloadBuffer : undefined;
+      const keptBefore =
+        editsBefore !== null ? await keepUnsavedEdits(resolved, editsBefore, incoming) : undefined;
+      // The disk read and the backup awaited I/O, long enough for the tab to be
+      // closed (`POST /api/close` is not queued). Reloading now would bring a
+      // closed document back half set up (no dirty observer, no store), so
+      // refuse, naming any backup already kept (ADR-057).
+      if (keepHolder && getOpenDocs().get(existingId) !== existing) {
+        throw reportKeptBackupOnFailure(
+          Object.assign(new Error("The document was closed while it was being reloaded."), {
+            code: "NO_DOCUMENT",
+          }),
+          existingId,
+          resolved,
+          "reload",
+          keptBefore,
+        );
+      }
+      // Edits typed during the awaits between that capture and the swap are
+      // read inside the swap's own transaction and kept after it.
+      const swap = keepHolder ? captureAtSwap(existingId, existing) : undefined;
+      // From here a failure may come after the edits were discarded, so a
+      // kept backup is reported whatever the outcome.
+      let keptNotified = false;
+      try {
+        const remap = await clearAndReload(
+          existingId,
+          doc,
+          resolved,
+          format,
+          existing,
+          reloadBuffer,
+          { readOnly, ...(swap ? { atSwap: swap.capture } : {}) },
+        );
+        if (keepHolder) {
+          const keptAtSwap = swap
+            ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
+            : undefined;
+          keepHolder.kept = keptAtSwap ?? keptBefore;
+          // Told now, not at the end: the edits are already gone, so a later
+          // step that throws (the store re-wire, the tutorial replay) must not
+          // also hide where they went.
+          if (keepHolder.kept) {
+            notifyUnsavedEditsKept(existingId, resolved, "reload", keepHolder.kept);
+            keptNotified = true;
+          }
+        }
+        await openDocumentWhenReady(
+          { id: existingId, filePath: resolved, format, readOnly, source: "file" },
+          async () => {
+            // `clearAndReload` kept the annotation map and remapped every record
+            // onto the new content (#2269). Disk content differing from the
+            // in-memory doc is the whole REASON to force, so "the text moved" is
+            // this path's normal case. The merge persists the remapped map; where
+            // the envelope's copy of a record wins instead, that copy holds
+            // pre-reload coordinates and `afterMerge` remaps it too.
+            await wireAnnotationStore(existingId, doc, resolved, {
+              afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
+            });
+          },
+        );
+        // Settings > Replay tutorial force-opens welcome.md. The reload keeps
+        // every seed still in the map (and the merge above then persists it, a
+        // map-only record), but a seed the user DELETED is gone and nothing else
+        // re-creates it, so replay here, past any tombstone those deletions left
+        // (#1696). A re-created tombstoned seed is persisted, or the envelope's
+        // tombstone deletes it again on the first reopen that has no session file
+        // to carry it.
+        if (
+          isWelcomeDoc(resolved) &&
+          injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
+        ) {
+          await persistEnvelopeNow(existingId, doc, resolved);
+        }
+      } catch (err) {
+        // Before the swap nothing was discarded: rethrow as is.
+        if (!swap?.fired) throw err;
+        // A failure after the swap: the edits typed during the awaits were read
+        // at the swap but not yet kept, and they are gone from the document now.
+        const kept =
+          keepHolder?.kept ??
+          (swap
+            ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
+            : undefined) ??
+          keptBefore;
+        throw reportKeptBackupOnFailure(err, existingId, resolved, "reload", kept, keptNotified);
       }
       ensureAutoSave();
       return {

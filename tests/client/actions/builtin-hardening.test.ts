@@ -160,6 +160,33 @@ describe("restore backup", () => {
     const said = notify.mock.calls.map((c) => String(c[1])).join(" | ");
     expect(said).not.toContain("Restore request failed");
   });
+
+  it("labels each backup's kind in the confirm (ADR-057)", async () => {
+    mount({});
+    const confirm = vi.fn((_msg: string) => false);
+    vi.stubGlobal("confirm", confirm);
+    routes([
+      [
+        API_BACKUPS,
+        () =>
+          json({
+            data: {
+              backups: [
+                { name: "u1", timestamp: "2026-01-02", kind: "unsaved" },
+                { name: "d1", timestamp: "2026-01-01", kind: "disk" },
+              ],
+            },
+          }),
+      ],
+    ]);
+
+    runRestore();
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+
+    const text = String(confirm.mock.calls[0][0]);
+    expect(text).toContain("your unsaved edits");
+    expect(text).toContain("the file on disk");
+  });
 });
 
 // ---------------------------------------------------------------------------
