@@ -322,6 +322,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/license/grace.ts": 2,
   "src/server/license/license-state.ts": 2,
   "src/server/mcp/annotations.ts": 1,
+  // ADR-057 PR 4: the compare view's bounded READ, an `fs.open` with
+  // O_RDONLY | O_NONBLOCK so the size comes from the opened handle. The idiom
+  // list counts every `fs.open` conservatively; this one writes nothing, and
+  // never a Claude config, so the accepted #1599 scope is unchanged.
+  "src/server/mcp/routes/compare.ts": 1,
   "src/server/mcp/convert.ts": 1,
   "src/server/mcp/document-service.ts": 4,
   "src/server/mcp/document.ts": 1,

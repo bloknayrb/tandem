@@ -357,6 +357,7 @@ const FAN_IN = [
   // "just put it in _shared" would show up as a widened edge.
   "server/mcp/routes/send-open-result.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/compare.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/external-conflict.ts -> server/documents/registry.ts (value) x1",

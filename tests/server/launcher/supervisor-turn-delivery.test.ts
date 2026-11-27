@@ -101,11 +101,22 @@ class FakeChild extends EventEmitter {
 const EPIPE = (): NodeJS.ErrnoException =>
   Object.assign(new Error("write EPIPE"), { code: "EPIPE" }) as NodeJS.ErrnoException;
 
-/** A crash the supervisor did not cause. */
-function exitChild(child: FakeChild, code: number | null, signal: NodeJS.Signals | null = null) {
+/** A crash the supervisor did not cause. Its output streams end after the
+ * exit, as a real child's do (the order the exit verdict waits out, #2358 S2),
+ * unless `keepStreamsOpen` — a test that writes after the exit ends them. */
+function exitChild(
+  child: FakeChild,
+  code: number | null,
+  signal: NodeJS.Signals | null = null,
+  keepStreamsOpen = false,
+) {
   child.exitCode = code;
   child.signalCode = signal;
   child.emit("exit", code, signal);
+  if (!keepStreamsOpen) {
+    child.stdout.end();
+    child.stderr.end();
+  }
 }
 
 function held(child: FakeChild): HeldWrite[] {
@@ -754,6 +765,11 @@ describe("#1868 — consecutive stdin-error kills trip their own breaker", () =>
     expect(texts(child3)).toEqual([SUPERVISOR_WAKE_PROMPT]);
     pushJson(child3, INIT);
     pushJson(child3, RESULT_OK);
+    // An exit that clears the saved session, so child 4 is fresh and has its
+    // bootstrap turn to fail.
+    const argv3 = vi.mocked(spawn).mock.calls[2][1] as string[];
+    const id3 = argv3[argv3.indexOf("--resume") + 1];
+    child3.stderr.write(`No conversation found with session ID: ${id3}\n`);
     await settle();
     exitChild(child3, 1);
 
@@ -1588,15 +1604,276 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
     expect(logText()).not.toContain("clearing saved session");
   });
 
-  // The control: the exit the gate exists for still clears at once.
-  it("a doomed resume (exit 1) still clears the saved session and goes fresh", async () => {
+  // The control: the exit the gate exists for still clears at once. #2358 S2
+  // (Windows 11, Claude Code 2.1.332): under stream-json a doomed resume says
+  // so in the `result` envelope's `errors` (the smoke logged it as
+  // `[Claude] Output error: No conversation found with session ID: …`), then
+  // exits 1.
+  const doomedResult = (id: string) => ({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: [`No conversation found with session ID: ${id}`],
+  });
+
+  it("a doomed resume (its message in the result envelope, exit 1) clears at once and goes fresh", async () => {
     const { child2, id } = await resumedChild();
+    pushJson(child2, doomedResult(id));
+    await settle();
     exitChild(child2, 1);
 
     await nthChild(3);
-    expect(logText()).toContain("Resume failed before confirmation — clearing saved session");
+    expect(logText()).toContain(
+      `[Claude] Output error: No conversation found with session ID: ${id}`,
+    );
+    expect(logText()).toContain(
+      "Resume failed before confirmation — clearing saved session (Claude has no such conversation)",
+    );
     expect(isFresh(3)).toBe(true);
     expect(claudeArgs(3)).not.toContain(id);
+  });
+
+  it("a doomed resume whose message is the result envelope's `result` clears at once too", async () => {
+    // Not measured; read in case a build moves the text, as the sign-in
+    // refusal already arrives there.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      is_error: true,
+      result: `No conversation found with session ID: ${id}`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(isFresh(3)).toBe(true);
+  });
+
+  it("a doomed resume whose message comes on stderr clears at once too", async () => {
+    // Where text mode prints it (docs/spikes/cli-session-resume-spike.md).
+    const { child2, id } = await resumedChild();
+    child2.stderr.write(`No conversation found with session ID: ${id}\n`);
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(logText()).toContain("clearing saved session (Claude has no such conversation)");
+    expect(isFresh(3)).toBe(true);
+  });
+
+  // Node may emit `exit` before the last stream data is read, and a doomed
+  // resume writes its message and exits at once (#2358 S2, seen on Windows).
+  // The verdict waits for both streams to end, and the restart's plan waits
+  // for the verdict (the restart backoff here is 0).
+  it.each([
+    ["the result envelope", (c: FakeChild, id: string) => pushJson(c, doomedResult(id))],
+    [
+      "stderr",
+      (c: FakeChild, id: string) =>
+        c.stderr.write(`No conversation found with session ID: ${id}\n`),
+    ],
+  ])("a message on %s that arrives after the exit still clears at once", async (_l, say) => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 1, null, true); // the exit first
+    await settle();
+    say(child2, id);
+    child2.stdout.end();
+    child2.stderr.end();
+
+    await nthChild(3);
+    expect(logText()).toContain("clearing saved session (Claude has no such conversation)");
+    expect(logText()).not.toContain("keeping the saved session for one more resume");
+    expect(isFresh(3)).toBe(true);
+  });
+
+  it("a pipe that never ends: the verdict falls back after the drain bound, on what arrived", async () => {
+    const { child2, id } = await resumedChild({ exitStreamDrainMs: 40 });
+    exitChild(child2, 1, null, true); // streams never end
+    await sleep(10);
+    expect(children).toHaveLength(2); // the next plan waits on the verdict
+    await nthChild(3);
+    expect(logText()).toContain("did not end within 40ms of its exit");
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    resumes(3, id);
+    // A message after the bound is too late to count for that exit.
+    child2.stderr.write(`No conversation found with session ID: ${id}\n`);
+    await settle();
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("the message is read only for this spawn's own id", async () => {
+    const { child2, id } = await resumedChild();
+    pushJson(child2, doomedResult("99999999-2222-4333-8444-555555555555"));
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a successful turn's reply quoting the message is not Claude's verdict", async () => {
+    // A `success` result's `result` is Claude's own answer, which can quote a
+    // pasted launcher log naming this very id.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      // Starts with the phrase, so only the errored-envelope guard keeps it out.
+      result: `Error: No conversation found with session ID: ${id} — that is what the log says.`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("an errored envelope whose `result` quotes the message mid-text is not Claude's verdict", async () => {
+    // An API error whose text carries a quoted log line naming this id.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: `API Error: 500 {"detail":"[Claude] Output error: No conversation found with session ID: ${id}"}`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  // On Windows, which has no signals, a `taskkill`'d or crashed Claude also
+  // exits 1, so before #2358 S2's fix a kill early in a resumed run lost the
+  // conversation.
+  it("a Windows-style kill (exit 1, no message) early in a resumed run keeps the session", async () => {
+    const { child2, id } = await resumedChild();
+    pushJson(child2, INIT);
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    expect(savedId()).toBe(id);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("an exit 1 without the message is kept once, then cleared on the second", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 1);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+
+    exitChild(child3, 1);
+    await nthChild(4);
+    expect(logText()).toContain("clearing saved session (code=1)");
+    expect(isFresh(4)).toBe(true);
+    expect(claudeArgs(4)).not.toContain(id);
+  });
+
+  // A native Windows crash relays its NTSTATUS truncated to a byte, outside 1
+  // and outside 129–192: 0xC0000005 → 5, 0xC00000FD → 253. No code says the
+  // conversation is missing, so it gets the same one retry.
+  it.each([
+    [5, "an access violation"],
+    [253, "a stack overflow"],
+    [127, "the reaper's failed exec"],
+  ])("a resumed run ending %i (%s) keeps the session once, then clears", async (code) => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, code);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+
+    exitChild(child3, code);
+    await nthChild(4);
+    expect(logText()).toContain(`clearing saved session (code=${code})`);
+    expect(isFresh(4)).toBe(true);
+  });
+
+  /** Our kill is recorded, and the reaper then exits with `code`: 143 is our
+   * SIGTERM forwarded, anything else is Claude's own exit racing it. */
+  const killEndsWith = (code: number) => (child: FakeChild) => {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      setImmediate(() => {
+        if (child.exitCode === null) exitChild(child, code);
+      });
+      return true;
+    };
+  };
+
+  it("our own kill's 143 does not spend the retry", async () => {
+    onSpawn = killEndsWith(143);
+    const { sup, child2, id } = await resumedChild();
+    await sup.stop(); // our kill: kept, not counted
+    expect(child2.kills).toEqual(["SIGTERM"]);
+    await sup.start();
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 137); // the first unexplained death: kept
+    await nthChild(4);
+    resumes(4, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a kill of ours that a doomed exit 1 raced is Claude's own exit: it spends the retry", async () => {
+    // `commandKill` records the kill while the reaper is still up, even if
+    // Claude has already exited: only 143 or 137 proves our kill ended it.
+    onSpawn = killEndsWith(1);
+    const { sup, child2, id } = await resumedChild();
+    await sup.stop(); // recorded as ours, but exit 1: counted
+    expect(child2.kills).toEqual(["SIGTERM"]);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+    await sup.start();
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 137); // the second unexplained death in a row: cleared
+    await nthChild(4);
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("the reaper's own signal death (code null) is kept and does not spend the retry", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, null, "SIGKILL");
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 137); // the first counted death: kept
+    await nthChild(4);
+    resumes(4, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("a crash relayed as 137 and then an exit 1 share the one retry", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, 137);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 1);
+    await nthChild(4);
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("a confirmed resume resets the allowance an exit 1 used", async () => {
+    const { child2, id } = await resumedChild({ resumeConfirmMs: 40 });
+    exitChild(child2, 1); // kept, allowance used
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    await sleep(80); // child 3 confirms: the id loads
+    exitChild(child3, 1); // after confirmation: kept regardless
+    const child4 = await nthChild(4);
+    resumes(4, id);
+    exitChild(child4, 1); // unconfirmed again, but the first since the reset
+    await nthChild(5);
+    resumes(5, id);
+    expect(logText()).not.toContain("clearing saved session");
   });
 });
 
