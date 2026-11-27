@@ -750,8 +750,8 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
   // `PATH_REJECTED` needs a symlink at the rename's destination. Making one
   // on Windows needs Developer Mode or elevation, so there the row runs only
   // where a probe link can be made; everywhere else it always runs, and a
-  // failed `symlinkSync` fails it rather than skipping it. Linux CI (`check`
-  // and `ownership-flag-on`) is what covers it.
+  // failed `symlinkSync` fails it rather than skipping it. Linux CI (`check`)
+  // is what covers it.
   const canSymlink = ((): boolean => {
     if (process.platform !== "win32") return true;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-symlink-probe-"));

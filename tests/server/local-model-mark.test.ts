@@ -324,7 +324,7 @@ describe("tandem_getAnnotations: dark (honour seam off)", () => {
 
     // Master's bytes, frozen: `tools/list`'s tandem_getAnnotations as
     // origin/master 3da09da8 served it. Identical with ownership off; with it
-    // on (CI's `ownership-flag-on` job) the one difference is the top-level
+    // on (the default since the flip) the one difference is the top-level
     // optional `owner` label (#2358 PR 5c, ownership design §5.7), removed
     // here after it is shown to be there, so the rest still equals master's.
     const tool = await getAnnotationsTool();

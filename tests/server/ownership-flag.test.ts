@@ -25,7 +25,7 @@ import {
  *   dark path stubs it `""`.
  *
  * What it cannot see is the built artifact; `scripts/ci/ownership-bundle-probe.mjs`
- * checks that, in `check` and in `ownership-flag-on` (both on since the flip).
+ * checks that, in `check` (on since the flip).
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");

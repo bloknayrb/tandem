@@ -4,8 +4,8 @@
  * argument, field or string; the operation queue and every refusal are
  * bypassed; nothing is stamped.
  *
- * Each test turns the flag off for itself, so it pins dark behaviour in the
- * `ownership-flag-on` job too. The enforcement test first builds, with the
+ * Each test turns the flag off for itself, so it pins dark behaviour in a
+ * flag-on run (`check`, since the flip) too. The enforcement test first builds, with the
  * flag on, the state a flag-on server refuses on (real records, every document
  * held by another one), and checks that it does refuse; then it turns the
  * flag off and drives every kind of tool against that state, and calls each

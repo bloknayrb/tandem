@@ -4,14 +4,9 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  OWNERSHIP_DEFINE_KEY,
-  planOwnershipBuilds,
-  SERVER_OUT_DIR,
-} from "../../scripts/ci/build-ownership-on.js";
 import {
   EXIT_MISMATCH,
   hashForLog,
@@ -35,30 +30,27 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * The `ownership-flag-on` job and the `check` bundle probe (#2358, ADR-054;
- * ownership design §12). ADR-051: the job does the work; this test, inside
- * `check`, pins the job's shape and the inputs it reads, so disarming it means
- * editing something a required check reads. The job itself was required too
- * while ownership was dark (in branch protection since 2026-11-08). Since the
- * flip (ADR-054's flip amendment) `check` builds and tests ownership-on itself,
- * so the job duplicates it; it is pinned unchanged until branch protection
- * drops it, a change made by hand.
+ * `check`'s ownership steps (#2358, ADR-054; ownership design §12): the bundle
+ * probe and the anchor runner. ADR-051: the job does the work; this test,
+ * inside `check`, pins the steps and the inputs they read, so disarming them
+ * means editing something a required check reads.
+ *
+ * Until the flip a separate `ownership-flag-on` job ran everything flag-on
+ * while a release build stayed flag-off, and was itself a required check.
+ * Since the flip (ADR-054's flip amendment) the release literal is on, so
+ * `check` builds and tests ownership-on itself. Branch protection stopped
+ * requiring the job on 2026-11-27 and it was deleted; its anchor step moved
+ * into `check`. The file keeps its name so the docs that cite it stay right.
  *
  * ADR-051's rules, as applied here:
- * 1. npm scripts the job runs are pinned by exact equality (`test`,
- *    `test:e2e`, `typecheck`).
+ * 1. npm scripts the steps depend on are pinned by exact equality.
  * 2. YAML attributes are read as parsed fields: whole step objects are
- *    compared, so a `continue-on-error`, `shell`, `if` or `env` added to any
- *    step changes the object and fails.
- * 3. The SET is pinned: the job's ordered step list is a literal; the job's
- *    own keys are exactly `runs-on` and `steps`.
- * 4. Presence, never with a default: absence of `needs`, `strategy`, `name`,
- *    `if`, `env`, `defaults`, `continue-on-error` is asserted on the parsed
- *    object, not defaulted.
- * 5. One owner per fact: the action SHAs are `workflow-action-pin.test.ts`'s
- *    (compared here to `check`'s, not to a literal); `check`'s Test command
- *    literal is `vitest-file-anchor-wiring.test.ts`'s (the flag-on Test step
- *    must equal it, read from the YAML); "the root `test.env` lacks
+ *    compared, so a `continue-on-error`, `shell`, `if` or `env` added to a
+ *    pinned step changes the object and fails.
+ * 3. Position is pinned where it carries meaning: the probe right after
+ *    Build, the anchor runner after the Test step whose report it reads.
+ * 4. One owner per fact: `check`'s Test command and its file anchor are
+ *    `vitest-file-anchor-wiring.test.ts`'s; "the root `test.env` lacks
  *    TANDEM_OWNERSHIP" is `tests/server/ownership-flag.test.ts`'s.
  */
 
@@ -68,7 +60,6 @@ const WORKFLOW_PATH = path.join(ROOT, ".github/workflows/ci.yml");
 const workflow = parse(readFileSync(WORKFLOW_PATH, "utf-8")) as Record<string, unknown> & {
   jobs: Record<string, Job>;
 };
-const job = workflow.jobs["ownership-flag-on"];
 const check = workflow.jobs.check;
 
 function checkStep(predicate: (s: Step) => boolean, label: string): Step {
@@ -77,24 +68,25 @@ function checkStep(predicate: (s: Step) => boolean, label: string): Step {
   return step;
 }
 
-const usesOf = (prefix: string) =>
-  checkStep((s) => typeof s.uses === "string" && s.uses.startsWith(prefix), prefix).uses;
-/** `check`'s own step, whole: the owner of its shape is whichever test pins it there. */
-const usesStep = (prefix: string) =>
-  checkStep((s) => typeof s.uses === "string" && s.uses.startsWith(prefix), prefix);
 const checkTestRun = checkStep((s) => s.name === "Test", "Test").run;
 
 const PROBE_ON = "node scripts/ci/ownership-bundle-probe.mjs --expect on";
 
-describe("the ownership-flag-on job (ADR-051)", () => {
-  it("exists, under exactly that key, with nothing that can skip, rename or soften it", () => {
-    expect(job, "ci.yml has no `ownership-flag-on` job").toBeDefined();
-    // A skipped job (`if`, or a failed `needs`) reports SUCCESS to branch
-    // protection; a job `name` or a matrix renames the check so the required
-    // context never reports; job `env`/`defaults`/`container` change what every
-    // step runs under.
-    expect(Object.keys(job).sort()).toEqual(["runs-on", "steps"]);
-    expect(job["runs-on"]).toBe("ubuntu-latest");
+describe("check's ownership anchor step (ADR-051)", () => {
+  it("the flag-on job is gone, and nothing else runs the suite with the variable set", () => {
+    expect(workflow.jobs["ownership-flag-on"]).toBeUndefined();
+    for (const [name, j] of Object.entries(workflow.jobs)) {
+      // Job-level env is inherited by every step, so it counts too.
+      const jobEnv = (j as { env?: Record<string, unknown> }).env;
+      expect(jobEnv?.TANDEM_OWNERSHIP, `${name}: job env`).toBeUndefined();
+      for (const step of j.steps ?? []) {
+        const label = `${name}: ${String(step.name ?? step.run)}`;
+        const env = step.env as Record<string, unknown> | undefined;
+        expect(env?.TANDEM_OWNERSHIP, label).toBeUndefined();
+        // An inline `TANDEM_OWNERSHIP=… npm test` in a `run` sets it as surely.
+        expect(String(step.run ?? ""), label).not.toMatch(/\bTANDEM_OWNERSHIP=/);
+      }
+    }
   });
 
   it("the workflow sets no env or defaults that every job would inherit", () => {
@@ -102,63 +94,35 @@ describe("the ownership-flag-on job (ADR-051)", () => {
     expect(workflow.defaults).toBeUndefined();
   });
 
-  it("runs exactly these steps, in this order, each exactly as written", () => {
+  it("runs after check's Test step, survives a red Test, and is pinned whole", () => {
     expect(typeof checkTestRun).toBe("string");
-    // The steps it shares with `check` are compared to check's own, whole:
-    // their shape is owned where check's is pinned (ADR-051 rule 5).
-    expect(job.steps).toEqual([
-      usesStep("actions/checkout@"),
-      usesStep("actions/setup-node@"),
-      usesStep("actions/setup-python@"),
-      checkStep((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
-      {
-        name: "Build (ownership on)",
-        run: "node node_modules/tsx/dist/cli.mjs scripts/ci/build-ownership-on.ts",
-      },
-      { name: "Built bundle is ownership-on", run: PROBE_ON, "timeout-minutes": 2 },
-      // The same command `check` runs — so the flag-on run is the same suite
-      // with the same reporters — plus the variable, on this step only.
-      { name: "Test", run: checkTestRun, env: { TANDEM_OWNERSHIP: "1" } },
-      {
-        name: "Ownership anchor ran flag-on",
-        if: "${{ !cancelled() }}",
-        run: "node scripts/ci/ownership-flag-on-runner.mjs .vitest-report.json",
-      },
-      {
-        name: "Every collected test file actually ran",
-        if: "${{ !cancelled() }}",
-        run: "node scripts/ci/vitest-file-anchor.mjs .vitest-report.json",
-      },
-      checkStep((s) => s.name === "Drop the unused Google Chrome apt source", "apt drop"),
-      checkStep((s) => s.name === "Install Playwright browsers", "Playwright install"),
-      { name: "E2E tests", run: "npm run test:e2e", env: { TANDEM_OWNERSHIP: "1" } },
-      {
-        name: "Upload Playwright report",
-        uses: usesOf("actions/upload-artifact@"),
-        if: "failure()",
-        with: {
-          name: "playwright-report-ownership-flag-on",
-          path: "playwright-report/\ntest-results/\n",
-        },
-      },
-    ]);
+    expect(String(checkTestRun)).toContain("--outputFile.json=.vitest-report.json");
+    const test = check.steps.findIndex((s) => s.name === "Test");
+    const i = check.steps.findIndex((s) => s.name === "Ownership anchor ran flag-on");
+    expect(i, "check no longer runs the ownership anchor").toBeGreaterThan(test);
+    expect(check.steps[i]).toEqual({
+      name: "Ownership anchor ran flag-on",
+      if: "${{ !cancelled() }}",
+      run: "node scripts/ci/ownership-flag-on-runner.mjs .vitest-report.json",
+    });
+    expect(
+      check.steps.filter((s) => s.run === check.steps[i].run),
+      "the anchor step appears once",
+    ).toHaveLength(1);
   });
 
-  it("the npm scripts it runs cannot swallow a failure", () => {
+  it("the npm script the Test step runs cannot swallow a failure", () => {
     const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")) as {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts.test).toBe("vitest");
     expect(pkg.scripts["test:e2e"]).toBe("playwright test");
-    expect(pkg.scripts.typecheck).toBe(
-      "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",
-    );
   });
 
   it("E2E under CI runs the built bundle the probe checked", () => {
-    // The flag-on E2E step carries TANDEM_OWNERSHIP=1, so it is flag-on on
-    // either branch; this pins that the CI branch is the bundle, which the
-    // probe proved ownership-on by its define.
+    // check's E2E step sets no variable, so it is flag-on only through the
+    // bundle; this pins that the CI branch is the bundle, which the probe
+    // proved ownership-on by its define.
     const src = readFileSync(path.join(ROOT, "playwright.config.ts"), "utf-8");
     expect(src).toMatch(
       /command:\s*process\.env\.CI\s*\?\s*"node scripts\/e2e-server\.mjs dist\/server\/index\.js"/,
@@ -193,47 +157,13 @@ describe("check sets no variable, and proves the release bundle is ownership-on 
   });
 });
 
-describe("scripts/ci/build-ownership-on.ts plans the flag-on build", () => {
-  const TSUP_CONFIG_URL = pathToFileURL(path.join(ROOT, "tsup.config.ts")).href;
-
-  it("flips the define on the server block of the real config and builds every block", async () => {
-    const config: unknown = (await import(TSUP_CONFIG_URL)).default;
-    expect(Array.isArray(config)).toBe(true);
-    const plan = planOwnershipBuilds(config);
-    expect(plan).toHaveLength((config as unknown[]).length);
-    for (const p of plan) expect(p.options.config).toBe(false);
-    const server = plan.find((p) => p.options.outDir === SERVER_OUT_DIR);
-    expect(server?.flipped).toBe(true);
-    expect(server?.options.define?.[OWNERSHIP_DEFINE_KEY]).toBe("true");
-    // Everything else the block carries survives the override.
-    expect(server?.options.define?.__DOCX_ENABLED__).toBe("false");
-    expect(server?.options.entry).toEqual(["src/server/index.ts"]);
-  });
-
-  it("refuses a config it cannot plan, rather than building a flag-off bundle", () => {
-    expect(() => planOwnershipBuilds({ outDir: SERVER_OUT_DIR })).toThrow(/array/);
-    expect(() => planOwnershipBuilds([{ outDir: "dist/cli" }])).toThrow(/dist\/server/);
-    expect(() =>
-      planOwnershipBuilds([{ outDir: SERVER_OUT_DIR, define: { __RENAMED__: "false" } }]),
-    ).toThrow(/carries no __OWNERSHIP_ENABLED__/);
-  });
-
-  it("leaves a block without the define unchanged", () => {
-    const block = { outDir: "dist/channel", entry: ["src/channel/index.ts"] };
-    const plan = planOwnershipBuilds([
-      { outDir: SERVER_OUT_DIR, define: { [OWNERSHIP_DEFINE_KEY]: "false", __X__: "1" } },
-      block,
-    ]);
-    expect(plan[1]).toEqual({ options: { ...block, config: false }, flipped: false });
-    expect(plan[0].options.define).toEqual({ [OWNERSHIP_DEFINE_KEY]: "true", __X__: "1" });
-  });
-});
-
 describe("scripts/ci/ownership-flag-on-runner.mjs", () => {
   const FIXTURES = path.join(ROOT, "tests/scripts/fixtures/ownership-anchor");
   // Captured from real vitest JSON reports of tests/server/ownership-anchor.test.ts
   // (vitest 5.0.5), run once with TANDEM_OWNERSHIP=1 and once without, then
-  // trimmed and given repo-relative names.
+  // trimmed and given repo-relative names. Captured before the flip: an unset
+  // variable now follows the `true` literal, so to rebuild skipped.json run
+  // with TANDEM_OWNERSHIP=0, not with the variable unset.
   const passed = JSON.parse(readFileSync(path.join(FIXTURES, "passed.json"), "utf-8"));
   const skipped = JSON.parse(readFileSync(path.join(FIXTURES, "skipped.json"), "utf-8"));
   const runner = path.join(ROOT, "scripts/ci/ownership-flag-on-runner.mjs");
@@ -242,7 +172,7 @@ describe("scripts/ci/ownership-flag-on-runner.mjs", () => {
     expect(evaluateAnchors(passed, ROOT).code).toBe(EXIT_OK);
   });
 
-  it("refuses a run where the anchor skipped: the variable never reached the workers", () => {
+  it("refuses a run where the anchor skipped: the run came out flag-off", () => {
     // vitest reports this file's status as `passed`; only assertions tell.
     expect(skipped.testResults[0].status).toBe("passed");
     const v = evaluateAnchors(skipped, ROOT);
@@ -560,7 +490,7 @@ describe("probeRefusal by behaviour (#2358 flip-blocker row, the plan's gate (c)
 });
 
 describe("the E2E MCP client's identity (PR 1c, ownership design §12)", () => {
-  // The flag-on E2E run is part of the required `ownership-flag-on` job. With
+  // check's E2E run is flag-on (the bundle's define, since the flip). With
   // ownership on, a client that sends no identity header is its own owner
   // record per connection, so the document one spec opened would refuse the
   // next spec. Every E2E client therefore sends one fixed client id.

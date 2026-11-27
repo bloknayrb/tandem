@@ -52,8 +52,8 @@ below still stand before v1.0 either way.
    (Claude Desktop's client name `claude-ai` measured, the nobody-holds precondition unreachable)
    and S8's CTRL row (Chromium and WebView2 held; macOS not run) accepted for the flip. Earlier the
    same day S8's document-room row closed when Bryan dropped that guard, S7 closed measured, with
-   the sentence moved into the skill and the tool description, and S5 closed measured. Still
-   Bryan's: dropping `ownership-flag-on` from branch protection's required checks, and the
+   the sentence moved into the skill and the tool description, and S5 closed measured. `ownership-flag-on` left
+   branch protection's required checks on 2026-11-27 and the job is deleted. Still Bryan's: the
    plan's manual check, which runs after both flips, before that release. Separate, not the
    flip's: the launcher's early-crash session clear on Windows, where a killed child exits 1.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**

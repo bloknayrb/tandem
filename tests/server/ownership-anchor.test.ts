@@ -10,17 +10,19 @@ import { resetOwnershipForTests } from "../../src/server/sessions/ownership.js";
 import { OWNERSHIP_ENABLED } from "../../src/shared/constants.js";
 
 /**
- * The positive anchor of the `ownership-flag-on` CI job (#2358, ADR-054;
- * ownership design §12).
+ * The positive anchor of ownership's flag-on CI run (#2358, ADR-054;
+ * ownership design §12), read by `check`'s "Ownership anchor ran flag-on" step.
  *
  * Every other ownership test turns the flag on for itself with `vi.stubEnv`, so
  * it runs in `check` too. This file is the opposite: it **never** stubs the
  * variable and runs only when the process itself is flag-on. Before the flip
- * it ran only in `ownership-flag-on`, where `scripts/ci/ownership-flag-on-runner.mjs`
- * refuses the job unless every assertion here reports `passed`. Since the flip
- * (ADR-054's flip amendment) an unset variable follows the `true` literal, so
- * it runs in `check` too, and a run of either job that came out flag-off
- * (the variable set to anything but `"1"`, or a literal set back) skips it.
+ * it ran only in the `ownership-flag-on` job (since deleted), where
+ * `scripts/ci/ownership-flag-on-runner.mjs` refused the run unless every
+ * assertion here reported `passed`. Since the flip (ADR-054's flip amendment)
+ * an unset variable follows the `true` literal, so it runs in `check`, whose
+ * anchor step runs the same runner: a run that came out flag-off (the
+ * variable set to anything but `"1"`, or the literal set back) skips it and
+ * turns `check` red.
  *
  * Only this file may key a test on the flag (`tests/server/ownership-module-seam.test.ts`
  * pins that): a second `runIf` elsewhere would be a test that silently never
@@ -36,12 +38,12 @@ afterEach(() => {
 
 describe("ownership-flag-on anchor", () => {
   it.runIf(ownershipEnabled())(
-    "is on by the literal or by the job's TANDEM_OWNERSHIP=1, not a stub",
+    "is on by the literal or by a set TANDEM_OWNERSHIP=1, not a stub",
     () => {
       // Separately from what ownershipEnabled() reports: this worker is flag-on
       // either because nothing set the variable (the literal decides, as in
-      // `check`) or because the workflow's Test step set it to "1" (the
-      // ownership-flag-on job). This file never stubs it
+      // `check`) or because someone ran the suite with it set to "1" (as the
+      // deleted ownership-flag-on job did). This file never stubs it
       // (tests/server/ownership-module-seam.test.ts pins its source).
       const variable = process.env.TANDEM_OWNERSHIP;
       if (variable === undefined) {

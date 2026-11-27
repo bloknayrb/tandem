@@ -51,8 +51,8 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 beforeEach(() => {
   setCtrlMode("tandem");
   // The delivery-round seam as `index.ts` wires it (#2358, the delivery-rounds
-  // PR; review round 1, item 4): in the `ownership-flag-on` job these tests
-  // run keyed rounds, as a real server does; flag off, master's one round.
+  // PR; review round 1, item 4): flag on (the default since the flip) these
+  // tests run keyed rounds, as a real server does; flag off, master's one round.
   setDeliveryRoundSeam({
     keyed: keyedDeliveryRounds,
     isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
@@ -783,7 +783,7 @@ describe("wasEmittedViaChannelInDocument", () => {
 describe("pushEvent records which inbox item a forward waits on", () => {
   const T = 1_700_000_000_000;
   // Master's one global round (the delivery-rounds PR): these pin its item
-  // hold, so they run with the round seam unwired even in the flag-on job.
+  // hold, so they run with the round seam unwired even in a flag-on run.
   // The keyed twin is the describe after this one.
   beforeEach(() => setDeliveryRoundSeam(undefined));
 

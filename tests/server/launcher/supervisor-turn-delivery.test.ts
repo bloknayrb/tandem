@@ -326,7 +326,7 @@ function logText(): string {
 /**
  * `status()` without `bindFailed` (#2358 PR 3b-2e1), for the crash cases that
  * pin a stopped shape exactly. Their stub children crash after a turn was
- * written without ever binding, so in the ownership-flag-on job the supervisor
+ * written without ever binding, so flag on (since the flip) the supervisor
  * rightly reports the failed bind beside the state each case pins; the field
  * has its own tests in `supervisor-presence.test.ts`. Flag off it is never
  * set, so this is the identity there.
@@ -3779,7 +3779,7 @@ describe("#2198 — the v1.0 walkthrough holds the boot start", () => {
 
 describe("#2197 — the one-time greeting", () => {
   // The dark rule (#2358 PR 3b-2c): these pin master's session-id keyed
-  // greeting, so they run flag-off in the ownership-flag-on job too. The
+  // greeting, so they run flag-off in a flag-on run too. The
   // bound-transport rule is the "#2358 PR 3b-2c" block below.
   beforeEach(() => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
