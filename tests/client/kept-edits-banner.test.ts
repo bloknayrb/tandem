@@ -29,7 +29,6 @@ function json(body: unknown, status = 200): Response {
 }
 
 const NOTICE = {
-  name: "n2-unsaved.md",
   timestamp: "2026-06-01T12:00:00.000Z",
   names: ["n2-unsaved.md", "n1-unsaved.md"],
 };

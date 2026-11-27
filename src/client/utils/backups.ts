@@ -9,6 +9,7 @@ import {
   API_BACKUPS_ACKNOWLEDGE,
   API_BACKUPS_RESTORE,
 } from "../../shared/api-paths.js";
+import { formatRelativeTime } from "../panels/annotation-card-helpers.js";
 import { API_BASE } from "./fileUpload.js";
 
 export interface BackupSnapshot {
@@ -19,11 +20,11 @@ export interface BackupSnapshot {
   kind?: "disk" | "unsaved";
 }
 
-/** The kept edits the user has not been told about yet. */
+/** The kept edits the user has not been shown yet. */
 export interface KeptNotice {
-  name: string;
+  /** When the newest of them was taken. */
   timestamp: string;
-  /** Every such snapshot: what Dismiss acknowledges. */
+  /** Every such snapshot, newest first: what Dismiss acknowledges. */
   names: string[];
 }
 
@@ -65,11 +66,9 @@ export async function listBackups(documentId: string): Promise<ListResult> {
 function parseKeptNotice(raw: unknown): KeptNotice | null {
   if (raw === null || typeof raw !== "object") return null;
   const n = raw as Record<string, unknown>;
-  if (typeof n.name !== "string" || typeof n.timestamp !== "string") return null;
-  const names = Array.isArray(n.names)
-    ? n.names.filter((x): x is string => typeof x === "string")
-    : [n.name];
-  return { name: n.name, timestamp: n.timestamp, names: names.length > 0 ? names : [n.name] };
+  if (typeof n.timestamp !== "string" || !Array.isArray(n.names)) return null;
+  const names = n.names.filter((x): x is string => typeof x === "string");
+  return names.length > 0 ? { timestamp: n.timestamp, names } : null;
 }
 
 export type RestoreResult =
@@ -103,7 +102,11 @@ export async function restoreBackup(
     data?: { unsavedEditsKept?: unknown };
   } | null;
   if (res.status === 409 && body?.error === "BACKUP_FAILED") {
-    return { ok: false, reason: "backup-failed" };
+    return {
+      ok: false,
+      reason: "backup-failed",
+      message: typeof body?.message === "string" ? body.message : undefined,
+    };
   }
   if (!res.ok) {
     return {
@@ -140,19 +143,10 @@ export function formatBackupTimestamp(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-/** "just now", "5 min ago", "3 h ago", "2 days ago"; the absolute time past a week. */
-export function formatRelativeTime(iso: string, now: number = Date.now()): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const s = Math.max(0, Math.round((now - t) / 1000));
-  if (s < 45) return "just now";
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h} h ago`;
-  const d = Math.round(h / 24);
-  if (d < 7) return d === 1 ? "1 day ago" : `${d} days ago`;
-  return formatBackupTimestamp(iso);
+/** "just now", "5m ago", "3h ago", then a date: the annotation cards' wording. */
+export function formatBackupAge(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso : formatRelativeTime(t);
 }
 
 /** A size for a row: bytes under 1 KB, else KB or MB with one decimal. */

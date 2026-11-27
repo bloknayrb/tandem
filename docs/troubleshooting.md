@@ -633,7 +633,7 @@ Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same p
 - up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), plus one more while Tandem runs: the copy taken before its first write that run (and, during a restore, the copy being restored is never removed either),
 - up to 3 copies of unsaved edits, named the same way with `-unsaved` before the extension, e.g. `thesis-20260609-142200-9f8e7d6c-unsaved.md`, and
 - a `source.txt` recording the original file's full path, and
-- once you have dismissed a "your edits were kept" banner, a `kept-ack.json` recording which kept edits you have already been told about. Deleting it only brings the banner back.
+- once Claude has kept your edits, a `kept-unseen.json` listing the kept edits you have not been shown yet (what the "your edits were kept" banner reads). Deleting it only hides the banner; the edits stay in Version history.
 
 To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 

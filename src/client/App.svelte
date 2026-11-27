@@ -354,7 +354,13 @@ const ownerTakeBackText = $derived(
 const notifications = createNotifications({
   onStreamNotice: (n) => {
     noteNotifyNotice(n.dedupKey);
-    if (n.type === "unsaved-edits-kept" || n.type === "file-reloaded") bumpBackupsRevision();
+    // Only the active tab's banner is mounted, and a tab switch re-reads anyway.
+    if (
+      n.documentId === yjsSync.activeTabId &&
+      (n.type === "unsaved-edits-kept" || n.dedupKey?.startsWith("restore-backup:"))
+    ) {
+      bumpBackupsRevision();
+    }
   },
   onStreamOpen: bumpBackupsRevision,
 });
@@ -3494,20 +3500,22 @@ function dismissModelPicker() {
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
+    <!-- The server's own "Restored … from backup" notice (same dedupKey) both
+         re-reads the banner and coalesces with this toast in the tray. -->
     <VersionHistoryModal
-      open={versionHistoryOpen}
       documentId={versionHistoryDocId}
       fileName={versionHistoryFileName}
       onClose={() => (versionHistoryDocId = null)}
       onRestored={(editsKept) => {
-        bumpBackupsRevision();
+        const docId = versionHistoryDocId;
         notifications.push({
           id: generateNotificationId(),
-          type: "general-error",
+          type: "file-reloaded",
           severity: "info",
           message: editsKept
             ? "Restored. Your unsaved edits were kept as a backup in Version history."
             : "Restored.",
+          ...(docId ? { documentId: docId, dedupKey: `restore-backup:${docId}` } : {}),
           timestamp: Date.now(),
         });
       }}
@@ -3782,10 +3790,9 @@ function dismissModelPicker() {
       {/key}
     {/if}
     <!-- ADR-057 PR 2: Claude kept this document's unsaved edits. Per-tab remount
-         like the banners above. Not in source view, for the conflict banner's
-         reason: its Version history leads to a restore a stale source-view
-         draft would undo. -->
-    {#if activeTab && !documentWorkspace.inSourceView}
+         like the banners above. Shown in source view too: its Version history
+         button leads to a restore, which `openVersionHistory` refuses there. -->
+    {#if activeTab}
       {#key activeTab.id}
         <KeptEditsBanner
           documentId={activeTab.id}

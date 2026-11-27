@@ -13,8 +13,8 @@
  *
  * Opt-in by the three tools, and by the browser's Version history restore
  * (`POST /api/backups/restore`, `actor: "user"`), which keeps the edits the
- * same way but says so in the user's own voice and marks what it kept as
- * already seen. The browser's Reload and close, `/api/open` and the watcher's
+ * same way but says so in the user's own voice and never records what it kept
+ * as unseen (`kept-unseen.json`). The browser's Reload and close, `/api/open` and the watcher's
  * auto-reload do not pass through here.
  *
  * Covered: `.md`/`.txt` documents opened from disk (`AUTO_SAVE_FORMATS`,
@@ -128,11 +128,15 @@ export async function keepUnsavedEdits(
   edits: string,
   incoming?: string,
   protect?: string,
+  actor: KeepActor = "claude",
 ): Promise<KeptBackup | undefined> {
   if (incoming !== undefined && edits === incoming) return undefined;
   const r = await snapshotUnsavedEdits(filePath, edits, {
     appDataDir: resolveAppDataDir(),
     ...(protect !== undefined ? { protect } : {}),
+    // A Claude keep is news to the user (the kept-edits banner); the editor's
+    // own Version history keep is not.
+    unseen: actor === "claude",
   });
   if (r.outcome === "written" || r.outcome === "skipped-identical") {
     return { name: r.name, timestamp: r.timestamp };
@@ -192,15 +196,16 @@ export async function keepEditsCapturedAtSwap(
   before: string | null,
   incoming?: string,
   protect?: string,
+  actor: KeepActor = "claude",
 ): Promise<KeptBackup | undefined> {
   if (atSwap === null || atSwap === before || atSwap === incoming) return undefined;
   try {
-    const kept = await keepUnsavedEdits(filePath, atSwap, incoming, protect);
+    const kept = await keepUnsavedEdits(filePath, atSwap, incoming, protect, actor);
     // This copy is a superset of the first capture's, and it is the one the
     // result names. On a coarse filesystem clock both can carry the same mtime
     // (and a restore pushes the first one's ahead of its disk snapshot), so
     // the listing would rank them by the random uuid8: mark this one newest,
-    // so "restore the most recent backup" returns it.
+    // so it tops the Version history.
     if (kept) {
       const markedAt = await markSnapshotNewest(filePath, resolveAppDataDir(), kept.name);
       if (markedAt !== undefined) kept.timestamp = markedAt;
@@ -259,7 +264,8 @@ export function notifyUnsavedEditsKept(
  * bytes are already on disk; a reload's swap may have landed) — by a notice
  * and a sentence on the error Claude receives. Returns the error to rethrow.
  * `alreadyNotified`: the success notice went out before the failure, so only
- * the error is amended.
+ * the error is amended. `actor: "user"` (the Version history): no notice, and
+ * the sentence points at Version history.
  */
 export function reportKeptBackupOnFailure(
   err: unknown,
@@ -267,8 +273,10 @@ export function reportKeptBackupOnFailure(
   filePath: string,
   action: DiscardingAction,
   kept: KeptBackup | undefined,
-  alreadyNotified = false,
-  actor: KeepActor = "claude",
+  {
+    alreadyNotified = false,
+    actor = "claude",
+  }: { alreadyNotified?: boolean; actor?: KeepActor } = {},
 ): unknown {
   if (!kept) return err;
   if (!alreadyNotified && actor === "claude") {

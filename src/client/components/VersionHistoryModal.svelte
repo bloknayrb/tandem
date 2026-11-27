@@ -3,12 +3,13 @@ import { tick, untrack } from "svelte";
 import {
   type BackupSnapshot,
   backupKindLabel,
+  formatBackupAge,
   formatBackupSize,
   formatBackupTimestamp,
-  formatRelativeTime,
   listBackups,
   restoreBackup,
 } from "../utils/backups.js";
+import { trapTab } from "../utils/focus-trap.js";
 import LiveRegion from "./LiveRegion.svelte";
 
 /**
@@ -21,13 +22,12 @@ import LiveRegion from "./LiveRegion.svelte";
  * so every restore made here can be undone from this same list. If the edits
  * cannot be kept, nothing is restored and the row offers "Restore anyway".
  *
- * `documentId` is fixed by the opener for as long as the modal is open: Claude
- * changing the active tab meanwhile must not retarget a restore. App closes the
- * modal if that document's tab goes away.
+ * Open while `documentId` is set. The opener fixes it for as long as the modal
+ * is open: Claude changing the active tab meanwhile must not retarget a
+ * restore. App clears it if that document's tab goes away.
  */
 
 interface Props {
-  open: boolean;
   documentId: string | null;
   fileName: string;
   onClose: () => void;
@@ -35,7 +35,9 @@ interface Props {
   onRestored: (editsKept: boolean) => void;
 }
 
-let { open, documentId, fileName, onClose, onRestored }: Props = $props();
+let { documentId, fileName, onClose, onRestored }: Props = $props();
+
+const open = $derived(documentId !== null);
 
 type Phase =
   | { kind: "loading" }
@@ -47,9 +49,25 @@ let phase = $state<Phase>({ kind: "loading" });
 let confirming = $state<string | null>(null);
 /** The row whose restore is in flight; every Restore is disabled meanwhile. */
 let restoring = $state<string | null>(null);
-/** A row's failed restore. `backup-failed` offers "Restore anyway". */
+/** A row's failed restore. `backupFailed` offers "Restore anyway". */
 let rowError = $state<{ name: string; backupFailed: boolean; message: string } | null>(null);
-let status = $state("");
+
+/** What the screen reader hears: derived, so no transition can leave it stale. */
+const status = $derived(
+  !open
+    ? ""
+    : restoring !== null
+      ? "Restoring…"
+      : rowError
+        ? rowError.message
+        : phase.kind === "error"
+          ? phase.message
+          : phase.kind === "ready"
+            ? phase.backups.length === 0
+              ? "No backups yet."
+              : `${phase.backups.length} backups.`
+            : "",
+);
 
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
@@ -59,11 +77,9 @@ async function load(forDoc: string) {
   const seq = ++loadSeq;
   phase = { kind: "loading" };
   const r = await listBackups(forDoc);
-  if (seq !== loadSeq || forDoc !== documentId || !open) return;
+  if (seq !== loadSeq || forDoc !== documentId) return;
   if (r.ok) {
     phase = { kind: "ready", backups: r.listing.backups };
-    status =
-      r.listing.backups.length === 0 ? "No backups yet." : `${r.listing.backups.length} backups.`;
     return;
   }
   // A body that is not a listing is "couldn't read", never "no backups": the
@@ -77,11 +93,10 @@ async function load(forDoc: string) {
           ? "Couldn't reach Tandem."
           : `Couldn't list backups: ${r.message ?? "the request failed"}.`,
   };
-  status = phase.message;
 }
 
 $effect(() => {
-  if (!open || documentId === null) return;
+  if (documentId === null) return;
   const forDoc = documentId;
   untrack(() => {
     confirming = null;
@@ -136,30 +151,26 @@ async function askConfirm(name: string) {
   dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-confirm"]')?.focus();
 }
 
+const BACKUP_FAILED_FALLBACK =
+  "Couldn't keep a backup of your unsaved edits first, so nothing was restored.";
+
 async function doRestore(name: string, discardUnsavedEdits: boolean) {
   if (restoring !== null || documentId === null) return;
   const forDoc = documentId;
   confirming = null;
   rowError = null;
   restoring = name;
-  status = "Restoring…";
   const r = await restoreBackup(forDoc, name, discardUnsavedEdits);
-  if (forDoc !== documentId || !open) return;
+  if (forDoc !== documentId) return;
   restoring = null;
   if (r.ok) {
-    status = "";
     onRestored(r.editsKept);
     onClose();
     return;
   }
   rowError =
     r.reason === "backup-failed"
-      ? {
-          name,
-          backupFailed: true,
-          message:
-            "Couldn't keep a backup of your unsaved edits first, so nothing was restored. Tandem's backup folder may be full or not writable.",
-        }
+      ? { name, backupFailed: true, message: r.message ?? BACKUP_FAILED_FALLBACK }
       : {
           name,
           backupFailed: false,
@@ -168,34 +179,10 @@ async function doRestore(name: string, discardUnsavedEdits: boolean) {
               ? "Couldn't reach Tandem. Nothing was restored."
               : `Restore failed: ${r.message ?? "the request failed"}.`,
         };
-  status = rowError.message;
-}
-
-function onDialogKeydown(e: KeyboardEvent) {
-  e.stopPropagation();
-  if (e.key !== "Tab" || !dialogEl) return;
-  const focusable = Array.from(
-    dialogEl.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  );
-  if (focusable.length === 0) {
-    e.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault();
-    first.focus();
-  }
 }
 </script>
 
-<LiveRegion srOnly message={open ? status : ""} data-testid="version-history-live" />
+<LiveRegion srOnly message={status} data-testid="version-history-live" />
 
 {#if open}
   <div
@@ -214,7 +201,10 @@ function onDialogKeydown(e: KeyboardEvent) {
       class="version-history"
       data-testid="version-history-modal"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={onDialogKeydown}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        trapTab(e, dialogEl);
+      }}
     >
       <header class="modal-header">
         <h2 id="version-history-title">Version history: {fileName}</h2>
@@ -261,7 +251,7 @@ function onDialogKeydown(e: KeyboardEvent) {
                     {backupKindLabel(b)}
                   </span>
                   <span class="meta" title={formatBackupTimestamp(b.timestamp)}>
-                    {formatRelativeTime(b.timestamp)} · {formatBackupSize(b.size)}
+                    {formatBackupAge(b.timestamp)} · {formatBackupSize(b.size)}
                   </span>
                 </div>
                 <div class="row-actions">

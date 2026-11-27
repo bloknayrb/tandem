@@ -17,13 +17,13 @@ import "./tandem-banner.css";
  * closed the tab, or a notice that arrived while no window was open.
  *
  * It shows while a Claude action has kept edits the user has not acknowledged.
- * The user's own Version history restores acknowledge their keeps on the
- * server before any notice goes out, so they never raise it. Dismiss
- * acknowledges exactly the snapshots it was showing; a newer keep shows again.
+ * The user's own Version history keeps are never recorded as unseen, so they
+ * never raise it. Dismiss acknowledges exactly the snapshots it was showing; a
+ * newer keep shows again.
  *
- * Not mounted in source view (App.svelte), for the reason the conflict banner
- * is not: its View leads to a restore, which a stale source-view draft would
- * silently undo on its next commit.
+ * App remounts it per tab (`{#key}`), so `documentId` is fixed for its life.
+ * Mounted in source view too: only its button leads to a restore, and the
+ * opener refuses that there.
  */
 
 interface Props {
@@ -48,10 +48,9 @@ $effect(() => {
   // if it is still the latest request, so a slow early answer (one that ran
   // before a restore acknowledged its keeps) can never overwrite a later one.
   backupsRevision();
-  const forDoc = documentId;
   const seq = ++requestSeq;
-  void listBackups(forDoc).then((r) => {
-    if (seq !== requestSeq || forDoc !== documentId) return;
+  void listBackups(documentId).then((r) => {
+    if (seq !== requestSeq) return;
     // A failed read stays silent: the banner is a convenience over Version
     // history, and an error on every document (a poisoned backup folder)
     // would be noise. The tray notice still said what happened.
@@ -80,12 +79,9 @@ const announcement = $derived(notice ? [message, error].filter(Boolean).join(" "
 
 async function dismiss() {
   if (!notice || dismissing) return;
-  const forDoc = documentId;
-  const names = notice.names;
   dismissing = true;
   error = null;
-  const ok = await acknowledgeKeptEdits(forDoc, names);
-  if (forDoc !== documentId) return;
+  const ok = await acknowledgeKeptEdits(documentId, notice.names);
   dismissing = false;
   if (!ok) {
     error = "Couldn't dismiss this. Try again.";

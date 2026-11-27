@@ -3,11 +3,11 @@
  * (ADR-057, PR 2).
  *
  * Body: `{ documentId, backups: string[] }`, the snapshot names the banner
- * showed. Records them in the document's `kept-ack.json`
+ * showed. Removes them from the document's `kept-unseen.json`
  * (`acknowledgeKeptEdits`), so the banner stays down until a Claude action
- * keeps edits again. Names are matched by string equality against the
- * document's own listing and never reach the file system; the written file's
- * name is a constant, and the directory comes from the registry's path.
+ * keeps edits again. Names are only compared with the stored set's strings and
+ * never reach the file system; the written file's name is a constant, and the
+ * directory comes from the registry's path.
  *
  * Its own module, not `backups.ts`: `tests/docs/loopback-gate-claims.test.ts`
  * resolves the gates per module, so a second mutating handler there would be
@@ -15,8 +15,6 @@
  * allowlisted origin can hide the banner, never the kept edits, which stay in
  * Version history.
  */
-
-import path from "node:path";
 
 import type { Request, Response } from "express";
 import { API_BACKUPS_ACKNOWLEDGE } from "../../../shared/api-paths.js";
@@ -57,10 +55,9 @@ export async function handleAcknowledgeKeptEdits(req: Request, res: Response): P
       .json({ error: "BAD_REQUEST", message: "backups must be a non-empty array of names." });
     return;
   }
-  // An explicit id only, never the active-document fallback; basename is the
-  // house sanitizer step after the shape check.
-  const docState = getCurrentDoc(path.basename(documentId));
-  if (!docState || docState.id !== documentId) {
+  // An explicit id never falls back to the active document.
+  const docState = getCurrentDoc(documentId);
+  if (!docState) {
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
   }

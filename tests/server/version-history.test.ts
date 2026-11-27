@@ -1,8 +1,8 @@
 /**
  * ADR-057, PR 2: the editor's Version history.
  *
- *  - `kept-ack.json`: which `unsaved` snapshots the user has been told about
- *    (`keptEditsNotice`, `acknowledgeKeptEdits`), its prune and sweep roles.
+ *  - `kept-unseen.json`: which `unsaved` snapshots a Claude action kept that the user
+ *    has not been shown (`keptEditsNotice`, `acknowledgeKeptEdits`), its prune and sweep roles.
  *  - `restoreDocumentFromBackup(…, { actor: "user" })`: the browser restore keeps
  *    the unsaved edits, says so in the user's voice, and never raises the
  *    kept-edits banner for its own keeps.
@@ -153,19 +153,18 @@ const req = (extra: Partial<Request> = {}): Request =>
 // The ack store
 // ---------------------------------------------------------------------------
 
-describe("kept-ack.json", () => {
+describe("kept-unseen.json", () => {
   it("a Claude keep is news until acknowledged, then not", async () => {
     const { filePath } = await openWithUnsavedEdits("a.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
 
-    const before = await noticeFor(filePath);
-    expect(before).toMatchObject({ name: kept, names: [kept] });
+    expect(await noticeFor(filePath)).toMatchObject({ names: [kept] });
 
     expect(await acknowledgeKeptEdits(filePath, appData(), [kept])).toBe(true);
     expect(await noticeFor(filePath)).toBeNull();
   });
 
-  it("a snapshot touched after its ack (Claude kept the same edits again) is news again", async () => {
+  it("an mtime touch after the ack (markSnapshotNewest, a clock change) does not bring it back", async () => {
     const { filePath } = await openWithUnsavedEdits("touch.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
     await acknowledgeKeptEdits(filePath, appData(), [kept]);
@@ -173,29 +172,42 @@ describe("kept-ack.json", () => {
     const later = new Date(Date.now() + 5_000);
     await fs.utimes(docBackupSnapshotPath(filePath, appData(), kept)!, later, later);
 
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+    expect(await noticeFor(filePath)).toBeNull();
   });
 
-  it("an ack recorded at a later clock time cannot hide a new snapshot (equality, not ordering)", async () => {
-    const { filePath } = await openWithUnsavedEdits("skew.md", "disk\n", "edits\n");
-    const kept = await claudeForceOpen(filePath);
-    // A clock that ran ahead: the ack file names a far-future time for another name.
-    await fs.writeFile(
-      path.join(subdirOf(filePath), "kept-ack.json"),
-      JSON.stringify({ acked: { "other-20990101-000000-abcdef12-unsaved.md": 4_102_444_800_000 } }),
-    );
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+  it("a new Claude action keeping byte-identical edits is news again", async () => {
+    const filePath = path.join(tmpDir, "same.md");
+    await fs.writeFile(filePath, "x\n");
+    const first = await snapshotUnsavedEdits(filePath, "same edits\n", {
+      appDataDir: appData(),
+      unseen: true,
+    });
+    if (first.outcome !== "written") throw new Error("expected a write");
+    await acknowledgeKeptEdits(filePath, appData(), [first.name]);
+
+    const again = await snapshotUnsavedEdits(filePath, "same edits\n", {
+      appDataDir: appData(),
+      unseen: true,
+    });
+
+    expect(again).toMatchObject({ outcome: "skipped-identical", name: first.name });
+    expect(await noticeFor(filePath)).toMatchObject({ names: [first.name] });
   });
 
-  it("acknowledges only names that are current unsaved snapshots; anything else is ignored", async () => {
+  it("a keep that is not Claude's is never news", async () => {
+    const filePath = path.join(tmpDir, "user-keep.md");
+    await fs.writeFile(filePath, "x\n");
+    await snapshotUnsavedEdits(filePath, "mine\n", { appDataDir: appData() });
+    expect(await noticeFor(filePath)).toBeNull();
+  });
+
+  it("acknowledges only names that are unseen; anything else changes nothing", async () => {
     const { filePath } = await openWithUnsavedEdits("names.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
-    const disk = (await listDocBackups(filePath, appData())).find((b) => b.kind === "disk");
 
     expect(await acknowledgeKeptEdits(filePath, appData(), ["../../etc/passwd"])).toBe(false);
     expect(await acknowledgeKeptEdits(filePath, appData(), ["source.txt"])).toBe(false);
-    if (disk) expect(await acknowledgeKeptEdits(filePath, appData(), [disk.name])).toBe(false);
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+    expect(await noticeFor(filePath)).toMatchObject({ names: [kept] });
   });
 
   it("never creates the backup directory", async () => {
@@ -207,65 +219,67 @@ describe("kept-ack.json", () => {
     await expect(fs.stat(subdirOf(filePath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("an unreadable, oversized or malformed ack file reads as nothing acknowledged", async () => {
+  it("an unreadable, oversized or malformed file reads as nothing unseen, and never throws", async () => {
     const { filePath } = await openWithUnsavedEdits("garbage.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
-    const ackFile = path.join(subdirOf(filePath), "kept-ack.json");
+    const file = path.join(subdirOf(filePath), "kept-unseen.json");
     for (const body of [
       "not json",
-      JSON.stringify({ acked: [kept] }),
-      JSON.stringify({ acked: { [kept]: "soon" } }),
-      JSON.stringify({ acked: { [kept]: -1 } }),
-      "x".repeat(70 * 1024),
+      JSON.stringify({ unseen: kept }),
+      JSON.stringify({ seen: [kept] }),
+      JSON.stringify({ unseen: [kept, 7] }).replace(`"${kept}",`, `"${kept}",`) +
+        "x".repeat(70 * 1024),
     ]) {
-      await fs.writeFile(ackFile, body);
-      expect((await noticeFor(filePath))?.name).toBe(kept);
+      await fs.writeFile(file, body);
+      expect(await noticeFor(filePath)).toBeNull();
     }
+    // A non-string entry is skipped, the rest still count.
+    await fs.writeFile(file, JSON.stringify({ unseen: [7, kept] }));
+    expect(await noticeFor(filePath)).toMatchObject({ names: [kept] });
   });
 
-  it("drops entries for snapshots no longer listed", async () => {
+  it("drops entries for snapshots no longer listed on the next write", async () => {
     const { filePath } = await openWithUnsavedEdits("drop.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
-    const ackFile = path.join(subdirOf(filePath), "kept-ack.json");
+    const file = path.join(subdirOf(filePath), "kept-unseen.json");
     await fs.writeFile(
-      ackFile,
-      JSON.stringify({ acked: { "gone-20200101-000000-abcdef12-unsaved.md": 1 } }),
+      file,
+      JSON.stringify({ unseen: [kept, "gone-20200101-000000-abcdef12-unsaved.md"] }),
     );
     await acknowledgeKeptEdits(filePath, appData(), [kept]);
-    const written = JSON.parse(await fs.readFile(ackFile, "utf-8")) as { acked: object };
-    expect(Object.keys(written.acked)).toEqual([kept]);
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ unseen: [] });
   });
 
-  it("the ack file name can never pass for a snapshot", () => {
-    expect(docBackupSnapshotPath("/x/doc.md", "/app", "kept-ack.json")).toBeNull();
+  it("neither the file nor its temp can pass for a snapshot", () => {
+    expect(docBackupSnapshotPath("/x/doc.md", "/app", "kept-unseen.json")).toBeNull();
+    expect(docBackupSnapshotPath("/x/doc.md", "/app", "kept-unseen.json.abcdef12.tmp")).toBeNull();
   });
 
-  it("the unsaved prune removes acknowledged snapshots before unacknowledged ones", async () => {
+  it("the unsaved prune removes the user's own keeps before an unseen Claude keep", async () => {
     const filePath = path.join(tmpDir, "prune.md");
     await fs.writeFile(filePath, "x\n");
     const claude = await snapshotUnsavedEdits(filePath, "claude kept this\n", {
       appDataDir: appData(),
+      unseen: true,
     });
     if (claude.outcome !== "written") throw new Error("expected a write");
-    // The user's own keeps after it, each acknowledged as the restore route does.
     for (let i = 0; i < MAX_DOC_BACKUPS + 1; i++) {
       const r = await snapshotUnsavedEdits(filePath, `user edits ${i}\n`, {
         appDataDir: appData(),
       });
       if (r.outcome !== "written") throw new Error("expected a write");
-      await acknowledgeKeptEdits(filePath, appData(), [r.name]);
     }
     const unsaved = (await listDocBackups(filePath, appData())).filter((b) => b.kind === "unsaved");
     expect(unsaved).toHaveLength(MAX_DOC_BACKUPS);
     expect(unsaved.map((b) => b.name)).toContain(claude.name);
-    expect((await noticeFor(filePath))?.name).toBe(claude.name);
+    expect(await noticeFor(filePath)).toMatchObject({ names: [claude.name] });
   });
 
-  it("the sweep removes the ack file with its emptied directory", async () => {
+  it("the sweep removes the file, and a stray temp of it, with the emptied directory", async () => {
     const { filePath } = await openWithUnsavedEdits("sweep.md", "disk\n", "edits\n");
-    const kept = await claudeForceOpen(filePath);
-    await acknowledgeKeptEdits(filePath, appData(), [kept]);
+    await claudeForceOpen(filePath);
     const subdir = subdirOf(filePath);
+    await fs.writeFile(path.join(subdir, "kept-unseen.json.abcdef12.tmp"), "{}");
     const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
     for (const name of await fs.readdir(subdir)) {
       if (name.endsWith(".md")) await fs.utimes(path.join(subdir, name), old, old);
@@ -356,7 +370,7 @@ describe('restoreDocumentFromBackup with actor: "user"', () => {
   it("restoring the kept edits a banner points at acknowledges them, whoever restores", async () => {
     const { filePath, id } = await openWithUnsavedEdits("back.md", "disk\n", "edits\n");
     const kept = await claudeForceOpen(filePath);
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+    expect((await noticeFor(filePath))?.names[0]).toBe(kept);
 
     // Claude brings them back (a clean document: nothing new is kept).
     await restoreDocumentFromBackup(id, kept, { keepUnsavedEdits: true });
@@ -370,7 +384,7 @@ describe('restoreDocumentFromBackup with actor: "user"', () => {
 
     const result = await restoreDocumentFromBackup(id, good.name, { keepUnsavedEdits: true });
 
-    expect((await noticeFor(filePath))?.name).toBe(result.unsavedEditsKept?.name);
+    expect((await noticeFor(filePath))?.names[0]).toBe(result.unsavedEditsKept?.name);
   });
 });
 
@@ -385,9 +399,9 @@ describe("GET /api/backups keptNotice", () => {
 
     const res = mockRes();
     await handleListBackups(req({ query: { documentId: id } }), res);
-    expect((res._json as { data: { keptNotice: { name: string } } }).data.keptNotice.name).toBe(
-      kept,
-    );
+    expect(
+      (res._json as { data: { keptNotice: { names: string[] } } }).data.keptNotice.names,
+    ).toEqual([kept]);
 
     await acknowledgeKeptEdits(filePath, appData(), [kept]);
     const res2 = mockRes();
@@ -509,7 +523,7 @@ describe("POST /api/backups/acknowledge", () => {
     );
     expect(remote._status).toBe(403);
 
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+    expect((await noticeFor(filePath))?.names[0]).toBe(kept);
   });
 
   it("validates its body and the document", async () => {
@@ -543,7 +557,7 @@ describe("POST /api/backups/acknowledge", () => {
     );
 
     expect(res._json).toEqual({ data: { acknowledged: false } });
-    expect((await noticeFor(filePath))?.name).toBe(kept);
+    expect((await noticeFor(filePath))?.names[0]).toBe(kept);
   });
 });
 
@@ -558,6 +572,6 @@ describe("end to end", () => {
     await fs.writeFile(filePath, "disk 2\n");
     const second = await claudeForceOpen(filePath);
 
-    expect(await noticeFor(filePath)).toMatchObject({ name: second, names: [second] });
+    expect(await noticeFor(filePath)).toMatchObject({ names: [second] });
   });
 });

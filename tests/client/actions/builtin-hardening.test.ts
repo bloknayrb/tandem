@@ -75,7 +75,7 @@ function routes(table: Array<[string, () => Response]>): void {
 }
 
 /** Drive the palette's "Version history…" the way the palette does. */
-function runRestore(): void {
+function runVersionHistory(): void {
   const action = getActionsMap().get("restore-backup");
   expect(action, "the restore-backup builtin must be registered").toBeDefined();
   action?.run();
@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Restore a backup — the data-recovery on-ramp
+// Version history — the data-recovery on-ramp
 // ---------------------------------------------------------------------------
 
 describe("version history (ADR-057 PR 2)", () => {
@@ -107,7 +107,7 @@ describe("version history (ADR-057 PR 2)", () => {
     const openVersionHistory = vi.fn();
     mount({ openVersionHistory, getActiveTabId: () => "doc-1" });
 
-    runRestore();
+    runVersionHistory();
 
     expect(openVersionHistory).toHaveBeenCalledWith("doc-1");
   });
@@ -117,7 +117,7 @@ describe("version history (ADR-057 PR 2)", () => {
     const openVersionHistory = vi.fn();
     mount({ notify, openVersionHistory, getActiveTabId: () => null });
 
-    runRestore();
+    runVersionHistory();
 
     expect(openVersionHistory).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith("warning", "No active document.");

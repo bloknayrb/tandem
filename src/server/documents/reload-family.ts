@@ -368,10 +368,9 @@ export async function restoreDocumentFromBackup(
     keepUnsavedEdits?: boolean;
     /**
      * Who asked (`KeepActor`). `user` is the editor's Version history: no
-     * Claude-voiced notice, what it kept is acknowledged at once (it is no
-     * news to the user, so it must not raise the kept-edits banner), and the
-     * bytes it overwrites are snapshotted every time, so the restore can be
-     * undone from the same list. Default `claude`.
+     * Claude-voiced notice, and what it keeps is not recorded as unseen (it
+     * is no news to the user, so it raises no kept-edits banner). Default
+     * `claude`.
      */
     actor?: KeepActor;
   },
@@ -458,40 +457,24 @@ export async function restoreDocumentFromBackup(
   const protect = useSidecar ? undefined : backupName;
   const keptBefore =
     editsBefore !== null
-      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming, protect)
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, incoming, protect, actor)
       : undefined;
-  /** The Version history's own keeps are no news to the user: never a banner. */
-  const acknowledgeUserKeeps = async (...kept: Array<KeptBackup | undefined>): Promise<void> => {
-    if (actor !== "user") return;
-    const names = kept.filter((k): k is KeptBackup => k !== undefined).map((k) => k.name);
-    if (names.length > 0) await acknowledgeKeptEdits(existing.filePath, appDataDir, names);
-  };
 
   // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
   // is itself reversible (never throws — a skip or snapshot failure must not
-  // block the restore). Claude's restore and the editor's Version history
-  // snapshot every time (ADR-057): after a Claude force-open the bytes on disk
-  // can be an external version an earlier autosave's once-per-run snapshot
-  // never saw, and a restore picked by name from a list is undone from the
-  // same list. A gate-respecting call (an internal caller passing neither) is
-  // also ungated when what it writes back is an `unsaved` snapshot, for the
-  // force-open reason.
+  // block the restore). Every restore, not only the run's first overwrite
+  // (ADR-057): after a Claude force-open the bytes on disk can be an external
+  // version an earlier autosave's once-per-run snapshot never saw, and a
+  // restore picked by name from the Version history is undone from that list.
   await snapshotBeforeFirstWrite(existing.filePath, {
     appDataDir,
     documentId: id,
-    ignoreRunGate: keepEdits || actor === "user" || snapshotKind(backupName) === "unsaved",
+    ignoreRunGate: true,
     ...(protect !== undefined ? { protect } : {}),
   });
-  // A restore of an `unsaved` snapshot that kept no edits of its own just made
-  // the overwritten bytes the newest backup; mark what it restores newest
-  // again, so "the most recent backup" is still the version now in the
-  // document rather than the one it replaced.
-  if (!keepEdits && snapshotKind(backupName) === "unsaved") {
-    await markSnapshotNewest(existing.filePath, appDataDir, backupName);
-  }
   // The edits were kept before that disk snapshot; make them the newest backup
-  // again, so the palette's "restore the most recent backup" brings them back.
-  // The reported time is the one the listing will show.
+  // again, so they list first. The reported time is the one the listing will
+  // show.
   if (keptBefore) {
     const markedAt = await markSnapshotNewest(existing.filePath, appDataDir, keptBefore.name);
     if (markedAt !== undefined) keptBefore.timestamp = markedAt;
@@ -506,7 +489,6 @@ export async function restoreDocumentFromBackup(
   // instead, naming any backup already kept (the close may have dropped the
   // edits it holds).
   if (getOpenDocs().get(id) !== existing) {
-    await acknowledgeUserKeeps(keptBefore);
     throw reportKeptBackupOnFailure(
       Object.assign(new Error("Document was closed while it was being restored."), {
         code: "NO_DOCUMENT",
@@ -515,8 +497,7 @@ export async function restoreDocumentFromBackup(
       existing.filePath,
       "restore",
       keptBefore,
-      false,
-      actor,
+      { actor },
     );
   }
   let fileWritten = false;
@@ -581,11 +562,7 @@ export async function restoreDocumentFromBackup(
   } catch (err) {
     // Nothing changed yet (the write itself failed): rethrow as is, without
     // telling anyone their edits may be gone.
-    if (!fileWritten && !swap?.fired) {
-      // The kept copy is still on disk: no news to a user who asked for it.
-      await acknowledgeUserKeeps(keptBefore);
-      throw err;
-    }
+    if (!fileWritten && !swap?.fired) throw err;
     // A failure after the swap: edits typed during the awaits were read at the
     // swap but not yet kept, and they are gone from the document now.
     const kept =
@@ -596,10 +573,10 @@ export async function restoreDocumentFromBackup(
             editsBefore,
             incoming,
             protect,
+            actor,
           )
         : undefined) ?? keptBefore;
-    await acknowledgeUserKeeps(kept, keptBefore);
-    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept, false, actor);
+    throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept, { actor });
   }
 
   // The restored bytes are the new saved baseline. Without this, the autosave
@@ -618,16 +595,15 @@ export async function restoreDocumentFromBackup(
             editsBefore,
             incoming,
             protect,
+            actor,
           )
         : undefined) ?? keptBefore)
     : undefined;
 
-  // Before any notice goes out: a client refetching on the notice must find
-  // the user's own keeps, and the version just brought back, already seen.
-  await acknowledgeUserKeeps(unsavedEditsKept, keptBefore);
+  // Kept edits a banner may be pointing at are back in the document, whoever
+  // restored them. Before any notice goes out, so a client re-reading on it
+  // finds them seen. (The Version history's own keeps were never unseen.)
   if (snapshotKind(backupName) === "unsaved" && !useSidecar) {
-    // The edits a banner may be pointing at are back in the document, whoever
-    // restored them.
     await acknowledgeKeptEdits(existing.filePath, appDataDir, [backupName]);
   }
 

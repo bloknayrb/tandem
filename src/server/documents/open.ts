@@ -571,7 +571,9 @@ async function openResolved(target: ResolvedPath, options?: OpenOptions): Promis
             ? await keepEditsCapturedAtSwap(resolved, swap.text, editsBefore, incoming)
             : undefined) ??
           keptBefore;
-        throw reportKeptBackupOnFailure(err, existingId, resolved, "reload", kept, keptNotified);
+        throw reportKeptBackupOnFailure(err, existingId, resolved, "reload", kept, {
+          alreadyNotified: keptNotified,
+        });
       }
       ensureAutoSave();
       return {

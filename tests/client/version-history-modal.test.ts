@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import VersionHistoryModal from "../../src/client/components/VersionHistoryModal.svelte";
-import { formatBackupSize, formatRelativeTime } from "../../src/client/utils/backups.js";
+import { formatBackupAge, formatBackupSize } from "../../src/client/utils/backups.js";
 import { API_BACKUPS, API_BACKUPS_RESTORE } from "../../src/shared/api-paths.js";
 
 const MODAL = "[data-testid='version-history-modal']";
@@ -67,7 +67,6 @@ function open(overrides: Record<string, unknown> = {}) {
   const onRestored = vi.fn();
   const r = render(VersionHistoryModal, {
     props: {
-      open: true,
       documentId: "doc-1",
       fileName: "notes.md",
       onClose,
@@ -156,7 +155,10 @@ describe("VersionHistoryModal", () => {
     let attempt = 0;
     const calls = routes(TWO, () =>
       ++attempt === 1
-        ? json({ error: "BACKUP_FAILED", message: "server copy for Claude" }, 409)
+        ? json(
+            { error: "BACKUP_FAILED", message: "The backup folder is full; nothing was restored." },
+            409,
+          )
         : json({ data: {} }),
     );
     const { container, onRestored } = open();
@@ -167,8 +169,7 @@ describe("VersionHistoryModal", () => {
     await settle();
 
     const error = container.querySelector("[data-testid='version-history-row-error']");
-    expect(error?.textContent).toContain("nothing was restored");
-    expect(error?.textContent).not.toContain("server copy for Claude");
+    expect(error?.textContent).toContain("The backup folder is full; nothing was restored.");
     expect(onRestored).not.toHaveBeenCalled();
 
     await fireEvent.click(container.querySelector(ANYWAY)!);
@@ -214,19 +215,16 @@ describe("VersionHistoryModal", () => {
 
   it("renders nothing when closed", () => {
     routes(TWO);
-    const { container } = open({ open: false });
+    const { container } = open({ documentId: null });
     expect(container.querySelector(MODAL)).toBeNull();
   });
 });
 
 describe("backups formatting", () => {
-  it("relative times", () => {
-    const now = Date.parse("2026-06-01T12:00:00Z");
-    expect(formatRelativeTime("2026-06-01T11:59:50Z", now)).toBe("just now");
-    expect(formatRelativeTime("2026-06-01T11:55:00Z", now)).toBe("5 min ago");
-    expect(formatRelativeTime("2026-06-01T09:00:00Z", now)).toBe("3 h ago");
-    expect(formatRelativeTime("2026-05-31T12:00:00Z", now)).toBe("1 day ago");
-    expect(formatRelativeTime("not a date", now)).toBe("not a date");
+  it("ages use the annotation cards' wording", () => {
+    expect(formatBackupAge(new Date().toISOString())).toBe("just now");
+    expect(formatBackupAge(new Date(Date.now() - 5 * 60_000).toISOString())).toBe("5m ago");
+    expect(formatBackupAge("not a date")).toBe("not a date");
   });
 
   it("sizes", () => {

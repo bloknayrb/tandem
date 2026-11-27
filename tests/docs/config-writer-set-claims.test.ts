@@ -285,11 +285,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // update, not a widening of the accepted scope in docs/security.md.
   "src/server/annotations/store.ts": 7,
   "src/server/auth/token-store.ts": 3,
-  // 3 since ADR-057 PR 2: `kept-ack.json`, which kept edits the user has been
-  // told about, written into the per-path doc-backups folder. Tandem's OWN
-  // app-data root, never a Claude config file, so the accepted #1599 scope is
-  // unchanged.
-  "src/server/file-io/doc-backup.ts": 3,
+  // 4 since ADR-057 PR 2: `kept-unseen.json` (which kept edits the user has
+  // not been shown), a temp `writeFile` plus a `rename`, in the per-path
+  // doc-backups folder. Tandem's OWN app-data root, never a Claude config
+  // file, so the accepted #1599 scope is unchanged.
+  "src/server/file-io/doc-backup.ts": 4,
   "src/server/file-io/index.ts": 3,
   // #2266: `hardenPrivateDir`'s `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` open of
   // an app-data store DIRECTORY, so it can `fchmod` the descriptor. The idiom
