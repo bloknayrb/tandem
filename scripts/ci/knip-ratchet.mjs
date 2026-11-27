@@ -3,8 +3,9 @@
  * knip as a ratchet: fail on NEW dead code, without first deciding the fate of
  * everything knip already reports.
  *
- * When this landed, knip reported ~130 findings (unused files, exports, types,
- * dependencies, unlisted dependencies). Some are false positives that need
+ * When this landed, knip reported 113 findings (unused files, exports, types,
+ * dependencies, unlisted dependencies and binaries; the baseline's length is
+ * the current count). Some are false positives that need
  * config (a native module loaded through `esmRequire`), some are real dead code
  * whose removal is a product decision. Settling all of them in one change was
  * not reasonable, so they are frozen in `scripts/knip-baseline.json` instead:
@@ -18,10 +19,19 @@
  * finding is fixed in code, or configured away in `knip.json` with a comment.
  *
  * Findings are keyed `category|file|name`, without line numbers, so editing a
- * file elsewhere does not churn the baseline.
+ * file elsewhere does not churn the baseline. A member finding carries its
+ * parent (`enumMembers|file|Mode.Unused`), so two enums' same-named members
+ * stay distinct.
+ *
+ * Two consequences of keying by file and of comparing against knip's output:
+ *  - Moving or renaming a file with frozen findings shows them as fixed (old
+ *    path) plus new (new path). Rename those keys in the baseline in the same
+ *    change, so the move shows in the diff.
+ *  - A knip upgrade that changes what knip reports fails `check` until someone
+ *    prunes or fixes by hand; a Dependabot bump of knip cannot pass on its own.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,15 +46,26 @@ export function findingsFrom(report) {
   const keys = new Set();
   for (const issue of report.issues) {
     for (const [category, items] of Object.entries(issue)) {
-      if (category === "file" || !Array.isArray(items)) continue;
+      if (category === "file") continue;
+      if (!Array.isArray(items)) {
+        // A category shape this script does not know would otherwise be
+        // skipped silently, which is a hole, not a pass.
+        if (items && typeof items === "object" && Object.keys(items).length > 0) {
+          throw new Error(`knip category "${category}" in ${issue.file} is not an array`);
+        }
+        continue;
+      }
       for (const item of items) {
-        // `duplicates` entries are arrays of {name}; everything else is {name}.
+        // `duplicates` entries are arrays of {name}; members carry the enum or
+        // namespace they belong to; everything else is {name}.
         const name = Array.isArray(item)
           ? item
               .map((d) => d.name)
               .sort()
               .join("|")
-          : String(item?.name ?? "");
+          : item?.namespace
+            ? `${item.namespace}.${item.name}`
+            : String(item?.name ?? "");
         keys.add(`${category}|${issue.file}|${name}`);
       }
     }
@@ -69,6 +90,7 @@ function runKnip() {
     maxBuffer: 64 * 1024 * 1024,
     shell: process.platform === "win32",
   });
+  if (r.error) throw new Error(`could not run knip: ${r.error.message}`);
   // knip exits non-zero whenever it has findings; only unparseable output is an error.
   try {
     return JSON.parse(r.stdout);
@@ -120,6 +142,18 @@ function main() {
   console.log(`knip-ratchet: ok (${current.length} frozen finding(s), none new).`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compare real paths on both sides: the ESM loader resolves symlinks for
+// import.meta.url but process.argv[1] is as typed, so a checkout reached
+// through a symlink would otherwise skip main() and exit 0 without checking.
+function realpathOrNull(candidate) {
+  if (!candidate) return null;
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+const invokedPath = realpathOrNull(process.argv[1]);
+if (invokedPath !== null && invokedPath === realpathOrNull(fileURLToPath(import.meta.url))) {
   main();
 }

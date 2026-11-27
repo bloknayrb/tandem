@@ -26,6 +26,10 @@ describe("knip ratchet logic", () => {
         ],
         types: [],
         duplicates: [[{ name: "X" }, { name: "A" }]],
+        enumMembers: [
+          { namespace: "Mode", name: "Unused" },
+          { namespace: "Other", name: "Unused" },
+        ],
       },
       { file: "package.json", dependencies: [{ name: "left-pad" }], exports: [] },
     ],
@@ -35,6 +39,8 @@ describe("knip ratchet logic", () => {
     expect(findingsFrom(report)).toEqual([
       "dependencies|package.json|left-pad",
       "duplicates|src/a.ts|A|X",
+      "enumMembers|src/a.ts|Mode.Unused",
+      "enumMembers|src/a.ts|Other.Unused",
       "exports|src/a.ts|bar",
       "exports|src/a.ts|foo",
     ]);
@@ -42,6 +48,12 @@ describe("knip ratchet logic", () => {
 
   it("refuses a report that is not knip JSON", () => {
     expect(() => findingsFrom({})).toThrow(/no `issues` array/);
+  });
+
+  it("refuses a category shape it does not know, rather than skipping it", () => {
+    expect(() =>
+      findingsFrom({ issues: [{ file: "src/a.ts", classMembers: { C: [{ name: "m" }] } }] }),
+    ).toThrow(/"classMembers" .* is not an array/);
   });
 
   it("reports new findings and fixed ones separately", () => {
