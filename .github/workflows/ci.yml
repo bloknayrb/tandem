@@ -117,7 +117,10 @@ jobs:
       # but a lint added in a new stable release would turn this required leg red
       # on every open PR at once — so clippy gets its own exact version, bumped by
       # hand. ubuntu + windows: the crate's `cfg(windows)` code is invisible to a
-      # Linux clippy. macOS-only code is not linted. Pinned by
+      # Linux clippy. Not linted: macOS-only code, and code behind a Cargo
+      # feature (`devtools`, `ui-inspector`), since this runs default features.
+      # It compiles on a second toolchain, so each leg builds the crate twice.
+      # MSRV for `incompatible_msrv` is set in src-tauri/clippy.toml. Pinned by
       # tests/scripts/clippy-wiring.test.ts.
       - name: Clippy (pinned, warnings denied)
         if: matrix.os != 'macos-latest'

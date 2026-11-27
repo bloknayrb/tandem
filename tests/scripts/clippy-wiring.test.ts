@@ -19,7 +19,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  */
 
 type Step = { run?: string; if?: unknown; "continue-on-error"?: unknown };
-type Job = { strategy?: { matrix?: { os?: string[] } }; steps?: Step[] };
+type Job = {
+  strategy?: { matrix?: { os?: string[] } };
+  steps?: Step[];
+  "continue-on-error"?: unknown;
+};
 
 const ci = parse(readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8")) as {
   jobs: Record<string, Job>;
@@ -42,7 +46,20 @@ describe("clippy runs in the required rust-test legs", () => {
     expect(run).toContain("--manifest-path src-tauri/Cargo.toml");
     expect(run).toContain("--all-targets");
     expect(run).toMatch(/--\s+-D warnings/);
-    expect(steps[0]?.["continue-on-error"], "clippy must be able to fail the leg").toBeUndefined();
+    // Anything after `--` that re-allows or caps lints would undo `-D warnings`.
+    const lintArgs = run.slice(run.indexOf(" -- ") + 4);
+    expect(lintArgs, "no -A / -W / --cap-lints after `--`").not.toMatch(
+      /(^|\s)(-A|-W|--cap-lints)\b/,
+    );
+    for (const [where, value] of [
+      ["step", steps[0]?.["continue-on-error"]],
+      ["job", job?.["continue-on-error"]],
+    ] as const) {
+      expect(
+        value === undefined || value === false,
+        `${where}-level continue-on-error would stop clippy failing the leg`,
+      ).toBe(true);
+    }
   });
 
   it("runs on the ubuntu and windows legs", () => {

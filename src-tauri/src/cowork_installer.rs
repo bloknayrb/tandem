@@ -1011,7 +1011,7 @@ mod tests {
             json!(["-y", expected_spec, "mcp-stdio"])
         );
         // Token must be present but we avoid logging it — just check it's non-empty.
-        assert!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"].as_str().unwrap().len() > 0);
+        assert!(!json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"].as_str().unwrap().is_empty());
     }
 
     #[test]
@@ -1503,7 +1503,7 @@ mod tests {
         let (_guard, _dir, ws_path) = temp_ws();
         install_tandem_plugin_into_workspace(&ws_path, "old-token", DEFAULT_TANDEM_URL).unwrap();
 
-        let rewritten = reconcile_stale_workspace_tokens(&[ws_path.clone()], "current-token");
+        let rewritten = reconcile_stale_workspace_tokens(std::slice::from_ref(&ws_path), "current-token");
         std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
 
         // The reported path is the #433-revalidated (canonicalized) form, which on

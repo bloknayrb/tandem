@@ -410,7 +410,7 @@ fn apply_app_mode(
             }
             let _ = tx.send(outcome);
         })
-        .map_err(|e| NativeThemeError::main_thread_dispatch_failed(e))?;
+        .map_err(NativeThemeError::main_thread_dispatch_failed)?;
     match rx.recv_timeout(std::time::Duration::from_secs(2)) {
         Ok(outcome) => Ok(outcome),
         // A timeout abandons the wait; it does NOT cancel the queued closure,
