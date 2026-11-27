@@ -263,6 +263,23 @@ describe("GET /api/document/compare", () => {
     expect(d.truncated).toBe(false);
   });
 
+  it("answers its own 500 when the document cannot be serialized", async () => {
+    const { id } = await opened("throws.md", "x\n");
+    const adapter = getAdapter("md");
+    const spy = vi.spyOn(adapter, "save").mockImplementation(() => {
+      throw new Error("serializer bug");
+    });
+    const res = await call({ documentId: id, against: "disk" });
+    spy.mockRestore();
+    expect(res._status).toBe(500);
+    expect((res._json as { message?: string }).message).toBe("Couldn't read the document.");
+  });
+
+  it("names the document's format, so the view can explain Markdown re-serialization", async () => {
+    const { id } = await opened("fmt.md", "x\n");
+    expect(data(await call({ documentId: id, against: "disk" }))).toMatchObject({ format: "md" });
+  });
+
   it("keeps a real U+FFFD that ends exactly at the cut", async () => {
     const { filePath, id } = await opened("fffd.txt", "small\n");
     // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.

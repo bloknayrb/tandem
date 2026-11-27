@@ -51,7 +51,7 @@ interface Props {
 const { ydoc, documentId, fileName, format, source, readOnly, onCompare }: Props = $props();
 
 /** Compare reads plain text on both sides: a `.md`/`.txt` file. */
-const canCompare = $derived(canCompareWithDisk({ source, format }));
+const canCompare = $derived(canCompareWithDisk({ source, format, readOnly }));
 
 /**
  * Formats with NO path back to disk — the server refuses every save for them.

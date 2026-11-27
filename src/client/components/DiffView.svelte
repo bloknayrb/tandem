@@ -32,6 +32,12 @@ const rows = $derived(comparison ? buildDiffRows(comparison.other, comparison.cu
     <span class="legend-remove">− {otherLabel}</span>
     <span class="legend-add">+ The document now, as saving would write it</span>
   </p>
+  {#if result.comparison.format === "md"}
+    <p class="note" data-testid="diff-md-note">
+      Some differences can be formatting only (such as <code>*</code> or <code>-</code> bullets):
+      Tandem writes Markdown in its own style when it saves.
+    </p>
+  {/if}
   {#if result.comparison.truncated}
     <p class="note" data-testid="diff-truncated">
       These versions are large, so only their beginnings are compared, and a change near the

@@ -100,6 +100,7 @@ command-palette
 comment-thread
 compare-close
 compare-error
+compare-live
 compare-modal
 compare-refresh
 connection-banner
@@ -172,6 +173,7 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 diff-line
+diff-md-note
 diff-more
 diff-none
 diff-too-large

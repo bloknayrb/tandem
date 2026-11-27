@@ -799,8 +799,13 @@ export function keepsUnsavedEditsOnDiscard(doc: {
  * server's `GET /api/document/compare` and the conflict banner's Compare
  * button read this one predicate.
  */
-export function canCompareWithDisk(doc: { format: string; source: string }): boolean {
-  return doc.source === "file" && AUTO_SAVE_FORMATS.has(doc.format);
+export function canCompareWithDisk(doc: {
+  format: string;
+  source: string;
+  readOnly?: boolean;
+}): boolean {
+  // Not read-only: its side is "as saving would write it", and it is never saved.
+  return doc.source === "file" && doc.readOnly !== true && AUTO_SAVE_FORMATS.has(doc.format);
 }
 
 /**

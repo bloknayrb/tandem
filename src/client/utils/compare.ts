@@ -39,6 +39,12 @@ export const MAX_DIFF_ROWS = 2000;
 const WORD_DIFF_MAX_CHARS = 2000;
 /** Characters word-diffed in total; past it, changed lines are shown whole. */
 const WORD_DIFF_BUDGET_CHARS = 200_000;
+/**
+ * Time all word diffs together may take. A character budget bounds input, not
+ * work (a word diff of two very different lines is roughly quadratic), so the
+ * highlighting also shares one deadline and stops when it passes.
+ */
+const WORD_DIFF_BUDGET_MS = 300;
 /** How long the line diff may run before giving up. */
 const DEFAULT_TIMEOUT_MS = 1500;
 
@@ -49,11 +55,17 @@ function linesOf(value: string): string[] {
   return lines;
 }
 
-/** Word segments for a removed/added line pair, one side each. */
-function wordSegments(oldLine: string, newLine: string): [DiffSegment[], DiffSegment[]] {
+/** Word segments for a removed/added line pair, one side each; undefined when it ran out of time. */
+function wordSegments(
+  oldLine: string,
+  newLine: string,
+  timeout: number,
+): [DiffSegment[], DiffSegment[]] | undefined {
+  const parts = diffWordsWithSpace(oldLine, newLine, { timeout });
+  if (parts === undefined) return undefined;
   const before: DiffSegment[] = [];
   const after: DiffSegment[] = [];
-  for (const p of diffWordsWithSpace(oldLine, newLine)) {
+  for (const p of parts) {
     if (!p.added) before.push({ text: p.value, changed: Boolean(p.removed) });
     if (!p.removed) after.push({ text: p.value, changed: Boolean(p.added) });
   }
@@ -70,6 +82,7 @@ export function buildDiffRows(
   other: string,
   current: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  wordTimeoutMs: number = WORD_DIFF_BUDGET_MS,
 ): DiffRow[] | null {
   // A difference only in the final newline is not shown: the rows drop the
   // newline, so it would read as a line removed and re-added unchanged.
@@ -82,6 +95,7 @@ export function buildDiffRows(
 
   const rows: DiffRow[] = [];
   let wordBudget = WORD_DIFF_BUDGET_CHARS;
+  let wordDeadline = Date.now() + wordTimeoutMs;
   for (let i = 0; i < changes.length; i++) {
     const c = changes[i];
     const lines = linesOf(c.value);
@@ -94,8 +108,13 @@ export function buildDiffRows(
         const pairs = lines.map((line, k) => {
           const size = line.length + added[k].length;
           if (size > WORD_DIFF_MAX_CHARS || size > wordBudget) return undefined;
+          const left = wordDeadline - Date.now();
+          if (left <= 0) return undefined;
           wordBudget -= size;
-          return wordSegments(line, added[k]);
+          const seg = wordSegments(line, added[k], left);
+          // Out of time: no further pair is highlighted either.
+          if (seg === undefined) wordDeadline = 0;
+          return seg;
         });
         lines.forEach((text, k) => rows.push({ kind: "remove", text, segments: pairs[k]?.[0] }));
         added.forEach((text, k) => rows.push({ kind: "add", text, segments: pairs[k]?.[1] }));

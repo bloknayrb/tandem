@@ -88,4 +88,10 @@ describe("buildDiffRows", () => {
     // 200 added rows, 3 context + a 4,994-line gap + 3 context, then the final pair.
     expect(last).toEqual({ kind: "more", count: 200 + 3 + 4994 + 3 + 2 });
   });
+
+  it("shows changed lines whole once the word-diff time budget is spent", () => {
+    const rows = buildDiffRows("the quick fox\n", "the slow fox\n", 1500, 0) ?? [];
+    expect(rows.map((r) => r.kind)).toEqual(["remove", "add"]);
+    for (const r of rows) expect("segments" in r && r.segments).toBeFalsy();
+  });
 });

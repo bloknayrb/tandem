@@ -335,4 +335,14 @@ describe("ExternalConflictBanner", () => {
     await tick();
     expect(container.querySelector("[data-testid='external-conflict-compare-btn']")).toBeNull();
   });
+
+  it("offers no Compare for a read-only document, which is never saved", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 9 });
+    const { container } = render(ExternalConflictBanner, {
+      props: { ...baseProps(ydoc).props, readOnly: true, onCompare: () => {} },
+    });
+    await tick();
+    expect(container.querySelector("[data-testid='external-conflict-compare-btn']")).toBeNull();
+  });
 });

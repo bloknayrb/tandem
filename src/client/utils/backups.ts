@@ -176,6 +176,8 @@ export interface Comparison {
   otherLabel: "disk" | "unsaved" | "disk-backup";
   /** One side or both were cut at the server's cap. */
   truncated: boolean;
+  /** The document's format; for `md` the document's side is re-serialized Markdown. */
+  format?: string;
 }
 
 export type CompareResult = { ok: true; comparison: Comparison } | { ok: false; message: string };
@@ -223,6 +225,7 @@ export async function compareDocument(documentId: string, against: string): Prom
       other: d.other,
       otherLabel: d.otherLabel,
       truncated: d.truncated === true,
+      ...(typeof d.format === "string" ? { format: d.format } : {}),
     },
   };
 }

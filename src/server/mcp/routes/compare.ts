@@ -224,11 +224,27 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
   }
-  const current = capText(toLf(stripBom(adapter.save(ydoc))), COMPARE_MAX_BYTES);
+  let serialized: string;
+  try {
+    serialized = adapter.save(ydoc);
+  } catch (err) {
+    console.error("[Compare] could not serialize the document:", err);
+    res.status(500).json({ error: "INTERNAL", message: "Couldn't read the document." });
+    return;
+  }
+  const current = capText(toLf(stripBom(serialized)), COMPARE_MAX_BYTES);
   const otherSide = { text: toLf(other.text), truncated: other.truncated };
   const truncated = current.truncated || other.truncated;
   const [currentShown, otherShown] = truncated
     ? alignCuts(current, otherSide)
     : [current.text, otherSide.text];
-  res.json({ data: { current: currentShown, other: otherShown, otherLabel, truncated } });
+  res.json({
+    data: {
+      current: currentShown,
+      other: otherShown,
+      otherLabel,
+      truncated,
+      format: docState.format,
+    },
+  });
 }
