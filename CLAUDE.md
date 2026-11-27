@@ -313,6 +313,7 @@ push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor std
 
 ## Tandem-Specific Skills
 
+- `.claude/skills/batch-issues/SKILL.md` -- Work several small, decided issues in one session: group by area, ask every decision up front, fix with commit-only subagents, one PR per group through the normal gates
 - `.claude/skills/changelog/SKILL.md` -- Generate a Keep a Changelog entry from git log since last tag
 - `.claude/skills/dev-server/SKILL.md` -- Start dev environment (server + client) and verify MCP connection
 - `.claude/skills/e2e/SKILL.md` -- Run Playwright E2E tests safely (warns about dev server conflicts)
@@ -321,7 +322,7 @@ push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor std
 - `.claude/skills/screenshots/SKILL.md` -- Capture README screenshots via Playwright + MCP
 - `.claude/skills/ui-inspector/SKILL.md` -- Resolve a `@ui_<ULID>` reference from the desktop element picker into its source location, metadata and locators (screenshots are off — see the skill)
 
-Those seven are the complete set. `skills/tandem/SKILL.md` (no leading dot) is a different thing entirely: the skill **shipped to users** in the npm package and installed into `~/.claude/skills/tandem/` by `tandem setup --apply`. It is behavioural instruction loaded into real user sessions, so treat a stale rule there as a product bug, and bump its frontmatter `version` when you change it. **Two different comparisons read that stamp and they differ by one character, so "refreshes when the bundle is newer" is only half true.** `refreshExistingSkillIfStale` (server startup, HTTP mode only) bails at `onDiskVersion >= BUNDLED_SKILL_VERSION` — strictly-newer-bundle only, which is why a content-only edit at an unchanged `version` reaches nobody. `installSkill` (`tandem setup --apply`, wizard) bails only at `>`, so it rewrites on *equal* and on any read error — that equality case is the repair path for a hand-mangled `SKILL.md`. Since #1790 neither one overwrites a strictly newer on-disk skill.
+Those eight are the complete set. `skills/tandem/SKILL.md` (no leading dot) is a different thing entirely: the skill **shipped to users** in the npm package and installed into `~/.claude/skills/tandem/` by `tandem setup --apply`. It is behavioural instruction loaded into real user sessions, so treat a stale rule there as a product bug, and bump its frontmatter `version` when you change it. **Two different comparisons read that stamp and they differ by one character, so "refreshes when the bundle is newer" is only half true.** `refreshExistingSkillIfStale` (server startup, HTTP mode only) bails at `onDiskVersion >= BUNDLED_SKILL_VERSION` — strictly-newer-bundle only, which is why a content-only edit at an unchanged `version` reaches nobody. `installSkill` (`tandem setup --apply`, wizard) bails only at `>`, so it rewrites on *equal* and on any read error — that equality case is the repair path for a hand-mangled `SKILL.md`. Since #1790 neither one overwrites a strictly newer on-disk skill.
 
 <!-- autoskills:end -->
 
