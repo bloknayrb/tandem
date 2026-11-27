@@ -1517,7 +1517,25 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
       type: "result",
       subtype: "success",
       is_error: false,
-      result: `The log says: No conversation found with session ID: ${id}`,
+      // Starts with the phrase, so only the errored-envelope guard keeps it out.
+      result: `Error: No conversation found with session ID: ${id} — that is what the log says.`,
+    });
+    await settle();
+    exitChild(child2, 1);
+
+    await nthChild(3);
+    resumes(3, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("an errored envelope whose `result` quotes the message mid-text is not Claude's verdict", async () => {
+    // An API error whose text carries a quoted log line naming this id.
+    const { child2, id } = await resumedChild();
+    pushJson(child2, {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: `API Error: 500 {"detail":"[Claude] Output error: No conversation found with session ID: ${id}"}`,
     });
     await settle();
     exitChild(child2, 1);
@@ -1554,6 +1572,62 @@ describe("a resumed run that dies by a signal inside the resume-confirm window",
     expect(logText()).toContain("clearing saved session (code=1)");
     expect(isFresh(4)).toBe(true);
     expect(claudeArgs(4)).not.toContain(id);
+  });
+
+  // A native Windows crash relays its NTSTATUS truncated to a byte, outside 1
+  // and outside 129–192: 0xC0000005 → 5, 0xC00000FD → 253. No code says the
+  // conversation is missing, so it gets the same one retry.
+  it.each([
+    [5, "an access violation"],
+    [253, "a stack overflow"],
+    [127, "the reaper's failed exec"],
+  ])("a resumed run ending %i (%s) keeps the session once, then clears", async (code) => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, code);
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    expect(logText()).toContain("keeping the saved session for one more resume");
+
+    exitChild(child3, code);
+    await nthChild(4);
+    expect(logText()).toContain(`clearing saved session (code=${code})`);
+    expect(isFresh(4)).toBe(true);
+  });
+
+  it("our own kill never spends the retry, whatever code it ends with", async () => {
+    // A stop whose kill ends in exit 1 (as a Claude that exits 1 on SIGTERM
+    // would), then an unrelated crash: the crash still gets its retry.
+    onSpawn = (child) => {
+      child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+        child.kills.push(sig);
+        child.killed = true;
+        setImmediate(() => {
+          if (child.exitCode === null) exitChild(child, 1);
+        });
+        return true;
+      };
+    };
+    const { sup, child2, id } = await resumedChild();
+    await sup.stop(); // our kill, exit 1: kept, not counted
+    expect(child2.kills).toEqual(["SIGTERM"]);
+    await sup.start();
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 137); // the first unexplained death: kept
+    await nthChild(4);
+    resumes(4, id);
+    expect(logText()).not.toContain("clearing saved session");
+  });
+
+  it("the reaper's own signal death (code null) is kept and does not spend the retry", async () => {
+    const { child2, id } = await resumedChild();
+    exitChild(child2, null, "SIGKILL");
+    const child3 = await nthChild(3);
+    resumes(3, id);
+    exitChild(child3, 137); // the first counted death: kept
+    await nthChild(4);
+    resumes(4, id);
+    expect(logText()).not.toContain("clearing saved session");
   });
 
   it("a crash relayed as 137 and then an exit 1 share the one retry", async () => {

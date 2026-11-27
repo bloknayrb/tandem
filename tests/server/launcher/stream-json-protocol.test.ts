@@ -72,6 +72,7 @@ const ENV_KEYS = [
   "TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN",
   "TANDEM_STUB_CLAUDE_EXIT_DELAY_MS",
   "TANDEM_STUB_CLAUDE_PERMISSION_DENIALS",
+  "TANDEM_STUB_CLAUDE_NO_CONVERSATION",
 ] as const;
 
 let tmpDir: string;
@@ -921,6 +922,10 @@ describe.skipIf(process.platform === "win32")(
       process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN = "1";
       // Holds A's exit until `relaunch()` has made B the current spawn.
       process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "800";
+      // Each resumed spawn says its conversation is missing, so an unconfirmed
+      // non-zero exit clears at once (#2358 S2) — without it, a first exit is
+      // kept anyway and neither half below discriminates.
+      process.env.TANDEM_STUB_CLAUDE_NO_CONVERSATION = "1";
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await writeSavedSession();
       const { sup, emit } = supervisorWithEventSink({
@@ -969,8 +974,8 @@ describe.skipIf(process.platform === "win32")(
           () => (hasRecord(`exited-${pid1}.json`) ? true : null),
           "spawn A's late, non-zero exit",
         );
-        // Kills the unguarded `clearSavedSession`: A's verdict (resuming, code
-        // 3, unconfirmed) is about A, but the file it unlinks is the one B is
+        // Kills the unguarded `clearSavedSession`: A's verdict (resuming, the
+        // message, code 3, unconfirmed) is about A, but the file it unlinks is the one B is
         // running on.
         expect(savedSessionId()).toBe(VALID_UUID);
 
@@ -1003,6 +1008,8 @@ describe.skipIf(process.platform === "win32")(
       const resumeConfirmMs = 4000;
       process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN = "1";
       process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "0";
+      // The #1169 shape: a resumed spawn that says its conversation is missing.
+      process.env.TANDEM_STUB_CLAUDE_NO_CONVERSATION = "1";
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await writeSavedSession();
       const { sup, emit } = supervisorWithEventSink({

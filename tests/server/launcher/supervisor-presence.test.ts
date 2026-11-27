@@ -708,8 +708,9 @@ describe("R1.4 site (b): fault kills torn down by a Start or an Off before their
 
   it("the same fault kill relayed by the Linux reaper as code 143 is a signal death, not the #1169 shape: judged at site (a), once", async () => {
     // The reaper forwards the kill's SIGTERM and exits 128 + 15, so the code is
-    // not null. `shouldClearSession` reads it as a signal death (#2358), which
-    // is how a null code (macOS, Windows) was already judged.
+    // not null. `shouldClearSession` keeps it once as an unexplained exit
+    // (#2358), and site (a) judges it as a null code (macOS, Windows) was
+    // already judged.
     const h = makeSupervisor();
     const c2 = await crashToResumed(await boundFreshRun(h));
     h.emit(annotationEvent());
