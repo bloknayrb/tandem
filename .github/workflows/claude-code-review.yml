@@ -137,13 +137,21 @@ jobs:
             echo "neutralising left $left entries behind"
             exit 1
           fi
-          cp ../trusted/AGENTS.md .
-          (cd ../trusted && find . -path ./.git -prune -o -type f -name 'CLAUDE.md' -print0) |
+          cp -L ../trusted/AGENTS.md .
+          # Master's CLAUDE.md at every depth, by content (`cp -L`, so a
+          # symlinked one is copied as its target), never under a .claude*
+          # directory. A nested restore whose directory the PR turned into a
+          # file is skipped and logged; only the root copy is mandatory.
+          (cd ../trusted && find . -path ./.git -prune -o -name '.claude*' -prune -o \
+            \( -type f -o -type l \) -name 'CLAUDE.md' -print0) |
             while IFS= read -r -d '' f; do
-              mkdir -p "$(dirname "$f")"
-              cp "../trusted/$f" "$f"
+              if mkdir -p "$(dirname "$f")" 2>/dev/null; then
+                cp -L "../trusted/$f" "$f"
+              else
+                echo "not restoring $f: its directory is not a directory in the PR"
+              fi
             done
-          test -f CLAUDE.md
+          test -f CLAUDE.md && test ! -L CLAUDE.md
 
       - name: Prepare review inputs
         if: steps.recheck.outputs.skip == 'false'
