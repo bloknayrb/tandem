@@ -72,8 +72,11 @@
  * or sleep, reopening after a drop) is listed there.
  * And the Windows smoke's four (2026-11-26; Windows 11 Pro 10.0.26300,
  * Claude Code 2.1.332, the desktop release build, results on #2358,
- * issuecomment-7209705011), each by its own `closedBy` and recorded in
- * ADR-054's flip amendment: *PR 3a's assumptions* (smoke S1), by the Linux
+ * issuecomment-7209705011), each as Bryan directed, which accepts what its
+ * `closedBy` asked for and neither smoke measured (macOS throughout; for S1
+ * the AppImage's Node and a not-signed-in child's bind; for S4 hook timing
+ * under `-p`), all recorded in ADR-054's flip amendment: *PR 3a's
+ * assumptions* (smoke S1), by the Linux
  * and Windows measurements (`--settings` disables the tagged plugin keys;
  * `.mcp.json` and the user's own `tandem` entry lose to the launcher's; a
  * missing run file recovers; no run file re-read after start on either OS,

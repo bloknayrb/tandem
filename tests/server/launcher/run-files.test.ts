@@ -695,11 +695,17 @@ describe("the installed-plugin lookup (smoke S1, Windows)", () => {
       reason: "timeout",
     });
     expect(await run((cb) => cb(err({ code: 1 }), ""))).toEqual({ ok: false, reason: "exit" });
+    // Killed from outside (not by the deadline): it ran, so not a spawn failure.
+    expect(
+      await run((cb) => cb(err({ killed: false, code: null, signal: "SIGSEGV" }), "")),
+    ).toEqual({ ok: false, reason: "exit" });
     expect(await run((cb) => cb(err({ code: "ENOENT" }), ""))).toEqual({
       ok: false,
       reason: "spawn",
     });
-    expect(await run((cb) => cb(err({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }), ""))).toEqual({
+    expect(
+      await run((cb) => cb(err({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: true }), "")),
+    ).toEqual({
       ok: false,
       reason: "unparseable",
     });

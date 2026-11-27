@@ -331,7 +331,10 @@ export type PluginListExec = (
     killSignal: NodeJS.Signals;
     encoding: "utf8";
   },
-  callback: (err: (Error & { killed?: boolean; code?: unknown }) | null, stdout: string) => void,
+  callback: (
+    err: (Error & { killed?: boolean; code?: unknown; signal?: unknown }) | null,
+    stdout: string,
+  ) => void,
 ) => unknown;
 
 /**
@@ -372,10 +375,15 @@ export function listInstalledTandemPluginKeys(opts: {
         },
         (err, stdout) => {
           if (err) {
-            if (err.killed) resolve({ ok: false, reason: "timeout" });
-            else if (typeof err.code === "number") resolve({ ok: false, reason: "exit" });
-            else if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+            // First: execFile kills a child past `maxBuffer` too, so this
+            // error also arrives with `killed` set.
+            if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
               resolve({ ok: false, reason: "unparseable" });
+            } else if (err.killed) resolve({ ok: false, reason: "timeout" });
+            // A non-zero exit, or a signal from outside (a crash, another
+            // process's kill): the child ran, so neither is a spawn failure.
+            else if (typeof err.code === "number" || typeof err.signal === "string") {
+              resolve({ ok: false, reason: "exit" });
             } else resolve({ ok: false, reason: "spawn" });
             return;
           }

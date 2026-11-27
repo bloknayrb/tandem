@@ -193,8 +193,8 @@ $effect(() => {
            session a turn. No Start Fresh here: the conversation is not what is
            wrong, and dropping it is irreversible (#1268). -->
       <p class="empty-sub empty-sub-secondary">
-        Claude Code needs to be signed in. Open a terminal, run <code>claude</code>, and finish
-        signing in.
+        Claude Code needs to be signed in, or its sign-in or API key was refused. Open a terminal,
+        run <code>claude</code>, and sign in (or correct the API key it uses).
       </p>
       <div class="empty-actions">
         <button

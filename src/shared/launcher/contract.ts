@@ -272,7 +272,9 @@ export function isPromotableByStartRoute(reason: LauncherUnavailableReason | und
  * `restart` chip as `circuit-open`, with no client change.
  *
  * `needs-login` (#1780): the Claude CLI runs but is not signed in — it answered
- * a turn with its "Not logged in" refusal, so the supervisor stopped retrying.
+ * a turn with its "Not logged in" refusal, or with an error result whose
+ * `api_error_status` is 401 or 403 (a refused sign-in or API key, smoke S3 on
+ * #2358; `signInFailureOf`), so the supervisor stopped retrying.
  * The remedy is to sign in (`claude` in a terminal) and re-check, which the
  * client offers as its own `sign-in` chip rather than a bare restart.
  *
