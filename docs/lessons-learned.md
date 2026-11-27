@@ -10,8 +10,9 @@ aliases: [Lessons learned, Lessons]
 > **Scope note:** Many lessons below reference Claude-specific behavior (channel push, plugin monitor, cowork, Claude Code skill, etc.). Cowork setup has shipped dark since 2026-10-02 ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)), so the Cowork lessons describe code that is merged but not offered. Tandem's default integration is Claude per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration), so lessons learned working ON that path are the deepest documented; lessons that generalize to any MCP client are noted as such inline. Other MCP clients are best-effort and not validated today.
 
 > **A new lesson ends with `Enforced by: <check>`** (the test, script, lint or hook that fails
-> on a recurrence) **or `Prose-only: <reason>`** (why no check can be written). Older lessons
-> predate the convention; add the line when you next touch one.
+> on a recurrence) **or `Prose-only: <reason>`** (why no check can be written), on a line of its
+> own. Lessons 1–99 predate the convention; add the line when you next touch one. Every lesson
+> numbered above 99 is checked by `tests/docs/issue-pr-templates.test.ts`.
 
 ## Index
 
