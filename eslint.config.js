@@ -54,17 +54,9 @@ export default tseslint.config(
     },
   },
 
-  // Complexity cap (cyclomatic, max 15) on server, client, shared and CLI
-  // TypeScript. Existing violations are frozen in `eslint-suppressions.json`
-  // (ESLint bulk suppressions), so only NEW ones fail; the frozen count may only
-  // go down (tests/scripts/complexity-suppressions-wiring.test.ts). Fix a frozen
-  // one, then run `npx eslint . --prune-suppressions`. `.svelte` files are
-  // outside ESLint here, so components are covered only by the file-size
-  // ratchet.
-  {
-    files: ["src/**/*.ts"],
-    rules: { complexity: ["error", 15] },
-  },
+  // Cyclomatic complexity is NOT an ESLint rule here, deliberately: it is a
+  // per-function ratchet in scripts/ci/complexity-ratchet.mjs (CI `check`),
+  // which owns its own rule config so nothing in this file can loosen it.
 
   // Project-wide rule overrides
   {

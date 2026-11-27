@@ -608,6 +608,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Cyclomatic complexity as a per-function ratchet (cap 15 for src TS):
+      # fails on a new over-cap function, on a frozen one that grew, and on one
+      # that shrank without its ceiling being lowered. Baseline:
+      # scripts/complexity-baseline.json. Pinned by
+      # tests/scripts/complexity-ratchet.test.ts.
+      - name: Complexity ratchet
+        run: node scripts/ci/complexity-ratchet.mjs
+
       - name: Biome format check
         run: npx biome check .
 

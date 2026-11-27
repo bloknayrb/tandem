@@ -31,8 +31,7 @@
       "*.{ts,json,html}",
       "!dist/**",
       "!node_modules/**",
-      "!package-lock.json",
-      "!eslint-suppressions.json"
+      "!package-lock.json"
     ]
   }
 }

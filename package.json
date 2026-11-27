@@ -86,14 +86,14 @@
   },
   "lint-staged": {
     "**/*.{ts,tsx}": [
-      "eslint --fix --pass-on-unpruned-suppressions",
+      "eslint --fix",
       "biome check --write --no-errors-on-unmatched"
     ],
     "src/**/*.{svelte,css,html}": [
       "biome check --write --no-errors-on-unmatched"
     ],
     "**/*.mjs": [
-      "eslint --fix --pass-on-unpruned-suppressions",
+      "eslint --fix",
       "biome check --write --no-errors-on-unmatched"
     ],
     "**/*.json": [

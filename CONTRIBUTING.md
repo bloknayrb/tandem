@@ -276,10 +276,11 @@ alias) is **hard-blocked** in agent sessions for exactly that reason. Use `HUSKY
 - Rune-based hooks/modules: `camelCase.svelte.ts`
 - Tests: `*.test.ts` / `*.spec.ts`, under the owning `tests/<area>/`
 - Route/service files: kebab-case where the surrounding directory already is
-- Complexity: functions in `src/**/*.ts` stay at cyclomatic complexity 15 or below (`eslint .`).
-  The ones over it when the cap landed are frozen in `eslint-suppressions.json`; after
-  simplifying one, run `npx eslint . --prune-suppressions` and lower the pinned total in
-  `tests/scripts/complexity-suppressions-wiring.test.ts`. Never re-run `--suppress-rule`.
+- Complexity: functions in `src/**/*.ts` stay at cyclomatic complexity 15 or below, enforced by
+  `node scripts/ci/complexity-ratchet.mjs` in CI's `check` job (not by `eslint .`). Functions over
+  15 when the cap landed are frozen in `scripts/complexity-baseline.json` at their own number, which
+  is a ceiling: they may not grow. After simplifying one, run the script with `--prune`. Moving a
+  frozen function to another file changes its key; rename the entry in the same change.
 
 On Windows: if `biome check .` fails locally with only CRLF errors while CI is green, check
 `git ls-files --eol | grep "w/crlf"` before blaming your change. The fix is
