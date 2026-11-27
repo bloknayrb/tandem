@@ -335,7 +335,7 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     probeCliUsable: () => true,
     resolveClaudeCommand: () => process.execPath,
     // Not `node plugin list --json` in a real subprocess on every spawn.
-    listInstalledPlugins: async () => ({ ok: true as const, keys: [] }),
+    listInstalledPlugins: async () => ({ ok: true as const, keys: [], dropped: 0 }),
     restartBackoffsMs: [0],
     homeOverride: home,
     claudeSettingsHome: home,
@@ -949,6 +949,18 @@ describe("R2.3: when each change is announced", () => {
     await settle();
     expect(h.log).toEqual(["present", "run-start", "not-present"]);
     expect(h.sup.status()).toMatchObject({ running: false, lastError: "needs-login" });
+  });
+
+  // Bryan, 2026-11-27, "401 only signs out (Recommended)": a 403 is an access
+  // error, not a sign-out, so a present Tandem's Claude stays present.
+  it("a 403 on a present Tandem's Claude: still present, running, accessDenied", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, { ...AUTH_REFUSED, result: "Forbidden", api_error_status: 403 });
+    await settle();
+    expect(c1.signalCode).toBeNull();
+    expect(h.log).toEqual(["present", "run-start"]);
+    expect(h.sup.status()).toMatchObject({ running: true, accessDenied: true });
   });
 
   describe("Check again while still signed out (both orders; which a real child takes is not measured)", () => {

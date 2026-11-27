@@ -373,6 +373,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   — the list of connections bound to the running Claude's run, one
   `settings-modal-tandem-claude-bound-transport` row each (`data-kind` is `bridge` or
   `direct-http`)
+- `settings-modal-tandem-claude-access-denied` — Tandem's Claude is running and its last API
+  error was a 403, an access error and not a sign-in one, with no button (driven by the
+  loopback-only `accessDenied` on `GET /api/launcher/status`; Bryan, 2026-11-27, "401 only
+  signs out (Recommended)")
 - `settings-modal-solo-rail-hidden-toggle`,
   `settings-modal-dwell-time-slider`,
   `settings-modal-selection-toolbar-toggle`,

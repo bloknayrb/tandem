@@ -20,9 +20,12 @@ import type { IntegrationsFile } from "../../../src/server/integrations/schema.j
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
   deleteRunFile,
+  listInstalledTandemPluginKeys,
+  type PluginListExec,
   RUN_FILE_READ_BACK_REASONS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
+  TANDEM_PLUGIN_KEY_MAX_LENGTH,
 } from "../../../src/server/launcher/run-files.js";
 import {
   buildClaudeArgs,
@@ -356,7 +359,7 @@ describe("the installed-plugin lookup before the write (smoke S1, Windows)", () 
     const sup = makeSupervisor({
       listInstalledPlugins: async (o) => {
         asked.push(o);
-        return { ok: true, keys: ["tandem@synced"] };
+        return { ok: true, keys: ["tandem@synced"], dropped: 0 };
       },
     });
     await sup.startFresh(spawnDir);
@@ -394,6 +397,45 @@ describe("the installed-plugin lookup before the write (smoke S1, Windows)", () 
     const { run } = await settingsOfFirstSpawn();
     expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
     expect(errors().filter((l) => l.includes("installed plugins"))).toHaveLength(1);
+  });
+
+  // Review of #2599, item 1: `prepareRun` awaits the lookup under the
+  // supervisor lock, so a runner that never calls back (a grandchild holding
+  // stdout) blocked every start. The real lookup's own deadline settles it.
+  it("a runner that never calls back settles at the lookup's deadline and the spawn proceeds", async () => {
+    const errors = captureErrors();
+    let destroyed = 0;
+    const neverAnswers: PluginListExec = () => ({
+      stdout: { destroy: () => destroyed++ },
+    });
+    const sup = makeSupervisor({
+      listInstalledPlugins: (o) =>
+        listInstalledTandemPluginKeys({ ...o, deadlineMs: 20, exec: neverAnswers }),
+    });
+    await sup.startFresh(spawnDir);
+    const { spawnRec, run } = await settingsOfFirstSpawn();
+    expect(flagsIn(spawnRec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(destroyed).toBe(1);
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([
+      "[Launcher] Could not list Claude Code's installed plugins (timeout) — disabling only the Tandem plugin keys its settings files name",
+    ]);
+  });
+
+  // Review of #2599, item 4: a dropped id is counted in the log, never named.
+  it("ids the lookup dropped are counted in one line, never named", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async () => ({ ok: true, keys: ["tandem@synced"], dropped: 2 }),
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({
+      enabledPlugins: { "tandem@synced": false, "tandem@tandem-editor": false },
+    });
+    expect(errors().filter((l) => l.includes("plugin id"))).toEqual([
+      `[Launcher] Claude Code listed 2 Tandem plugin id(s) over ${TANDEM_PLUGIN_KEY_MAX_LENGTH} characters — not disabling them`,
+    ]);
   });
 });
 
@@ -1076,18 +1118,38 @@ describe("the run files are read back before the spawn (S1)", () => {
     expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([]);
   });
 
-  it("a user start (startFresh) throws the guard's error; its route logs nothing more", async () => {
+  // Review of #2599, item 3: a user start used to throw (the route's 500) AND
+  // schedule the crash restart, so Claude started a moment after the failure
+  // was reported. Now the throw is the whole answer: no restart, no breaker
+  // attempt, and a status that says stopped with `spawn-failed`, as the route
+  // does.
+  it.each([
+    ["Start fresh", (sup: Supervisor) => sup.startFresh(spawnDir)],
+    ["Relaunch", (sup: Supervisor) => sup.relaunch(spawnDir)],
+    ["Start", (sup: Supervisor) => sup.startByUser()],
+  ])("a user %s throws the guard's error and schedules no restart", async (_label, act) => {
     const logs = captureErrors();
     const sup = makeSupervisor({
       runFileWriteHold: damageOnce("settings", "truncate"),
-      restartBackoffsMs: [60_000],
+      restartBackoffsMs: [50],
     });
-    await expect(sup.startFresh(spawnDir)).rejects.toBeInstanceOf(RunFileGuardError);
+    await expect(act(sup)).rejects.toBeInstanceOf(RunFileGuardError);
     expect(records("spawn-")).toEqual([]);
     expect(logs().filter((l) => l.includes("Not spawning"))).toEqual([
       GUARD_LINE("settings file", "size"),
     ]);
-    expect(sup.status()).toMatchObject({ lastError: "spawn-failed", restartPending: true });
+    const status = sup.status();
+    expect(status).toEqual(expect.objectContaining({ running: false, lastError: "spawn-failed" }));
+    expect(status).not.toHaveProperty("restartPending");
+    // Well past the 50 ms backoff a scheduled restart would have used.
+    await sleep(400);
+    expect(records("spawn-")).toEqual([]);
+    expect(sup.status()).toEqual(
+      expect.objectContaining({ running: false, lastError: "spawn-failed" }),
+    );
+    // The user's next try is not held back by the refused one: it spawns.
+    await sup.startByUser();
+    await waitFor(() => records<SpawnRecord>("spawn-")[0], "the next user start's spawn");
   });
 });
 

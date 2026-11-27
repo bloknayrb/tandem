@@ -96,8 +96,10 @@
  * their documents on Linux and Windows (the early-crash session clear, exit
  * code 1 on Windows, is a separate PR). *An auth failure that is not 'Not
  * logged in'* (S3), by the fix: an `is_error` result with `api_error_status`
- * 401 or 403 ends presence as the sign-in refusal does (Bryan's "Treat it
- * like signed out (Recommended)"; `signInFailureOf`). *Project settings `env`
+ * 401 ends presence as the sign-in refusal does (Bryan's "Treat it like
+ * signed out (Recommended)", narrowed to 401 by his "401 only signs out
+ * (Recommended)" of 2026-11-27; `signInFailureOf`), and a 403 is an access
+ * error that keeps Tandem's Claude running (`accessErrorOf`). *Project settings `env`
  * against the run config* (S4), by the measurements on both OSes: an entry's
  * `env` wins key by key for all six keys.
  *

@@ -6,8 +6,8 @@
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
  *     `cwd`, `resuming`, `reaperPid`, `busy`, `attached`, `standby`,
- *     `startsOnMessage`, `greetingLate`, `bindFailed` and `boundTransports`
- *     are loopback-only
+ *     `startsOnMessage`, `greetingLate`, `bindFailed`, `boundTransports` and
+ *     `accessDenied` are loopback-only
  *     for the same reason as `/health`'s session-presence fields: `busy` in
  *     particular is an activity trace of the person at this machine, and the
  *     CORS allowlist admits any 127.0.0.1 port, so any local page can read
@@ -349,6 +349,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         attached,
         ...(raw.greetingLate ? { greetingLate: true as const } : {}),
         ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
+        ...(raw.accessDenied ? { accessDenied: true as const } : {}),
         ...bindFields,
         ...boundTransportFields(deps),
         ...ignored,
@@ -1213,7 +1214,9 @@ function sendUnexpected(res: Response, err: unknown, label: string): void {
     return;
   }
   // The run files' read-back refused the spawn: `spawnOnce` logged its one
-  // line (the file's kind, never its contents) and scheduled the restart.
+  // line (the file's kind, never its contents) and recorded `spawn-failed`,
+  // scheduling no restart (a route's start is a `respawn`), so this 500 and
+  // the status chip both say it failed.
   // Full error (stack, etc.) stays server-side for anything else; the wire
   // gets a bounded message either way.
   if (!(err instanceof RunFileGuardError)) console.error(`[Launcher routes] ${label}:`, err);

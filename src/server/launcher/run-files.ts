@@ -26,14 +26,15 @@
  *
  * Read back before the spawn (`runFileReadsBack`, called by `spawnOnce`): a
  * file that is missing or does not hold what was written refuses that spawn,
- * which then takes the crash-restart path (smoke S1: Claude Code silently
+ * which then takes the crash-restart path, or for a user's start is that
+ * start's reported failure (smoke S1: Claude Code silently
  * ignores a `--settings` file it cannot parse).
  *
  * This module imports no flag; the supervisor calls it only while ownership
  * is on (Ruling I).
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants, lstatSync, readFileSync } from "node:fs";
 import fsp from "node:fs/promises";
@@ -205,7 +206,23 @@ function enabledTandemKeys(value: unknown): string[] | null {
   if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) return [];
   const entries = Object.entries(plugins as Record<string, unknown>);
   if (entries.length > SETTINGS_READ_MAX_KEYS) return null;
-  return entries.filter(([k, v]) => k.startsWith("tandem@") && v === true).map(([k]) => k);
+  return entries.filter(([k, v]) => isTandemPluginKey(k) && v === true).map(([k]) => k);
+}
+
+/** The longest plugin key the launcher will put in a run settings file. Keys
+ * are JSON object keys written through `JSON.stringify`, so no key can inject
+ * into the file; the cap only keeps one absurd key from bloating it. */
+export const TANDEM_PLUGIN_KEY_MAX_LENGTH = 512;
+
+/** A Tandem plugin key, by the one rule both sources use (the settings files
+ * and Claude Code's plugin list): `tandem@`, and at most
+ * {@link TANDEM_PLUGIN_KEY_MAX_LENGTH} characters in all. */
+export function isTandemPluginKey(key: unknown): key is string {
+  return (
+    typeof key === "string" &&
+    key.startsWith("tandem@") &&
+    key.length <= TANDEM_PLUGIN_KEY_MAX_LENGTH
+  );
 }
 
 /**
@@ -263,9 +280,21 @@ function userSettingsKeys(env: NodeJS.ProcessEnv, home: string): string[] {
 
 /** Resolve within `ms`, or to `fallback` (the work may still be running; its
  * result is ignored). */
-function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  fallback: T,
+  onDeadline?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
+    const timer = setTimeout(() => {
+      resolve(fallback);
+      try {
+        onDeadline?.();
+      } catch {
+        // Best-effort cleanup; the fallback is already the answer.
+      }
+    }, ms);
     timer.unref?.();
     work.then(
       (value) => {
@@ -284,24 +313,34 @@ function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
  * without it (smoke S1 on Windows; Bryan, 2026-11-26). Measured at about 0.6 s
  * on Linux (Claude Code 2.1.332, 18 plugins). */
 export const PLUGIN_LIST_DEADLINE_MS = 5_000;
+/** How long past the runner's timeout ({@link PLUGIN_LIST_DEADLINE_MS}) the
+ * lookup's own deadline waits before answering `timeout` without the runner.
+ * An `execFile`-shaped runner kills the child at its timeout but calls back
+ * only on `close`, which never comes while something else (a grandchild of a
+ * `TANDEM_CLAUDE_CMD` wrapper that does not `exec`, outside the killed group)
+ * holds the child's stdout; this deadline is what bounds the spawn then. */
+export const PLUGIN_LIST_DEADLINE_MARGIN_MS = 1_000;
 /** The lookup's stdout cap; past it the answer is unparseable (the fallback). */
 export const PLUGIN_LIST_MAX_BYTES = 1024 * 1024;
-/** A plugin key the lookup may put in the run settings file: `tandem@` and a
- * marketplace name of plain characters. Anything else is ignored. */
-const TANDEM_PLUGIN_KEY_RE = /^tandem@[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /** Why the installed-plugin lookup gave no answer: a closed set, logged as is. */
 export type PluginListFailure = "timeout" | "exit" | "spawn" | "unparseable";
+/** `dropped` counts the `tandem@` ids the list held that
+ * {@link isTandemPluginKey} refused (too long): those are not disabled. */
 export type PluginListLookup =
-  | { ok: true; keys: string[] }
+  | { ok: true; keys: string[]; dropped: number }
   | { ok: false; reason: PluginListFailure };
 
 /**
- * The `tandem@…` ids in `claude plugin list --json`'s output, or `null` when
- * it is not the array of `{ id }` objects Claude Code prints. Every Tandem id
- * it reports, enabled or not: a `false` for a disabled one changes nothing.
+ * The Tandem ids ({@link isTandemPluginKey}) in `claude plugin list --json`'s
+ * output, or `null` when it is not the array of `{ id }` objects Claude Code
+ * prints. Every Tandem id it reports, enabled or not: a `false` for a
+ * disabled one changes nothing. `dropped` counts the distinct `tandem@` ids
+ * the predicate refused.
  */
-export function tandemKeysFromPluginList(stdout: string): string[] | null {
+export function tandemKeysFromPluginList(
+  stdout: string,
+): { keys: string[]; dropped: number } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -310,15 +349,18 @@ export function tandemKeysFromPluginList(stdout: string): string[] | null {
   }
   if (!Array.isArray(parsed)) return null;
   const keys = new Set<string>();
+  const dropped = new Set<string>();
   for (const entry of parsed) {
     const id = (entry as { id?: unknown } | null)?.id;
-    if (typeof id === "string" && TANDEM_PLUGIN_KEY_RE.test(id)) keys.add(id);
+    if (isTandemPluginKey(id)) keys.add(id);
+    else if (typeof id === "string" && id.startsWith("tandem@")) dropped.add(id);
   }
   if (keys.size > SETTINGS_READ_MAX_KEYS) return null;
-  return [...keys].sort();
+  return { keys: [...keys].sort(), dropped: dropped.size };
 }
 
-/** The `execFile` shape the lookup uses, injectable for tests. */
+/** The `execFile` shape the lookup uses, injectable for tests. The default is
+ * {@link spawnPluginList}, not `execFile`, which drops `detached`. */
 export type PluginListExec = (
   file: string,
   args: readonly string[],
@@ -330,6 +372,7 @@ export type PluginListExec = (
     windowsHide: boolean;
     killSignal: NodeJS.Signals;
     encoding: "utf8";
+    detached: boolean;
   },
   callback: (
     err: (Error & { killed?: boolean; code?: unknown; signal?: unknown }) | null,
@@ -348,9 +391,18 @@ export type PluginListExec = (
  * 2.1.332: `installed_plugins.json` empty while `plugin list` reported
  * `tandem@synced`).
  *
- * Never rejects and never logs a key. A failure answers its reason, and the
- * caller writes the keys it found without it (falling back to S1's pre-fix
- * state for any key only the lookup knows).
+ * Never rejects, never logs a key, and always settles within `deadlineMs`
+ * plus {@link PLUGIN_LIST_DEADLINE_MARGIN_MS}: `prepareRun` awaits it while
+ * holding the supervisor lock, so a child's own timeout is not enough (an
+ * `execFile`-shaped call answers on `close`, which a grandchild holding
+ * stdout, such as a `TANDEM_CLAUDE_CMD` wrapper that does not `exec`, delays
+ * forever). At `deadlineMs` the default runner kills the child's process
+ * group on POSIX (the child leads its own group for this), the child itself
+ * on Windows, and destroys its pipes; the margin's deadline does the same to
+ * whatever an injected runner returned. A grandchild that left the group
+ * survives, its pipe closed. A failure answers its reason, and the caller
+ * writes the keys it found without it (falling back to S1's pre-fix state for
+ * any key only the lookup knows).
  */
 export function listInstalledTandemPluginKeys(opts: {
   claudeBin: string;
@@ -359,25 +411,30 @@ export function listInstalledTandemPluginKeys(opts: {
   deadlineMs?: number;
   exec?: PluginListExec;
 }): Promise<PluginListLookup> {
-  const exec: PluginListExec = opts.exec ?? (execFile as unknown as PluginListExec);
-  return new Promise<PluginListLookup>((resolve) => {
+  const exec: PluginListExec = opts.exec ?? spawnPluginList;
+  const deadlineMs = opts.deadlineMs ?? PLUGIN_LIST_DEADLINE_MS;
+  const groupKill = process.platform !== "win32";
+  let child: unknown;
+  const work = new Promise<PluginListLookup>((resolve) => {
     try {
-      exec(
+      child = exec(
         opts.claudeBin,
         ["plugin", "list", "--json"],
         {
           cwd: opts.cwd,
           env: opts.env,
-          timeout: opts.deadlineMs ?? PLUGIN_LIST_DEADLINE_MS,
+          timeout: deadlineMs,
           maxBuffer: PLUGIN_LIST_MAX_BYTES,
           windowsHide: true,
           killSignal: "SIGKILL",
           encoding: "utf8",
+          // POSIX: its own process group, so the deadline can kill the tree.
+          detached: groupKill,
         },
         (err, stdout) => {
           if (err) {
-            // First: execFile kills a child past `maxBuffer` too, so this
-            // error also arrives with `killed` set.
+            // First: a child past `maxBuffer` is killed too, so this error
+            // also arrives with `killed` set.
             if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
               resolve({ ok: false, reason: "unparseable" });
             } else if (err.killed) resolve({ ok: false, reason: "timeout" });
@@ -388,14 +445,131 @@ export function listInstalledTandemPluginKeys(opts: {
             } else resolve({ ok: false, reason: "spawn" });
             return;
           }
-          const keys = tandemKeysFromPluginList(String(stdout));
-          resolve(keys === null ? { ok: false, reason: "unparseable" } : { ok: true, keys });
+          const found = tandemKeysFromPluginList(String(stdout));
+          resolve(found === null ? { ok: false, reason: "unparseable" } : { ok: true, ...found });
         },
       );
     } catch {
       resolve({ ok: false, reason: "spawn" });
     }
   });
+  return withDeadline(
+    work,
+    deadlineMs + PLUGIN_LIST_DEADLINE_MARGIN_MS,
+    { ok: false, reason: "timeout" },
+    () => killPluginListTree(child, groupKill),
+  );
+}
+
+/** The parts of a `ChildProcess` the lookup's deadline uses. */
+interface PluginListChild {
+  pid?: number;
+  kill?: (signal?: NodeJS.Signals) => boolean;
+  stdin?: { destroy(): void } | null;
+  stdout?: { destroy(): void } | null;
+  stderr?: { destroy(): void } | null;
+}
+
+/**
+ * The lookup's default runner: `execFile`'s contract (stdout as utf8, the
+ * callback on `close`, `killed` set when the timeout or `maxBuffer` killed
+ * the child, `code` and `signal` from a failed exit, a spawn error as is),
+ * built on `spawn` because `execFile` does not pass `detached` through, and
+ * killing through {@link killPluginListTree}, so the timeout takes the
+ * process group and the pipes with it.
+ */
+export const spawnPluginList: PluginListExec = (file, args, options, callback) => {
+  const child = spawn(file, [...args], {
+    cwd: options.cwd,
+    env: options.env,
+    windowsHide: options.windowsHide,
+    detached: options.detached,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let bytes = 0;
+  let killed = false;
+  let failure: (Error & { code?: unknown; killed?: boolean }) | null = null;
+  let done = false;
+  const kill = (): void => {
+    killed = true;
+    killPluginListTree(child, options.detached, options.killSignal);
+  };
+  const timer = setTimeout(kill, options.timeout);
+  timer.unref?.();
+  const finish = (err: Parameters<typeof callback>[0], out: string): void => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    callback(err, out);
+  };
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    if (failure) return;
+    bytes += Buffer.byteLength(chunk, "utf8");
+    if (bytes > options.maxBuffer) {
+      failure = Object.assign(new Error("stdout maxBuffer length exceeded"), {
+        code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+      });
+      kill();
+      return;
+    }
+    stdout += chunk;
+  });
+  // Drained and discarded: a full stderr pipe would stall the child.
+  child.stderr?.resume();
+  child.on("error", (err: Error & { code?: unknown }) => {
+    // A spawn failure (no pid) answers now; a later error waits for `close`.
+    if (child.pid === undefined) finish(err, "");
+    else failure ??= err;
+  });
+  child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+    if (failure) {
+      finish(Object.assign(failure, { killed }), stdout);
+    } else if (code === 0 && !killed) {
+      finish(null, stdout);
+    } else {
+      finish(
+        Object.assign(new Error(`plugin list exited (${code ?? signal})`), {
+          killed,
+          code,
+          signal,
+        }),
+        stdout,
+      );
+    }
+  });
+  return child;
+};
+
+/** Best effort, never throws: kill the lookup's process group (POSIX) or the
+ * child, then destroy its pipes so nothing still holds this process's end. */
+function killPluginListTree(
+  raw: unknown,
+  groupKill: boolean,
+  signal: NodeJS.Signals = "SIGKILL",
+): void {
+  if (typeof raw !== "object" || raw === null) return;
+  const child = raw as PluginListChild;
+  if (groupKill && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      // ESRCH: the group is already gone.
+    }
+  }
+  try {
+    child.kill?.(signal);
+  } catch {
+    // Already exited.
+  }
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try {
+      stream?.destroy();
+    } catch {
+      // Nothing to release.
+    }
+  }
 }
 
 /**

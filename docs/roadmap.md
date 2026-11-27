@@ -47,7 +47,8 @@ below still stand before v1.0 either way.
    `claude plugin list --json` and disables every `tandem@` plugin key, because an account-synced
    `tandem@synced` plugin loaded beside its bridge), with one accepted residual (a run file deleted
    before its ACL step launches unbound and silent); S2 and S4 closed by the measurements on both
-   OSes; S3 closed by a fix (a 401 or 403 result ends presence as "Not logged in" does); S6
+   OSes; S3 closed by a fix (a 401 result ends presence as "Not logged in" does; since 2026-11-27 a
+   403 is an access error that keeps Tandem's Claude running and shows in Settings); S6
    (Claude Desktop's client name `claude-ai` measured, the nobody-holds precondition unreachable)
    and S8's CTRL row (Chromium and WebView2 held; macOS not run) accepted for the flip. Earlier the
    same day S8's document-room row closed when Bryan dropped that guard, S7 closed measured, with

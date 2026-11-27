@@ -43,6 +43,7 @@ import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
+  ACCESS_ERROR_TEXT_MAX,
   createSupervisor,
   LicenseRefusedError,
   type Supervisor,
@@ -1044,21 +1045,100 @@ describe("#1780 — a Claude Code that is not signed in", () => {
     expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
     const lines = logText()
       .split("\n")
-      .filter((l) => l.includes("sign-in or API key was refused"));
+      .filter((l) => l.includes("sign-in or API key is not valid"));
     expect(lines).toEqual([expect.stringContaining("(HTTP 401)")]);
     expect(logText()).not.toContain("Claude Code is not signed in");
+    expect(logText()).not.toContain("API access was refused");
     await expectNoMoreSpawns(1);
   });
 
-  it("trips on a 403 whatever its text", async () => {
+  it("trips on a 401 whatever its text", async () => {
     const { sup } = makeSupervisor();
     await sup.startFresh(cwdDir);
     const child1 = children[0];
     pushJson(child1, INIT);
-    pushJson(child1, { ...AUTH_REFUSED, result: "OAuth token revoked", api_error_status: 403 });
+    pushJson(child1, { ...AUTH_REFUSED, result: "OAuth token revoked" });
     await waitFor(() => sup.status().lastError === "needs-login", "the auth trip");
     expect(child1.kills).toEqual(["SIGTERM"]);
     await expectNoMoreSpawns(1);
+  });
+
+  // Bryan, 2026-11-27, "401 only signs out (Recommended)": a 403 is an access
+  // error. Tandem's Claude keeps running — no kill, no breaker, no sign-in
+  // code — and the error is logged once (sanitised, bounded, never a key) and
+  // surfaced through the running status's `accessDenied`.
+  const accessLines = () =>
+    logText()
+      .split("\n")
+      .filter((l) => l.includes("API access was refused"));
+
+  it("does not trip on a 403: it keeps running, logs once and reports accessDenied", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, {
+      ...AUTH_REFUSED,
+      result: "Your organization does not have access to Claude Code",
+      api_error_status: 403,
+    });
+    await settle();
+    expect(child1.kills).toEqual([]);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+    expect(status).toEqual(expect.objectContaining({ accessDenied: true }));
+    expect(accessLines()).toEqual([
+      `[Launcher] Claude Code's API access was refused (HTTP 403): "Your organization does not have access to Claude Code" — Tandem's Claude keeps running. Check the account, organization or API key permissions Claude Code uses.`,
+    ]);
+    expect(logText()).not.toContain("sign-in or API key is not valid");
+    expect(logText()).not.toContain("not signed in");
+
+    // A second 403 is not logged again; a turn that succeeds clears it, and
+    // a 403 after that is logged anew.
+    pushJson(child1, { ...AUTH_REFUSED, result: "Forbidden", api_error_status: 403 });
+    await settle();
+    expect(accessLines()).toHaveLength(1);
+    pushJson(child1, {
+      ...AUTH_REFUSED,
+      result: "API Error: 529 overloaded",
+      api_error_status: 529,
+    });
+    await settle();
+    expect(sup.status()).toEqual(expect.objectContaining({ accessDenied: true }));
+    pushJson(child1, { type: "result", subtype: "success", is_error: false, result: "ok" });
+    await settle();
+    expect(sup.status()).not.toHaveProperty("accessDenied");
+    pushJson(child1, { ...AUTH_REFUSED, result: "Forbidden", api_error_status: 403 });
+    await settle();
+    expect(accessLines()).toHaveLength(2);
+    expect(sup.status()).toEqual(expect.objectContaining({ accessDenied: true }));
+    expect(child1.kills).toEqual([]);
+    await expectNoMoreSpawns(1);
+  });
+
+  it("a 403's logged text is sanitised, bounded and never carries a key", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    const key = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    // A key-shaped token with no `sk-` prefix: the length rule's case.
+    const bare = "Zq9Xw8Vu7Ts6Rq5Po4Nm3Lk2Jh1G";
+    pushJson(child1, {
+      ...AUTH_REFUSED,
+      result: `Key ${key} refused, token ${bare}\n\u001b[31mforged line\u0007 ${"word ".repeat(100)}`,
+      api_error_status: 403,
+    });
+    await settle();
+    const [line] = accessLines();
+    expect(line).not.toContain("AbCdEfGh");
+    expect(line).not.toContain(bare.slice(0, 12));
+    expect(line).not.toMatch(/[\u0000-\u001f]/);
+    expect(line).toContain("Key [redacted] refused, token [redacted] [31mforged line word");
+    const quoted = /"(.*)"/.exec(line)?.[1] ?? "";
+    expect(quoted.length).toBe(ACCESS_ERROR_TEXT_MAX + 1);
+    expect(quoted.endsWith("…")).toBe(true);
   });
 
   it("does not trip on an overloaded API (529) or a server error (500)", async () => {

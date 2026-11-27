@@ -87,6 +87,7 @@ import {
   runFileReadsBack,
   runFileText,
   sweepRunFiles,
+  TANDEM_PLUGIN_KEY_MAX_LENGTH,
   writeRunFile,
 } from "./run-files.js";
 import {
@@ -834,23 +835,30 @@ const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sess
  */
 const NOT_SIGNED_IN_RESULT = /^Not logged in\b/;
 
-/** The HTTP statuses an `api_error_status` reports for a refused credential. */
-const AUTH_FAILURE_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+/** The one HTTP status an `api_error_status` reports for a credential that
+ * is not valid: 401 (Bryan, 2026-11-27, "401 only signs out (Recommended)"). */
+const AUTH_FAILURE_STATUS = 401;
+/** The status of a valid credential refused access (Bryan, 2026-11-27): an
+ * access error, surfaced, never a sign-out (`accessErrorOf`). */
+const ACCESS_DENIED_STATUS = 403;
 
 /**
  * Which sign-in failure, if any, a `result` envelope reports (#1780; smoke S3
- * on #2358, Bryan's "Treat it like signed out (Recommended)", 2026-11-26).
- * Both end presence the same way; only the log line differs.
+ * on #2358, Bryan's "Treat it like signed out (Recommended)", 2026-11-26,
+ * narrowed by his "401 only signs out (Recommended)", 2026-11-27). Both end
+ * presence the same way; only the log line differs.
  *
  * - `not-signed-in`: the never-signed-in refusal, `NOT_SIGNED_IN_RESULT`.
  * - `auth-refused`: any other `is_error` result whose `api_error_status` is
- *   401 or 403 (S3 measured an invalid API key on Windows, Claude Code
- *   2.1.332: `{"type":"result","subtype":"success","is_error":true,"result":
+ *   401 (S3 measured an invalid API key on Windows, Claude Code 2.1.332:
+ *   `{"type":"result","subtype":"success","is_error":true,"result":
  *   "Invalid API key · Fix external API key","terminal_reason":"api_error",
  *   "api_error_status":401}`). Keyed on the status, not the text, so an expired
- *   or revoked credential worded differently still matches. Any other API
- *   error, a 529 overload or a 500 among them, is not a sign-in failure and
- *   does not match: the next turn may succeed.
+ *   or revoked credential worded differently still matches. A 403 is NOT a
+ *   sign-in failure: the credential was accepted and the request refused
+ *   (an organization or permission rule), so signing in again cannot fix it;
+ *   `accessErrorOf` reports it instead. Any other API error, a 529 overload
+ *   or a 500 among them, does not match either: the next turn may succeed.
  *
  * `is_error` must be exactly `true`: a successful answer that quotes either
  * never matches. The envelope is the child's untyped JSON, so every field is
@@ -865,9 +873,48 @@ export function signInFailureOf(parsed: {
   if (typeof parsed.result === "string" && NOT_SIGNED_IN_RESULT.test(parsed.result)) {
     return "not-signed-in";
   }
-  const status = parsed.api_error_status;
-  if (typeof status === "number" && AUTH_FAILURE_STATUSES.has(status)) return "auth-refused";
+  if (parsed.api_error_status === AUTH_FAILURE_STATUS) return "auth-refused";
   return null;
+}
+
+/** The longest result text an access error's log line carries. */
+export const ACCESS_ERROR_TEXT_MAX = 200;
+
+/**
+ * An access error (Bryan, 2026-11-27, "401 only signs out (Recommended)"):
+ * an `is_error` result whose `api_error_status` is 403, answered with its
+ * result text made safe to log, or `null` for any other envelope. Tandem's
+ * Claude keeps running — no trip, no breaker, no sign-in remedy — and the
+ * status shows `accessDenied` until a turn succeeds or the next spawn.
+ *
+ * The text is Claude Code's, so it is treated as untrusted: control and
+ * bidi-formatting characters become spaces, anything shaped like a key (`sk-…`, or 24 or more
+ * key characters in a row) becomes `[redacted]` BEFORE the cut, so a key
+ * never survives partly, and it is cut to {@link ACCESS_ERROR_TEXT_MAX}.
+ */
+export function accessErrorOf(parsed: {
+  is_error?: unknown;
+  result?: unknown;
+  api_error_status?: unknown;
+}): string | null {
+  if (parsed.is_error !== true || parsed.api_error_status !== ACCESS_DENIED_STATUS) return null;
+  if (typeof parsed.result !== "string") return "(no message)";
+  const text = parsed.result
+    // Bidi marks, overrides and isolates too (U+200E/F, U+202A-E,
+    // U+2066-9): they would let the untrusted text reorder how the rest of
+    // the log line reads.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, " ")
+    .replace(/\bsk-[A-Za-z0-9_-]*/g, "[redacted]")
+    .replace(/[A-Za-z0-9_+/=-]{24,}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text === "") return "(no message)";
+  if (text.length <= ACCESS_ERROR_TEXT_MAX) return text;
+  // Never end on half a surrogate pair: a lone high surrogate is not text.
+  const cut = text.slice(0, ACCESS_ERROR_TEXT_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  return `${last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut}…`;
 }
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
@@ -1109,6 +1156,9 @@ export type SupervisorStatus =
       greetingLate?: true;
       /** Not woken while a local model answers chat (#1123 A2, R4.5). */
       heldForLocalModel?: true;
+      /** The last API error was a 403 and no turn has succeeded since — see
+       * `LauncherStatus`. */
+      accessDenied?: true;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -2380,6 +2430,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let opLock: Promise<void> = Promise.resolve();
   /** Last fatal error message — surfaced via status() when running=false. */
   let lastError: LauncherErrorCode | undefined;
+  /** The current child's last API error was a 403 (`accessErrorOf`), and no
+   * turn has succeeded since. Not a `lastError`: that is a stopped Claude's
+   * diagnosis, and this one keeps running. Cleared by every spawn. */
+  let accessDenied = false;
   function withLock<T>(fn: () => Promise<T>): Promise<T> {
     const next = opLock.then(fn, fn);
     opLock = next.then(
@@ -3226,6 +3280,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error(
           `[Launcher] Could not list Claude Code's installed plugins (${installed.reason}) — disabling only the Tandem plugin keys its settings files name`,
         );
+      } else if (installed.dropped > 0) {
+        // A count, never a key: the ids are Claude Code's, unscreened.
+        console.error(
+          `[Launcher] Claude Code listed ${installed.dropped} Tandem plugin id(s) over ${TANDEM_PLUGIN_KEY_MAX_LENGTH} characters — not disabling them`,
+        );
       }
       const keys = await collectTandemPluginKeys({
         env,
@@ -3339,11 +3398,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   /** `claudeBin` is the caller's `resolveCommand()` answer — absolute, never a
    * bare name (#2199). The caller resolves it, so a missing CLI is answered on
    * its own terms (`cli-unusable`) rather than as a spawn failure. */
+  /** `fromRespawn`: called by `respawn` (a Relaunch, Start fresh or Start, or
+   * a start nobody clicked that takes the same path). A run-file refusal then
+   * schedules no restart — the caller reports the throw (the route's 500, or
+   * `recordStartThrow`), as it does every other throw out of `respawn`, so the
+   * answer and the status chip agree and the breaker counts nothing. */
   async function spawnOnce(
     plan: SpawnPlan,
     idleLimitMs: number | null,
     claudeBin: string,
     run: SpawnRun | null = null,
+    fromRespawn = false,
   ): Promise<ChildProcess> {
     // A throw before `spawn()` returns ends this spawn's run state (R4.4):
     // "already running", a missing reaper, the run files' read-back, a
@@ -3382,8 +3447,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // at most 100 ms, so the invariant holds. A refusal is one line naming the
     // kind and the closed-set reason, then the crash path the long-lived
     // "error" handler below takes for a failed spawn: `spawn-failed` and a
-    // restart under the breaker, unless a stop is under way. The throw ends
-    // this spawn's run state like any other throw before `spawn()` (R4.4).
+    // restart under the breaker, unless a stop is under way or the spawn came
+    // from `respawn` (`fromRespawn`: its caller reports the throw, and a
+    // restart a moment later would contradict that report — #2599 review).
+    // The throw ends this spawn's run state like any other throw before
+    // `spawn()` (R4.4).
     if (run) {
       const mcpCheck = runFileReadsBack(run.mcpConfigPath, run.mcpConfigText);
       const settingsCheck = mcpCheck.ok
@@ -3398,7 +3466,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         run.discard();
         console.error(`[Launcher] Not spawning: ${err.message}`);
         setLastError("spawn-failed");
-        if (!stopRequested) scheduleRestart();
+        if (!stopRequested && !fromRespawn) scheduleRestart();
         throw err;
       }
     }
@@ -3492,6 +3560,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
     setLastError(undefined);
+    accessDenied = false;
     lastRefusal = null;
     deliveryKillAt = undefined;
     setStandby(undefined);
@@ -4096,9 +4165,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // retrying cannot help, and the pending wake's write would only earn
         // another refusal, so return before `flushPendingWake`. The kill does
         // not go through `onStdinGone`, so it never counts toward the
-        // wake-delivery streak. A refused credential (a 401 or 403, smoke S3)
-        // is treated the same way (`signInFailureOf`): same code, same trip,
-        // same not-present; only its one log line differs.
+        // wake-delivery streak. A credential that is not valid (a 401, smoke
+        // S3) is treated the same way (`signInFailureOf`): same code, same
+        // trip, same not-present; only its one log line differs. A 403 is not
+        // (`accessErrorOf`, below).
         const signInFailure = signInFailureOf(parsed);
         if (signInFailure !== null) {
           if (child === spawned) {
@@ -4113,7 +4183,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             console.error(
               signInFailure === "not-signed-in"
                 ? "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again."
-                : `[Launcher] Claude Code's sign-in or API key was refused (HTTP ${String(parsed.api_error_status)}) — not retrying. Fix the sign-in or API key Claude Code uses (run \`claude\` in a terminal), then use Check again.`,
+                : "[Launcher] Claude Code's sign-in or API key is not valid (HTTP 401) — not retrying. Fix the sign-in or API key Claude Code uses (run `claude` in a terminal), then use Check again.",
             );
             // Its handle stops binding now, not when the exit arrives (R4.4).
             run?.discard();
@@ -4130,6 +4200,32 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         if (child === spawned && loginRecheckOwed) {
           loginRecheckOwed = false;
           persistLoginRecheck(plan.sessionId, false);
+        }
+
+        // An access error, a 403 (Bryan, 2026-11-27, "401 only signs out
+        // (Recommended)"): the credential was accepted and the request
+        // refused, so signing in again cannot help. Tandem's Claude keeps
+        // running — no trip, no breaker, no sign-in chip — and the turn ends
+        // as any other. Logged once until a turn succeeds (each wake would
+        // otherwise repeat it), and shown in Settings through the status's
+        // `accessDenied`.
+        if (child === spawned) {
+          const accessError = accessErrorOf(parsed);
+          if (accessError !== null) {
+            if (!accessDenied) {
+              console.error(
+                `[Launcher] Claude Code's API access was refused (HTTP 403): "${accessError}" — Tandem's Claude keeps running. Check the account, organization or API key permissions Claude Code uses.`,
+              );
+            }
+            accessDenied = true;
+          } else if (
+            parsed.is_error !== true &&
+            !(typeof parsed.subtype === "string" && parsed.subtype.startsWith("error"))
+          ) {
+            // A turn that succeeded: the same "errored" test the greeting
+            // uses above, so an `error_*` subtype does not count as one.
+            accessDenied = false;
+          }
         }
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
@@ -5030,7 +5126,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return { spawned: false, why: "held-by-local-model" };
       }
     }
-    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run));
+    armBackoffReset(
+      await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run, true),
+    );
     return { spawned: true };
   }
 
@@ -5314,6 +5412,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
           : {}),
         ...(bindFailed() ? { bindFailed: true as const } : {}),
+        ...(accessDenied ? { accessDenied: true as const } : {}),
       };
     }
     // A `cli-unusable` with no crash behind it (#2199) is a reading of the

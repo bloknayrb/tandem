@@ -114,6 +114,13 @@ export type LauncherStatus =
       heldForLocalModel?: true;
       /** Loopback-only, flag on only (#2358 PR 3b-2e1): see the stopped arm. */
       bindFailed?: true;
+      /** Loopback-only (Bryan, 2026-11-27, "401 only signs out
+       * (Recommended)"): Tandem's Claude's last API error was a 403 — its
+       * credential was accepted and the request refused — and no turn has
+       * succeeded since. It keeps running; Settings shows an access error.
+       * Never a sign-in failure (`needs-login` is a 401). Cleared by a
+       * successful turn and by the next spawn. Absent from an older server. */
+      accessDenied?: true;
       /** Loopback-only, and only while multi-session ownership is on (#2358
        * PR 3b-2e1, ownership design §3.3's Ruling C): the MCP connections
        * bound to this run of Tandem's Claude, one row each, by kind alone.
@@ -273,8 +280,11 @@ export function isPromotableByStartRoute(reason: LauncherUnavailableReason | und
  *
  * `needs-login` (#1780): the Claude CLI runs but is not signed in — it answered
  * a turn with its "Not logged in" refusal, or with an error result whose
- * `api_error_status` is 401 or 403 (a refused sign-in or API key, smoke S3 on
- * #2358; `signInFailureOf`), so the supervisor stopped retrying.
+ * `api_error_status` is 401 (a sign-in or API key that is not valid, smoke S3
+ * on #2358; `signInFailureOf`), so the supervisor stopped retrying. A 403 is
+ * not this code: the credential was valid and access was refused, so Tandem's
+ * Claude keeps running and the running status carries `accessDenied` instead
+ * (Bryan, 2026-11-27, "401 only signs out (Recommended)").
  * The remedy is to sign in (`claude` in a terminal) and re-check, which the
  * client offers as its own `sign-in` chip rather than a bare restart.
  *
