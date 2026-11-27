@@ -38,6 +38,9 @@ One line per file, taken from its opening lines.
 
 ## Claude Code sessions, identity and transport
 
+- [nested-claude-md-loading.md](nested-claude-md-loading.md): which actions load a per-directory
+  CLAUDE.md into context, and which (Bash writes, searches, a parent of a subagent) do not
+  (2026-11-27).
 - [cli-session-resume-spike.md](cli-session-resume-spike.md): Claude Code session resume for the
   auto-launch supervisor; GO with caveats (2026-05-17).
 - [sidecar-launcher-spike.md](sidecar-launcher-spike.md): validating the sidecar launcher; GO with
