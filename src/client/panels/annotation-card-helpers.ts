@@ -83,8 +83,8 @@ export function getAuthorLabel(
  * "3h ago", else the locale date. Shared by the card header and the reply
  * thread so both read identically.
  */
-export function formatRelativeTime(timestamp: number): string {
-  const diffMin = Math.floor((Date.now() - timestamp) / 60_000);
+export function formatRelativeTime(timestamp: number, now: number = Date.now()): string {
+  const diffMin = Math.floor((now - timestamp) / 60_000);
   if (diffMin < 1) return "just now";
   if (diffMin < 60) return `${diffMin}m ago`;
   const diffHr = Math.floor(diffMin / 60);

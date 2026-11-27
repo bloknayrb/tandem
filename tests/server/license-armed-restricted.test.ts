@@ -939,7 +939,8 @@ describe("armed and keyless (#1521)", () => {
         documentId: docId,
         choice: "keep",
       });
-      expect(res).toEqual({ status: 200, json: { success: true } });
+      // Keep also reports whether it kept the disk version (ADR-057 PR 3).
+      expect(res).toMatchObject({ status: 200, json: { success: true } });
       expect(meta.has(Y_MAP_EXTERNAL_CONFLICT)).toBe(false);
     });
 

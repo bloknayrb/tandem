@@ -29,8 +29,13 @@ function setConflict(ydoc: Y.Doc, conflict: ExternalConflictState): void {
   ydoc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, conflict);
 }
 
-const baseProps = (ydoc: Y.Doc, fileName = "notes.md", format = "md") => ({
-  props: { ydoc, documentId: "d1", fileName, format },
+const baseProps = (
+  ydoc: Y.Doc,
+  fileName = "notes.md",
+  format = "md",
+  { source = "file", readOnly = false }: { source?: string; readOnly?: boolean } = {},
+) => ({
+  props: { ydoc, documentId: "d1", fileName, format, source, readOnly },
 });
 
 describe("ExternalConflictBanner", () => {
@@ -49,6 +54,9 @@ describe("ExternalConflictBanner", () => {
     expect(banner).toBeTruthy();
     expect(banner?.textContent).toContain("notes.md");
     expect(banner?.textContent).toContain("your next save overwrites the disk changes");
+    // ADR-057 PR 3: both choices are undoable here.
+    expect(banner?.textContent).toContain("kept in Version history first");
+    expect(banner?.textContent).toContain("reloading keeps your unsaved edits in Version history");
     expect(container.querySelector("[data-testid='external-conflict-keep-btn']")).toBeTruthy();
     expect(container.querySelector("[data-testid='external-conflict-reload-btn']")).toBeTruthy();
   });
@@ -213,6 +221,92 @@ describe("ExternalConflictBanner", () => {
         (container.querySelector("[data-testid='external-conflict-keep-btn']") as HTMLButtonElement)
           .disabled,
       ).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("never promises Reload keeps the edits where the server keeps none (read-only, .docx, upload)", async () => {
+    for (const [name, format, opts] of [
+      ["ro.md", "md", { readOnly: true }],
+      ["doc.docx", "docx", {}],
+      ["up.md", "md", { source: "upload" }],
+    ] as const) {
+      const ydoc = new Y.Doc();
+      setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 1 });
+      const { container, unmount } = render(
+        ExternalConflictBanner,
+        baseProps(ydoc, name, format, opts),
+      );
+      await tick();
+      const text = container.querySelector(BANNER)?.textContent ?? "";
+      expect(text, name).toMatch(/reloading discards (your unsaved edits|them)/);
+      expect(text, name).not.toContain("reloading keeps");
+      unmount();
+    }
+  });
+
+  it("names Version history for a restored session's Reload on a writable .md", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "unsaved-restore", diskChanged: false, detectedAt: 4 });
+    const { container } = render(ExternalConflictBanner, baseProps(ydoc));
+    await tick();
+    expect(container.querySelector(BANNER)?.textContent).toContain(
+      "they're kept in Version history",
+    );
+  });
+
+  it("offers Reload anyway only after a refused keep, for that conflict, and sends the flag with the same episode", async () => {
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 7 });
+    const { container } = render(ExternalConflictBanner, baseProps(ydoc));
+    await tick();
+    const ANYWAY = "[data-testid='external-conflict-reload-anyway-btn']";
+    expect(container.querySelector(ANYWAY)).toBeNull();
+
+    const bodies: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      call++;
+      return Promise.resolve(
+        call === 1
+          ? new Response(JSON.stringify({ error: "BACKUP_FAILED", message: "No room." }), {
+              status: 409,
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response(JSON.stringify({ success: true }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+      );
+    }) as typeof fetch;
+    try {
+      (
+        container.querySelector("[data-testid='external-conflict-reload-btn']") as HTMLButtonElement
+      ).click();
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+        await tick();
+      }
+      expect(container.querySelector(BANNER)?.textContent).toContain("No room.");
+      const anyway = container.querySelector(ANYWAY) as HTMLButtonElement;
+      expect(anyway).toBeTruthy();
+      anyway.click();
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+        await tick();
+      }
+      expect(bodies).toEqual([
+        { documentId: "d1", choice: "reload", detectedAt: 7 },
+        { documentId: "d1", choice: "reload", detectedAt: 7, discardUnsavedEdits: true },
+      ]);
+
+      // A newer conflict does not inherit the offer.
+      setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 8 });
+      await tick();
+      expect(container.querySelector(ANYWAY)).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }

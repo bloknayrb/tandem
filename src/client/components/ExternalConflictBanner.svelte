@@ -2,11 +2,13 @@
 import type * as Y from "yjs";
 import { API_EXTERNAL_CONFLICT_RESOLVE } from "../../shared/api-paths";
 import {
+  keepsUnsavedEditsOnDiscard,
   SAVEABLE_FORMATS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
 } from "../../shared/constants";
 import type { ExternalConflictState } from "../../shared/types";
+import { isBackupFailedResponse } from "../utils/backups";
 import { API_BASE } from "../utils/fileUpload";
 import LiveRegion from "./LiveRegion.svelte";
 import "./tandem-banner.css";
@@ -38,9 +40,12 @@ interface Props {
   fileName: string;
   /** Document format, so the copy doesn't promise a save the format can't do. */
   format: string;
+  /** With `readOnly`, decides whether Reload keeps the unsaved edits (ADR-057 PR 3). */
+  source: string;
+  readOnly: boolean;
 }
 
-const { ydoc, documentId, fileName, format }: Props = $props();
+const { ydoc, documentId, fileName, format, source, readOnly }: Props = $props();
 
 /**
  * Formats with NO path back to disk — the server refuses every save for them.
@@ -51,9 +56,25 @@ const { ydoc, documentId, fileName, format }: Props = $props();
  */
 const cannotSave = $derived(!SAVEABLE_FORMATS.has(format));
 
+/**
+ * Whether Reload keeps the unsaved edits as a backup first: the same shared
+ * predicate the server keeps them by, so the copy can never promise a backup
+ * the server does not make (a read-only `.md`, `.docx`, an upload).
+ */
+const reloadKeepsEdits = $derived(keepsUnsavedEditsOnDiscard({ format, source, readOnly }));
+
+/** Whether Keep backs up the version on disk first: a real file Tandem may save over (as the server decides). */
+const keepKeepsDisk = $derived(!cannotSave && source === "file" && !readOnly);
+
 let conflict = $state<ExternalConflictState | null>(null);
-let pending = $state<"keep" | "reload" | null>(null);
+let pending = $state<"keep" | "reload" | "reload-anyway" | null>(null);
 let error = $state<string | null>(null);
+/**
+ * This episode's Reload was refused because the unsaved edits could not be
+ * kept: show "Reload anyway". Reset with `error` and `pending` whenever the
+ * episode changes, so a newer conflict never inherits it.
+ */
+let backupFailed = $state(false);
 
 $effect(() => {
   // Track the ydoc prop — re-observe when the active tab's doc changes.
@@ -81,6 +102,7 @@ $effect(() => {
     if (next?.detectedAt !== lastDetectedAt) {
       error = null;
       pending = null;
+      backupFailed = false;
     }
     lastDetectedAt = next?.detectedAt;
     conflict = next;
@@ -96,22 +118,35 @@ $effect(() => {
     conflict = null;
     error = null;
     pending = null;
+    backupFailed = false;
   };
 });
 
 const message = $derived.by(() => {
   if (!conflict) return "";
+  // A read-only document of a saveable format has no next save either: keeping
+  // the edits keeps them in this session, and Keep takes no disk backup.
+  if (readOnly && !cannotSave) {
+    return conflict.kind === "external-edit"
+      ? `${fileName} changed on disk while you have unsaved edits. This document is read-only, so keeping your edits keeps them in this session only; reloading discards them.`
+      : `Unsaved edits for ${fileName} were restored from your last session. This document is read-only, so keeping them keeps them in this session only. Reload to start fresh from the file on disk (discards them).`;
+  }
   if (conflict.kind === "external-edit") {
     return cannotSave
       ? `${fileName} changed on disk while you have unsaved edits. Tandem can't write this file type back to disk, so keeping your edits keeps them in this session only — the file itself will still hold the disk version. Reloading discards your unsaved edits.`
-      : `${fileName} changed on disk while you have unsaved edits. Keeping your edits means your next save overwrites the disk changes; reloading discards your unsaved edits.`;
+      : `${fileName} changed on disk while you have unsaved edits. Keeping your edits means your next save overwrites the disk changes${keepKeepsDisk ? ", which are kept in Version history first" : ""}; ${
+          reloadKeepsEdits
+            ? "reloading keeps your unsaved edits in Version history."
+            : "reloading discards your unsaved edits."
+        }`;
   }
   if (cannotSave) {
     return `Unsaved edits for ${fileName} were restored from your last session. Tandem can't write this file type back to disk, so keeping them keeps them in this session only. Reload to start fresh from the file on disk (discards them).`;
   }
+  const reloadClause = reloadKeepsEdits ? "they're kept in Version history" : "discards them";
   return conflict.diskChanged
-    ? `Unsaved edits for ${fileName} were restored from your last session, but the file also changed on disk. Keep your restored edits, or reload the file from disk (discards them)?`
-    : `Unsaved edits for ${fileName} were restored from your last session. Keep them, or reload fresh from the file on disk (discards them)?`;
+    ? `Unsaved edits for ${fileName} were restored from your last session, but the file also changed on disk. Keep your restored edits, or reload the file from disk (${reloadClause})?`
+    : `Unsaved edits for ${fileName} were restored from your last session. Keep them, or reload fresh from the file on disk (${reloadClause})?`;
 });
 
 /**
@@ -122,7 +157,7 @@ const message = $derived.by(() => {
  */
 const announcement = $derived([message, error].filter(Boolean).join(" "));
 
-async function resolve(choice: "keep" | "reload") {
+async function resolve(choice: "keep" | "reload", discardUnsavedEdits = false) {
   if (pending) return;
   // Pin the document AND the conflict episode this request belongs to. The
   // document pin (`forDoc`) guards cross-document leakage — App.svelte remounts
@@ -136,7 +171,7 @@ async function resolve(choice: "keep" | "reload") {
   // banner would inherit A's stale `pending`/`error`.
   const forDoc = documentId;
   const forConflict = conflict?.detectedAt;
-  pending = choice;
+  pending = discardUnsavedEdits ? "reload-anyway" : choice;
   error = null;
   try {
     const res = await fetch(`${API_BASE}${API_EXTERNAL_CONFLICT_RESOLVE}`, {
@@ -146,12 +181,21 @@ async function resolve(choice: "keep" | "reload") {
       // saw and clicked on — the server no-ops instead of resolving a
       // different episode that may have replaced it before this request lands
       // (#1238 review finding).
-      body: JSON.stringify({ documentId: forDoc, choice, detectedAt: forConflict }),
+      body: JSON.stringify({
+        documentId: forDoc,
+        choice,
+        detectedAt: forConflict,
+        ...(discardUnsavedEdits ? { discardUnsavedEdits: true } : {}),
+      }),
     });
     const stillCurrent = forDoc === documentId && forConflict === conflict?.detectedAt;
     if (!res.ok && stillCurrent) {
       const body = await res.json().catch(() => null);
       error = body?.message ?? `Request failed (HTTP ${res.status}).`;
+      // ADR-057 PR 3: the edits could not be kept, so nothing was reloaded.
+      // Autosave and Ctrl+S are refused while the conflict is pending, so
+      // without this way out the user would be stranded.
+      if (isBackupFailedResponse(res.status, body)) backupFailed = true;
     }
     // On success the server clears the meta flag — the observer hides the banner.
   } catch {
@@ -211,5 +255,18 @@ async function resolve(choice: "keep" | "reload") {
     >
       {pending === "reload" ? "Reloading…" : "Reload from file"}
     </button>
+    {#if backupFailed}
+      <button
+        type="button"
+        class="tandem-banner__cta"
+        data-testid="external-conflict-reload-anyway-btn"
+        onclick={() => resolve("reload", true)}
+        disabled={pending !== null}
+      >
+        {pending === "reload-anyway"
+          ? "Reloading…"
+          : "Reload anyway (your unsaved edits will be lost)"}
+      </button>
+    {/if}
   </div>
 {/if}

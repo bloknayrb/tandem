@@ -472,7 +472,7 @@ lost", which is what its latch does.
 **Row 3 is the browser, and correcting that removed work rather than adding it.** Every one of the
 seven routes Surface B gated is called from `src/client/` and nowhere else — `annotation-reply` and
 `remove-annotation` from `panels/annotation-actions.ts`, `apply-changes` from
-`ApplyChangesButton.svelte`, `scratchpad` and `backups/restore` from `actions/builtin.svelte.ts`,
+`ApplyChangesButton.svelte`, `scratchpad` from `actions/builtin.svelte.ts`, `backups/restore` from `utils/backups.ts` (the Version history),
 `document/reload` from `editor/SourceView.svelte`, `external-conflict/resolve` from
 `ExternalConflictBanner.svelte`; and `POST /api/open` with `force: true` from
 `client/utils/server-paths.ts`. They are the **browser's** write path, twins of an MCP tool only in

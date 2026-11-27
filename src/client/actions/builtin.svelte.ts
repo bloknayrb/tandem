@@ -16,8 +16,6 @@
  */
 
 import {
-  API_BACKUPS,
-  API_BACKUPS_RESTORE,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
   API_LAUNCHER_SETTINGS,
@@ -556,7 +554,7 @@ export async function triggerSave(
       if (integrity > 0) {
         notifyUser(
           "error",
-          'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Restore a backup of this document…" from the command palette.',
+          'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Version history: restore a backup…" from the command palette.',
         );
       }
       // Two distinct facts, ONE toast (#1142 G3). A third toast would fire on
@@ -1151,118 +1149,21 @@ export async function saveLauncherSettings(
 }
 
 // ---------------------------------------------------------------------------
-// Restore a backup of the active document (#1086)
+// Version history of the active document (#1086, ADR-057 PR 2)
 // ---------------------------------------------------------------------------
 
-interface BackupSnapshot {
-  name: string;
-  timestamp: string;
-  size: number;
-  /** `disk`: the file before an overwrite. `unsaved`: edits a Claude action discarded (ADR-057). Absent from an older server. */
-  kind?: "disk" | "unsaved";
-}
-
-/** How the confirm names a backup's kind. */
-function backupKindLabel(b: BackupSnapshot): string {
-  return b.kind === "unsaved" ? "your unsaved edits" : "the file on disk";
-}
-
-let restoreBackupInflight = false;
-
-function formatBackupTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
-
 /**
- * Minimal restore flow: list the document's snapshots (newest first, each
- * labelled with its kind: up to 3 of the file on disk, one more kept from the
- * run's first write, and up to 3 of unsaved edits a Claude action discarded),
- * confirm, and restore the MOST RECENT one. The command palette has no
- * dynamic-sublist support, so older snapshots are surfaced in the confirm text
- * and restorable via Claude (`tandem_restoreBackup`) — the MCP tool is the
- * primary surface (ADR-038); this action is the discoverable on-ramp.
+ * Open the Version history for the active document: every backup, newest
+ * first, each restorable by name (`VersionHistoryModal.svelte`). The MCP tool
+ * (`tandem_restoreBackup`) remains Claude's surface (ADR-038).
  */
-async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
-  if (restoreBackupInflight) {
-    // Same reasoning as createScratchpad's guard: silence here reads as a
-    // broken palette entry, and this one can sit behind an awaited confirm.
-    d.notify("info", "A restore is already in progress.", {
-      dedupKey: "restore-backup-inflight",
-      id: "restore-backup-inflight",
-    });
-    return;
-  }
+function openVersionHistoryOfActiveDoc(d: ActionDeps): void {
   const activeDocId = d.getActiveTabId();
   if (!activeDocId) {
     d.notify("warning", "No active document.");
     return;
   }
-  restoreBackupInflight = true;
-  let restored: string | null = null;
-  try {
-    const listRes = await fetch(
-      `${API_BASE}${API_BACKUPS}?documentId=${encodeURIComponent(activeDocId)}`,
-    );
-    if (!listRes.ok) {
-      const body = (await listRes.json().catch(() => ({}))) as { message?: string };
-      d.notify("error", `Couldn't list backups: ${body.message ?? listRes.statusText}`);
-      return;
-    }
-    const listJson = (await listRes.json().catch(() => null)) as {
-      data?: { backups?: BackupSnapshot[] };
-    } | null;
-    if (!listJson) {
-      // Split from the empty-list branch below, and this is the highest-stakes
-      // split in the file. Collapsing a parse failure into "no backups exist"
-      // states the most reassuring of three possibilities as fact — to someone
-      // who arrived here because a save told them "some content may not have
-      // been preserved — your original is backed up". They stop looking, and the
-      // backup is on disk the whole time.
-      d.notify("error", "Couldn't read the list of backups — please try again.");
-      return;
-    }
-    const backups = listJson.data?.backups ?? [];
-    if (backups.length === 0) {
-      d.notify(
-        "info",
-        "No backups exist for this document yet. Tandem snapshots the on-disk file before its first overwrite each session, and keeps your unsaved edits when Claude reloads, restores or closes the document.",
-      );
-      return;
-    }
-    const newest = backups[0];
-    const lines = backups
-      .map((b, i) => `  ${i + 1}. ${formatBackupTimestamp(b.timestamp)} (${backupKindLabel(b)})`)
-      .join("\n");
-    const ok = await confirmDialog(
-      `Available backups (newest first):\n${lines}\n\n` +
-        `Restore the most recent backup (${formatBackupTimestamp(newest.timestamp)}, ${backupKindLabel(newest)})? ` +
-        "The document reloads with the backup's content; annotations are preserved.\n\n" +
-        "Older backups can be restored by asking Claude (tandem_restoreBackup).",
-    );
-    if (!ok) return;
-    const restoreRes = await fetch(`${API_BASE}${API_BACKUPS_RESTORE}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId: activeDocId, backup: newest.name }),
-    });
-    if (!restoreRes.ok) {
-      const body = (await restoreRes.json().catch(() => ({}))) as { message?: string };
-      d.notify("error", `Restore failed: ${body.message ?? restoreRes.statusText}`);
-      return;
-    }
-    restored = formatBackupTimestamp(newest.timestamp);
-  } catch (err) {
-    d.notify("error", `Restore request failed: ${err instanceof Error ? err.message : err}`);
-  } finally {
-    restoreBackupInflight = false;
-  }
-  // Outside the try for the same reason as `postLauncherMutation`'s: the file on
-  // disk has already been replaced by this point, so a throw from `notify`
-  // caught above would say "Restore request failed" about a restore that
-  // happened — and the user would restore again, or give up believing their
-  // document was never recovered.
-  if (restored) d.notify("info", `Restored backup from ${restored}.`);
+  d.openVersionHistory(activeDocId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,13 +1415,14 @@ const BUILTINS: Action[] = [
     },
   },
   {
-    // Palette-only: discoverable on-ramp to the pre-overwrite document
-    // backups (#1086). Restores the most recent snapshot after a confirm.
+    // Palette-only: the on-ramp to the document's backups (#1086). Opens the
+    // Version history (ADR-057 PR 2). The id is unchanged; the label names
+    // both what it is and what people search for.
     id: "restore-backup",
-    label: "Restore a backup of this document…",
+    label: "Version history: restore a backup…",
     group: "document",
     run() {
-      runBoundAction("restore-backup", (d) => restoreBackupOfActiveDoc(d));
+      runBoundAction("restore-backup", (d) => openVersionHistoryOfActiveDoc(d));
     },
   },
   {

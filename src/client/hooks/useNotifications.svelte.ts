@@ -98,6 +98,13 @@ interface CreateOpts {
    * switch's own notices arrive (#1123 part B, R1.2).
    */
   onStreamNotice?: (notification: TandemNotification) => void;
+  /**
+   * Called each time the notify stream (re)opens, from its `open` handler.
+   * Notices pushed while it was down are not replayed to `onStreamNotice`, so
+   * a consumer deriving state from them re-reads it here (ADR-057 PR 2: the
+   * kept-edits banner).
+   */
+  onStreamOpen?: () => void;
 }
 
 const INFO_TTL = ACTIVITY_INFO_TTL_MS;
@@ -365,6 +372,14 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
       opts.onStreamNotice?.(notification);
     } catch (err) {
       console.warn("[useNotifications] onStreamNotice failed", err);
+    }
+  };
+
+  es.onopen = () => {
+    try {
+      opts.onStreamOpen?.();
+    } catch (err) {
+      console.warn("[useNotifications] onStreamOpen failed", err);
     }
   };
 
