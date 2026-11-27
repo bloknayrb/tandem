@@ -17,6 +17,10 @@ aliases: [Gotchas, Silent-failure catalogue]
 > Narrative lessons with issue archaeology live in
 > [lessons-learned.md](lessons-learned.md); this file is the operational detail behind
 > the inline rules.
+>
+> **A new entry ends with `Enforced by: <check>`** (the test, script, lint or hook that fails
+> on a recurrence) **or `Prose-only: <reason>`** (why no check can be written). Older entries
+> predate the convention; add the line when you next touch one.
 
 ### Desktop / Tauri
 
