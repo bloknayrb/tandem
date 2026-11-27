@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Answers one question with evidence rather than opinion: **when a fresh session
 fixes a real bug here, what does it read, what does that cost, and which of it
-was stale, wrong, missing or noise?** Adopted from the essay behind ADR-057
+was stale, wrong, missing or noise?** Adopted from the essay behind ADR-058
 ("fix an example bug and record what they're reading"). The recurring gate is
 the dated issue named at the end of the latest report in `docs/reviews/`.
 

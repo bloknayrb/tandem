@@ -1,6 +1,6 @@
 # Context audit — #2481, baseline — 2026-11-27
 
-The first run of the [context-audit skill](../../.claude/skills/context-audit/SKILL.md) (ADR-057's
+The first run of the [context-audit skill](../../.claude/skills/context-audit/SKILL.md) (ADR-058's
 plan, step 8). A fresh headless Claude Code session fixed a real, closed bug in a history-free
 copy of the repo, and this records what it read, what that cost, how its fix compares with the
 real one, and what it said it was missing.
@@ -96,7 +96,7 @@ What it wished had been written down:
    goes through one shared predicate).*
 3. **When a CHANGELOG entry is required.** *Verdict: valid; CONTRIBUTING.md does not say.*
 4. **The minimum verification for a small server-only fix**, against the full plan-and-review
-   loop. *Verdict: this is what ADR-057's tiers answer (#2589).*
+   loop. *Verdict: this is what ADR-058's tiers answer (#2589).*
 
 ## 6. Findings
 

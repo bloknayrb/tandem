@@ -14,7 +14,7 @@ aliases: [Reviews, Review index, Audits]
 Newest first. One line per file or folder, taken from its opening lines.
 
 - [2026-11-27-context-audit-2481-baseline.md](2026-11-27-context-audit-2481-baseline.md): the
-  first context audit (ADR-057): a fresh session fixed #2481 in a history-free copy, with what it
+  first context audit (ADR-058): a fresh session fixed #2481 in a history-free copy, with what it
   read, what it cost and how its fix compared; CLAUDE.md was not auto-loaded in that run.
 - [2026-10-20-docs-audit.md](2026-10-20-docs-audit.md): a whole-repo documentation audit against
   the code, with the fixes it made, the decisions it left for the maintainer and the follow-ups
