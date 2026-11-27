@@ -154,6 +154,7 @@ Three things about it that are easy to get wrong:
 | `npm run check:links` | Relative Markdown links, anchors and images across the repo, plus docs-vault reachability. Runs in CI's `check` job, not in the hooks |
 | `npm run audit:origins` / `npm run audit:ymap-keys` | Static walks for the Y.Doc origin-tagging and Y.Map-key invariants |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | The Rust/Tauri layer |
+| `node scripts/ci/knip-ratchet.mjs` | Dead code (knip) as a ratchet: fails on a new unused file, export or dependency, and on a frozen one that was fixed but not pruned (`--prune`). Moving a file renames its frozen keys: edit them in the same change. A knip upgrade that changes its output needs a hand prune. Runs in CI's `check` job |
 
 `npm run check:links` is the one to run after moving or renaming any Markdown file, since nothing
 else will catch the dangling links before CI does. It reads relative links only; `docs/workflows.md`
