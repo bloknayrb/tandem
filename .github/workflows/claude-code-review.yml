@@ -93,8 +93,10 @@ jobs:
           path: trusted
           persist-credentials: false
           sparse-checkout-cone-mode: false
+          # `CLAUDE.md` without a leading slash matches at every depth: the
+          # colocated per-directory files are master's instructions too.
           sparse-checkout: |
-            /CLAUDE.md
+            CLAUDE.md
             /AGENTS.md
             /.github/claude-review/
 
@@ -114,8 +116,10 @@ jobs:
 
       # Symlinks first, so nothing below can write through one. Then every
       # agent-config name at every depth (a nested CLAUDE.md is loaded as
-      # instructions when the model reads that directory), then master's root
-      # copies back. The PR's changes to these files still show in the diff.
+      # instructions when the model reads that directory), then master's copies
+      # back: AGENTS.md at the root and every CLAUDE.md at its own depth, its
+      # directory recreated if the PR removed it. The PR's changes to these
+      # files still show in the diff; a CLAUDE.md the PR adds is not restored.
       - name: Neutralise the PR checkout
         if: steps.recheck.outputs.skip == 'false'
         working-directory: pr
@@ -133,7 +137,13 @@ jobs:
             echo "neutralising left $left entries behind"
             exit 1
           fi
-          cp ../trusted/CLAUDE.md ../trusted/AGENTS.md .
+          cp ../trusted/AGENTS.md .
+          (cd ../trusted && find . -path ./.git -prune -o -type f -name 'CLAUDE.md' -print0) |
+            while IFS= read -r -d '' f; do
+              mkdir -p "$(dirname "$f")"
+              cp "../trusted/$f" "$f"
+            done
+          test -f CLAUDE.md
 
       - name: Prepare review inputs
         if: steps.recheck.outputs.skip == 'false'
