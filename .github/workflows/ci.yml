@@ -112,6 +112,20 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      # Clippy, warnings denied, on a PINNED toolchain. The toolchain step above
+      # deliberately tracks `stable` (tests/scripts/workflow-action-pin.test.ts),
+      # but a lint added in a new stable release would turn this required leg red
+      # on every open PR at once — so clippy gets its own exact version, bumped by
+      # hand. ubuntu + windows: the crate's `cfg(windows)` code is invisible to a
+      # Linux clippy. macOS-only code is not linted. Pinned by
+      # tests/scripts/clippy-wiring.test.ts.
+      - name: Clippy (pinned, warnings denied)
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy
+          cargo +1.97.0 clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
   # Compile the standalone reaper crate on every platform. Its per-OS reaping
   # path (reaper/src/{linux,macos,windows}.rs) is cfg-gated, so macos.rs only
   # ever compiled on the tag-triggered Tauri Release matrix — a nix-0.29 API
