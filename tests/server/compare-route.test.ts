@@ -34,7 +34,6 @@ import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   _resetDocBackupGateForTests,
-  docBackupSnapshotPath,
   docBackupsRoot,
   listDocBackups,
   snapshotBeforeFirstWrite,
@@ -163,19 +162,14 @@ describe("GET /api/document/compare", () => {
     spy.mockRestore();
   });
 
-  it("answers 404 for a snapshot name that is not in this document's folder", async () => {
-    const { filePath, id } = await opened("missing.md", "x\n");
+  it("answers 404 for a snapshot name that is not in this document's folder, opening nothing", async () => {
+    const { id } = await opened("missing.md", "x\n");
     const spy = vi.spyOn(fs, "open");
     const res = await call({ documentId: id, against: "nope-20260101-000000-abcdef12.md" });
     expect(res._status).toBe(404);
     expect((res._json as { message?: string }).message).toBe("That backup no longer exists.");
-    // Resolved as restore resolves it: only ever inside this document's own folder.
-    const snapshot = docBackupSnapshotPath(
-      filePath,
-      resolveAppDataDir(),
-      "nope-20260101-000000-abcdef12.md",
-    );
-    expect(spy.mock.calls.map(([p]) => String(p))).toEqual([snapshot]);
+    // Matched against the folder's listing: the caller's name reaches no fs call.
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 

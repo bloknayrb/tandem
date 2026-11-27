@@ -29,7 +29,7 @@ import type { Request, Response } from "express";
 import { canCompareWithDisk } from "../../../shared/constants.js";
 import { isLoopback } from "../../auth/middleware.js";
 import { getOpenDocs } from "../../documents/registry.js";
-import { docBackupSnapshotPath, snapshotKind } from "../../file-io/doc-backup.js";
+import { docBackupSnapshotPath, listDocBackups } from "../../file-io/doc-backup.js";
 import { getAdapter } from "../../file-io/index.js";
 import { stripBom, toLf } from "../../file-io/line-endings.js";
 import { resolveAppDataDir } from "../../platform.js";
@@ -110,10 +110,12 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     res.status(400).json({ error: "BAD_REQUEST", message: "against must be a single name." });
     return;
   }
-  // The house CodeQL sanitizer after the shape check. `safeId` is used for
-  // every later call.
+  // The house CodeQL sanitizer after the shape check. The registry entry is
+  // found by comparing ids over its values rather than looked up by the
+  // caller's key, so nothing derived from the request reaches the paths read
+  // below (CodeQL js/path-injection, alert 252).
   const safeId = path.basename(documentId);
-  const docState = getOpenDocs().get(safeId);
+  const docState = [...getOpenDocs().values()].find((d) => d.id === safeId);
   if (!docState) {
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
@@ -138,25 +140,25 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
   try {
     if (against === "disk") {
       otherLabel = "disk";
-      // Safe FS sink (CodeQL js/path-injection): `docState.filePath` comes from
-      // the server-owned OpenDoc registry (docs/security.md, "Paths from the
-      // server-owned OpenDoc registry"), reached by an id that passed
-      // `isValidDocumentId` and `path.basename` above; never request input.
-      // Same disposition as document-service.ts's sinks; dismiss per #1042.
+      // `docState.filePath` is the server-owned registry's (docs/security.md,
+      // "Paths from the server-owned OpenDoc registry"), never request input.
       other = await readTextBounded(docState.filePath, COMPARE_MAX_BYTES);
     } else {
-      // Resolved as the restore path resolves it (`restoreDocumentFromBackup`):
-      // a name that is not a snapshot's own basename is refused, and a missing
-      // one is the ENOENT below.
-      const snapshotPath = docBackupSnapshotPath(docState.filePath, resolveAppDataDir(), against);
-      if (snapshotPath === null) {
+      // Matched by equality against the folder's own listing, and the path
+      // joined from the listing's entry (a `readdir` result), never from the
+      // caller's text, which reaches no filesystem call.
+      const appDataDir = resolveAppDataDir();
+      const entry = (await listDocBackups(docState.filePath, appDataDir)).find(
+        (b) => b.name === against,
+      );
+      const snapshotPath = entry
+        ? docBackupSnapshotPath(docState.filePath, appDataDir, entry.name)
+        : null;
+      if (!entry || snapshotPath === null) {
         res.status(404).json({ error: "NOT_FOUND", message: "That backup no longer exists." });
         return;
       }
-      otherLabel = snapshotKind(against) === "unsaved" ? "unsaved" : "disk-backup";
-      // Safe FS sink (CodeQL js/path-injection): the registry path (above) and
-      // the `path.basename` result `docBackupSnapshotPath` joins (#1882),
-      // checked against `SNAPSHOT_TAIL_RE`. Dismiss per #1042.
+      otherLabel = entry.kind === "unsaved" ? "unsaved" : "disk-backup";
       other = await readTextBounded(snapshotPath, COMPARE_MAX_BYTES);
     }
   } catch (err) {
