@@ -1533,7 +1533,7 @@ pub(crate) fn cowork_install_into_workspace(handle: String) -> Result<String, St
     let report = install_tandem_plugin_into_workspace(&validated_path, &token, &tandem_url)
         .map_err(|e| e.to_string())?;
 
-    Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
+    serde_json::to_string(&report).map_err(|e| e.to_string())
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -1552,7 +1552,7 @@ pub(crate) fn cowork_uninstall_from_workspace(handle: String) -> Result<String, 
 
     let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&validated_path)
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
+    serde_json::to_string(&report).map_err(|e| e.to_string())
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
