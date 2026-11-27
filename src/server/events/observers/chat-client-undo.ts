@@ -196,8 +196,16 @@ export function applyChatUndo(ctrlDoc: Y.Doc, chatMap: Y.Map<unknown>, undo: Cha
  * could send one aimed at the server's next write and have it land later
  * under no origin, past the undo. The browser client talks only to the
  * server (a star), so an update of its depends only on what the server sent
- * it or it sent first, and never leaves anything pending; one that does is
- * dropped. Returns whether anything was dropped.
+ * it or it sent first, and is expected never to leave anything pending; one
+ * that does is dropped. Returns whether anything was dropped.
+ *
+ * That expectation is a premise, not a property: the same star argument held
+ * for document rooms, where Chromium smoke S8 (2026-11-26, on #2358) saw a
+ * real tab leave a paste pending after a forced reconnect, the drop lose it,
+ * and the tab stop syncing, so the document-room guard was removed. In CTRL,
+ * S8 saw nothing pending in Chromium; WebView2 and WKWebView are unmeasured
+ * (the CTRL row in `tests/server/ownership-flip-blockers.ts`). Both callers
+ * left are CTRL's (`ctrl-chat.ts`, `document-service.ts`).
  */
 export function dropPendingUpdates(doc: Y.Doc): boolean {
   const store = doc.store as { pendingStructs: unknown; pendingDs: unknown };

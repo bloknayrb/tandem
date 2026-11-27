@@ -315,6 +315,7 @@ If you *do* have unsaved edits, Tandem won't choose for you. A banner at the top
 
 - **Keep my edits** — keep what's in the editor. Your next save overwrites the changes on disk, so Tandem first keeps the version on disk as a backup, which you can bring back from Version history (command palette: "Version history: restore a backup…").
 - **Reload from file** — load the version on disk. For a `.md` or `.txt` file you can edit, your unsaved edits are kept as a backup first, in Version history; if they can't be kept (the backup folder is full or can't be written), nothing is reloaded and the banner offers **Reload anyway**, which discards them. For other files, reloading discards your unsaved edits, and the banner says so.
+- **Compare** — for a `.md` or `.txt` file, see what is different between the file on disk and your document before you choose.
 
 ![A banner across the top of the document saying the file changed on disk while you have unsaved edits, with Keep my edits and Reload from file buttons](screenshots/18-external-conflict-banner.png)
 
@@ -525,7 +526,7 @@ While chat is set to a local model, the title bar shows a chip with the model's 
 
 **What Claude still sees.** While a local model answers chat, Tandem stops handing Claude your chat messages and the changes you make. Tandem only stops handing them over: a Claude session that is already connected can still read your document and its comments (the local model's included) if it asks, and finish the step it is on. Choose **Claude** to switch back. A comment you sent to Claude meanwhile (and a note only if you sent it to Claude) waits for Claude: it is delivered when Claude next looks, once chat is back on Claude, Solo mode is off, the document is open and a Claude session is running; Tandem does not start a Claude for it in every case. Chat messages from that time are not handed to Claude afterwards, though a Claude session with file access on this computer can still read Tandem's own files.
 
-**Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments (its card shows the model's name), reply in comment threads that Claude or a local model started (never in your own comments) and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
+**Comments and suggestions (experimental).** By default a local model only chats. Turn on **Let local models comment and suggest changes** to let it add comments (its card shows the model's name), reply in comment threads that Claude or a local model started (and, on a build with multi-session ownership on, in your shared comments, never in a private note or private comment; with it off, a reply in a comment you wrote is refused), and suggest replacements, which change your text only when you accept them. It does this in Tandem mode only. Review every suggestion.
 
 **What is sent.** For a local model, Tandem sends your document's text only to the Endpoint address you enter. The model server at that address may pass it on.
 

@@ -25,7 +25,11 @@ import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
-import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
+import {
+  CHECK_INBOX_DESCRIPTION,
+  CHECK_INBOX_DESCRIPTION_OWNED,
+  registerAwarenessTools,
+} from "../../src/server/mcp/awareness.js";
 import { registerDiagnosticsTools } from "../../src/server/mcp/diagnostics.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -198,6 +202,9 @@ describe("tools/list while dark", () => {
     // `tandem_listDocuments`: their output schemas only (below).
     // #2360 PR A: `tandem_annotationReply`'s description and `inProgress`
     // input, which a dark registration does not carry.
+    // The flip (ADR-054's flip amendment): `tandem_checkInbox`'s description
+    // and `documentId` input, and `tandem_reply`'s `documentId` input, which
+    // said things false flag-on (the flip-blocker row on them).
     expect(changed.sort()).toEqual([
       "tandem_annotationReply",
       "tandem_checkInbox",
@@ -205,6 +212,7 @@ describe("tools/list while dark", () => {
       "tandem_getAnnotations",
       "tandem_listDocuments",
       "tandem_open",
+      "tandem_reply",
       "tandem_status",
       "tandem_switchDocument",
     ]);
@@ -246,12 +254,38 @@ describe("tools/list while dark", () => {
     expect(on.get("tandem_status")?.description).toBe(off.get("tandem_status")?.description);
     expect(JSON.stringify(on.get("tandem_status")?.outputSchema)).toContain('"owner"');
     expect(JSON.stringify(off.get("tandem_status")?.outputSchema)).not.toContain('"owner"');
-    // The inbox: only the output schema changes — description and input are
-    // byte-identical, and the flag-on field is optional.
+    // The inbox: since the flip its description and `documentId` input are
+    // the lit server's (a dark registration keeps master's text, byte for
+    // byte), and the flag-on output field is optional.
     const inboxOn = on.get("tandem_checkInbox");
     const inboxOff = off.get("tandem_checkInbox");
-    expect(inboxOn?.description).toBe(inboxOff?.description);
-    expect(inboxOn?.inputSchema).toEqual(inboxOff?.inputSchema);
+    expect(inboxOff?.description).toBe(CHECK_INBOX_DESCRIPTION);
+    expect(inboxOn?.description).toBe(CHECK_INBOX_DESCRIPTION_OWNED);
+    type Props = { properties: Record<string, { description?: string }> };
+    const inboxInOn = inboxOn?.inputSchema as unknown as Props;
+    const inboxInOff = inboxOff?.inputSchema as unknown as Props;
+    expect(inboxInOn.properties.cursor).toEqual(inboxInOff.properties.cursor);
+    expect(inboxInOff.properties.documentId?.description).toMatch(/poll every open document —/);
+    expect(inboxInOn.properties.documentId?.description).toMatch(
+      /poll every open document that is yours to answer/,
+    );
+    // `tandem_reply`: only its `documentId` input's description.
+    const replyOn = on.get("tandem_reply");
+    const replyOff = off.get("tandem_reply");
+    expect(replyOn?.description).toBe(replyOff?.description);
+    const replyInOn = replyOn?.inputSchema as unknown as Props;
+    const replyInOff = replyOff?.inputSchema as unknown as Props;
+    expect(Object.keys(replyInOn.properties)).toEqual(Object.keys(replyInOff.properties));
+    for (const key of Object.keys(replyInOff.properties)) {
+      if (key === "documentId") continue;
+      expect(replyInOn.properties[key], key).toEqual(replyInOff.properties[key]);
+    }
+    expect(replyInOff.properties.documentId?.description).toBe(
+      "Document context for this reply (defaults to active document)",
+    );
+    expect(replyInOn.properties.documentId?.description).toMatch(
+      /Omit it when replying to a message/,
+    );
     expect(JSON.stringify(inboxOn?.outputSchema)).toContain('"notYours"');
     expect(JSON.stringify(inboxOff?.outputSchema)).not.toContain('"ownership"');
     const required = (inboxOn?.outputSchema as { required?: string[] } | undefined)?.required;

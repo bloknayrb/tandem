@@ -351,6 +351,8 @@ function makeSupervisor(extra: ExtraOpts = {}): {
   const opts = {
     probeCliUsable: () => true,
     resolveClaudeCommand: () => process.execPath,
+    // Not `node plugin list --json` in a real subprocess on every spawn.
+    listInstalledPlugins: async () => ({ ok: true as const, keys: [], dropped: 0 }),
     restartBackoffsMs: [0],
     homeOverride: home,
     claudeSettingsHome: home,

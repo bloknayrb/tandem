@@ -107,7 +107,7 @@ One-time, per machine:
 
 ```sh
 cargo install tauri-ui-inspector    # the CLI; not a repo dependency
-rustup update stable                # the plugin needs rustc >= 1.97
+rustup update stable                # tandem-desktop needs rustc >= 1.95
 ```
 
 Then `cargo tauri dev --features ui-inspector`, and either press `Ctrl+Shift+C` (`Cmd+Shift+C` on
@@ -136,11 +136,11 @@ Three things about it that are easy to get wrong:
   default — the CLI finds a store by walking *up* from where you invoke it, and the app's CWD under
   `cargo tauri dev` is `src-tauri/`, a descendant. Left at the default, every CLI call from the repo
   root fails with exit 3, which reads as "the app isn't running".
-- **Two upstream version floors sit above ours**: the crate declares `rust-version = 1.97` (ours is
-  1.77.2) and the npm packages declare `engines.node >= 26` (ours is >= 22.12.0). The crate is an
-  optional dependency, so a default `cargo build`/`cargo test` never resolves it and the Rust floor
-  applies only when you pass the feature. The Node floor is an `npm install` warning only — nothing
-  in this repo sets `engine-strict`, and CI on Node 22 warns and passes.
+- **One upstream version floor sits above ours**: the npm packages declare `engines.node >= 26`
+  (ours is >= 22.12.0). That is an `npm install` warning only — nothing in this repo sets
+  `engine-strict`, and CI on Node 22 warns and passes. The Rust crate is not one: 0.1.6 declares
+  `rust-version = 1.91`, below tandem-desktop's 1.95 (set by `windows-version` 0.100 on the
+  Windows build), so the feature build needs no newer toolchain than the default one.
 
 ## Checks
 
@@ -174,8 +174,9 @@ files from `git ls-files`, plus untracked files that are not ignored, so it need
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
 queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
-macOS and Windows, each running `cargo test`), `windows-acl-proof` and, while multi-session
-ownership ships dark, `ownership-flag-on`; `coverage`, CodeQL and `vitest-windows`
+macOS and Windows, each running `cargo test`), `windows-acl-proof` and `ownership-flag-on`, which multi-session ownership
+made required while it shipped dark and which leaves the required set once branch protection is
+changed after the flip; `coverage`, CodeQL and `vitest-windows`
 report but do not block. `vitest-windows` is advisory: it runs the build and the full vitest suite on Windows, which
 `check` does not, so read it even though it cannot stop a merge. Compare a red one with the job's
 latest run on `master`: a failure `master` also has is not yours. A new one usually is, and a test

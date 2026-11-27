@@ -59,6 +59,21 @@ describe("buildCommentNotificationText (#2360)", () => {
     ).toBe("Claude sent 2 replies to your comments");
   });
 
+  it("words a local model's answer as chat does: never by name, mixed batches neutral (#1123)", () => {
+    const local = {
+      agentIdentity: { provider: "local-ollama" as const, displayName: "Llama Secret" },
+    };
+    const one = buildCommentNotificationText([item("a", local)], "document", names);
+    expect(one.title).toBe("Your local model replied to your comment in report.md");
+    expect(one.title).not.toContain("Llama");
+    expect(
+      buildCommentNotificationText([item("a", local), item("b", local)], "generic", names).title,
+    ).toBe("Your local model sent 2 replies to your comments");
+    expect(
+      buildCommentNotificationText([item("a"), item("b", local)], "generic", names).title,
+    ).toBe("2 new replies to your comments");
+  });
+
   it("cleans a file name's bidi controls", () => {
     const sneaky = (id: string) => (id === "doc-1" ? "report\u202Edm.exe" : null);
     expect(buildCommentNotificationText([item("a")], "document", sneaky).title).toBe(
@@ -78,6 +93,13 @@ describe("toCommentAnswerItem", () => {
         timestamp: 5,
       }),
     ).toMatchObject({ id: "rpl_1", documentId: "doc-1", annotationId: "ann_1", author: "claude" });
+  });
+
+  it("carries a local model's identity, and adds none to a Claude answer", () => {
+    const base = { documentId: "doc-1", annotationId: "a", replyId: "r", text: "t", timestamp: 5 };
+    const agentIdentity = { provider: "local-ollama" as const, displayName: "M" };
+    expect(toCommentAnswerItem({ ...base, agentIdentity }).agentIdentity).toEqual(agentIdentity);
+    expect("agentIdentity" in toCommentAnswerItem(base)).toBe(false);
   });
 });
 

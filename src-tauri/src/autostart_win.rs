@@ -179,7 +179,7 @@ impl Registration<'_> {
         }
         Ok(self
             .startup_approved_bytes()
-            .map_or(true, |bytes| win_startup_approved_allows(&bytes)))
+            .is_none_or(|bytes| win_startup_approved_allows(&bytes)))
     }
 
     /// The StartupApproved bytes, or `None` when there are none to read. Any

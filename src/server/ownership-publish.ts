@@ -2,7 +2,7 @@
  * The ownership state the editor reads, published and guarded (#2358 PR 5a-3,
  * ADR-054's 5a-3 amendment; ownership design §10.2, §10.3).
  *
- * **Ships dark.** Every export returns at its first line while ownership is
+ * **Flag-gated** (on since the flip). Every export returns at its first line while ownership is
  * off: no observer is attached, no timer is armed, `Y_MAP_OPEN_DOCUMENTS`
  * entries carry no owner field (`publishedOwnerFields` answers undefined) and
  * `CTRL_ROOM` gains no key.

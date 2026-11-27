@@ -6,7 +6,11 @@ authors = ["Bryan Kolb"]
 license = "BUSL-1.1"
 repository = "https://github.com/bloknayrb/tandem"
 edition = "2021"
-rust-version = "1.77.2"
+# 1.95: the floor of the Windows build, set by `windows-version` 0.100
+# (below), the highest rust-version of any dependency on the default build.
+# Clippy's `incompatible_msrv` reads this value, so it is the real floor, not
+# an aspiration. The reaper crate (reaper/Cargo.toml) keeps its own, lower one.
+rust-version = "1.95"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -74,10 +78,8 @@ tauri-plugin-devtools = { version = "2", optional = true }
 # platform graphics chain in release builds. Upstream's suggested
 # `#[cfg(debug_assertions)]` gates the registration *call*, not the dep graph.
 #
-# MSRV: this crate declares rust-version 1.97, above tandem-desktop's 1.77.2.
-# Optional keeps that off the default build — `cargo build` / `cargo test`
-# without the feature never resolve it — but building WITH the feature needs a
-# toolchain >= 1.97. See CONTRIBUTING.md.
+# MSRV: 0.1.6 declares rust-version 1.91, below tandem-desktop's 1.95, so the
+# feature build needs nothing newer than the default one. See CONTRIBUTING.md.
 tauri-plugin-ui-inspector = { version = "0.1", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -89,8 +91,8 @@ tauri-plugin-window-state = "2"
 # that reports a desktop notification click to `on_action`. On macOS a click is
 # reported only for a notification with an action button (notify-rust 4.18
 # waits for nothing else), so a chat reply there carries an "Open chat" action;
-# see CHAT_REPLY_ACTION_TYPE. MSRV: it declares rust-version 1.90, above
-# tandem-desktop's 1.77.2 — CI builds on stable.
+# see CHAT_REPLY_ACTION_TYPE. MSRV: 2.8 declares rust-version 1.90, within
+# tandem-desktop's 1.95.
 tauri-plugin-notification = "2.6"
 tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "6"
@@ -169,11 +171,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Reads the running Windows build number via `RtlGetVersion` (the standard
-# way to bypass `GetVersionEx`'s manifest-gated lies). Same crate — same
-# version, already resolved transitively via `tao` — that Tauri's own
-# dark-mode support uses to gate the uxtheme ordinal it resolves; used here
-# so `win_app_mode`'s build >= 18362 guard matches that precedent exactly
-# rather than re-deriving a parallel version-detection mechanism.
+# way to bypass `GetVersionEx`'s manifest-gated lies). The same crate that
+# Tauri's own dark-mode support uses (via `tao`) to gate the uxtheme ordinal
+# it resolves, though not the same version: tao resolves 0.1.7, this 0.100.
+# Used so `win_app_mode`'s build >= 18362 guard matches that precedent rather
+# than re-deriving a parallel version-detection mechanism. MSRV: 0.100
+# declares rust-version 1.95, which is why tandem-desktop's is 1.95.
 windows-version = "0.100"
 
 [features]

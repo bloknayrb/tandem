@@ -2,7 +2,7 @@
 /**
  * Is the BUILT server bundle ownership-on or ownership-off? (#2358, ADR-054)
  *
- * Ownership ships dark behind the `__OWNERSHIP_ENABLED__` define. Every source-
+ * Ownership is decided by the `__OWNERSHIP_ENABLED__` define (on since the flip). Every source-
  * level pin (the literal, the tsup block, the identifier `ownership-flag.ts`
  * reads) can be green while the artifact is wrong — a misspelled identifier or a
  * dropped define leaves the bundle falling back to the `TANDEM_OWNERSHIP` env
@@ -21,12 +21,18 @@
  * it off it must succeed. Requiring the owner's own write keeps a bundle that
  * refuses everything from passing as "on".
  *
- *   --expect on   the child gets NO `TANDEM_OWNERSHIP`, so only the define can
- *                 turn it on (the `ownership-flag-on` job, after
- *                 scripts/ci/build-ownership-on.ts);
+ *   --expect on   the child gets `TANDEM_OWNERSHIP=0`, so only the define can
+ *                 turn it on: a bundle that fell back to the env var would read
+ *                 it off and fail. Set rather than absent, because since the
+ *                 flip an UNSET variable follows the bundled `true` literal, so
+ *                 a define-less bundle would pass with no variable (`check`,
+ *                 after the normal build, and the `ownership-flag-on` job,
+ *                 after scripts/ci/build-ownership-on.ts);
  *   --expect off  the child gets `TANDEM_OWNERSHIP=1`, so a bundle that fell
- *                 back to the env var would turn on and fail (`check`, after the
- *                 normal build: a release ignores the variable).
+ *                 back to the env var would turn on and fail. No CI step runs
+ *                 it since the flip (before it, `check` did, to prove a dark
+ *                 release ignored the variable): every release bundle is
+ *                 ownership-on now and fails it by design.
  *
  * The child's environment is built here from scratch (`serverEnvFor`), never
  * inherited: a home, app-data and config directories inside one temp dir, so a
@@ -216,7 +222,8 @@ export function reservedPorts(testPortsSource) {
 /**
  * The child's whole environment. Pure. Inherits PATH (and Windows' SystemRoot,
  * which Node needs there) and nothing else: no token, no bind host, no data
- * dir, no TANDEM_OWNERSHIP from the parent. Every home and data location points
+ * dir, no TANDEM_OWNERSHIP from the parent (the variable is set here, to the
+ * value that would contradict the expectation). Every home and data location points
  * into `dir`; `XDG_DATA_HOME` in particular, because the auth token file lives
  * under env-paths' data dir and ignores `TANDEM_APP_DATA_DIR`.
  *
@@ -244,7 +251,7 @@ export function serverEnvFor(expect, dir, ports, parentEnv) {
   env.TANDEM_NO_SAMPLE = "1";
   env.TANDEM_DISABLE_LAUNCHER = "1";
   env.TANDEM_DISABLE_FIRST_RUN_WIZARD = "1";
-  if (expect === "off") env.TANDEM_OWNERSHIP = "1";
+  env.TANDEM_OWNERSHIP = expect === "off" ? "1" : "0";
   return env;
 }
 

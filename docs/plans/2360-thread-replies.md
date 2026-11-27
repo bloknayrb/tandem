@@ -537,7 +537,9 @@ must not be in that release. The alternative is to fold C into the flip PR (Q1).
 **Q3. An "I'm on it" inside a thread** (ownership design §5.5 requires a marker).
 - (a) An `inProgress` input, flag on only: it settles nothing, sets no answerer, and is not exported
   to `.docx`. *(Recommended: it matches `tandem_reply`.)* The v0.31.0 chime fires twice, once for
-  the acknowledgement and once for the answer.
+  the acknowledgement and once for the answer. *(Superseded 2026-11-26 by Bryan's pick "Quiet it, like chat": the
+  acknowledgement shows in the thread but neither chimes nor notifies; only the answer does. See
+  ADR-054's PR C amendment.)*
 - (b) No in-thread acknowledgement. The skill acknowledges in chat, and every thread reply is
   final.
 - **Answer.** Bryan, 2026-11-26: **"Yes, as in-progress (Recommended)"** — (a).
@@ -624,6 +626,15 @@ the parent record; forged pre-flip chat `replyTo` rows).
   is retired like any other, so a handled mark that is later lost (the load sweep on an untrusted
   room) re-owes the item instead of leaving it read as delivered. ADR-054's #2360 PR B amendment
   records it.
+- **Closed in PR C (2026-11-26): row S.** The skill (version 43; master's ADR-057 had taken 42, and the flip bumps it to 44), `docs/mcp-tools.md` and the
+  local model's `reply_to_annotation` description carry the switch, and row S is deleted.
+  Decisions the plan left open, recorded in ADR-054's #2360 PR C amendment: the skill describes
+  the lit server, as §5 says, with one fallback that keeps it right against a dark or older server
+  (a user's comment refused `NOT_OWNED`: do what the refusal says); the local model's description
+  is read per request through `clientWritesUndoneGrant()`, byte-identical dark. Its editing
+  prompt still limits it to ids it created in the same reply, and the harness fingerprint records
+  the dark description; neither changed here. The `CHANGELOG.md` entry says the v0.31.0 chime and
+  notification now fire.
 
 ## 9. Review dispositions
 

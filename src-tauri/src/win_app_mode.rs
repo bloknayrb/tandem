@@ -148,10 +148,10 @@ const MIN_BUILD_FOR_APP_MODE: u32 = 18362;
 fn uxtheme_module() -> Option<HMODULE> {
     static MODULE: OnceLock<isize> = OnceLock::new();
     let handle = *MODULE.get_or_init(|| {
-        // SAFETY: "uxtheme.dll\0" is a valid, static, NUL-terminated ANSI
+        // SAFETY: c"uxtheme.dll" is a valid, static, NUL-terminated ANSI
         // string. The returned handle is checked for null before use and is
         // never passed to FreeLibrary, so it stays valid for every later call.
-        let h = unsafe { LoadLibraryA(b"uxtheme.dll\0".as_ptr()) as isize };
+        let h = unsafe { LoadLibraryA(c"uxtheme.dll".as_ptr().cast()) as isize };
         if h == 0 {
             // Genuinely abnormal (Server Core, a hardened image, DLL
             // redirection) and quite different from "this build predates the

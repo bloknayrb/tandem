@@ -114,6 +114,13 @@ export type LauncherStatus =
       heldForLocalModel?: true;
       /** Loopback-only, flag on only (#2358 PR 3b-2e1): see the stopped arm. */
       bindFailed?: true;
+      /** Loopback-only (Bryan, 2026-11-27, "401 only signs out
+       * (Recommended)"): Tandem's Claude's last API error was a 403 — its
+       * credential was accepted and the request refused — and no turn has
+       * succeeded since. It keeps running; Settings shows an access error.
+       * Never a sign-in failure (`needs-login` is a 401). Cleared by a
+       * successful turn and by the next spawn. Absent from an older server. */
+      accessDenied?: true;
       /** Loopback-only, and only while multi-session ownership is on (#2358
        * PR 3b-2e1, ownership design §3.3's Ruling C): the MCP connections
        * bound to this run of Tandem's Claude, one row each, by kind alone.
@@ -272,7 +279,12 @@ export function isPromotableByStartRoute(reason: LauncherUnavailableReason | und
  * `restart` chip as `circuit-open`, with no client change.
  *
  * `needs-login` (#1780): the Claude CLI runs but is not signed in — it answered
- * a turn with its "Not logged in" refusal, so the supervisor stopped retrying.
+ * a turn with its "Not logged in" refusal, or with an error result whose
+ * `api_error_status` is 401 (a sign-in or API key that is not valid, smoke S3
+ * on #2358; `signInFailureOf`), so the supervisor stopped retrying. A 403 is
+ * not this code: the credential was valid and access was refused, so Tandem's
+ * Claude keeps running and the running status carries `accessDenied` instead
+ * (Bryan, 2026-11-27, "401 only signs out (Recommended)").
  * The remedy is to sign in (`claude` in a terminal) and re-check, which the
  * client offers as its own `sign-in` chip rather than a bare restart.
  *
@@ -603,8 +615,12 @@ export const TANDEM_CLASSIFIER_GATED_TOOLS = [
  *   - `mcp__plugin_tandem_tandem__<tool>` — the plugin's server: `plugin.json`
  *     names it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
  *
- * The opt-in channel shim's server (`tandem-channel`) is deliberately absent:
- * a supervised session never loads it (see `CLAUDE_STREAM_JSON_FLAGS`).
+ * The opt-in channel shim's server (`tandem-channel`) is deliberately absent.
+ * A user-scope `tandem-channel` entry does load in a supervised session
+ * (smoke S1 on Windows, #2358, 2026-11-26), but the session never takes a turn
+ * from it (see `CLAUDE_STREAM_JSON_FLAGS`), and with ownership on its one tool,
+ * `tandem_reply`, is refused for the launcher's own child (`channelReplyGate`):
+ * pre-approving it would grant nothing.
  *
  * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
  * fails toward "auto mode alone decides" rather than toward a crash.

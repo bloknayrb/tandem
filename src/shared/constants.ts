@@ -171,21 +171,24 @@ export const COWORK_ENABLED = false;
 export const LAN_BIND_ENABLED = false;
 
 /**
- * Multi-session document ownership ships DARK (#2358, ADR-054): while it is
- * off, Tandem behaves exactly as it did before the ownership series began.
+ * Multi-session document ownership (#2358, ADR-054): on since the flip PR
+ * (ADR-054's flip amendment). Each document and each chat message has one
+ * owner session, and only it answers.
  *
  * This literal is the release truth. `tsup.config.ts` injects it into the
  * server and cli bundles as `__OWNERSHIP_ENABLED__` (read by
- * `src/server/ownership-flag.ts`, where the define wins and the
- * `TANDEM_OWNERSHIP=1` env fallback exists only for tsx and vitest), so no
- * environment variable can turn ownership on in a release. The client reads no
- * flag: everything it would show rides on fields a dark server never writes.
+ * `src/server/ownership-flag.ts`, where the define wins), so no environment
+ * variable changes ownership in a release. Without a define (tsx, vitest) the
+ * flag follows this literal unless `TANDEM_OWNERSHIP` is set, which tests use
+ * to run the dark path (`""`). The client reads no flag: everything it shows
+ * rides on fields a dark server never writes.
  *
- * `tests/server/ownership-flag.test.ts` pins this literal, and the
- * `ownership-flag-on` CI job builds with the define forced on and runs the
- * suites flag-on. Flipping it is the series' last PR (design v5 §17, PR 6).
+ * `tests/server/ownership-flag.test.ts` pins this literal; while it is `true`,
+ * that file also fails while any row of `tests/server/ownership-flip-blockers.ts`
+ * is open and not accepted. Setting it back to `false` is its own reviewed
+ * release, not a revert: the shipped skill describes the lit server.
  */
-export const OWNERSHIP_ENABLED = false;
+export const OWNERSHIP_ENABLED = true;
 
 export const DOCX_EXTENSION = ".docx";
 
@@ -791,6 +794,23 @@ export function keepsUnsavedEditsOnDiscard(doc: {
   readOnly?: boolean;
 }): boolean {
   return doc.source === "file" && doc.readOnly !== true && AUTO_SAVE_FORMATS.has(doc.format);
+}
+
+/**
+ * True when the compare view can show this document beside the file on disk
+ * or a backup (ADR-057 PR 4): plain text on both sides, from a real file. The
+ * server's `GET /api/document/compare` and the conflict banner's Compare
+ * button read this one predicate.
+ */
+export function canCompareWithDisk(doc: {
+  format: string;
+  source: string;
+  readOnly?: boolean;
+}): boolean {
+  // The same documents, by construction: Compare shows "the document as saving
+  // would write it" against what a discard would keep, so it exists exactly
+  // where those backups do (not read-only, which is never saved).
+  return keepsUnsavedEditsOnDiscard(doc);
 }
 
 /**

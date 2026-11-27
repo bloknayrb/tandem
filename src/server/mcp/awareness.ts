@@ -160,6 +160,27 @@ const replySurfacedIds = new Set<string>();
  */
 export const CHAT_ACK_DIRECTIVE = `The user sees nothing in chat until you reply. ${CHAT_ACK_RULE} If several arrived together, reply to the latest. Skip any you have already answered`;
 
+/**
+ * Follows `CHAT_ACK_DIRECTIVE` in the summary of a scoped poll (ownership on,
+ * the flip): a reply naming a message another session answers is refused, and
+ * the refusal carries what to do instead.
+ */
+export const CHAT_REFUSED_DIRECTIVE =
+  "If a reply is refused because another session answers that message, do not send it again; do what the refusal says";
+
+/**
+ * `tandem_checkInbox`'s description. Two texts, chosen once per registration
+ * by the same flag that decides its `ownership` output field: the second is
+ * the lit server's (#2358 ADR-054's flip amendment; the flip-blocker row on
+ * this description), where a poll reads only what is the caller's to answer.
+ * The first is master's from before ownership, byte for byte, for a build or
+ * test run with ownership off.
+ */
+export const CHECK_INBOX_DESCRIPTION =
+  "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats on every poll until you pass a cursor from a response that held it, so a lost response loses nothing, and once a poll of yours has read a document, another session's polls never hide its items from you (\"start\" skips what another session acknowledged). Chat is marked read when you acknowledge it, and a chat message you answered with tandem_reply `replyTo` is not repeated. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Omit `documentId` to cover every open document: each item carries its `documentId`, so pass that id when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`); `chatMessages` spans every document. Works with no document open. This is the authoritative delivery path: a push cannot be confirmed to have reached you, so nothing here is suppressed on its strength; `alreadyPushed: true` describes the server's side only. Never returns user notes or other private records. In solo mode the user's comments and replies are held until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one (it is not cleared when focus leaves the editor), and `activity.selectionAt` is when the user made it. If the text at that selection has changed since (e.g. you edited a document no editor is showing), both are null.";
+export const CHECK_INBOX_DESCRIPTION_OWNED =
+  "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. You are handed only what is yours to answer: the open documents you hold or may take now (`ownership.holding`; `ownership.notYours` lists those another session answers) and your chat. `holding` is the truth; `ownership.changed` only explains past changes to it, may be incomplete, and changes nothing you may do. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats until you pass a cursor from a response that held it, so a lost response loses nothing, except an accept/dismiss notice whose document has left you. When a document changes hands, its items are handed again, unmarked, to whoever answers it now. Chat is marked read when you acknowledge it; one answered by your final tandem_reply `replyTo` is not repeated; a reply to chat not yours is refused. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Omit `documentId` to cover all of that. Pass an item's `documentId` when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`). Works with no document open. Authoritative: nothing is suppressed because it was pushed; `alreadyPushed: true` describes the server's side only. Never returns user notes or private records. Solo mode holds user comments and replies. `activity.selectedText` is the latest non-empty selection, not necessarily the current one, made at `activity.selectionAt`; both are null if that text has changed since.";
+
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
   return documentItemKey(documentId, itemId);
@@ -3465,14 +3486,15 @@ export function registerAwarenessTools(server: McpServer): void {
   server.registerTool(
     "tandem_checkInbox",
     {
-      description:
-        "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats on every poll until you pass a cursor from a response that held it, so a lost response loses nothing, and once a poll of yours has read a document, another session's polls never hide its items from you (\"start\" skips what another session acknowledged). Chat is marked read when you acknowledge it, and a chat message you answered with tandem_reply `replyTo` is not repeated. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Omit `documentId` to cover every open document: each item carries its `documentId`, so pass that id when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`); `chatMessages` spans every document. Works with no document open. This is the authoritative delivery path: a push cannot be confirmed to have reached you, so nothing here is suppressed on its strength; `alreadyPushed: true` describes the server's side only. Never returns user notes or other private records. In solo mode the user's comments and replies are held until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one (it is not cleared when focus leaves the editor), and `activity.selectionAt` is when the user made it. If the text at that selection has changed since (e.g. you edited a document no editor is showing), both are null.",
+      description: ownershipField ? CHECK_INBOX_DESCRIPTION_OWNED : CHECK_INBOX_DESCRIPTION,
       inputSchema: {
         documentId: z
           .string()
           .optional()
           .describe(
-            "Limit comments, replies and accept/dismiss responses to one document. Omit it to poll every open document — the usual call",
+            ownershipField
+              ? "Limit comments, replies and accept/dismiss responses to one document. Omit it to poll every open document that is yours to answer — the usual call"
+              : "Limit comments, replies and accept/dismiss responses to one document. Omit it to poll every open document — the usual call",
           ),
         cursor: z
           .string()
@@ -3630,6 +3652,9 @@ export function registerAwarenessTools(server: McpServer): void {
               `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
             );
             parts.push(CHAT_ACK_DIRECTIVE);
+            // With ownership on a reply can be refused (another session answers
+            // that message), so the directive says what to do then (the flip).
+            if (ownershipField && scope.scoped) parts.push(CHAT_REFUSED_DIRECTIVE);
             // #1123 A2, R2.4: chat owed to Claude when a local period began,
             // handed after it, is marked old — the set, never time, decides.
             if (chat.owedAtSwitch.length > 0) {
@@ -3711,7 +3736,9 @@ export function registerAwarenessTools(server: McpServer): void {
           // so notes and private records never appear there.
           if (decoded && !decoded.recognised) {
             actions +=
-              " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";
+              ownershipField && scope.scoped
+                ? " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything yours to answer not yet acknowledged."
+                : " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";
           }
           // Leads, so a model reading only the summary knows why the document
           // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
@@ -3991,7 +4018,11 @@ export function registerAwarenessTools(server: McpServer): void {
       documentId: z
         .string()
         .optional()
-        .describe("Document context for this reply (defaults to active document)"),
+        .describe(
+          ownershipField
+            ? "Document context for this reply. Omit it when replying to a message (`replyTo`): the reply takes that message's document, and a different one is refused. A post without it takes the active document only if you hold it"
+            : "Document context for this reply (defaults to active document)",
+        ),
     },
     withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }, caller) => {
       // Ownership (the chat owners PR, R5; the posts PR, R1; ownership design

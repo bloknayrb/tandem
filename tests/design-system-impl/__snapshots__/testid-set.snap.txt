@@ -98,6 +98,11 @@ clear-recent-files
 color-picker-close
 command-palette
 comment-thread
+compare-close
+compare-error
+compare-live
+compare-modal
+compare-refresh
 connection-banner
 connection-banner-live
 connection-banner-retry
@@ -167,6 +172,13 @@ decorations-settings-link
 default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
+diff-line
+diff-md-note
+diff-more
+diff-none
+diff-too-large
+diff-truncated
+diff-view
 dismiss-btn-{*}
 display-menu
 display-menu-measure-{*}
@@ -202,6 +214,7 @@ empty-state-start-fresh
 error-boundary-recover-btn
 error-boundary-reload-btn
 external-conflict-banner
+external-conflict-compare-btn
 external-conflict-keep-btn
 external-conflict-live
 external-conflict-reload-anyway-btn
@@ -537,6 +550,7 @@ settings-modal-solo-rail-hidden-toggle
 settings-modal-tab-{*}
 settings-modal-tandem-claude
 settings-modal-tandem-claude-absent
+settings-modal-tandem-claude-access-denied
 settings-modal-tandem-claude-bind-failed
 settings-modal-tandem-claude-bound-transport
 settings-modal-tandem-claude-bound-transports
@@ -627,6 +641,9 @@ updater-banner-live
 updater-banner-visible
 version-history-cancel
 version-history-close
+version-history-compare
+version-history-compare-back
+version-history-compare-view
 version-history-confirm
 version-history-empty
 version-history-error
