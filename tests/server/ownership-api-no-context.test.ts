@@ -76,6 +76,11 @@ const DRIVEN: Array<{
     body: (id) => ({ documentId: id, backup: "none.md" }),
   },
   {
+    constant: "API_BACKUPS_ACKNOWLEDGE",
+    method: "post",
+    body: (id) => ({ documentId: id, backups: ["none.md"] }),
+  },
+  {
     constant: "API_EXTERNAL_CONFLICT_RESOLVE",
     method: "post",
     body: (id) => ({ documentId: id, choice: "keep" }),

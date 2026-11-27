@@ -622,17 +622,18 @@ If a saved session file is corrupt, Tandem quarantines it instead of failing the
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. It also keeps your **unsaved edits** there when Claude reloads a document from disk, restores a backup over it, or closes it while it holds edits that hadn't been saved yet. The editor tells you when that happens. If a save ever mangles your file, you want yesterday's version back, or you want those unsaved edits back, there are three ways to restore:
+Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. It also keeps your **unsaved edits** there when Claude reloads a document from disk, restores a backup over it, or closes it while it holds edits that hadn't been saved yet. The "file changed on disk" banner adds both sides: **Keep my edits** keeps the version on disk before your next save overwrites it, and **Reload from file** keeps your unsaved edits before it discards them. The editor tells you when that happens. If a save ever mangles your file, you want yesterday's version back, or you want those unsaved edits back, there are three ways to restore:
 
-- **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
-- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach. Each one is labelled `disk` (the file as it was on disk) or `unsaved` (edits Claude's action discarded). When Claude's action keeps your edits, it tells Claude the backup's name, so you can simply ask for them back.
+- **In the app:** open the command palette (Ctrl+Shift+P) and run "Version history: restore a backup…". It lists every backup of the document, newest first, labelled "Your unsaved edits" or "File on disk", and restores the one you pick. The document reloads in place; annotations are preserved. Any unsaved edits the document has are kept as a backup first, and the version on disk is copied before it is overwritten, so a restore made here can itself be undone from the same list. If the edits can't be kept (the backup folder is full or not writable), nothing is restored and the row offers **Restore anyway**, which discards them. When Claude has kept your edits, a banner above the document says so until you dismiss it; its **Version history** button opens the same list.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name. Each one is labelled `disk` (the file as it was on disk) or `unsaved` (edits Claude's action discarded). When Claude's action keeps your edits, it tells Claude the backup's name, so you can simply ask for them back.
 - **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
 - up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), plus one more while Tandem runs: the copy taken before its first write that run (and, during a restore, the copy being restored is never removed either),
 - up to 3 copies of unsaved edits, named the same way with `-unsaved` before the extension, e.g. `thesis-20260609-142200-9f8e7d6c-unsaved.md`, and
-- a `source.txt` recording the original file's full path.
+- a `source.txt` recording the original file's full path, and
+- once Claude has kept your edits, a `kept-unseen.json` listing the kept edits you have not been shown yet (what the "your edits were kept" banner reads). Deleting it only hides the banner; the edits stay in Version history.
 
 To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 
