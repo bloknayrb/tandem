@@ -523,8 +523,8 @@ export async function runMcpStdio(): Promise<void> {
   upstreamHeaders[TANDEM_CLIENT_ID_HEADER] = randomUUID();
   // The owner handle (#2358 PR 3a, design §3.3 route L): read once, here, and
   // presented only to the server whose launcher named it (R2.2). Unconditional:
-  // this bundle reads no flags, and nothing sets the variable while ownership
-  // is dark. Silent on every outcome: never echoed, never logged, never on
+  // this bundle reads no flags; the launcher writes both handle variables into
+  // every run config while ownership is on (every release since the flip). Silent on every outcome: never echoed, never logged, never on
   // stderr (Claude Code captures that into its own logs).
   const ownerHandle = ownerHandleForUpstream(baseUrl, process.env);
   if (ownerHandle !== undefined) upstreamHeaders[OWNER_HANDLE_HEADER] = ownerHandle;

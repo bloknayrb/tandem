@@ -69,6 +69,8 @@ pub enum BoundedOutcome {
     /// means it started answering and then stalled (the CIM query hung after the
     /// marker line). They are `0` when the reader could not complete at all,
     /// which is honest: we do not know.
+    // Read by `firewall.rs` (Windows); tests read `pid` on every host.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     TimedOut {
         pid: u32,
         partial_stdout_len: usize,
@@ -211,11 +213,8 @@ fn spawn_reader<R: Read + Send + 'static>(pipe: Option<R>) -> Receiver<Vec<u8>> 
                 // Dropping `tx` instead surfaces as `Disconnected`, which the
                 // `.ok()` at both call sites already maps to `None`, and thence
                 // to `TimedOut` — "we stopped waiting", which is honest.
-                match pipe.read_to_end(&mut buf) {
-                    Ok(_) => {
-                        let _ = tx.send(buf);
-                    }
-                    Err(_) => {}
+                if pipe.read_to_end(&mut buf).is_ok() {
+                    let _ = tx.send(buf);
                 }
             });
         }

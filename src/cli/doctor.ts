@@ -1346,14 +1346,30 @@ function reportBridgeEntry(
 }
 
 /**
+ * What a direct-HTTP entry costs while it stays one, with ownership on. Ends
+ * every arm's fix in {@link reportDirectHttpEntry}, so each remedy says why it
+ * matters.
+ */
+export const DIRECT_HTTP_OWNERSHIP_COST =
+  "While this entry is direct HTTP, Tandem can't tell that a terminal's Tandem toolsets are one session: a terminal " +
+  "that also has the Tandem plugin counts as two sessions, so writing through one toolset to a " +
+  "document it opened through the other is refused, and replies sent through the optional " +
+  "channel shim are refused. Each refusal says what to do.";
+
+/**
  * The direct-HTTP entry Tandem used to write. Whether the next start switches
  * it depends on whether this install can write the bridge at all, so the fix
  * never offers a step that would write the same entry again.
  *
- * The cost is stated for a release where ownership is still dark: the server
- * cannot tell which Claude Code session is calling, which today means Tandem's
- * own Claude cannot be confirmed connected without the plugin, and its earlier
- * connection can be mistaken for another AI.
+ * The cost is stated for a release with multi-session ownership on (every
+ * release since its flip, ADR-054; ownership design §3.1, §9.3, §14 items 3
+ * and 8): the entry sends no Claude Code session id, so the server cannot tell
+ * which terminal is calling. A terminal that also has the plugin is two
+ * sessions to it, and a write through one toolset to a document opened
+ * through the other is refused; the opt-in channel shim's replies are refused.
+ * Tandem's own Claude no longer depends on this entry (the launcher's own run
+ * config names its bridge), so the dark-era cost (its own Claude unconfirmed,
+ * its earlier connection read as another AI) is not stated.
  */
 async function reportDirectHttpEntry(
   r: Recorder,
@@ -1375,7 +1391,8 @@ async function reportDirectHttpEntry(
         "an npx run, or a desktop app whose own copy of the bridge could not be made), so it " +
         "never switches the entry. The entry still works. An installed Tandem " +
         "(`npm install -g tandem-editor`, or the desktop app installed normally) switches it " +
-        "when it starts; then restart any Claude Code terminal that was open.",
+        "when it starts; then restart any Claude Code terminal that was open. " +
+        DIRECT_HTTP_OWNERSHIP_COST,
     );
     return;
   }
@@ -1384,7 +1401,7 @@ async function reportDirectHttpEntry(
       message,
       "Tandem is running from macOS's quarantine copy, which moves on every launch, so it keeps " +
         "this entry. Move Tandem to Applications, open it from there, and it switches the entry " +
-        "when it starts.",
+        `when it starts. ${DIRECT_HTTP_OWNERSHIP_COST}`,
     );
     return;
   }
@@ -1398,7 +1415,7 @@ async function reportDirectHttpEntry(
         "anywhere but Program Files or your user folder (or through a folder named in 8.3 short " +
         "form, such as C:\\PROGRA~1). Install Node 22.12 or newer where " +
         "Tandem's PATH can see it (for an npm install, on the PATH of the shell you start " +
-        `Tandem from), then restart Tandem. ${desktopPathAside()}`,
+        `Tandem from), then restart Tandem. ${desktopPathAside()} ${DIRECT_HTTP_OWNERSHIP_COST}`,
     );
     return;
   }
@@ -1419,7 +1436,8 @@ async function reportDirectHttpEntry(
         `with. ${desktopPathAside()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
         "too. If the entry is " +
         "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
-        "\"Claude Code's 'tandem' entry stays direct HTTP\".",
+        "\"Claude Code's 'tandem' entry stays direct HTTP\". " +
+        DIRECT_HTTP_OWNERSHIP_COST,
     );
     return;
   }
@@ -1427,9 +1445,7 @@ async function reportDirectHttpEntry(
   r.warn(
     message,
     `Restart Tandem (it switches this entry when it starts), or ${setupStep(cliAvailable())}; ` +
-      "then restart any Claude Code terminal that was open. Until it switches, Tandem can't " +
-      "confirm its own Claude is connected unless the Tandem plugin is installed, and may " +
-      "decline to start it while that Claude's earlier connection lingers.",
+      `then restart any Claude Code terminal that was open. ${DIRECT_HTTP_OWNERSHIP_COST}`,
   );
 }
 

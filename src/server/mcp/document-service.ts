@@ -40,6 +40,13 @@ import {
   markCleanIfUnchanged,
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
+import {
+  type KeptBackup,
+  keepUnsavedEdits,
+  notifyUnsavedEditsKept,
+  reportKeptBackupOnFailure,
+  unsavedEditsOf,
+} from "../documents/keep-unsaved.js";
 import { openFromRestore } from "../documents/open.js";
 import {
   clearReadOnlyFileState,
@@ -1826,9 +1833,22 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
  */
 export async function closeDocumentById(
   id: string,
+  opts?: {
+    /**
+     * Keep the document's unsaved edits as a backup before the close discards
+     * them (ADR-057). Passed by `tandem_close` alone; `POST /api/close` (the
+     * browser, which confirms its own closes) is unchanged.
+     */
+    keepUnsavedEdits?: boolean;
+  },
 ): Promise<
-  | { success: true; closedPath: string; activeDocumentId: string | null }
-  | { success: false; error: string }
+  | {
+      success: true;
+      closedPath: string;
+      activeDocumentId: string | null;
+      unsavedEditsKept?: KeptBackup;
+    }
+  | { success: false; error: string; code?: "BACKUP_FAILED" }
 > {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input through Map.get(id) to docState.filePath FS sinks
@@ -1850,6 +1870,65 @@ export async function closeDocumentById(
   }
 
   const closedPath = docState.filePath;
+
+  // ADR-057: keep the unsaved edits this close would discard, before any
+  // teardown, so a failed backup refuses the close with the document intact.
+  // Skipped where the close keeps its session below, edits and all: a pending
+  // conflict, or edits a read-only file refused (#2273). A close has no swap to
+  // re-read at, so edits typed between this await and the teardown are not
+  // kept — milliseconds, accepted in ADR-057.
+  let unsavedEditsKept: KeptBackup | undefined;
+  // Set when the backup was skipped because the session would be kept: the
+  // close below then keeps it whatever its own later probe says, so a file
+  // made writable in between cannot leave the edits with neither (ADR-057).
+  let backupSkippedForKeptSession = false;
+  // The writability probe's answer when this block took it, reused below so no
+  // await falls between the identity re-check and the teardown (ADR-057).
+  let probedNotWritable: boolean | undefined;
+  if (opts?.keepUnsavedEdits) {
+    const closingDocForBackup = getOrCreateDocument(safeId);
+    const notWritable = async (): Promise<boolean> => {
+      probedNotWritable = !(await isWritableOnDisk(docState.filePath));
+      return probedNotWritable;
+    };
+    const sessionWillBeKept =
+      readPendingConflict(closingDocForBackup) !== undefined ||
+      (isDirty(safeId) &&
+        (hasReadOnlyFileEpisode(safeId) || (docState.source === "file" && (await notWritable()))));
+    backupSkippedForKeptSession = sessionWillBeKept;
+    if (!sessionWillBeKept) {
+      try {
+        const edits = unsavedEditsOf(safeId, closingDocForBackup, docState);
+        // Not compared with the file first (as force-open and restore compare
+        // with what replaces the edits): that would be a new read of a path
+        // reached from the caller's document id, a CodeQL js/path-injection
+        // sink. The cost is a backup, and a notice, for a dirty flag over text
+        // that already matches disk — harmless, and the byte-identical skip
+        // keeps a repeat from writing again.
+        if (edits !== null) unsavedEditsKept = await keepUnsavedEdits(docState.filePath, edits);
+      } catch (err) {
+        // A failed snapshot, the size cap, or edits the serializer could not
+        // write: all `BACKUP_FAILED`, the code the skill keys on.
+        return { success: false, error: (err as Error).message, code: "BACKUP_FAILED" };
+      }
+    }
+    // The checks above awaited disk I/O. If the document was closed (and
+    // perhaps reopened: `POST /api/close` is not queued) meanwhile, the
+    // teardown below would act on a document this call never looked at. A
+    // backup already written is still reported.
+    if (openDocs.get(safeId) !== docState) {
+      const err = reportKeptBackupOnFailure(
+        new Error(
+          `Document ${id} was closed or reopened while this close was in progress; nothing was closed.`,
+        ),
+        safeId,
+        docState.filePath,
+        "close",
+        unsavedEditsKept,
+      ) as Error;
+      return { success: false, error: err.message };
+    }
+  }
 
   // Stop watching for external changes BEFORE reading the pending-conflict
   // flag below (review finding). A file-watcher debounce timer can still be
@@ -1884,11 +1963,20 @@ export async function closeDocumentById(
   // Probed as well as remembered: after a restart the episode is gone until
   // the next save attempt, and a restored tab closed in that window would
   // otherwise lose the edits the previous close kept.
+  // A Claude close reuses the probe its backup step took, so nothing awaits
+  // between that step's identity re-check and the teardown (ADR-057).
   const readOnlyBlockedAtClose =
     isDirty(safeId) &&
     (hasReadOnlyFileEpisode(safeId) ||
-      (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
-  const keepSession = conflictAtClose !== undefined || readOnlyBlockedAtClose;
+      (docState.source === "file" &&
+        (probedNotWritable ?? !(await isWritableOnDisk(docState.filePath)))));
+  // The skipped-backup case keeps the session only while there is still
+  // something to keep: a conflict the user answered with Reload during this
+  // call's awaits leaves a clean document, whose kept session would only
+  // reopen a closed tab at the next start.
+  const keptForSkippedBackup = backupSkippedForKeptSession && isDirty(safeId);
+  const keepSession =
+    conflictAtClose !== undefined || readOnlyBlockedAtClose || keptForSkippedBackup;
   if (keepSession) {
     try {
       await saveSession(docState.filePath, docState.format, closingDoc, {
@@ -1967,7 +2055,11 @@ export async function closeDocumentById(
     console.warn(
       "[Tandem] Keeping the session for %s: closed with %s, so the session holds the only copy of its unsaved edits.",
       path.basename(closedPath),
-      conflictAtClose ? "an unresolved external conflict" : "edits a read-only file refused",
+      conflictAtClose
+        ? "an unresolved external conflict"
+        : readOnlyBlockedAtClose
+          ? "edits a read-only file refused"
+          : "unsaved edits that were not backed up",
     );
   } else {
     try {
@@ -1981,7 +2073,13 @@ export async function closeDocumentById(
     stopAutoSave();
   }
 
-  return { success: true, closedPath, activeDocumentId: getActiveDocId() };
+  if (unsavedEditsKept) notifyUnsavedEditsKept(safeId, closedPath, "close", unsavedEditsKept);
+  return {
+    success: true,
+    closedPath,
+    activeDocumentId: getActiveDocId(),
+    ...(unsavedEditsKept ? { unsavedEditsKept } : {}),
+  };
 }
 
 /** Save all open sessions (for shutdown handler). */

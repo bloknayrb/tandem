@@ -22,6 +22,18 @@
  * Layout: `${appDataDir}/doc-backups/<pathHash>/<stem>-<YYYYMMDD-HHMMSS>-<uuid8><ext>`
  * plus `source.txt` recording the original absolute path. Plain copies —
  * restorable with any file manager, no Tandem needed.
+ *
+ * Two kinds of snapshot share that directory (ADR-057):
+ *  - `disk` — the on-disk bytes above, verbatim.
+ *  - `unsaved` — the open document's unsaved edits, serialized the way the next
+ *    autosave would have written them, kept just before a Claude action
+ *    (`tandem_open force`, `tandem_restoreBackup`, `tandem_close`) would discard
+ *    them (`snapshotUnsavedEdits`). Its name carries `-unsaved` before the
+ *    extension. It DOES pass through the serializer — it is the in-memory text,
+ *    there are no other bytes — and its failure contract is the opposite of the
+ *    disk kind's: the caller refuses the action rather than lose the edits.
+ * Each kind is pruned to `MAX_DOC_BACKUPS` separately, so Claude's actions can
+ * never evict the disk-kind snapshots that guard against serializer bugs.
  */
 
 import { randomUUID } from "node:crypto";
@@ -47,8 +59,34 @@ const DOC_BACKUP_DIR_NAME = "doc-backups";
 /** Records the original absolute path inside each per-path subdir. */
 const SOURCE_MARKER_FILENAME = "source.txt";
 
-/** Keep at most this many snapshots per document path. */
+/**
+ * The `unsaved` snapshots a Claude action kept that the user has not been
+ * shown yet, per path (ADR-057, PR 2): `{"unseen": ["<snapshot name>", …]}`.
+ * Decided when the snapshot is written — a Claude keep adds its name, the
+ * user's own keeps never do — and cleared by a Dismiss or by restoring that
+ * snapshot. Keyed by name alone, so a later mtime touch (`markSnapshotNewest`,
+ * a byte-identical re-keep's refresh) and a clock that moved cannot change the
+ * answer; a byte-identical re-keep by a NEW Claude action adds the name again.
+ * Never matches `SNAPSHOT_TAIL_RE`, so prune, listing and restore never treat
+ * it as a snapshot; the sweep removes it, and a stray temp of it, with its
+ * directory.
+ */
+const KEPT_UNSEEN_FILENAME = "kept-unseen.json";
+
+/** Its temp sibling during a write: the file name, a uuid8, `.tmp`. */
+const KEPT_UNSEEN_TEMP_RE = /^kept-unseen\.json\.[0-9a-f]{8}\.tmp$/;
+
+/** A larger file is not one this module wrote: read it as empty. */
+const KEPT_UNSEEN_MAX_BYTES = 64 * 1024;
+
+/** Keep at most this many snapshots per document path, per kind. */
 export const MAX_DOC_BACKUPS = 3;
+
+/** What a snapshot holds: the file's on-disk bytes, or the open document's unsaved edits. */
+export type DocBackupKind = "disk" | "unsaved";
+
+/** The tag an `unsaved` snapshot's name carries between its uuid8 and its extension. */
+const UNSAVED_TAG = "-unsaved";
 
 /**
  * Total-size ceiling for the whole doc-backups tree. Bounds confused-deputy
@@ -66,18 +104,34 @@ export const MAX_DOC_BACKUP_BYTES = 500 * 1024 * 1024;
 const SWEEP_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Matches a snapshot filename's `-YYYYMMDD-HHMMSS-<uuid8>` tail. The anchored
- * tail (not the variable stem) is the deletion boundary: `source.txt` and any
- * stray file can never match, so prune/sweep only ever touch files this module
- * wrote. Lexicographic sort on the full name is approximately newest-first
- * (constant stem + timestamp segment) but ties within the same second fall to
- * the random uuid8 — callers that need true recency order re-sort by mtime
- * (`listDocBackups`); prune avoids the tie by construction.
+ * Matches a snapshot filename's `-YYYYMMDD-HHMMSS-<uuid8>[-unsaved]` tail. The
+ * anchored tail (not the variable stem) is the deletion boundary: `source.txt`
+ * and any stray file can never match, so prune/sweep only ever touch files this
+ * module wrote. The kind tag lives in the tail, never in the user-derived stem,
+ * so a document named `x-unsaved.md` cannot pass for the other kind. Lexicographic
+ * sort on the full name is approximately newest-first (constant stem + timestamp
+ * segment) but ties within the same second fall to the random uuid8 — callers
+ * that need true recency order re-sort by mtime (`listDocBackups`); prune avoids
+ * the tie by construction.
  */
-const SNAPSHOT_TAIL_RE = /-\d{8}-\d{6}-[0-9a-f]{8}(\.[^.]*)?$/;
+const SNAPSHOT_TAIL_RE = /-\d{8}-\d{6}-[0-9a-f]{8}(-unsaved)?(\.[^.]*)?$/;
+
+/** The kind a snapshot filename names. Only meaningful for a name `SNAPSHOT_TAIL_RE` accepts. */
+export function snapshotKind(name: string): DocBackupKind {
+  return SNAPSHOT_TAIL_RE.exec(name)?.[1] === UNSAVED_TAG ? "unsaved" : "disk";
+}
 
 /** Paths (by hash) already snapshotted — or deliberately skipped — this run. */
 const snapshottedPaths = new Set<string>();
+
+/**
+ * Per path (by hash): the disk-kind snapshot that holds the file as it was
+ * before Tandem's first write this run — the serializer-bug net. Prune never
+ * removes it, so a run of restores (each snapshotting the bytes it overwrites,
+ * `ignoreRunGate`) cannot push it out (ADR-057). At most one extra file per
+ * path; it ages out normally once a later run pins its own.
+ */
+const pinnedFirstSnapshot = new Map<string, string>();
 
 /** One cap-exceeded notification per server run. */
 let sizeCapNotified = false;
@@ -99,6 +153,7 @@ const failureNotifiedPaths = new Set<string>();
  */
 export function _resetDocBackupGateForTests(): void {
   snapshottedPaths.clear();
+  pinnedFirstSnapshot.clear();
   sizeCapNotified = false;
   failureNotifiedPaths.clear();
   _resetPrivateDirAclForTests();
@@ -136,15 +191,23 @@ export function sanitizeBackupStem(stem: string): string {
   return safe;
 }
 
-/** Build a snapshot filename for `filePath` (e.g. `thesis-20260609-141500-ab12cd34.md`). */
-export function snapshotFilename(filePath: string, now: Date = new Date()): string {
+/**
+ * Build a snapshot filename for `filePath` (e.g. `thesis-20260609-141500-ab12cd34.md`,
+ * or `thesis-20260609-141500-ab12cd34-unsaved.md` for the `unsaved` kind).
+ */
+export function snapshotFilename(
+  filePath: string,
+  now: Date = new Date(),
+  kind: DocBackupKind = "disk",
+): string {
   const ext = path.extname(filePath);
   const stem = sanitizeBackupStem(path.basename(filePath, ext));
   // Extensions are server-validated at open/save-as time, but sanitize anyway
   // so this function is safe in isolation.
   const safeExt = sanitizeBackupStem(ext.replace(/^\./, ""));
   const uuid8 = randomUUID().slice(0, 8);
-  return `${stem}-${formatTimestamp(now)}-${uuid8}${safeExt ? `.${safeExt}` : ""}`;
+  const tag = kind === "unsaved" ? UNSAVED_TAG : "";
+  return `${stem}-${formatTimestamp(now)}-${uuid8}${tag}${safeExt ? `.${safeExt}` : ""}`;
 }
 
 /**
@@ -230,8 +293,8 @@ function logUnreadable(dir: string, err: unknown, repair: AclRepairOutcome): voi
   }
 }
 
-/** List snapshot filenames in a per-path subdir, newest first. */
-async function listSnapshots(dir: string): Promise<string[]> {
+/** List snapshot filenames in a per-path subdir, newest first; one kind when `kind` is given. */
+async function listSnapshots(dir: string, kind?: DocBackupKind): Promise<string[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
@@ -240,7 +303,7 @@ async function listSnapshots(dir: string): Promise<string[]> {
     throw err;
   }
   return entries
-    .filter((e) => SNAPSHOT_TAIL_RE.test(e))
+    .filter((e) => SNAPSHOT_TAIL_RE.test(e) && (kind === undefined || snapshotKind(e) === kind))
     .sort()
     .reverse();
 }
@@ -296,6 +359,8 @@ export interface DocBackupSnapshot {
   timestamp: string;
   /** Snapshot size in bytes. */
   size: number;
+  /** `disk`: the file's bytes before an overwrite. `unsaved`: edits kept before a Claude action discarded them. */
+  kind: DocBackupKind;
 }
 
 /**
@@ -322,14 +387,23 @@ export async function listDocBackups(
         name,
         timestamp: new Date(st.mtimeMs).toISOString(),
         size: st.size,
+        kind: snapshotKind(name),
         mtimeMs: st.mtimeMs,
       });
     } catch {
       // Raced away (concurrent prune/sweep) — skip the entry.
     }
   }
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
-  return out.map(({ name, timestamp, size }) => ({ name, timestamp, size }));
+  // Equal mtimes (coarse filesystem clocks: a restore writes its disk and its
+  // unsaved snapshot milliseconds apart) put the unsaved kind first, so the top of
+  // the list is the kept edits rather than a coin flip on uuid8.
+  out.sort(
+    (a, b) =>
+      b.mtimeMs - a.mtimeMs ||
+      Number(b.kind === "unsaved") - Number(a.kind === "unsaved") ||
+      b.name.localeCompare(a.name),
+  );
+  return out.map(({ name, timestamp, size, kind }) => ({ name, timestamp, size, kind }));
 }
 
 /**
@@ -435,11 +509,30 @@ export type SnapshotOutcome =
  */
 export async function snapshotBeforeFirstWrite(
   filePath: string,
-  opts: { appDataDir: string; documentId?: string; maxTotalBytes?: number },
+  opts: {
+    appDataDir: string;
+    documentId?: string;
+    maxTotalBytes?: number;
+    /**
+     * Snapshot even when this path was already snapshotted this run (ADR-057).
+     * Every backup restore passes it, and so does the conflict banner's Keep
+     * (whose next save overwrites the external version): the bytes at risk are
+     * then a version the once-per-run gate, consumed by an earlier autosave,
+     * would not cover.
+     * The byte-identical skip still applies, so repeats cost nothing.
+     */
+    ignoreRunGate?: boolean;
+    /**
+     * A snapshot name the prune must not remove: the one a restore is about to
+     * write back. Without it, restoring the oldest snapshot would prune the very
+     * version being restored, leaving it on disk alone for the next overwrite.
+     */
+    protect?: string;
+  },
 ): Promise<SnapshotOutcome> {
   const maxTotalBytes = opts.maxTotalBytes ?? MAX_DOC_BACKUP_BYTES;
   const pathKey = docHash(filePath);
-  if (snapshottedPaths.has(pathKey)) return "skipped-already-this-run";
+  if (!opts.ignoreRunGate && snapshottedPaths.has(pathKey)) return "skipped-already-this-run";
 
   try {
     let original: Buffer;
@@ -468,20 +561,25 @@ export async function snapshotBeforeFirstWrite(
     await ensureBackupRootHardened(root);
 
     // Byte-identical skip: nothing changed on disk since the newest snapshot
-    // (typical across restarts with no external edits). ENOENT mid-read (e.g.
-    // a peer instance pruning concurrently) means "no prior snapshot" —
-    // proceed with the write.
-    const existing = await listSnapshots(subdir);
-    if (existing.length > 0) {
-      try {
-        const newest = await fs.readFile(path.join(subdir, existing[0]));
-        if (newest.equals(original)) {
-          snapshottedPaths.add(pathKey);
-          return "skipped-identical";
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      }
+    // (typical across restarts with no external edits). Newest by mtime, not by
+    // name: two snapshots in the same second tie on name and fall to the random
+    // uuid8, and `ignoreRunGate` makes that ordinary. The first write of a run
+    // compares only against the newest, which the prune removes last. A
+    // gate-ignoring snapshot (a restore) compares against every kept one: bytes
+    // already kept are recoverable, and re-writing them would only crowd older
+    // versions out (restoring a version, then restoring another, would
+    // otherwise snapshot the first one twice).
+    const existing = await listSnapshots(subdir, "disk");
+    const newest = await newestByMtime(subdir, existing);
+    const candidates = opts.ignoreRunGate ? existing : newest !== null ? [newest] : [];
+    const identical = await findIdenticalSnapshot(subdir, candidates, original);
+    if (identical !== null) {
+      snapshottedPaths.add(pathKey);
+      if (!pinnedFirstSnapshot.has(pathKey)) pinnedFirstSnapshot.set(pathKey, identical);
+      // A restore's match may be an older copy: touch it, so the copy of what
+      // this restore overwrites is not the next one the prune removes.
+      if (opts.ignoreRunGate && identical !== newest) await touchBestEffort(subdir, identical);
+      return "skipped-identical";
     }
 
     if ((await totalTreeBytes(root)) + original.length > maxTotalBytes) {
@@ -515,40 +613,12 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    // 0o700 mode on the per-path subdir. Windows ignores it; the root's
-    // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
-    // directory there, and it is already in force by the time we get here.
-    await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
-
-    // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
-    // open instead of following it. UUID suffix makes the path unpredictable.
-    const snapshotName = snapshotFilename(filePath);
-    const snapshotPath = path.join(subdir, snapshotName);
-    try {
-      await fs.writeFile(snapshotPath, original, { flag: "wx", mode: 0o600 });
-    } catch (writeErr) {
-      // Remove any partial file so it never counts as a valid snapshot.
-      // Best-effort: if the cleanup itself fails, the partial survives until
-      // a later prune; writeErr below is the error the caller needs to see.
-      await fs.rm(snapshotPath, { force: true }).catch(() => {});
-      throw writeErr;
-    }
-
-    // Metadata, rewritten on every snapshot so post-rename staleness self-heals.
-    await fs
-      .writeFile(path.join(subdir, SOURCE_MARKER_FILENAME), `${filePath}\n`, { mode: 0o600 })
-      .catch((err) => console.error("[DocBackup] source.txt write failed (continuing):", err));
-
-    // Prune beyond MAX_DOC_BACKUPS, newest kept. The write added exactly one
-    // file to the listing we already have — no second readdir needed. Do NOT
-    // re-sort: the timestamp segment is second-granular, so two snapshots in
-    // the same second tie and fall to the random uuid8 — which can rank the
-    // just-written file "oldest" and prune it. By construction it is newest.
-    const all = [snapshotName, ...existing];
-    for (const name of all.slice(MAX_DOC_BACKUPS)) {
-      await fs
-        .rm(path.join(subdir, name), { force: true })
-        .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, original, "disk", existing, [
+      pinnedFirstSnapshot.get(pathKey),
+      opts.protect,
+    ]);
+    if (!pinnedFirstSnapshot.has(pathKey)) {
+      pinnedFirstSnapshot.set(pathKey, path.basename(snapshotPath));
     }
 
     snapshottedPaths.add(pathKey);
@@ -584,6 +654,422 @@ export async function snapshotBeforeFirstWrite(
       });
     }
     return "failed";
+  }
+}
+
+/**
+ * Set a snapshot's mtime to now (or `when`). Best-effort: the bytes are kept
+ * either way, so a refused touch (antivirus, a read-only attribute) is logged
+ * and never turns a kept backup into a failure. Returns whether it took.
+ */
+async function touchBestEffort(subdir: string, name: string, when = new Date()): Promise<boolean> {
+  try {
+    await fs.utimes(path.join(subdir, name), when, when);
+    return true;
+  } catch (err) {
+    console.error("[DocBackup] could not refresh the time of %s (continuing):", name, err);
+    return false;
+  }
+}
+
+/**
+ * Mark an `unsaved` snapshot as the newest backup of `filePath`: a restore
+ * keeps the edits BEFORE its disk snapshot (so a refusal comes before anything
+ * is written or pruned), then calls this, so the edits still top the
+ * listing (ADR-057). Best-effort, never throws. Returns the
+ * time it set, as ISO 8601 (the time `listDocBackups` will report), or
+ * undefined when the touch did not take.
+ */
+export async function markSnapshotNewest(
+  filePath: string,
+  appDataDir: string,
+  name: string,
+): Promise<string | undefined> {
+  const resolved = docBackupSnapshotPath(filePath, appDataDir, name);
+  if (resolved === null) return undefined;
+  const subdir = path.dirname(resolved);
+  const leaf = path.basename(resolved);
+  // Strictly later than every other snapshot here, not just "now": a file
+  // system stamps its own clock, which on Windows can run ahead of
+  // `Date.now()`'s ~15 ms tick, so a disk snapshot written a moment ago can
+  // carry a later mtime than the `new Date()` set after it.
+  let latestOther = Number.NEGATIVE_INFINITY;
+  for (const other of await listSnapshots(subdir).catch(() => [] as string[])) {
+    if (other === leaf) continue;
+    try {
+      latestOther = Math.max(latestOther, (await fs.stat(path.join(subdir, other))).mtimeMs);
+    } catch {
+      // Raced away — not a rival.
+    }
+  }
+  const when = new Date(Math.max(Date.now(), latestOther + 1));
+  return (await touchBestEffort(subdir, leaf, when)) ? when.toISOString() : undefined;
+}
+
+/**
+ * `names` ordered newest first by mtime, the name as tiebreak (as
+ * `listDocBackups`). A name that cannot be stat'ed sorts last, so a prune
+ * removes it before any snapshot whose age is known.
+ */
+async function sortByMtimeNewestFirst(subdir: string, names: string[]): Promise<string[]> {
+  const stamped = await Promise.all(
+    names.map(async (name) => {
+      try {
+        return { name, mtimeMs: (await fs.stat(path.join(subdir, name))).mtimeMs };
+      } catch {
+        return { name, mtimeMs: Number.NEGATIVE_INFINITY };
+      }
+    }),
+  );
+  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  return stamped.map((s) => s.name);
+}
+
+/** The most recently modified of `names` in `subdir`, or null when none can be stat'ed. */
+async function newestByMtime(subdir: string, names: string[]): Promise<string | null> {
+  let best: { name: string; mtimeMs: number } | null = null;
+  for (const name of names) {
+    try {
+      const { mtimeMs } = await fs.stat(path.join(subdir, name));
+      if (best === null || mtimeMs > best.mtimeMs) best = { name, mtimeMs };
+    } catch {
+      // Raced away (concurrent prune/sweep) — not a candidate.
+    }
+  }
+  return best?.name ?? null;
+}
+
+/**
+ * The first of `names` (in `subdir`) whose bytes equal `bytes`, or null. A
+ * snapshot that vanished mid-read (a peer instance pruning concurrently) is
+ * not a match; any other read error is rethrown.
+ */
+async function findIdenticalSnapshot(
+  subdir: string,
+  names: string[],
+  bytes: Buffer,
+): Promise<string | null> {
+  for (const name of names) {
+    try {
+      const file = path.join(subdir, name);
+      // A different size cannot be identical: skip the read.
+      if ((await fs.stat(file)).size !== bytes.length) continue;
+      if ((await fs.readFile(file)).equals(bytes)) return name;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Write one snapshot into `subdir` (created if missing), refresh `source.txt`,
+ * and prune that kind beyond `MAX_DOC_BACKUPS`. `existing` is the kind's listing
+ * the caller already read. Throws on a failed write; returns the snapshot path.
+ */
+async function writeSnapshotFile(
+  subdir: string,
+  filePath: string,
+  bytes: Buffer,
+  kind: DocBackupKind,
+  existing: string[],
+  /**
+   * Snapshots the prune must keep beyond the cap: the run's first-write copy,
+   * and the one a restore is writing back.
+   */
+  pinned: ReadonlyArray<string | undefined> = [],
+): Promise<string> {
+  // 0o700 mode on the per-path subdir. Windows ignores it; the root's
+  // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
+  // directory there, and it is already in force by the time we get here.
+  await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
+
+  // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
+  // open instead of following it. UUID suffix makes the path unpredictable.
+  const snapshotName = snapshotFilename(filePath, new Date(), kind);
+  const snapshotPath = path.join(subdir, snapshotName);
+  try {
+    await fs.writeFile(snapshotPath, bytes, { flag: "wx", mode: 0o600 });
+  } catch (writeErr) {
+    // Remove any partial file so it never counts as a valid snapshot.
+    // Best-effort: if the cleanup itself fails, the partial survives until
+    // a later prune; writeErr below is the error the caller needs to see.
+    await fs.rm(snapshotPath, { force: true }).catch(() => {});
+    throw writeErr;
+  }
+
+  // Metadata, rewritten on every snapshot so post-rename staleness self-heals.
+  await fs
+    .writeFile(path.join(subdir, SOURCE_MARKER_FILENAME), `${filePath}\n`, { mode: 0o600 })
+    .catch((err) => console.error("[DocBackup] source.txt write failed (continuing):", err));
+
+  // Prune this kind beyond MAX_DOC_BACKUPS, newest kept. The write added
+  // exactly one file to the listing we already have — no second readdir
+  // needed. The just-written file goes first by construction: never re-sort it,
+  // since the name's timestamp segment is second-granular and a same-second tie
+  // falls to the random uuid8, which could rank it "oldest". The older ones ARE
+  // ordered by mtime, for the same reason: name order can rank a newer one
+  // below an older one taken in the same second. Per kind, so neither kind can
+  // evict the other (ADR-057). The pinned snapshots are kept beyond the cap and
+  // do not count toward it.
+  // An `unsaved` snapshot the user has not been shown yet (`kept-unseen.json`)
+  // outranks one they have: the edits a Claude action kept stay until the user
+  // has seen them, however many of the user's own restores keep edits after
+  // them. The cap is unchanged; only who goes first.
+  const sorted = await sortByMtimeNewestFirst(subdir, existing);
+  const olderNewestFirst =
+    kind === "unsaved" && sorted.length + 1 > MAX_DOC_BACKUPS
+      ? await unseenFirst(subdir, sorted)
+      : sorted;
+  const all = [snapshotName, ...olderNewestFirst].filter((name) => !pinned.includes(name));
+  for (const name of all.slice(MAX_DOC_BACKUPS)) {
+    await fs
+      .rm(path.join(subdir, name), { force: true })
+      .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
+  }
+  return snapshotPath;
+}
+
+// ---------------------------------------------------------------------------
+// Kept edits the user has not been shown yet (kept-unseen.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a subdir's unseen set. Missing, unreadable, oversized, a symbolic link,
+ * not JSON or the wrong shape all read as empty: the banner is then not shown,
+ * while the edits stay in the listing and the `unsaved-edits-kept` notice that
+ * announced them stays in the activity tray.
+ */
+async function readUnseen(subdir: string): Promise<Set<string>> {
+  try {
+    const file = path.join(subdir, KEPT_UNSEEN_FILENAME);
+    const st = await fs.lstat(file);
+    if (!st.isFile() || st.size > KEPT_UNSEEN_MAX_BYTES) return new Set();
+    const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
+    const unseen = (parsed as { unseen?: unknown } | null)?.unseen;
+    if (!Array.isArray(unseen)) return new Set();
+    return new Set(unseen.filter((n): n is string => typeof n === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Write a subdir's unseen set: a temp sibling, then a rename over the file. */
+async function writeUnseen(subdir: string, names: Iterable<string>): Promise<void> {
+  const file = path.join(subdir, KEPT_UNSEEN_FILENAME);
+  const temp = `${file}.${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    await fs.writeFile(temp, `${JSON.stringify({ unseen: [...names] })}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    await fs.rename(temp, file);
+  } catch (err) {
+    await fs.rm(temp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Serializes unseen-set read-modify-writes per subdir within this process.
+ * Local rather than `file-io/index.ts`' `runSerialized`, which would pull that
+ * module's document-model graph into this leaf (and is typed `void`).
+ */
+const unseenChains = new Map<string, Promise<unknown>>();
+
+function withUnseenLock<T>(subdir: string, fn: () => Promise<T>): Promise<T> {
+  const next = (unseenChains.get(subdir) ?? Promise.resolve()).then(fn, fn);
+  const tail = next.catch(() => {});
+  unseenChains.set(subdir, tail);
+  void tail.then(() => {
+    if (unseenChains.get(subdir) === tail) unseenChains.delete(subdir);
+  });
+  return next;
+}
+
+/** Update a subdir's unseen set under its lock. Never throws; a failure is logged. */
+/**
+ * Update a subdir's unseen set under its lock. Resolves whether `change`
+ * changed it; rejects when the change could not be written.
+ */
+function updateUnseen(subdir: string, change: (unseen: Set<string>) => boolean): Promise<boolean> {
+  return withUnseenLock(subdir, async () => {
+    const unseen = await readUnseen(subdir);
+    if (!change(unseen)) return false;
+    // Entries for snapshots that are gone are dropped on every write.
+    const present = new Set(await listSnapshots(subdir, "unsaved"));
+    await writeUnseen(
+      subdir,
+      [...unseen].filter((n) => present.has(n)),
+    );
+    return true;
+  });
+}
+
+/** `updateUnseen` for a keep, where the edits are kept either way: a failure is logged. */
+async function updateUnseenBestEffort(
+  subdir: string,
+  change: (unseen: Set<string>) => boolean,
+): Promise<void> {
+  await updateUnseen(subdir, change).catch((err: unknown) => {
+    console.error("[DocBackup] could not record unseen kept edits in %s:", subdir, err);
+  });
+}
+
+/** `names` (newest first) with the unseen ones moved ahead, each group keeping its order. */
+async function unseenFirst(subdir: string, names: string[]): Promise<string[]> {
+  const unseen = await readUnseen(subdir);
+  if (unseen.size === 0) return names;
+  return [...names.filter((n) => unseen.has(n)), ...names.filter((n) => !unseen.has(n))];
+}
+
+/** The edits a Claude action kept that the user has not been shown yet. */
+export interface KeptEditsNotice {
+  /** When the newest of them was taken, as `listDocBackups` reports it. */
+  timestamp: string;
+  /** Every such snapshot, newest first: what a Dismiss acknowledges. */
+  names: string[];
+}
+
+/**
+ * The `unsaved` snapshots in `backups` (a `listDocBackups` result for
+ * `filePath`) the user has not been shown, or null when there are none.
+ */
+export async function keptEditsNotice(
+  filePath: string,
+  appDataDir: string,
+  backups: ReadonlyArray<DocBackupSnapshot>,
+): Promise<KeptEditsNotice | null> {
+  if (!backups.some((b) => b.kind === "unsaved")) return null;
+  const unseen = await readUnseen(path.join(docBackupsRoot(appDataDir), docHash(filePath)));
+  const pending = backups.filter((b) => b.kind === "unsaved" && unseen.has(b.name));
+  if (pending.length === 0) return null;
+  return { timestamp: pending[0].timestamp, names: pending.map((b) => b.name) };
+}
+
+/**
+ * The user has been shown the kept edits `names` of `filePath` (a Dismiss), or
+ * they are back in the document (a restore of that snapshot). Names are only
+ * compared with the stored set's strings, so caller-supplied text never
+ * reaches the file system. Resolves whether any name was unseen; rejects when
+ * the change could not be written, so a Dismiss can say it did not take.
+ */
+export async function acknowledgeKeptEdits(
+  filePath: string,
+  appDataDir: string,
+  names: ReadonlyArray<string>,
+): Promise<boolean> {
+  const subdir = path.join(docBackupsRoot(appDataDir), docHash(filePath));
+  return updateUnseen(subdir, (unseen) => {
+    let changed = false;
+    for (const name of names) changed = unseen.delete(name) || changed;
+    return changed;
+  });
+}
+
+/** The result of `snapshotUnsavedEdits`. `name`/`timestamp` are set when a snapshot holds the edits. */
+export type UnsavedEditsOutcome =
+  | { outcome: "written" | "skipped-identical"; name: string; timestamp: string }
+  | { outcome: "skipped-size-cap" | "failed" };
+
+/**
+ * Keep an open document's unsaved edits as an `unsaved`-kind snapshot, just
+ * before a Claude action discards them (ADR-057). Never throws.
+ *
+ * Unlike `snapshotBeforeFirstWrite` this is not gated once per run and it
+ * neither consults nor sets that gate, so it can never suppress the disk-kind
+ * snapshot that guards against serializer bugs. Its failure contract is the
+ * opposite one: a `skipped-size-cap` or `failed` outcome means the caller
+ * must REFUSE the action, because the edits it would discard are exactly what
+ * this was meant to keep. So it raises no notification of its own — the
+ * refusal is what the caller reports. A byte-identical repeat of the newest
+ * `unsaved` snapshot is not written again; its name is returned, since it
+ * already holds these edits.
+ */
+export async function snapshotUnsavedEdits(
+  filePath: string,
+  content: string,
+  opts: {
+    appDataDir: string;
+    maxTotalBytes?: number;
+    protect?: string;
+    /**
+     * A Claude action is keeping them: record the snapshot as not yet shown
+     * to the user (`kept-unseen.json`), which raises the editor's kept-edits
+     * banner. The editor's own Version history leaves it unset. Best-effort:
+     * the edits are kept either way.
+     */
+    unseen?: boolean;
+  },
+): Promise<UnsavedEditsOutcome> {
+  const maxTotalBytes = opts.maxTotalBytes ?? MAX_DOC_BACKUP_BYTES;
+  try {
+    const bytes = Buffer.from(content, "utf-8");
+    const root = docBackupsRoot(opts.appDataDir);
+    const subdir = path.join(root, docHash(filePath));
+    // Harden before anything reads the tree — see `snapshotBeforeFirstWrite`.
+    await ensureBackupRootHardened(root);
+
+    const existing = await listSnapshots(subdir, "unsaved");
+    // Newest only: an older identical copy is the next one the prune removes,
+    // and its name is about to be handed to the user and Claude.
+    const newest = await newestByMtime(subdir, existing);
+    const identical = newest !== null ? await findIdenticalSnapshot(subdir, [newest], bytes) : null;
+    if (identical !== null) {
+      // Touched, not left as it was: these edits are being kept NOW, so the
+      // snapshot that holds them must rank as now too — newer than a disk
+      // snapshot a restore just wrote, so they still top the listing, and
+      // last in line for the prune.
+      const now = new Date();
+      const touched = await touchBestEffort(subdir, identical, now);
+      // A refused touch leaves the old mtime, which is what the listing shows:
+      // report that, never a time the file does not carry.
+      const timestamp = touched
+        ? now.toISOString()
+        : new Date((await fs.stat(path.join(subdir, identical))).mtimeMs).toISOString();
+      if (opts.unseen) {
+        await updateUnseenBestEffort(subdir, (u) => !u.has(identical) && !!u.add(identical));
+      }
+      return { outcome: "skipped-identical", name: identical, timestamp };
+    }
+
+    if ((await totalTreeBytes(root)) + bytes.length > maxTotalBytes) {
+      console.error(
+        `[DocBackup] Size cap reached (${maxTotalBytes} bytes) — cannot keep the unsaved edits of ${filePath}`,
+      );
+      return { outcome: "skipped-size-cap" };
+    }
+
+    // A keep that is not Claude's (the Version history's) never prunes a
+    // Claude keep the user has not been shown: those are pinned for its prune,
+    // so the edits the banner names cannot vanish under the user's own
+    // restores. A Claude keep prunes normally (unseen ones last), so the kind
+    // stays bounded: at most `MAX_DOC_BACKUPS` unseen plus the cap.
+    const pinned = opts.unseen ? [opts.protect] : [opts.protect, ...(await readUnseen(subdir))];
+    const snapshotPath = await writeSnapshotFile(
+      subdir,
+      filePath,
+      bytes,
+      "unsaved",
+      existing,
+      pinned,
+    );
+    const st = await fs.stat(snapshotPath);
+    if (opts.unseen) {
+      const name = path.basename(snapshotPath);
+      await updateUnseenBestEffort(subdir, (u) => !!u.add(name));
+    }
+    console.error(
+      `[DocBackup] Kept unsaved edits of ${path.basename(filePath)} -> ${snapshotPath}`,
+    );
+    return {
+      outcome: "written",
+      name: path.basename(snapshotPath),
+      timestamp: new Date(st.mtimeMs).toISOString(),
+    };
+  } catch (err) {
+    console.error("[DocBackup] Keeping unsaved edits failed for %s:", filePath, err);
+    return { outcome: "failed" };
   }
 }
 
@@ -696,6 +1182,16 @@ export async function sweepDocBackups(
       // plain rmdir on a non-empty dir throws ENOTEMPTY, which is the
       // expected "keep" signal for stray files. Anything else (EACCES,
       // EPERM) is a real problem worth a log line.
+      for (const entry of entries) {
+        if (
+          entry.isFile() &&
+          (entry.name === KEPT_UNSEEN_FILENAME || KEPT_UNSEEN_TEMP_RE.test(entry.name))
+        ) {
+          await fs.rm(path.join(subPath, entry.name), { force: true }).catch((err) => {
+            console.error(`[DocBackup] sweep: failed to remove ${entry.name} in ${subPath}:`, err);
+          });
+        }
+      }
       await fs.rm(path.join(subPath, SOURCE_MARKER_FILENAME), { force: true }).catch((err) => {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
           console.error(`[DocBackup] sweep: failed to remove source.txt in ${subPath}:`, err);

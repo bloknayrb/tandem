@@ -24,6 +24,7 @@ import {
   resolveRouteCwd,
   resolveSafeCwd,
   SIDECAR_SIGNAL_ENV_KEYS,
+  saysNoConversation,
   sessionCwdMatches,
   shouldClearSession,
   TANDEM_SECRET_ENV_KEYS,
@@ -578,11 +579,12 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     resuming: true,
     resumeConfirmed: false,
     commandedKill: false,
+    noConversationFound: false,
     priorUncommandedDeaths: 0,
   };
 
-  it("clears on non-zero exit while resuming and unconfirmed", () => {
-    expect(shouldClearSession({ ...base, code: 1 })).toBe(true);
+  it("clears on a doomed resume while resuming and unconfirmed", () => {
+    expect(shouldClearSession({ ...base, code: 1, noConversationFound: true })).toBe(true);
   });
 
   it("does NOT clear on signal kill (code = null) while resuming and unconfirmed", () => {
@@ -638,18 +640,17 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     expect(shouldClearSession({ ...base, code, priorUncommandedDeaths: 1 })).toBe(true);
   });
 
-  // `killed` says we signalled the reaper, not what Claude died of: the
-  // stdin-gone handler kills a reaper whose Claude already crashed, and the
-  // reaper then relays the crash. Only our SIGTERM (143) or its SIGKILL
-  // escalation (137) is our kill.
+  // `commandKill` records our kill whenever the reaper has not yet exited,
+  // even when Claude already had: only 143 or 137 proves our kill ended it.
+  // Any other code is Claude's own exit, which the kill merely raced.
   it.each([
-    [134, "a V8 abort"],
+    [134, "a V8 abort as we stopped it"],
     [139, "a segfault"],
-    [130, "SIGINT"],
-    [129, "SIGHUP"],
-    [192, "128 + 64, the highest Linux signal"],
+    [1, "a doomed exit 1 racing a Restart"],
+    [127, "the reaper's exec failure"],
+    [5, "a Windows access violation's low byte"],
   ])(
-    "a relayed death that is not our signal counts as a crash though we sent a kill (code %i, %s)",
+    "a kill of ours that ended with another code is unexplained (code %i, %s): kept once, then cleared",
     (code) => {
       expect(shouldClearSession({ ...base, code, commandedKill: true })).toBe(false);
       expect(
@@ -658,14 +659,85 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     },
   );
 
+  // No exit code is evidence that the conversation is missing, so every
+  // unexplained exit gets the one retry. A false clear loses a live
+  // conversation; a kept doomed session costs one retry.
   it.each([
-    [1, 'a doomed --resume ("No conversation found")'],
-    [127, "the reaper's exec failure"],
+    [127, "the reaper's exec failure: a missing CLI, not a missing conversation"],
     [128, "128 + 0 is no signal"],
     [193, "above 128 + SIGRTMAX, so no signal could produce it"],
-  ])("clears at once on a non-signal exit (code %i, %s), even if we sent a kill", (code) => {
-    expect(shouldClearSession({ ...base, code })).toBe(true);
-    expect(shouldClearSession({ ...base, code, commandedKill: true })).toBe(true);
+    [5, "Windows 0xC0000005 (access violation), truncated to a byte"],
+    [9, "Windows 0xC0000409 (stack buffer overrun), truncated"],
+    [253, "Windows 0xC00000FD (stack overflow), truncated"],
+    [2, "any other code"],
+  ])(
+    "keeps the session once on an unexplained exit (code %i, %s), clears on the second",
+    (code) => {
+      expect(shouldClearSession({ ...base, code })).toBe(false);
+      expect(shouldClearSession({ ...base, code, priorUncommandedDeaths: 1 })).toBe(true);
+    },
+  );
+
+  // #2358 S2 (Windows 11, Claude Code 2.1.332): a `taskkill`'d Claude exits 1,
+  // the same code as a doomed --resume, so the code alone cannot tell them
+  // apart. Claude's "No conversation found" message can.
+  it("clears at once on Claude's no-conversation message, whatever the code", () => {
+    for (const code of [1, 2, 134, 143, 255]) {
+      for (const commandedKill of [false, true]) {
+        expect(
+          shouldClearSession({ ...base, code, commandedKill, noConversationFound: true }),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("an exit 1 without the message is kept once, then cleared on the second", () => {
+    expect(shouldClearSession({ ...base, code: 1 })).toBe(false);
+    expect(shouldClearSession({ ...base, code: 1, priorUncommandedDeaths: 1 })).toBe(true);
+  });
+
+  it("the message changes nothing outside a resumed, unconfirmed, non-zero exit", () => {
+    const said = { ...base, noConversationFound: true };
+    expect(shouldClearSession({ ...said, code: null })).toBe(false);
+    expect(shouldClearSession({ ...said, code: 0 })).toBe(false);
+    expect(shouldClearSession({ ...said, code: 1, resumeConfirmed: true })).toBe(false);
+    expect(shouldClearSession({ ...said, code: 1, resuming: false })).toBe(false);
+  });
+});
+
+describe("saysNoConversation — a doomed --resume's own message (#2358 S2)", () => {
+  const ID = "abcdef01-2222-4333-8444-5555555555ee";
+
+  it.each([
+    [`No conversation found with session ID: ${ID}`, "the measured text"],
+    [`Error: No conversation found with session ID: ${ID}`, "a prefix"],
+    [`\u001b[31mNo conversation found with session ID: ${ID}\u001b[0m`, "a colour code"],
+    [`no conversation found with session id ${ID.toUpperCase()}`, "a change of case"],
+    [`  [error] No conversation found with session ID: ${ID}`, "whitespace and a bracket label"],
+    [`No conversation found with session ID "${ID}"`, "the id quoted, no colon"],
+  ])("matches %j (%s)", (text) => {
+    expect(saysNoConversation(text, ID)).toBe(true);
+  });
+
+  it.each([
+    ["No conversation found with session ID: 99999999-2222-4333-8444-555555555555", "another id"],
+    ["No conversation found with session ID", "no id at all"],
+    [`Session ${ID} could not be loaded`, "other wording: falls back to the one retry"],
+    [
+      `I saw this in the log: [Claude] Output error: No conversation found with session ID: ${ID}`,
+      "a quoted log line: the phrase mid-text",
+    ],
+    [
+      `The launcher said "No conversation found with session ID: ${ID}" earlier`,
+      "the phrase mid-sentence",
+    ],
+    [`The log says: No conversation found with session ID: ${ID}`, "a sentence, not a label"],
+    [
+      `No conversation found with session ID: 99999999-2222-4333-8444-555555555555 (current ${ID})`,
+      "another id named, ours only later in the line",
+    ],
+  ])("does not match %j (%s)", (text) => {
+    expect(saysNoConversation(text, ID)).toBe(false);
   });
 });
 

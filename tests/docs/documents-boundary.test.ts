@@ -331,6 +331,9 @@ const FAN_IN = [
   // import document-service to ask a question about a map it writes itself.
   "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
+  // ADR-057: `tandem_close` keeps the unsaved edits it discards as a backup,
+  // and the close lives in document-service.
+  "server/mcp/document-service.ts -> server/documents/keep-unsaved.ts (value) x1",
   // #2273: the read-only-file prompt, the conflict flag's sibling. Its state
   // is server memory the save path, close and the resolve route all consult.
   "server/mcp/document-service.ts -> server/documents/read-only-file.ts (value) x1",
@@ -354,6 +357,7 @@ const FAN_IN = [
   // "just put it in _shared" would show up as a widened edge.
   "server/mcp/routes/send-open-result.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/compare.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/external-conflict.ts -> server/documents/registry.ts (value) x1",
@@ -441,6 +445,15 @@ const FAN_OUT = [
   "server/documents/reload-family.ts -> shared/origins.ts (value) x1",
   "server/documents/reload-family.ts -> shared/utils.ts (value) x1",
   "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
+  // ADR-057: keep the unsaved edits a Claude force-open, restore or close
+  // would discard. The backup store, the format adapter that serializes the
+  // edits as the next autosave would, the app-data root, and the notice.
+  "server/documents/keep-unsaved.ts -> server/file-io/doc-backup.ts (value) x1",
+  "server/documents/keep-unsaved.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/keep-unsaved.ts -> server/notifications.ts (value) x1",
+  "server/documents/keep-unsaved.ts -> server/platform.ts (value) x1",
+  "server/documents/keep-unsaved.ts -> shared/constants.ts (value) x1",
+  "server/documents/keep-unsaved.ts -> shared/utils.ts (value) x1",
   "server/documents/autosave.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // The .docx ship-dark flag (ADR-053): open.ts asks it which extensions a build accepts.

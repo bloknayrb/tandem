@@ -326,6 +326,11 @@ export const SERVER_INSTRUCTIONS = [
   "wake ever arrives twice, stop one watch. Skip arming entirely if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",
+  // The flip (#2358, ADR-054's flip amendment; ownership design §14): a
+  // refusal carries its own remedy, and an open takes a document from the
+  // session answering it.
+  "When a call is refused because another session answers that document or message, do what the",
+  "refusal says; open a document another session holds only when the user asked you to work on it.",
 ].join(" ");
 
 /** Create an McpServer with all tool groups registered (no transport). */

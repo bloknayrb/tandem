@@ -37,7 +37,7 @@ import { sendApiError } from "./_shared.js";
  * The first handler of every ownership registration: while ownership is off
  * it skips the route (`next("route")`), so the request falls through to
  * whatever answers an unknown `/api` path, byte for byte (ownership design
- * §12: nothing visible while dark). Read per request, like the flag itself.
+ * §12: nothing visible while ownership is off). Read per request, like the flag itself.
  */
 export function ownershipRouteGate(_req: Request, _res: Response, next: NextFunction): void {
   if (ownershipEnabled()) next();

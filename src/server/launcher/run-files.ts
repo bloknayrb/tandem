@@ -11,8 +11,11 @@
  *   an `--mcp-config` entry named `tandem` replaces the user's own entry of
  *   that name. It holds no auth token: a loopback caller needs none.
  * - the **run settings file** (`--settings`): every enabled Tandem plugin key
- *   (Ruling D3) set to `false`, so the plugin's own bridge does not load beside
- *   the launcher's (probe 10). It holds nothing else, and no secret.
+ *   (Ruling D3), and every `tandem@…` key Claude Code's own `plugin list
+ *   --json` reports (smoke S1 on Windows: an account-synced `tandem@synced` is
+ *   in no settings file), set to `false`, so the plugin's own bridge does not
+ *   load beside the launcher's (probe 10). It holds nothing else, and no
+ *   secret.
  *
  * Written fail-closed (R1.6): the directory is refused if it is a link or not
  * the current user's own; each file is created exclusively at a random final
@@ -21,12 +24,19 @@
  * behaviour. Deleted at the spawn's first bind (the MCP config, probe 11),
  * at its teardown, and by the boot sweep (R4.2, R1.9).
  *
+ * Read back before the spawn (`runFileReadsBack`, called by `spawnOnce`): a
+ * file that is missing or does not hold what was written refuses that spawn,
+ * which then takes the crash-restart path, or for a user's start is that
+ * start's reported failure (smoke S1: Claude Code silently
+ * ignores a `--settings` file it cannot parse).
+ *
  * This module imports no flag; the supervisor calls it only while ownership
  * is on (Ruling I).
  */
 
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, lstatSync, readFileSync } from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -163,9 +173,12 @@ export function buildRunMcpConfig(opts: {
           // would leave the launcher's own child connected but never bound.
           CLAUDE_PLUGIN_OPTION_SERVER_URL: "",
           // An inherited `--report-on-*` or `--inspect` would expose the
-          // bridge's environment. Whether an entry's `env` wins over the
-          // environment Claude Code passes is unmeasured; if it does not, this
-          // clears nothing (a residual, docs/security.md).
+          // bridge's environment. An entry's `env` wins over the environment
+          // Claude Code passes, key by key: measured on Linux (smoke S4,
+          // 2026-11-26, the bridge's `/proc` environment) and on Windows (the
+          // same day, by behaviour: a project `NODE_OPTIONS` naming a missing
+          // preload killed the other Tandem servers in that run while this
+          // bridge bound), Claude Code 2.1.332 on both. Not measured on macOS.
           NODE_OPTIONS: "",
           // `NODE_DEBUG=http,fetch,…` would print request headers, the handle's
           // among them, to the bridge's stderr, which Claude Code captures.
@@ -193,7 +206,23 @@ function enabledTandemKeys(value: unknown): string[] | null {
   if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) return [];
   const entries = Object.entries(plugins as Record<string, unknown>);
   if (entries.length > SETTINGS_READ_MAX_KEYS) return null;
-  return entries.filter(([k, v]) => k.startsWith("tandem@") && v === true).map(([k]) => k);
+  return entries.filter(([k, v]) => isTandemPluginKey(k) && v === true).map(([k]) => k);
+}
+
+/** The longest plugin key the launcher will put in a run settings file. Keys
+ * are JSON object keys written through `JSON.stringify`, so no key can inject
+ * into the file; the cap only keeps one absurd key from bloating it. */
+export const TANDEM_PLUGIN_KEY_MAX_LENGTH = 512;
+
+/** A Tandem plugin key, by the one rule both sources use (the settings files
+ * and Claude Code's plugin list): `tandem@`, and at most
+ * {@link TANDEM_PLUGIN_KEY_MAX_LENGTH} characters in all. */
+export function isTandemPluginKey(key: unknown): key is string {
+  return (
+    typeof key === "string" &&
+    key.startsWith("tandem@") &&
+    key.length <= TANDEM_PLUGIN_KEY_MAX_LENGTH
+  );
 }
 
 /**
@@ -251,9 +280,21 @@ function userSettingsKeys(env: NodeJS.ProcessEnv, home: string): string[] {
 
 /** Resolve within `ms`, or to `fallback` (the work may still be running; its
  * result is ignored). */
-function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  fallback: T,
+  onDeadline?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
+    const timer = setTimeout(() => {
+      resolve(fallback);
+      try {
+        onDeadline?.();
+      } catch {
+        // Best-effort cleanup; the fallback is already the answer.
+      }
+    }, ms);
     timer.unref?.();
     work.then(
       (value) => {
@@ -268,20 +309,286 @@ function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
   });
 }
 
+/** How long the installed-plugin lookup may take before the spawn goes on
+ * without it (smoke S1 on Windows; Bryan, 2026-11-26). Measured at about 0.6 s
+ * on Linux (Claude Code 2.1.332, 18 plugins) and 0.93 to 1.06 s on Windows
+ * (Bryan, 2026-11-27, 80 plugins, warm disk cache). */
+export const PLUGIN_LIST_DEADLINE_MS = 5_000;
+/** How long past the runner's timeout ({@link PLUGIN_LIST_DEADLINE_MS}) the
+ * lookup's own deadline waits before answering `timeout` without the runner.
+ * An `execFile`-shaped runner kills the child at its timeout but calls back
+ * only on `close`, which never comes while something else (a grandchild of a
+ * `TANDEM_CLAUDE_CMD` wrapper that does not `exec`, outside the killed group)
+ * holds the child's stdout; this deadline is what bounds the spawn then. */
+export const PLUGIN_LIST_DEADLINE_MARGIN_MS = 1_000;
+/** The lookup's stdout cap; past it the answer is unparseable (the fallback). */
+export const PLUGIN_LIST_MAX_BYTES = 1024 * 1024;
+
+/** Why the installed-plugin lookup gave no answer: a closed set, logged as is. */
+export type PluginListFailure = "timeout" | "exit" | "spawn" | "unparseable";
+/** `dropped` counts the `tandem@` ids the list held that
+ * {@link isTandemPluginKey} refused (too long): those are not disabled. */
+export type PluginListLookup =
+  | { ok: true; keys: string[]; dropped: number }
+  | { ok: false; reason: PluginListFailure };
+
+/**
+ * The Tandem ids ({@link isTandemPluginKey}) in `claude plugin list --json`'s
+ * output, or `null` when it is not the array of `{ id }` objects Claude Code
+ * prints. Every Tandem id it reports, enabled or not: a `false` for a
+ * disabled one changes nothing. `dropped` counts the distinct `tandem@` ids
+ * the predicate refused.
+ */
+export function tandemKeysFromPluginList(
+  stdout: string,
+): { keys: string[]; dropped: number } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const keys = new Set<string>();
+  const dropped = new Set<string>();
+  for (const entry of parsed) {
+    const id = (entry as { id?: unknown } | null)?.id;
+    if (isTandemPluginKey(id)) keys.add(id);
+    else if (typeof id === "string" && id.startsWith("tandem@")) dropped.add(id);
+  }
+  if (keys.size > SETTINGS_READ_MAX_KEYS) return null;
+  return { keys: [...keys].sort(), dropped: dropped.size };
+}
+
+/** The `execFile` shape the lookup uses, injectable for tests. The default is
+ * {@link spawnPluginList}, not `execFile`, which drops `detached`. */
+export type PluginListExec = (
+  file: string,
+  args: readonly string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    timeout: number;
+    maxBuffer: number;
+    windowsHide: boolean;
+    killSignal: NodeJS.Signals;
+    encoding: "utf8";
+    detached: boolean;
+  },
+  callback: (
+    err: (Error & { killed?: boolean; code?: unknown; signal?: unknown }) | null,
+    stdout: string,
+  ) => void,
+) => unknown;
+
+/**
+ * Ask Claude Code itself which Tandem plugins it has (smoke S1 on Windows;
+ * Bryan, 2026-11-26, "Ask Claude Code (Recommended)"): `claude plugin list
+ * --json`, run with the child's own binary, environment and working
+ * directory, so it reports what that child would load. Settings files alone
+ * miss a plugin enabled by account sync (`tandem@synced`), which no
+ * `settings.json` names. Claude Code's installed-plugins registry file was
+ * not used: it does not list a synced plugin (measured on Linux, Claude Code
+ * 2.1.332: `installed_plugins.json` empty while `plugin list` reported
+ * `tandem@synced`).
+ *
+ * Never rejects, never logs a key, and always settles within `deadlineMs`
+ * plus {@link PLUGIN_LIST_DEADLINE_MARGIN_MS}: `prepareRun` awaits it while
+ * holding the supervisor lock, so a child's own timeout is not enough (an
+ * `execFile`-shaped call answers on `close`, which a grandchild holding
+ * stdout, such as a `TANDEM_CLAUDE_CMD` wrapper that does not `exec`, delays
+ * forever). At `deadlineMs` the default runner kills the child's process
+ * group on POSIX (the child leads its own group for this), the child itself
+ * on Windows, and destroys its pipes; the margin's deadline does the same to
+ * whatever an injected runner returned. A grandchild that left the group
+ * survives, its pipe closed. A failure answers its reason, and the caller
+ * writes the keys it found without it (falling back to S1's pre-fix state for
+ * any key only the lookup knows).
+ */
+export function listInstalledTandemPluginKeys(opts: {
+  claudeBin: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  deadlineMs?: number;
+  exec?: PluginListExec;
+}): Promise<PluginListLookup> {
+  const exec: PluginListExec = opts.exec ?? spawnPluginList;
+  const deadlineMs = opts.deadlineMs ?? PLUGIN_LIST_DEADLINE_MS;
+  const groupKill = process.platform !== "win32";
+  let child: unknown;
+  const work = new Promise<PluginListLookup>((resolve) => {
+    try {
+      child = exec(
+        opts.claudeBin,
+        ["plugin", "list", "--json"],
+        {
+          cwd: opts.cwd,
+          env: opts.env,
+          timeout: deadlineMs,
+          maxBuffer: PLUGIN_LIST_MAX_BYTES,
+          windowsHide: true,
+          killSignal: "SIGKILL",
+          encoding: "utf8",
+          // POSIX: its own process group, so the deadline can kill the tree.
+          detached: groupKill,
+        },
+        (err, stdout) => {
+          if (err) {
+            // First: a child past `maxBuffer` is killed too, so this error
+            // also arrives with `killed` set.
+            if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+              resolve({ ok: false, reason: "unparseable" });
+            } else if (err.killed) resolve({ ok: false, reason: "timeout" });
+            // A non-zero exit, or a signal from outside (a crash, another
+            // process's kill): the child ran, so neither is a spawn failure.
+            else if (typeof err.code === "number" || typeof err.signal === "string") {
+              resolve({ ok: false, reason: "exit" });
+            } else resolve({ ok: false, reason: "spawn" });
+            return;
+          }
+          const found = tandemKeysFromPluginList(String(stdout));
+          resolve(found === null ? { ok: false, reason: "unparseable" } : { ok: true, ...found });
+        },
+      );
+    } catch {
+      resolve({ ok: false, reason: "spawn" });
+    }
+  });
+  return withDeadline(
+    work,
+    deadlineMs + PLUGIN_LIST_DEADLINE_MARGIN_MS,
+    { ok: false, reason: "timeout" },
+    () => killPluginListTree(child, groupKill),
+  );
+}
+
+/** The parts of a `ChildProcess` the lookup's deadline uses. */
+interface PluginListChild {
+  pid?: number;
+  kill?: (signal?: NodeJS.Signals) => boolean;
+  stdin?: { destroy(): void } | null;
+  stdout?: { destroy(): void } | null;
+  stderr?: { destroy(): void } | null;
+}
+
+/**
+ * The lookup's default runner: `execFile`'s contract (stdout as utf8, the
+ * callback on `close`, `killed` set when the timeout or `maxBuffer` killed
+ * the child, `code` and `signal` from a failed exit, a spawn error as is),
+ * built on `spawn` because `execFile` does not pass `detached` through, and
+ * killing through {@link killPluginListTree}, so the timeout takes the
+ * process group and the pipes with it.
+ */
+export const spawnPluginList: PluginListExec = (file, args, options, callback) => {
+  const child = spawn(file, [...args], {
+    cwd: options.cwd,
+    env: options.env,
+    windowsHide: options.windowsHide,
+    detached: options.detached,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let bytes = 0;
+  let killed = false;
+  let failure: (Error & { code?: unknown; killed?: boolean }) | null = null;
+  let done = false;
+  const kill = (): void => {
+    killed = true;
+    killPluginListTree(child, options.detached, options.killSignal);
+  };
+  const timer = setTimeout(kill, options.timeout);
+  timer.unref?.();
+  const finish = (err: Parameters<typeof callback>[0], out: string): void => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    callback(err, out);
+  };
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    if (failure) return;
+    bytes += Buffer.byteLength(chunk, "utf8");
+    if (bytes > options.maxBuffer) {
+      failure = Object.assign(new Error("stdout maxBuffer length exceeded"), {
+        code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+      });
+      kill();
+      return;
+    }
+    stdout += chunk;
+  });
+  // Drained and discarded: a full stderr pipe would stall the child.
+  child.stderr?.resume();
+  child.on("error", (err: Error & { code?: unknown }) => {
+    // A spawn failure (no pid) answers now; a later error waits for `close`.
+    if (child.pid === undefined) finish(err, "");
+    else failure ??= err;
+  });
+  child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+    if (failure) {
+      finish(Object.assign(failure, { killed }), stdout);
+    } else if (code === 0 && !killed) {
+      finish(null, stdout);
+    } else {
+      finish(
+        Object.assign(new Error(`plugin list exited (${code ?? signal})`), {
+          killed,
+          code,
+          signal,
+        }),
+        stdout,
+      );
+    }
+  });
+  return child;
+};
+
+/** Best effort, never throws: kill the lookup's process group (POSIX) or the
+ * child, then destroy its pipes so nothing still holds this process's end. */
+function killPluginListTree(
+  raw: unknown,
+  groupKill: boolean,
+  signal: NodeJS.Signals = "SIGKILL",
+): void {
+  if (typeof raw !== "object" || raw === null) return;
+  const child = raw as PluginListChild;
+  if (groupKill && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      // ESRCH: the group is already gone.
+    }
+  }
+  try {
+    child.kill?.(signal);
+  } catch {
+    // Already exited.
+  }
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try {
+      stream?.destroy();
+    } catch {
+      // Nothing to release.
+    }
+  }
+}
+
 /**
  * Every key Ruling D3 names: each `tandem@…` key set to `true` in the user
  * settings file, and in the project and local settings files of the child's
- * working directory, plus {@link ALWAYS_DISABLED_PLUGIN_KEY}. Deduplicated,
- * sorted. Never fails and never logs a key.
+ * working directory, plus {@link ALWAYS_DISABLED_PLUGIN_KEY} and every key in
+ * `installed` (the installed-plugin lookup's answer, when it gave one).
+ * Deduplicated, sorted. Never fails and never logs a key.
  */
 export async function collectTandemPluginKeys(opts: {
   env: NodeJS.ProcessEnv;
   cwd: string;
   home?: string;
   deadlineMs?: number;
+  installed?: readonly string[];
 }): Promise<string[]> {
   const deadline = opts.deadlineMs ?? SETTINGS_READ_DEADLINE_MS;
-  const keys = new Set<string>([ALWAYS_DISABLED_PLUGIN_KEY]);
+  const keys = new Set<string>([ALWAYS_DISABLED_PLUGIN_KEY, ...(opts.installed ?? [])]);
   let user: string[] = [];
   try {
     user = userSettingsKeys(opts.env, opts.home ?? os.homedir());
@@ -404,6 +711,17 @@ export async function ensureLauncherDir(
  * exclusive create follows a dangling link and there is no `O_NOFOLLOW`, so the
  * window between the `lstat` and the create remains (a residual). Returns the
  * file's path; on failure, deletes what this call created and throws.
+ *
+ * **Already atomic for its one reader** (checked 2026-11-26 for Bryan's "write
+ * both run files atomically"): the name is random and reaches Claude Code only
+ * in the spawn's argv, after this call has written the whole text and closed
+ * the handle; a failed write unlinks the file and throws, so no spawn is given
+ * it, and a crash mid-write leaves a name nobody was given, for the boot sweep.
+ * A temp-and-rename (`atomicWrite`, `atomicWriteConfigFile`) adds nothing for
+ * that reader and would lose what R1.6 needs: those helpers neither refuse a
+ * name already present nor re-read a new file's ACL while it is still empty,
+ * `atomicWriteConfigFile`'s cross-device fallback writes in place, and a temp
+ * name is one the strict sweep pattern does not match.
  */
 export async function writeRunFile(
   dir: string,
@@ -449,7 +767,7 @@ export async function writeRunFile(
         throw new RunFileError(`${kind}-acl`);
       }
     }
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await handle.writeFile(runFileText(value), "utf8");
     await handle.close();
     handle = undefined;
     return file;
@@ -458,6 +776,147 @@ export async function writeRunFile(
     if (created) await fsp.unlink(file).catch(() => {});
     if (err instanceof RunFileError) throw err;
     throw new RunFileError(`${kind}-write`, errCode(err));
+  }
+}
+
+/** A run file's whole text: what `writeRunFile` writes, and so what
+ * {@link runFileReadsBack} expects to find. */
+export function runFileText(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * The pre-spawn read-back (#2358, smoke S1 on Linux, Claude Code 2.1.332;
+ * Bryan's pick of 2026-11-26, "Guard it before the flip (Recommended)"). `ok`
+ * only when `file` is a regular file, not a link, whose whole content is
+ * exactly `expected`. A missing, emptied or truncated file fails (a truncated
+ * one does not parse), and so does any other content than what was written.
+ * Never throws, never logs, never returns what it read: a refusal carries only
+ * a {@link RunFileReadBackReason}, a closed set with no path in it.
+ *
+ * **One retry, for a file another process holds open** (Bryan, 2026-11-26,
+ * "Retry once, log the reason (Recommended)"): an antivirus scanner or a sync
+ * client on Windows can hold a just-written file, and the read then fails with
+ * EBUSY, EPERM or EACCES. On exactly those three codes, from the `lstat` or
+ * the read, it waits {@link RUN_FILE_READ_BACK_RETRY_MS} once and reads again;
+ * a second failure refuses with whatever that attempt found. Only those three,
+ * Bryan's set: `TRANSIENT_READ_CODES` (supervisor.ts, the crash restart's
+ * `integrations.json` read) adds EAGAIN, EMFILE and ENFILE, but that read
+ * retries through the crash loop's backoff, and here a non-blocking read of a
+ * FIFO answers EAGAIN, which must refuse at once rather than retry.
+ *
+ * Why it exists: Claude Code IGNORES a `--settings` file it cannot parse, with
+ * no error, so the plugin's Tandem toolset loads beside the launcher's and a
+ * second owner registers under the same Claude session: fail-open. A bad MCP
+ * config already fails closed ("MCP config is not a valid JSON").
+ *
+ * **Synchronous on purpose**, so its caller (`spawnOnce`) adds no `await`
+ * between the post-write re-checks (R1.8) and `spawn()`. That is also why the
+ * retry's wait is a synchronous sleep (`Atomics.wait`) rather than a timer: it
+ * blocks the server's event loop for at most 100 ms per file, and only when a
+ * read already failed with one of the three codes, which on POSIX is almost
+ * never. The other way to keep the invariant, an async read-back before the
+ * re-checks, would widen the gap below and need a second copy at each of
+ * `spawnOnce`'s two callers.
+ *
+ * **What it cannot close (TOCTOU).** Claude Code reads the files after it
+ * starts, not when this runs: S1's strace saw the reads within about 0.5 s of
+ * start, and the settings file stays on disk until the spawn's teardown. A
+ * file changed in that gap is not seen here. So this catches a file already
+ * missing or damaged before the spawn (a failing disk, a cleanup tool, an
+ * antivirus quarantine), not a writer racing Claude Code's read; such a writer
+ * needs write access to `launcher/`, which is the user's own processes, or on
+ * Windows #2439's and #2441's cases (docs/security.md).
+ *
+ * The open is non-blocking: a FIFO swapped in between the `lstat` and the
+ * read would otherwise block this synchronous read, and with it the server's
+ * event loop, until a writer came (`O_NOFOLLOW` refuses a link, not a FIFO).
+ * Non-blocking, such a read returns nothing or `EAGAIN`, and either fails the
+ * comparison. Both flags are absent on Windows, where the `lstat` alone
+ * refuses a link.
+ */
+export function runFileReadsBack(
+  file: string,
+  expected: string,
+  /** Test-only: the file system calls and the retry's sleep. */
+  io: RunFileReadBackIo = realReadBackIo,
+): RunFileReadBack {
+  const first = readBackOnce(file, expected, io);
+  if (first.ok || !READ_BACK_RETRY_CODES.has(first.reason)) return first;
+  io.sleep(RUN_FILE_READ_BACK_RETRY_MS);
+  return readBackOnce(file, expected, io);
+}
+
+/** The read-back's one wait before its retry. */
+export const RUN_FILE_READ_BACK_RETRY_MS = 100;
+
+/** Errno codes kept as themselves in a reason; any other reads `"unreadable"`.
+ * The first three are the ones retried (`READ_BACK_RETRY_CODES`). */
+const READ_BACK_ERRNO_REASONS = [
+  "EBUSY",
+  "EPERM",
+  "EACCES",
+  "EAGAIN",
+  "ELOOP",
+  "EISDIR",
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+] as const;
+const READ_BACK_RETRY_CODES: ReadonlySet<string> = new Set(["EBUSY", "EPERM", "EACCES"]);
+
+/**
+ * Why a run file did not read back. A closed set, so the refusal's log line
+ * can carry it: `missing` (no file at the name), `not-regular` (a link, a
+ * directory, anything but a regular file), `size` (not the length written, as a
+ * truncated file is), `content` (the right length, other bytes), one of a fixed
+ * list of errno codes, or `unreadable` for any other errno.
+ */
+export const RUN_FILE_READ_BACK_REASONS = [
+  "missing",
+  "not-regular",
+  "size",
+  "content",
+  ...READ_BACK_ERRNO_REASONS,
+  "unreadable",
+] as const;
+export type RunFileReadBackReason = (typeof RUN_FILE_READ_BACK_REASONS)[number];
+
+export type RunFileReadBack = { ok: true } | { ok: false; reason: RunFileReadBackReason };
+
+/** The calls the read-back makes, injectable so a test can fail one. */
+export interface RunFileReadBackIo {
+  lstat(file: string): { isFile(): boolean; size: number };
+  read(file: string, flag: number): string;
+  sleep(ms: number): void;
+}
+
+const realReadBackIo: RunFileReadBackIo = {
+  lstat: (file) => lstatSync(file),
+  read: (file, flag) => readFileSync(file, { encoding: "utf8", flag }),
+  sleep: (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
+};
+
+function errnoReason(err: unknown): RunFileReadBackReason {
+  const code = errCode(err);
+  if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+  return (READ_BACK_ERRNO_REASONS as readonly string[]).includes(code ?? "")
+    ? (code as RunFileReadBackReason)
+    : "unreadable";
+}
+
+function readBackOnce(file: string, expected: string, io: RunFileReadBackIo): RunFileReadBack {
+  try {
+    const st = io.lstat(file);
+    if (!st.isFile()) return { ok: false, reason: "not-regular" };
+    if (st.size !== Buffer.byteLength(expected, "utf8")) return { ok: false, reason: "size" };
+    const flag =
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+    return io.read(file, flag) === expected ? { ok: true } : { ok: false, reason: "content" };
+  } catch (err) {
+    return { ok: false, reason: errnoReason(err) };
   }
 }
 

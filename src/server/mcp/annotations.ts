@@ -1300,7 +1300,7 @@ export function registerAnnotationTools(server: McpServer): void {
     ),
   );
 
-  // #2360 (ships dark): with ownership on, Claude replies inside a user's
+  // #2360 (ownership on): with ownership on, Claude replies inside a user's
   // shared comment thread, and an "I'm on it" takes `inProgress`. Decided once
   // per registration like the owner label, so a dark registration's
   // description and schema are byte-identical to before.
@@ -1323,9 +1323,9 @@ export function registerAnnotationTools(server: McpServer): void {
     threadReplies
       ? "Reply in the thread of a pending comment: one Claude authored, or one the user shared " +
           "with Claude, where the user reads the answer to their comment (ANNOTATION_RESOLVED once " +
-          "it is accepted or dismissed). Any other record (an imported comment, a highlight) " +
-          "returns NOT_OWNED; leave a fresh tandem_comment. Private notes and private comments " +
-          "return INVALID_ARGUMENT, and a comment held while the user works in Solo returns " +
+          "it is accepted or dismissed). An imported record or a user's highlight returns " +
+          "NOT_OWNED; leave a fresh tandem_comment. Private notes, private comments and a " +
+          "highlight Claude authored return INVALID_ARGUMENT, and a comment held while the user works in Solo returns " +
           "NOT_FOUND. Set inProgress for a short acknowledgement that answers nothing yet, then " +
           "reply again with the answer."
       : "Reply in the thread of a pending annotation Claude authored (ANNOTATION_RESOLVED once it is " +

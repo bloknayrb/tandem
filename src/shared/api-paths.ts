@@ -51,11 +51,13 @@ export const API_APPLY_CHANGES = "/api/apply-changes";
 // Raw-markdown source view/edit (#1021). GET returns the document's literal
 // markdown; POST replaces the Y.Doc content from a user-supplied markdown string.
 export const API_DOCUMENT_RAW = "/api/document/raw";
+export const API_DOCUMENT_COMPARE = "/api/document/compare";
 export const API_DOCUMENT_RELOAD = "/api/document/reload";
 // Pre-overwrite document backups (#1086). GET lists a document's restorable
 // snapshots; POST restores one through the reload lifecycle.
 export const API_BACKUPS = "/api/backups";
 export const API_BACKUPS_RESTORE = "/api/backups/restore";
+export const API_BACKUPS_ACKNOWLEDGE = "/api/backups/acknowledge";
 // Resolve an external-conflict prompt (#1069, all formats since #1238): keep
 // the in-memory unsaved edits (re-baseline) or reload fresh from the on-disk file.
 export const API_EXTERNAL_CONFLICT_RESOLVE = "/api/external-conflict/resolve";

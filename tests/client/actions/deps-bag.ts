@@ -37,6 +37,7 @@ export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps 
     afterLauncherAction: vi.fn(),
     aiNotice: () => null,
     openSettings: vi.fn(),
+    openVersionHistory: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),
     openFindBarTabs: vi.fn(),

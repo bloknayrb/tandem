@@ -1935,7 +1935,7 @@ pub(crate) async fn start_sidecar(
     // or any other listener on the MCP/WS ports can answer /health but be incompatible
     // with this app's auth token / session state, leaving the UI stuck on "Disconnected".
     // The sidecar's own `freePort()` step on start handles port conflicts cleanly.
-    if cfg!(debug_assertions) && check_health(&client).await {
+    if cfg!(debug_assertions) && check_health(client).await {
         log::info!("Server already healthy — skipping sidecar spawn (debug build)");
         // Promote + drain here too, or this early return is a silent hole: the
         // server IS healthy, we just did not spawn it, so `SIDECAR_HEALTHY` would
@@ -2279,7 +2279,7 @@ pub(crate) async fn start_sidecar(
         }
 
         let started = std::time::Instant::now();
-        match wait_for_health(&client, &sidecar_dead, child_pid).await {
+        match wait_for_health(client, &sidecar_dead, child_pid).await {
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
 
@@ -3942,6 +3942,7 @@ mod shutdown_guard_tests {
     ///   - a zero deadline sends `wait_for_server_gone` into a `while now <
     ///     deadline` loop whose body never runs, so the closed port is never
     ///     observed and the verdict is `TimedOut`, not `Flushed`.
+    ///
     /// Either one hard-kills every Quit with the user's edits unflushed (#1756).
     #[test]
     fn exit_sequence_forwards_the_budget_and_deadline_a_real_quit_uses() {

@@ -241,7 +241,14 @@ describe("ReviewOnlyBanner live region", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("ExternalConflictBanner live region", () => {
-  const props = (ydoc: Y.Doc) => ({ ydoc, documentId: "d1", fileName: "notes.md", format: "md" });
+  const props = (ydoc: Y.Doc) => ({
+    ydoc,
+    documentId: "d1",
+    fileName: "notes.md",
+    format: "md",
+    source: "file",
+    readOnly: false,
+  });
   const conflict: ExternalConflictState = {
     kind: "external-edit",
     diskChanged: true,

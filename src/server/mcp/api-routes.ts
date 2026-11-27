@@ -5,6 +5,7 @@ import {
   API_ANNOTATION_REPLY,
   API_APPLY_CHANGES,
   API_BACKUPS,
+  API_BACKUPS_ACKNOWLEDGE,
   API_BACKUPS_RESTORE,
   API_CHANNEL_AWARENESS,
   API_CHANNEL_ERROR,
@@ -13,6 +14,7 @@ import {
   API_CLOSE,
   API_CONVERT,
   API_DIAGNOSTICS,
+  API_DOCUMENT_COMPARE,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
   API_EXTERNAL_CONFLICT_RESOLVE,
@@ -47,7 +49,9 @@ import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleListBackups, handleRestoreBackup } from "./routes/backups.js";
+import { handleAcknowledgeKeptEdits } from "./routes/backups-ack.js";
 import { handleClose } from "./routes/close.js";
+import { handleGetDocumentCompare } from "./routes/compare.js";
 import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
@@ -505,6 +509,8 @@ export function registerApiRoutes(
   // content must not be disclosed to LAN peers, #1121 F5); POST is gated on
   // origin allowlist + loopback inside the handler (#1121 F6).
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
+  // The compare view (ADR-057 PR 4): loopback-only by hand, like raw above.
+  app.get(API_DOCUMENT_COMPARE, mw, handleGetDocumentCompare);
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
 
@@ -514,6 +520,9 @@ export function registerApiRoutes(
   app.get(API_BACKUPS, mw, handleListBackups);
   app.options(API_BACKUPS_RESTORE, mw);
   app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+  // The kept-edits banner's Dismiss (ADR-057 PR 2). Same gates, in the handler.
+  app.options(API_BACKUPS_ACKNOWLEDGE, mw);
+  app.post(API_BACKUPS_ACKNOWLEDGE, mw, largeBody, handleAcknowledgeKeptEdits);
 
   // External-conflict resolution (#1069, all formats since #1238). Gated on
   // origin allowlist + loopback inside the handler (#1121 F6).
