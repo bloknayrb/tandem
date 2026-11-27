@@ -8,7 +8,11 @@ import {
   buildRunSettings,
   collectTandemPluginKeys,
   ensureLauncherDir,
+  listInstalledTandemPluginKeys,
   loopbackBaseUrl,
+  PLUGIN_LIST_DEADLINE_MS,
+  PLUGIN_LIST_MAX_BYTES,
+  type PluginListExec,
   RUN_FILE_READ_BACK_RETRY_MS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
@@ -22,6 +26,7 @@ import {
   SETTINGS_READ_MAX_BYTES,
   SETTINGS_READ_MAX_KEYS,
   sweepRunFiles,
+  tandemKeysFromPluginList,
   writeRunFile,
 } from "../../../src/server/launcher/run-files.js";
 import { stripComments } from "../../helpers/src-tree.js";
@@ -612,5 +617,139 @@ describe("the boot sweep (R1.9, Ruling D13)", () => {
     fs.symlinkSync(victim, link);
     expect(await sweepRunFiles(dir, { acl: NO_ACL })).toBe(0);
     expect(fs.existsSync(victim)).toBe(true);
+  });
+});
+
+// Smoke S1 on Windows (#2358, 2026-11-26): the account-synced `tandem@synced`
+// plugin is enabled by account sync, not by any settings file, so the settings
+// reads never saw it and its toolset loaded beside the launcher's. Bryan's
+// "Ask Claude Code (Recommended)": the launcher asks `claude plugin list
+// --json` and disables every `tandem@` key it reports, failing safe.
+describe("the installed-plugin lookup (smoke S1, Windows)", () => {
+  /** The shape `claude plugin list --json` printed on Linux, Claude Code 2.1.332. */
+  const LISTED = JSON.stringify([
+    { id: "pdf-viewer@synced", version: "0.2.0", scope: "synced", enabled: true },
+    { id: "tandem@synced", version: "0.32.0", scope: "synced", enabled: true },
+    { id: "tandem@tandem-editor", version: "0.32.0", scope: "user", enabled: false },
+    { id: "tandemx@synced", version: "1", scope: "synced", enabled: true },
+    { id: "tandem@bad key", version: "1", scope: "user", enabled: true },
+    { id: 42 },
+    null,
+  ]);
+
+  it("takes every well-formed tandem@ id, enabled or not, and nothing else", () => {
+    expect(tandemKeysFromPluginList(LISTED)).toEqual(["tandem@synced", "tandem@tandem-editor"]);
+    expect(tandemKeysFromPluginList("[]")).toEqual([]);
+  });
+
+  it("answers null for output that is not Claude Code's array", () => {
+    expect(tandemKeysFromPluginList("not json")).toBeNull();
+    expect(tandemKeysFromPluginList('{"plugins":[]}')).toBeNull();
+    const many = Array.from({ length: SETTINGS_READ_MAX_KEYS + 1 }, (_, i) => ({
+      id: `tandem@m${i}`,
+    }));
+    expect(tandemKeysFromPluginList(JSON.stringify(many))).toBeNull();
+  });
+
+  function fakeExec(
+    answer: (cb: Parameters<PluginListExec>[3]) => void,
+    seen: { file?: string; args?: readonly string[]; options?: Parameters<PluginListExec>[2] } = {},
+  ): PluginListExec {
+    return (file, args, options, cb) => {
+      seen.file = file;
+      seen.args = args;
+      seen.options = options;
+      answer(cb);
+      return undefined;
+    };
+  }
+
+  it("runs the child's own binary with plugin list --json, in its cwd and environment, bounded", async () => {
+    const seen: Parameters<typeof fakeExec>[1] = {};
+    const env = { PATH: "/x", CLAUDE_CONFIG_DIR: "/cfg" };
+    const result = await listInstalledTandemPluginKeys({
+      claudeBin: "/bin/claude",
+      env,
+      cwd: "/work",
+      exec: fakeExec((cb) => cb(null, LISTED), seen),
+    });
+    expect(result).toEqual({ ok: true, keys: ["tandem@synced", "tandem@tandem-editor"] });
+    expect(seen.file).toBe("/bin/claude");
+    expect(seen.args).toEqual(["plugin", "list", "--json"]);
+    expect(seen.options).toMatchObject({
+      cwd: "/work",
+      env,
+      timeout: PLUGIN_LIST_DEADLINE_MS,
+      maxBuffer: PLUGIN_LIST_MAX_BYTES,
+      windowsHide: true,
+      killSignal: "SIGKILL",
+    });
+  });
+
+  it("names each failure, never rejecting", async () => {
+    const run = (answer: Parameters<typeof fakeExec>[0]) =>
+      listInstalledTandemPluginKeys({ claudeBin: "c", env: {}, cwd: "/", exec: fakeExec(answer) });
+    const err = (fields: Record<string, unknown>) => Object.assign(new Error("x"), fields);
+    expect(await run((cb) => cb(err({ killed: true, code: null }), ""))).toEqual({
+      ok: false,
+      reason: "timeout",
+    });
+    expect(await run((cb) => cb(err({ code: 1 }), ""))).toEqual({ ok: false, reason: "exit" });
+    expect(await run((cb) => cb(err({ code: "ENOENT" }), ""))).toEqual({
+      ok: false,
+      reason: "spawn",
+    });
+    expect(await run((cb) => cb(err({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }), ""))).toEqual({
+      ok: false,
+      reason: "unparseable",
+    });
+    expect(await run((cb) => cb(null, "Usage: claude"))).toEqual({
+      ok: false,
+      reason: "unparseable",
+    });
+    const throwing: PluginListExec = () => {
+      throw new Error("spawn EINVAL");
+    };
+    expect(
+      await listInstalledTandemPluginKeys({ claudeBin: "c", env: {}, cwd: "/", exec: throwing }),
+    ).toEqual({ ok: false, reason: "spawn" });
+  });
+
+  it.skipIf(!POSIX)("runs a real executable and reads its JSON", async () => {
+    const bin = path.join(root, "claude");
+    fs.writeFileSync(
+      bin,
+      `#!${process.execPath}\nconst a = process.argv.slice(2).join(" ");\n` +
+        `if (a !== "plugin list --json") process.exit(3);\n` +
+        `process.stdout.write(JSON.stringify([{ id: "tandem@synced" }, { id: process.cwd() }]));\n`,
+      { mode: 0o755 },
+    );
+    expect(
+      await listInstalledTandemPluginKeys({ claudeBin: bin, env: process.env, cwd: root }),
+    ).toEqual({ ok: true, keys: ["tandem@synced"] });
+    expect(
+      await listInstalledTandemPluginKeys({
+        claudeBin: path.join(root, "missing"),
+        env: process.env,
+        cwd: root,
+      }),
+    ).toEqual({ ok: false, reason: "spawn" });
+  });
+
+  it("collectTandemPluginKeys adds the lookup's keys to the settings files' and the known one", async () => {
+    const home = path.join(root, "home");
+    const cwd = path.join(root, "doc");
+    fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "tandem@proj": true } }),
+    );
+    const keys = await collectTandemPluginKeys({
+      env: {},
+      cwd,
+      home,
+      installed: ["tandem@synced", "tandem@proj"],
+    });
+    expect(keys).toEqual([ALWAYS_DISABLED_PLUGIN_KEY, "tandem@proj", "tandem@synced"].sort());
   });
 });

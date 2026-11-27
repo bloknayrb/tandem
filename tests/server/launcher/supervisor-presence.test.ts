@@ -153,6 +153,16 @@ const NOT_SIGNED_IN = {
   result: "Not logged in · Please run /login",
 };
 const RESULT_OK = { type: "result", subtype: "success", is_error: false, result: "done" };
+/** Smoke S3 on #2358 (Windows, Claude Code 2.1.332, 2026-11-26), verbatim:
+ * an invalid API key's result envelope. */
+const AUTH_REFUSED = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  result: "Invalid API key · Fix external API key",
+  terminal_reason: "api_error",
+  api_error_status: 401,
+};
 
 function pushJson(child: FakeChild, obj: Record<string, unknown>): void {
   child.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -924,6 +934,19 @@ describe("R2.3: when each change is announced", () => {
     pushJson(c1, NOT_SIGNED_IN);
     await settle();
     expect(h.log).toEqual(["present", "run-start", "not-present"]);
+  });
+
+  // Smoke S3 (Bryan, 2026-11-26, "Treat it like signed out (Recommended)"): a
+  // refused credential ends presence exactly as "Not logged in" does, so work
+  // routes away from a Claude that cannot answer.
+  it("a refused API key (S3's envelope) on a present Tandem's Claude: not present at once, needs-login", async () => {
+    const h = makeSupervisor();
+    const c1 = await boundFreshRun(h);
+    pushJson(c1, AUTH_REFUSED);
+    await until(() => c1.signalCode !== null, "the trip's kill");
+    await settle();
+    expect(h.log).toEqual(["present", "run-start", "not-present"]);
+    expect(h.sup.status()).toMatchObject({ running: false, lastError: "needs-login" });
   });
 
   describe("Check again while still signed out (both orders; which a real child takes is not measured)", () => {

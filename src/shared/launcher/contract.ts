@@ -603,8 +603,12 @@ export const TANDEM_CLASSIFIER_GATED_TOOLS = [
  *   - `mcp__plugin_tandem_tandem__<tool>` — the plugin's server: `plugin.json`
  *     names it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
  *
- * The opt-in channel shim's server (`tandem-channel`) is deliberately absent:
- * a supervised session never loads it (see `CLAUDE_STREAM_JSON_FLAGS`).
+ * The opt-in channel shim's server (`tandem-channel`) is deliberately absent.
+ * A user-scope `tandem-channel` entry does load in a supervised session
+ * (smoke S1 on Windows, #2358, 2026-11-26), but the session never takes a turn
+ * from it (see `CLAUDE_STREAM_JSON_FLAGS`), and with ownership on its one tool,
+ * `tandem_reply`, is refused for the launcher's own child (`channelReplyGate`):
+ * pre-approving it would grant nothing.
  *
  * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
  * fails toward "auto mode alone decides" rather than toward a crash.

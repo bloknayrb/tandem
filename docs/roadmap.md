@@ -21,7 +21,7 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 i
 
 ### Where v1.0 stands
 
-Document ownership (#2358) is built; its flip waits on the hardware smoke. After it, what
+Document ownership (#2358) is built, and its flip's gate passes since the Windows smoke. After it, what
 remains is the licence gate's last checks, the commercial setup, hardware verification, and
 the flag flips.
 
@@ -38,17 +38,23 @@ below still stand before v1.0 either way.
    PR of the series is built, and #2360's switch (PR C) is the commit before the flip. **The
    flip PR (PR 6)** sets `OWNERSHIP_ENABLED = true`, ships skill 44 and the lit
    `tandem_checkInbox` text, and closes the three flip-blocker rows that named it (ADR-054's
-   flip amendment). It cannot merge yet, by design: `tests/server/ownership-flip-blockers.ts`
-   holds 14 rows, 8 accepted and **6 open**, and `tests/server/ownership-flag.test.ts` is red
-   while any is open with the literal `true`. The six are the
-   [consolidated hardware smoke](plans/2358-ownership.md#consolidated-pre-flip-hardware-smoke)'s
-   S1 to S4, S6 and S8 (S8's document-room row closed on 2026-11-26, when Bryan dropped that guard; its
-   CTRL row is measured in Chromium only; S7 closed the same day, measured, with the sentence moved
-   into the skill and the tool description; S5 closed the same day too, measured: Claude Code
-   2.1.332 held its GET stream, so the re-ask is not owed): each closes when Bryan records its result on #2358 (and,
-   where its row says so, the change lands) or accepts it. Also Bryan's: dropping
-   `ownership-flag-on` from branch protection's required checks, and the plan's manual check,
-   which runs after both flips, before that release.
+   flip amendment). Its gate passes: `tests/server/ownership-flip-blockers.ts` holds 10 rows,
+   **all accepted, none open**, so `tests/server/ownership-flag.test.ts` is green with the literal
+   `true`. The six the
+   [consolidated hardware smoke](plans/2358-ownership.md#consolidated-pre-flip-hardware-smoke)
+   left (S1 to S4, S6 and S8) were settled on 2026-11-26 by Bryan's Windows run (on #2358) and
+   his picks: S1 closed by the Linux and Windows measurements and a fix (the launcher now asks
+   `claude plugin list --json` and disables every `tandem@` plugin key, because an account-synced
+   `tandem@synced` plugin loaded beside its bridge), with one accepted residual (a run file deleted
+   before its ACL step launches unbound and silent); S2 and S4 closed by the measurements on both
+   OSes; S3 closed by a fix (a 401 or 403 result ends presence as "Not logged in" does); S6
+   (Claude Desktop's client name `claude-ai` measured, the nobody-holds precondition unreachable)
+   and S8's CTRL row (Chromium and WebView2 held; macOS not run) accepted for the flip. Earlier the
+   same day S8's document-room row closed when Bryan dropped that guard, S7 closed measured, with
+   the sentence moved into the skill and the tool description, and S5 closed measured. Still
+   Bryan's: dropping `ownership-flag-on` from branch protection's required checks, and the
+   plan's manual check, which runs after both flips, before that release. Separate, not the
+   flip's: the launcher's early-crash session clear on Windows, where a killed child exits 1.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key.

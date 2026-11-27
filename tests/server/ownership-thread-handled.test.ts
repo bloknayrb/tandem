@@ -698,7 +698,7 @@ describe("the flip-blocker rows PR B closes (#2360)", () => {
         closed,
       ).toBe(false);
     }
-    // The CTRL pending row stays open (S8 on WebView2 and WKWebView).
+    // The CTRL pending row stays, accepted for the flip (S8: WKWebView not run).
     expect(rows.some((g) => g.startsWith("The posts PR drops CTRL-doc update data"))).toBe(true);
   });
 });

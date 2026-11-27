@@ -337,6 +337,66 @@ describe("each spawn gets a handle and its run files (R1)", () => {
   });
 });
 
+// Smoke S1 on Windows (#2358, 2026-11-26; Bryan's "Ask Claude Code
+// (Recommended)"): an account-synced `tandem@synced` is in no settings file,
+// so only Claude Code's own plugin list names it.
+describe("the installed-plugin lookup before the write (smoke S1, Windows)", () => {
+  async function settingsOfFirstSpawn() {
+    const [spawnRec] = await waitFor(() => {
+      const r = records<SpawnRecord>("spawn-");
+      return r.length > 0 ? r : null;
+    }, "the spawn record");
+    const run = await waitFor(() => runRecordFor(spawnRec.pid), "the run-files record");
+    return { spawnRec, run };
+  }
+
+  it("a tandem@synced key only the lookup reports is disabled; the lookup gets the child's binary, cwd and environment", async () => {
+    const asked: { claudeBin: string; env: NodeJS.ProcessEnv; cwd: string }[] = [];
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async (o) => {
+        asked.push(o);
+        return { ok: true, keys: ["tandem@synced"] };
+      },
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({
+      enabledPlugins: { "tandem@synced": false, "tandem@tandem-editor": false },
+    });
+    expect(asked).toHaveLength(1);
+    expect(asked[0].claudeBin).toBe(process.env.TANDEM_CLAUDE_CMD);
+    expect(asked[0].cwd).toBe(spawnDir);
+    expect(asked[0].env).toEqual(childEnv());
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([]);
+  });
+
+  it("a failed lookup still spawns with the known key, after one line naming the reason", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: async () => ({ ok: false, reason: "timeout" }),
+    });
+    await sup.startFresh(spawnDir);
+    const { spawnRec, run } = await settingsOfFirstSpawn();
+    expect(flagsIn(spawnRec.claudeArgs)).toEqual(["--mcp-config", "--settings"]);
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(errors().filter((l) => l.includes("installed plugins"))).toEqual([
+      "[Launcher] Could not list Claude Code's installed plugins (timeout) — disabling only the Tandem plugin keys its settings files name",
+    ]);
+  });
+
+  it("a lookup that rejects (a broken seam) fails safe the same way", async () => {
+    const errors = captureErrors();
+    const sup = makeSupervisor({
+      listInstalledPlugins: () => Promise.reject(new Error("boom")),
+    });
+    await sup.startFresh(spawnDir);
+    const { run } = await settingsOfFirstSpawn();
+    expect(run.settings?.value).toEqual({ enabledPlugins: { "tandem@tandem-editor": false } });
+    expect(errors().filter((l) => l.includes("installed plugins"))).toHaveLength(1);
+  });
+});
+
 describe("no usable bridge, no flags (R1.5)", () => {
   async function expectNoFlags(sup: Supervisor) {
     await sup.startFresh(spawnDir);

@@ -77,7 +77,9 @@ import {
   deleteRunFile,
   ensureLauncherDir,
   launcherDirFor,
+  listInstalledTandemPluginKeys,
   loopbackBaseUrl,
+  type PluginListLookup,
   type RunFileAcl,
   RunFileError,
   type RunFileReadBackReason,
@@ -375,6 +377,18 @@ interface SupervisorOpts {
   stdioBridgeScript?: string;
   /** Test-only override for `os.homedir()` when finding the user settings file. */
   claudeSettingsHome?: string;
+  /**
+   * The installed-plugin lookup run before each spawn's run files are written
+   * (smoke S1 on Windows; Bryan, 2026-11-26, "Ask Claude Code
+   * (Recommended)"). Defaults to `listInstalledTandemPluginKeys`, which runs
+   * `<claudeBin> plugin list --json`. A seam so a spawn test answers it
+   * without running a CLI. Never passed by `index.ts`. Ownership on only.
+   */
+  listInstalledPlugins?: (opts: {
+    claudeBin: string;
+    env: NodeJS.ProcessEnv;
+    cwd: string;
+  }) => Promise<PluginListLookup>;
   /** Test-only: the run files' 32-hex name suffix, so a test can plant a file
    * or a link at the name. Never passed by `index.ts`. */
   runFileNameSuffix?: (kind: "mcp" | "settings") => string;
@@ -819,6 +833,42 @@ const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sess
  * differently this does not match, which fails soft to the old behaviour.
  */
 const NOT_SIGNED_IN_RESULT = /^Not logged in\b/;
+
+/** The HTTP statuses an `api_error_status` reports for a refused credential. */
+const AUTH_FAILURE_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+
+/**
+ * Which sign-in failure, if any, a `result` envelope reports (#1780; smoke S3
+ * on #2358, Bryan's "Treat it like signed out (Recommended)", 2026-11-26).
+ * Both end presence the same way; only the log line differs.
+ *
+ * - `not-signed-in`: the never-signed-in refusal, `NOT_SIGNED_IN_RESULT`.
+ * - `auth-refused`: any other `is_error` result whose `api_error_status` is
+ *   401 or 403 (S3 measured an invalid API key on Windows, Claude Code
+ *   2.1.332: `{"type":"result","subtype":"success","is_error":true,"result":
+ *   "Invalid API key · Fix external API key","terminal_reason":"api_error",
+ *   "api_error_status":401}`). Keyed on the status, not the text, so an expired
+ *   or revoked credential worded differently still matches. Any other API
+ *   error, a 529 overload or a 500 among them, is not a sign-in failure and
+ *   does not match: the next turn may succeed.
+ *
+ * `is_error` must be exactly `true`: a successful answer that quotes either
+ * never matches. The envelope is the child's untyped JSON, so every field is
+ * type-checked before use.
+ */
+export function signInFailureOf(parsed: {
+  is_error?: unknown;
+  result?: unknown;
+  api_error_status?: unknown;
+}): "not-signed-in" | "auth-refused" | null {
+  if (parsed.is_error !== true) return null;
+  if (typeof parsed.result === "string" && NOT_SIGNED_IN_RESULT.test(parsed.result)) {
+    return "not-signed-in";
+  }
+  const status = parsed.api_error_status;
+  if (typeof status === "number" && AUTH_FAILURE_STATUSES.has(status)) return "auth-refused";
+  return null;
+}
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
  * an attacker-controlled value flowing into `--resume` could hijack
@@ -1564,6 +1614,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const getBoundMcpAddress = opts.getBoundMcpAddress ?? (() => null);
   const storeLockHeld = opts.storeLockHeld ?? isStoreLockHeld;
   const runFileAcl = opts.runFileAcl ?? realRunFileAcl;
+  const listInstalledPlugins = opts.listInstalledPlugins ?? listInstalledTandemPluginKeys;
   /** The boot sweep runs once per supervisor (R1.9). */
   let runFilesSwept = false;
   /** Run-file deletions still in flight (#2358 PR 3a review, item 9). A
@@ -3108,8 +3159,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * usable bridge script, a bound address that is not a loopback literal, or
    * any fail-closed step of R1.6. One line names the failed step, never a
    * file's contents, and nothing is left behind.
+   *
+   * The settings file's keys include every `tandem@…` key Claude Code itself
+   * reports installed (`claudeBin plugin list --json`, smoke S1 on Windows: an
+   * account-synced `tandem@synced` is in no settings file). The lookup runs
+   * beside the directory checks, before the settings reads and any write, and
+   * is bounded by `PLUGIN_LIST_DEADLINE_MS`. It fails safe: no answer writes
+   * the keys the settings files and `ALWAYS_DISABLED_PLUGIN_KEY` give, after
+   * one line naming the reason.
    */
-  async function prepareRun(plan: SpawnPlan): Promise<SpawnRun | null> {
+  async function prepareRun(plan: SpawnPlan, claudeBin: string): Promise<SpawnRun | null> {
     const baseUrl = loopbackBaseUrl(getBoundMcpAddress());
     if (baseUrl === null) {
       console.error(
@@ -3154,11 +3213,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         },
       });
       const dir = launcherDirFor(opts.integrationsBase);
+      const env = childEnv();
+      // Started first, awaited after the directory checks: it never rejects,
+      // so leaving it in flight when a check throws loses nothing.
+      const installedLookup = listInstalledPlugins({ claudeBin, env, cwd: plan.cwd }).catch(
+        (): PluginListLookup => ({ ok: false, reason: "spawn" }),
+      );
       await ensureLauncherDir(dir, { create: true, acl: runFileAcl });
+      const installed = await installedLookup;
+      if (!installed.ok) {
+        console.error(
+          `[Launcher] Could not list Claude Code's installed plugins (${installed.reason}) — disabling only the Tandem plugin keys its settings files name`,
+        );
+      }
       const keys = await collectTandemPluginKeys({
-        env: childEnv(),
+        env,
         cwd: plan.cwd,
         ...(opts.claudeSettingsHome !== undefined ? { home: opts.claudeSettingsHome } : {}),
+        ...(installed.ok ? { installed: installed.keys } : {}),
       });
       // #2440: the two files' per-file checks (on Windows each a PowerShell
       // `Get-Acl` read) run at the same time. Everything that could throw is
@@ -3958,6 +4030,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         is_error?: boolean;
         errors?: string[];
         result?: unknown;
+        api_error_status?: unknown;
         permission_denials?: unknown;
       };
       try {
@@ -4022,12 +4095,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // retrying cannot help, and the pending wake's write would only earn
         // another refusal, so return before `flushPendingWake`. The kill does
         // not go through `onStdinGone`, so it never counts toward the
-        // wake-delivery streak.
-        if (
-          parsed.is_error === true &&
-          typeof parsed.result === "string" &&
-          NOT_SIGNED_IN_RESULT.test(parsed.result)
-        ) {
+        // wake-delivery streak. A refused credential (a 401 or 403, smoke S3)
+        // is treated the same way (`signInFailureOf`): same code, same trip,
+        // same not-present; only its one log line differs.
+        const signInFailure = signInFailureOf(parsed);
+        if (signInFailure !== null) {
           if (child === spawned) {
             // The sign-in trip (#2358 PR 3b-1, amendment 2): its cause first,
             // and its not-present at once, identified by this site.
@@ -4038,7 +4110,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             loginRecheckOwed = true;
             persistLoginRecheck(plan.sessionId, true);
             console.error(
-              "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
+              signInFailure === "not-signed-in"
+                ? "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again."
+                : `[Launcher] Claude Code's sign-in or API key was refused (HTTP ${String(parsed.api_error_status)}) — not retrying. Fix the sign-in or API key Claude Code uses (run \`claude\` in a terminal), then use Check again.`,
             );
             // Its handle stops binding now, not when the exit arrives (R4.4).
             run?.discard();
@@ -4573,7 +4647,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // a failed write awaited too, and a stop can have landed during it.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      run = await prepareRun(plan);
+      run = await prepareRun(plan, claudeBin);
       const why =
         child !== null
           ? "a Claude started meanwhile"
@@ -4929,7 +5003,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // the lock) and the licence can move. Flag off, nothing here runs.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      run = await prepareRun(plan);
+      run = await prepareRun(plan, claudeBin);
       const refusal = decideRefusal();
       if (refusal) {
         run?.discard();

@@ -1018,6 +1018,78 @@ describe("#1780 — a Claude Code that is not signed in", () => {
     expect(status.lastError).toBeUndefined();
   });
 
+  // Smoke S3 on #2358 (Bryan, 2026-11-26, "Treat it like signed out
+  // (Recommended)"): a refused credential trips exactly as "Not logged in"
+  // does. The envelope is verbatim from Windows 11, Claude Code 2.1.332.
+  const AUTH_REFUSED = {
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    result: "Invalid API key · Fix external API key",
+    terminal_reason: "api_error",
+    api_error_status: 401,
+  };
+
+  it("trips on S3's invalid-API-key envelope: one line, needs-login, no retry", async () => {
+    const { sup, emit } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    emit(annotationEvent());
+    pushJson(child1, INIT);
+    pushJson(child1, AUTH_REFUSED);
+
+    await waitFor(() => sup.status().lastError === "needs-login", "the auth trip");
+    expect(sup.status()).toEqual({ running: false, lastError: "needs-login" });
+    expect(child1.kills).toEqual(["SIGTERM"]);
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    const lines = logText()
+      .split("\n")
+      .filter((l) => l.includes("sign-in or API key was refused"));
+    expect(lines).toEqual([expect.stringContaining("(HTTP 401)")]);
+    expect(logText()).not.toContain("Claude Code is not signed in");
+    await expectNoMoreSpawns(1);
+  });
+
+  it("trips on a 403 whatever its text", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, { ...AUTH_REFUSED, result: "OAuth token revoked", api_error_status: 403 });
+    await waitFor(() => sup.status().lastError === "needs-login", "the auth trip");
+    expect(child1.kills).toEqual(["SIGTERM"]);
+    await expectNoMoreSpawns(1);
+  });
+
+  it("does not trip on an overloaded API (529) or a server error (500)", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, {
+      ...AUTH_REFUSED,
+      result: "API Error: 529 overloaded",
+      api_error_status: 529,
+    });
+    pushJson(child1, { ...AUTH_REFUSED, result: "API Error: 500", api_error_status: 500 });
+    await settle();
+    expect(child1.kills).toEqual([]);
+    expect(sup.status().running).toBe(true);
+    expect(sup.status().lastError).toBeUndefined();
+  });
+
+  it("does not trip on a 401 status in a result that is not an error, or a status that is not a number", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, { ...AUTH_REFUSED, is_error: false });
+    pushJson(child1, { ...AUTH_REFUSED, api_error_status: "401" });
+    await settle();
+    expect(child1.kills).toEqual([]);
+    expect(sup.status().running).toBe(true);
+  });
+
   it("does not trip on a tool's own 'not logged in' inside a result", async () => {
     const { sup } = makeSupervisor();
     await sup.startFresh(cwdDir);

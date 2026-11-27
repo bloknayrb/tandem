@@ -11,8 +11,11 @@
  *   an `--mcp-config` entry named `tandem` replaces the user's own entry of
  *   that name. It holds no auth token: a loopback caller needs none.
  * - the **run settings file** (`--settings`): every enabled Tandem plugin key
- *   (Ruling D3) set to `false`, so the plugin's own bridge does not load beside
- *   the launcher's (probe 10). It holds nothing else, and no secret.
+ *   (Ruling D3), and every `tandem@…` key Claude Code's own `plugin list
+ *   --json` reports (smoke S1 on Windows: an account-synced `tandem@synced` is
+ *   in no settings file), set to `false`, so the plugin's own bridge does not
+ *   load beside the launcher's (probe 10). It holds nothing else, and no
+ *   secret.
  *
  * Written fail-closed (R1.6): the directory is refused if it is a link or not
  * the current user's own; each file is created exclusively at a random final
@@ -30,6 +33,7 @@
  * is on (Ruling I).
  */
 
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants, lstatSync, readFileSync } from "node:fs";
 import fsp from "node:fs/promises";
@@ -168,9 +172,12 @@ export function buildRunMcpConfig(opts: {
           // would leave the launcher's own child connected but never bound.
           CLAUDE_PLUGIN_OPTION_SERVER_URL: "",
           // An inherited `--report-on-*` or `--inspect` would expose the
-          // bridge's environment. Whether an entry's `env` wins over the
-          // environment Claude Code passes is unmeasured; if it does not, this
-          // clears nothing (a residual, docs/security.md).
+          // bridge's environment. An entry's `env` wins over the environment
+          // Claude Code passes, key by key: measured on Linux (smoke S4,
+          // 2026-11-26, the bridge's `/proc` environment) and on Windows (the
+          // same day, by behaviour: a project `NODE_OPTIONS` naming a missing
+          // preload killed the other Tandem servers in that run while this
+          // bridge bound), Claude Code 2.1.332 on both. Not measured on macOS.
           NODE_OPTIONS: "",
           // `NODE_DEBUG=http,fetch,…` would print request headers, the handle's
           // among them, to the bridge's stderr, which Claude Code captures.
@@ -273,20 +280,131 @@ function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
   });
 }
 
+/** How long the installed-plugin lookup may take before the spawn goes on
+ * without it (smoke S1 on Windows; Bryan, 2026-11-26). Measured at about 0.6 s
+ * on Linux (Claude Code 2.1.332, 18 plugins). */
+export const PLUGIN_LIST_DEADLINE_MS = 5_000;
+/** The lookup's stdout cap; past it the answer is unparseable (fail safe). */
+export const PLUGIN_LIST_MAX_BYTES = 1024 * 1024;
+/** A plugin key the lookup may put in the run settings file: `tandem@` and a
+ * marketplace name of plain characters. Anything else is ignored. */
+const TANDEM_PLUGIN_KEY_RE = /^tandem@[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Why the installed-plugin lookup gave no answer: a closed set, logged as is. */
+export type PluginListFailure = "timeout" | "exit" | "spawn" | "unparseable";
+export type PluginListLookup =
+  | { ok: true; keys: string[] }
+  | { ok: false; reason: PluginListFailure };
+
+/**
+ * The `tandem@…` ids in `claude plugin list --json`'s output, or `null` when
+ * it is not the array of `{ id }` objects Claude Code prints. Every Tandem id
+ * it reports, enabled or not: a `false` for a disabled one changes nothing.
+ */
+export function tandemKeysFromPluginList(stdout: string): string[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const keys = new Set<string>();
+  for (const entry of parsed) {
+    const id = (entry as { id?: unknown } | null)?.id;
+    if (typeof id === "string" && TANDEM_PLUGIN_KEY_RE.test(id)) keys.add(id);
+  }
+  if (keys.size > SETTINGS_READ_MAX_KEYS) return null;
+  return [...keys].sort();
+}
+
+/** The `execFile` shape the lookup uses, injectable for tests. */
+export type PluginListExec = (
+  file: string,
+  args: readonly string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    timeout: number;
+    maxBuffer: number;
+    windowsHide: boolean;
+    killSignal: NodeJS.Signals;
+    encoding: "utf8";
+  },
+  callback: (err: (Error & { killed?: boolean; code?: unknown }) | null, stdout: string) => void,
+) => unknown;
+
+/**
+ * Ask Claude Code itself which Tandem plugins it has (smoke S1 on Windows;
+ * Bryan, 2026-11-26, "Ask Claude Code (Recommended)"): `claude plugin list
+ * --json`, run with the child's own binary, environment and working
+ * directory, so it reports what that child would load. Settings files alone
+ * miss a plugin enabled by account sync (`tandem@synced`), which no
+ * `settings.json` names. Claude Code's installed-plugins registry file was
+ * not used: it does not list a synced plugin (measured on Linux, Claude Code
+ * 2.1.332: `installed_plugins.json` empty while `plugin list` reported
+ * `tandem@synced`).
+ *
+ * Never rejects and never logs a key. A failure answers its reason, and the
+ * caller writes the keys it found without it (fail safe).
+ */
+export function listInstalledTandemPluginKeys(opts: {
+  claudeBin: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  deadlineMs?: number;
+  exec?: PluginListExec;
+}): Promise<PluginListLookup> {
+  const exec: PluginListExec = opts.exec ?? (execFile as unknown as PluginListExec);
+  return new Promise<PluginListLookup>((resolve) => {
+    try {
+      exec(
+        opts.claudeBin,
+        ["plugin", "list", "--json"],
+        {
+          cwd: opts.cwd,
+          env: opts.env,
+          timeout: opts.deadlineMs ?? PLUGIN_LIST_DEADLINE_MS,
+          maxBuffer: PLUGIN_LIST_MAX_BYTES,
+          windowsHide: true,
+          killSignal: "SIGKILL",
+          encoding: "utf8",
+        },
+        (err, stdout) => {
+          if (err) {
+            if (err.killed) resolve({ ok: false, reason: "timeout" });
+            else if (typeof err.code === "number") resolve({ ok: false, reason: "exit" });
+            else if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+              resolve({ ok: false, reason: "unparseable" });
+            } else resolve({ ok: false, reason: "spawn" });
+            return;
+          }
+          const keys = tandemKeysFromPluginList(String(stdout));
+          resolve(keys === null ? { ok: false, reason: "unparseable" } : { ok: true, keys });
+        },
+      );
+    } catch {
+      resolve({ ok: false, reason: "spawn" });
+    }
+  });
+}
+
 /**
  * Every key Ruling D3 names: each `tandem@…` key set to `true` in the user
  * settings file, and in the project and local settings files of the child's
- * working directory, plus {@link ALWAYS_DISABLED_PLUGIN_KEY}. Deduplicated,
- * sorted. Never fails and never logs a key.
+ * working directory, plus {@link ALWAYS_DISABLED_PLUGIN_KEY} and every key in
+ * `installed` (the installed-plugin lookup's answer, when it gave one).
+ * Deduplicated, sorted. Never fails and never logs a key.
  */
 export async function collectTandemPluginKeys(opts: {
   env: NodeJS.ProcessEnv;
   cwd: string;
   home?: string;
   deadlineMs?: number;
+  installed?: readonly string[];
 }): Promise<string[]> {
   const deadline = opts.deadlineMs ?? SETTINGS_READ_DEADLINE_MS;
-  const keys = new Set<string>([ALWAYS_DISABLED_PLUGIN_KEY]);
+  const keys = new Set<string>([ALWAYS_DISABLED_PLUGIN_KEY, ...(opts.installed ?? [])]);
   let user: string[] = [];
   try {
     user = userSettingsKeys(opts.env, opts.home ?? os.homedir());

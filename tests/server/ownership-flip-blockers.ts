@@ -13,9 +13,9 @@
  * same PR. A row is never closed by editing its text; the sanctioned edits
  * to a standing row are adding `acceptedFor`, which records a pick of Bryan's
  * and does not close it, and recording a partial measurement in its `gap`,
- * which closes nothing (the CTRL pending row's Chromium result; the Linux
- * results on the PR 3a assumptions, resumes and project settings `env` rows). The flip PR may set the literal only once every
- * remaining row carries `acceptedFor`.
+ * which closes nothing (the CTRL pending row's Chromium and WebView2 results;
+ * the Claude Desktop row's client name). The flip PR may set the literal only
+ * once every remaining row carries `acceptedFor`.
  *
  * **An accepted row** stays in the list, still open, and does not stop the
  * flip. Adding `acceptedFor` records a pick of Bryan's, cited in ADR-054;
@@ -60,7 +60,7 @@
  * on #2358) found it shows a tool's name, top-level description and input
  * schema only, and Bryan picked "Skill and description (Recommended)" for
  * where the sentence goes: the shipped skill's Multi-Document paragraph
- * (version 43) and a one-line form in the lit `tandem_checkInbox` description.
+ * (version 44) and a one-line form in the lit `tandem_checkInbox` description.
  * And *a session whose live stream dropped stays lapsed* (2026-11-26), closed
  * by its own `closedBy`: smoke S5 (Claude Code 2.1.332 on Linux, a
  * direct-HTTP entry, on #2358) found Claude Code holds its GET stream: one
@@ -70,6 +70,32 @@
  * flip amendment, so 3b-2b2's re-ask is not owed. What it cannot speak to
  * (other versions, the stdio bridge, Windows and macOS, real network drops
  * or sleep, reopening after a drop) is listed there.
+ * And the Windows smoke's four (2026-11-26; Windows 11 Pro 10.0.26300,
+ * Claude Code 2.1.332, the desktop release build, results on #2358,
+ * issuecomment-7209705011), each by its own `closedBy` and recorded in
+ * ADR-054's flip amendment: *PR 3a's assumptions* (smoke S1), by the Linux
+ * and Windows measurements (`--settings` disables the tagged plugin keys;
+ * `.mcp.json` and the user's own `tandem` entry lose to the launcher's; a
+ * missing run file recovers; no run file re-read after start on either OS,
+ * so #2439's void condition is not observed) and the fix for what Windows
+ * found: an account-synced `tandem@synced` plugin, in no settings file,
+ * loaded beside the launcher's bridge, so the launcher now asks Claude Code
+ * (`claude plugin list --json`) and disables every `tandem@` key it reports,
+ * failing safe to the known keys (Bryan's "Ask Claude Code (Recommended)").
+ * Its residual, a run file deleted between its write and its ACL step,
+ * which launches Tandem's Claude without run files, unbound and with no
+ * line saying so, Bryan accepted ("Accept all three (Recommended)"). The
+ * user-scope `tandem-channel` shim also loads under the launcher; it is not
+ * suppressed (its one tool is refused for the launcher's own child, and it
+ * registers no MCP session), as the amendment records. *Resumes the smoke
+ * did not exercise* (S2), by the measurements: all three bound and took back
+ * their documents on Linux and Windows (the early-crash session clear, exit
+ * code 1 on Windows, is a separate PR). *An auth failure that is not 'Not
+ * logged in'* (S3), by the fix: an `is_error` result with `api_error_status`
+ * 401 or 403 ends presence as the sign-in refusal does (Bryan's "Treat it
+ * like signed out (Recommended)"; `signInFailureOf`). *Project settings `env`
+ * against the run config* (S4), by the measurements on both OSes: an entry's
+ * `env` wins key by key for all six keys.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -95,11 +121,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
       "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
       "dropped silently. Measured in Chromium only (smoke S8, 2026-11-26, results on " +
-      "#2358): no pending CTRL data in hundreds of transactions. WebView2 (the Windows " +
-      "desktop build) and WKWebView (macOS) are still to measure, on Bryan's hardware.",
+      "#2358): no pending CTRL data in hundreds of transactions. Measured in WebView2 (the " +
+      "Windows desktop build, smoke S8, 2026-11-26, results on #2358, issuecomment-7209705011): " +
+      "the CTRL row held (chat and mode written offline arrived at reconnect; only writes " +
+      "reloaded away before reconnecting were lost, the known chat loss and an unsaved offline " +
+      "edit), and no `pendingStructs` was logged. WKWebView (macOS) is not measured.",
     closedBy:
       "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
       "pending data after a tab's update, or a narrower drop.",
+    acceptedFor:
+      "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (Chromium " +
+      "and WebView2 held; macOS not run); tracked as #2358.",
   },
   {
     gap:
@@ -158,86 +190,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     acceptedFor:
       "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
       "(PR 5's controls are the remedy); tracked as #2358.",
-  },
-  {
-    gap:
-      "PR 3a's assumptions the 2026-11-17 smoke left unmeasured (Windows 11, Claude Code " +
-      "2.1.325, one sample, run contained): whether `--settings` disables a plugin beside " +
-      "`--mcp-config`; a project-scope `.mcp.json` `tandem` entry and the user's own Tandem " +
-      "entry and skill being replaced; missing or invalid run files; a `--settings` re-read; " +
-      "macOS, Linux and the bundled Node; whether a not-signed-in child's bridge binds before " +
-      "its refusal. The `--settings` re-read (Claude Code reading a run file again after it " +
-      "starts) is also one of #2439's void conditions (`docs/security.md`), so the result " +
-      "decides #2439 too. Measured on Linux (2026-11-26, Claude Code 2.1.332, through " +
-      "Tandem's own launcher; results on #2358, issuecomment-7202149262): `--settings` " +
-      "disables both tagged plugin keys and the user's own entry (`init` lists only the " +
-      "launcher's `tandem`, and none of their bridges starts); a project-scope `.mcp.json` " +
-      "`tandem` entry loses to the launcher's; a missing run file recovers (Claude Code " +
-      "exits, the resume-failure path clears the saved session and the restart writes fresh " +
-      "files and binds), in four or five log lines rather than one, which Bryan accepted on " +
-      "2026-11-26 ('Yes, accept the recovery (Recommended)', picked from options), though " +
-      "because it takes the resume-failure path a missing file still drops a resumed " +
-      "conversation; a truncated MCP config fails closed; a truncated settings file FAILED " +
-      "OPEN (ignored with no error, the plugin's toolset loaded beside the launcher's and a " +
-      "second terminal owner registered under the same Claude session), so the launcher now " +
-      "reads both files back before each spawn and refuses the spawn when either is missing " +
-      "or not what was written (Bryan's 'Guard it before the flip (Recommended)'; " +
-      "`runFileReadsBack`), which cannot see a file changed between that check and Claude " +
-      "Code's read about half a second later; and no run file was re-read after start in 16 " +
-      "spawns (#2439's void condition not observed, on Linux). Still unmeasured: Windows " +
-      "(and so #2439's re-read there, and whether antivirus or sync-client collisions with " +
-      "a new run file happen on a real Windows install, where the read-back retries EBUSY, " +
-      "EPERM and EACCES once after 100 ms (Bryan's 'Retry once, log the reason " +
-      "(Recommended)') and a lock that outlasts that refuses every spawn until the breaker " +
-      "trips), macOS, the desktop build and the AppImage's bundled Node, and whether a " +
-      "not-signed-in child's bridge binds before its refusal.",
-    closedBy:
-      "A further smoke measuring them, or Bryan's acceptance of each; whoever closes it " +
-      "checks #2439's acceptance against the re-read result.",
-  },
-  {
-    gap:
-      "Project settings `env` against the run config: measured for one key (`TANDEM_URL`) in " +
-      "one file (`.claude/settings.json`), in a hand run, with Tandem's value reaching the " +
-      "bridge; not measured for `settings.local.json`, the other keys the run config sets or " +
-      "clears (`TANDEM_OWNER_HANDLE`, `TANDEM_OWNER_HANDLE_URL`, " +
-      "`CLAUDE_PLUGIN_OPTION_SERVER_URL`, `NODE_OPTIONS`, `NODE_DEBUG`), the launcher's own " +
-      "invocation, or hook timing under `-p` before the first bind. Measured on Linux " +
-      "(2026-11-26, Claude Code 2.1.332, through Tandem's own launcher; results on #2358, " +
-      "issuecomment-7202149262): each of those six keys set to a wrong value in the " +
-      "project's `.claude/settings.local.json`, one at a time, and the child bound in 6 of 6, " +
-      "the bridge's environment holding the launcher's values each time; a control run " +
-      "handed all six wrong values to an entry with no `env`, so an entry's `env` wins key " +
-      "by key. Still unmeasured: hook timing under `-p` before the first bind, Windows, " +
-      "macOS, the desktop build and the AppImage.",
-    closedBy:
-      "The remaining cases measured with Tandem's value winning in each, or a guard that " +
-      "refuses the run files on such a file; a measurement showing a project value wins does " +
-      "not close it.",
-  },
-  {
-    gap:
-      "An auth failure that is not 'Not logged in' (an expired token, a revoked key) is " +
-      "unmeasured: if it returns an ordinary `result`, such a child stays present though it " +
-      "cannot answer.",
-    closedBy:
-      "A measured list of auth-failure results, and the not-signed-in pattern widened to it.",
-  },
-  {
-    gap:
-      "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
-      "resume across a server restart, a resume after a crash. Measured on Linux " +
-      "(2026-11-26, Claude Code 2.1.332, through Tandem's own launcher; results on #2358, " +
-      "issuecomment-7202149262): all three bound and Tandem's Claude took back its documents " +
-      "(a stale resume cleared the session and started fresh; a server restart resumed the " +
-      "same session and took back both restored documents; a crash, SIGKILL 35 s in, resumed " +
-      "and still held them). It found a bug on master, flag on or off: the reaper reports a " +
-      "signal death as 128+n while `shouldClearSession` expects a null code, so a Restart " +
-      "(143) or crash (137) within `RESUME_CONFIRM_MS` of a resumed run clears the saved " +
-      "session and drops the conversation (binding and documents unaffected); its fix is a " +
-      "separate PR against master (Bryan's 'Separate PR, new branch', picked from options, " +
-      "2026-11-26). Kept open for Windows, macOS, the desktop build and the AppImage.",
-    closedBy: "A smoke run of each, or Bryan's acceptance.",
   },
   {
     gap:
@@ -322,10 +274,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Claude Desktop is left out of 'another session' by its self-reported client name " +
       "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
       "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
-      "the name is open.",
+      "the name is open. Measured on Windows (smoke S6, 2026-11-26, Claude Desktop 6.28899.6.0, " +
+      "results on #2358, issuecomment-7209705011): Desktop's `tandem` entry registered as client " +
+      "'claude-ai' (owners show 'Claude Desktop'), and a comment on a document Tandem's Claude " +
+      "held started it with Desktop connected. The precondition, a document nobody holds, was " +
+      "not reached: Tandem's Claude's record outlives its run, so every open document had a holder.",
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
+    acceptedFor:
+      "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (the client " +
+      "name measured; the nobody-holds precondition unreachable); tracked as #2358.",
   },
 ];
 

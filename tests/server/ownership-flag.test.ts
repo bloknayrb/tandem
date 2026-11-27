@@ -162,6 +162,7 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
   it("the accepted rows are exactly these, word for word (a new acceptance, or an edit to one, edits this pin)", () => {
     const acceptedRows = OWNERSHIP_FLIP_BLOCKERS.filter((row) => row.acceptedFor !== undefined);
     expect(acceptedRows.map((row) => row.gap.slice(0, 53))).toEqual([
+      "The posts PR drops CTRL-doc update data left pending ",
       "The lone-session re-hand. With one session attached, ",
       "Flag on, a message's delivery round that no poll will",
       "A document claimed by a poll whose items its holder t",
@@ -170,8 +171,28 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
       "Acknowledged but unanswered chat is never started for",
       "Acknowledged but unanswered chat by the channel route",
       "Read but unacknowledged chat is never started for (3b",
+      "Claude Desktop is left out of 'another session' by it",
     ]);
     expect(acceptedRows).toEqual([
+      {
+        gap:
+          "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
+          "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
+          "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
+          "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
+          "dropped silently. Measured in Chromium only (smoke S8, 2026-11-26, results on " +
+          "#2358): no pending CTRL data in hundreds of transactions. Measured in WebView2 (the " +
+          "Windows desktop build, smoke S8, 2026-11-26, results on #2358, issuecomment-7209705011): " +
+          "the CTRL row held (chat and mode written offline arrived at reconnect; only writes " +
+          "reloaded away before reconnecting were lost, the known chat loss and an unsaved offline " +
+          "edit), and no `pendingStructs` was logged. WKWebView (macOS) is not measured.",
+        closedBy:
+          "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
+          "pending data after a tab's update, or a narrower drop.",
+        acceptedFor:
+          "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (Chromium " +
+          "and WebView2 held; macOS not run); tracked as #2358.",
+      },
       {
         gap:
           "The lone-session re-hand. With one session attached, a close and reopen of a tab it holds, " +
@@ -307,6 +328,23 @@ describe("the flip cannot land with an unaccepted blocker open (tests/server/own
         acceptedFor:
           "Bryan picked 'Fold into #2484 (Recommended)', picked from options, 2026-11-23; tracked " +
           "as #2484.",
+      },
+      {
+        gap:
+          "Claude Desktop is left out of 'another session' by its self-reported client name " +
+          "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
+          "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
+          "the name is open. Measured on Windows (smoke S6, 2026-11-26, Claude Desktop 6.28899.6.0, " +
+          "results on #2358, issuecomment-7209705011): Desktop's `tandem` entry registered as client " +
+          "'claude-ai' (owners show 'Claude Desktop'), and a comment on a document Tandem's Claude " +
+          "held started it with Desktop connected. The precondition, a document nobody holds, was " +
+          "not reached: Tandem's Claude's record outlives its run, so every open document had a holder.",
+        closedBy:
+          "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
+          "comment on an unheld document makes tandemWorkWaiting true.",
+        acceptedFor:
+          "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (the client " +
+          "name measured; the nobody-holds precondition unreachable); tracked as #2358.",
       },
     ]);
   });

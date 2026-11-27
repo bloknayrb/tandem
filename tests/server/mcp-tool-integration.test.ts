@@ -2416,7 +2416,12 @@ describe("MCP tool integration — awareness tools", () => {
       await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
     );
     expect(withChat.data.summary).toContain(CHAT_ACK_DIRECTIVE);
-    expect(withChat.data.summary).toContain(CHAT_REFUSED_DIRECTIVE);
+    // The refusal sentence follows a scoped poll only (ownership on), which is
+    // the poll that carries the `ownership` field: keyed on the response, not
+    // on the flag, so the suite passes lit and dark (`TANDEM_OWNERSHIP=`).
+    expect(withChat.data.summary.includes(CHAT_REFUSED_DIRECTIVE)).toBe(
+      withChat.data.ownership !== undefined,
+    );
   });
 
   it("tandem_reply records inProgress and marks the answered message read", async () => {
