@@ -385,7 +385,7 @@ describe("the installed-plugin lookup before the write (smoke S1, Windows)", () 
     ]);
   });
 
-  it("a lookup that rejects (a broken seam) fails safe the same way", async () => {
+  it("a lookup that rejects (a broken seam) falls back the same way", async () => {
     const errors = captureErrors();
     const sup = makeSupervisor({
       listInstalledPlugins: () => Promise.reject(new Error("boom")),

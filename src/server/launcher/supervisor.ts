@@ -3164,9 +3164,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * reports installed (`claudeBin plugin list --json`, smoke S1 on Windows: an
    * account-synced `tandem@synced` is in no settings file). The lookup runs
    * beside the directory checks, before the settings reads and any write, and
-   * is bounded by `PLUGIN_LIST_DEADLINE_MS`. It fails safe: no answer writes
-   * the keys the settings files and `ALWAYS_DISABLED_PLUGIN_KEY` give, after
-   * one line naming the reason.
+   * is bounded by `PLUGIN_LIST_DEADLINE_MS`. It falls back to S1's pre-fix
+   * state, not to safety: no answer writes only the keys the settings files and
+   * `ALWAYS_DISABLED_PLUGIN_KEY` give, after one line naming the reason, so an
+   * account-synced key it would have found stays enabled for that run.
    */
   async function prepareRun(plan: SpawnPlan, claudeBin: string): Promise<SpawnRun | null> {
     const baseUrl = loopbackBaseUrl(getBoundMcpAddress());

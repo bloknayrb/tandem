@@ -85,7 +85,7 @@
  * found: an account-synced `tandem@synced` plugin, in no settings file,
  * loaded beside the launcher's bridge, so the launcher now asks Claude Code
  * (`claude plugin list --json`) and disables every `tandem@` key it reports,
- * failing safe to the known keys (Bryan's "Ask Claude Code (Recommended)").
+ * falling back to the known keys, which is S1's pre-fix state (Bryan's "Ask Claude Code (Recommended)").
  * Its residual, a run file deleted between its write and its ACL step,
  * which launches Tandem's Claude without run files, unbound and with no
  * line saying so, Bryan accepted ("Accept all three (Recommended)"). The

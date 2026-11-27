@@ -284,7 +284,7 @@ function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> 
  * without it (smoke S1 on Windows; Bryan, 2026-11-26). Measured at about 0.6 s
  * on Linux (Claude Code 2.1.332, 18 plugins). */
 export const PLUGIN_LIST_DEADLINE_MS = 5_000;
-/** The lookup's stdout cap; past it the answer is unparseable (fail safe). */
+/** The lookup's stdout cap; past it the answer is unparseable (the fallback). */
 export const PLUGIN_LIST_MAX_BYTES = 1024 * 1024;
 /** A plugin key the lookup may put in the run settings file: `tandem@` and a
  * marketplace name of plain characters. Anything else is ignored. */
@@ -349,7 +349,8 @@ export type PluginListExec = (
  * `tandem@synced`).
  *
  * Never rejects and never logs a key. A failure answers its reason, and the
- * caller writes the keys it found without it (fail safe).
+ * caller writes the keys it found without it (falling back to S1's pre-fix
+ * state for any key only the lookup knows).
  */
 export function listInstalledTandemPluginKeys(opts: {
   claudeBin: string;
