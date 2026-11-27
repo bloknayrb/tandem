@@ -1,0 +1,163 @@
+<script lang="ts">
+import { buildDiffRows } from "../utils/compare.js";
+
+/**
+ * A read-only unified diff of another version of a document against the
+ * document as it is now (ADR-057, PR 4). Pure view: the caller fetches both
+ * texts (`GET /api/document/compare`).
+ */
+
+interface Props {
+  /** The document as it is now: what a restore or reload would replace. */
+  current: string;
+  /** The other version: a backup, or the file on disk. */
+  other: string;
+  /** How the legend names the other version, e.g. "The file on disk". */
+  otherLabel: string;
+  /** The server cut one side or both at its size cap. */
+  truncated: boolean;
+}
+
+const { current, other, otherLabel, truncated }: Props = $props();
+
+const rows = $derived(buildDiffRows(other, current));
+</script>
+
+<div class="diff-view" data-testid="diff-view">
+  <p class="legend">
+    <span class="legend-remove">− {otherLabel}</span>
+    <span class="legend-add">+ The document now</span>
+  </p>
+  {#if truncated}
+    <p class="note" data-testid="diff-truncated">
+      These versions are large, so only their beginnings are compared.
+    </p>
+  {/if}
+  {#if rows === null}
+    <p class="note" data-testid="diff-too-large">These versions are too different to compare here.</p>
+  {:else if rows.length === 0}
+    <p class="note" data-testid="diff-none">No differences.</p>
+  {:else}
+    <div class="lines" role="list">
+      {#each rows as row, i (i)}
+        {#if row.kind === "gap"}
+          <div class="line line--gap" role="listitem" data-testid="diff-line" data-kind="gap">
+            {row.count} unchanged {row.count === 1 ? "line" : "lines"}
+          </div>
+        {:else}
+          <div
+            class="line line--{row.kind}"
+            role="listitem"
+            data-testid="diff-line"
+            data-kind={row.kind}
+          >
+            <span class="marker" aria-hidden="true"
+              >{row.kind === "add" ? "+" : row.kind === "remove" ? "−" : " "}</span
+            >
+            <span class="sr-only"
+              >{row.kind === "add"
+                ? "Only in the document now: "
+                : row.kind === "remove"
+                  ? `Only in ${otherLabel.toLowerCase()}: `
+                  : ""}</span
+            >
+            {#if row.kind !== "same" && row.segments}
+              <span class="text"
+                >{#each row.segments as seg, k (k)}<span class:word-changed={seg.changed}
+                    >{seg.text}</span
+                  >{/each}</span
+              >
+            {:else}
+              <span class="text">{row.text === "" ? " " : row.text}</span>
+            {/if}
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .diff-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    min-height: 0;
+  }
+
+  .legend {
+    display: flex;
+    gap: var(--tandem-space-4);
+    margin: 0;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .legend-remove {
+    color: var(--tandem-error-fg-strong);
+  }
+  .legend-add {
+    color: var(--tandem-success-fg-strong);
+  }
+
+  .note {
+    margin: 0;
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg-muted);
+  }
+
+  .lines {
+    font-family: var(--tandem-font-mono, monospace);
+    font-size: var(--tandem-text-xs);
+    line-height: 1.5;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    overflow: auto;
+    max-height: 55vh;
+  }
+
+  .line {
+    display: flex;
+    gap: var(--tandem-space-2);
+    padding: 0 var(--tandem-space-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .line--add {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .line--remove {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+  }
+  .line--gap {
+    justify-content: center;
+    color: var(--tandem-fg-subtle);
+    background: var(--tandem-surface-sunk);
+    font-style: italic;
+  }
+
+  .marker {
+    flex: 0 0 auto;
+    user-select: none;
+  }
+  .text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .word-changed {
+    border-radius: 2px;
+    background: color-mix(in srgb, currentColor 18%, transparent);
+    font-weight: 600;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+</style>
