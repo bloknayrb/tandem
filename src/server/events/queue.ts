@@ -55,11 +55,7 @@ import { makeAwarenessObserver } from "./observers/awareness.js";
 import { makeCtrlChatObserver } from "./observers/ctrl-chat.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
-import {
-  makeDocumentPendingGuard,
-  makeReplyClientUndo,
-  resetReplyUndoForTests,
-} from "./observers/reply-client-undo.js";
+import { makeReplyClientUndo, resetReplyUndoForTests } from "./observers/reply-client-undo.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
@@ -771,12 +767,13 @@ export function attachObservers(
 
   const cleanups: Array<() => void> = [];
 
-  // #2360 (ships dark): undo a client connection's change to the replies map,
-  // and drop update data a client left pending. Every document, upload and
-  // scratchpad included, re-run after the Hocuspocus swap; and FIRST, so the
-  // undo runs before the replies observer derives anything from the same
-  // event (Yjs calls a map's listeners in registration order).
-  cleanups.push(makeReplyClientUndo(doc), makeDocumentPendingGuard(doc, docName));
+  // #2360 (ownership on): undo a client connection's change to the replies map.
+  // Every document, upload and scratchpad included, re-run after the
+  // Hocuspocus swap; and FIRST, so the undo runs before the replies observer
+  // derives anything from the same event (Yjs calls a map's listeners in
+  // registration order). Pending update data is not dropped in document rooms
+  // (Bryan, 2026-11-26; `docs/security.md` #2576 holds what that leaves).
+  cleanups.push(makeReplyClientUndo(doc));
   // The load sweep (`thread-answers-trust.ts`), at room creation: a document
   // whose store this process does not trust loses any `answers`/`inProgress`
   // its rows carry. On a swap it runs from `reattachObservers`, after the

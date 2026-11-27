@@ -97,3 +97,26 @@ test("Keep my edits keeps the version on disk in Version history", async ({ page
     modal.getByTestId("version-history-row").filter({ hasText: "File on disk" }).first(),
   ).toBeVisible();
 });
+
+test("Compare shows the file on disk against the document before choosing", async ({ page }) => {
+  await raiseConflict(page, "MY COMPARE EDIT");
+
+  await page.getByTestId("external-conflict-compare-btn").click();
+  const modal = page.getByTestId("compare-modal");
+  await expect(modal).toBeVisible();
+  // The disk's line is only in the other version; the typed edit only in the document now.
+  await expect(
+    modal.locator("[data-testid='diff-line'][data-kind='remove']").filter({
+      hasText: "The external version.",
+    }),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    modal.locator("[data-testid='diff-line'][data-kind='add']").filter({
+      hasText: "MY COMPARE EDIT",
+    }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+  // Nothing was resolved by looking.
+  await expect(page.getByTestId("external-conflict-banner")).toBeVisible();
+});

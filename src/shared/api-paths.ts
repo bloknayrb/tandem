@@ -51,6 +51,7 @@ export const API_APPLY_CHANGES = "/api/apply-changes";
 // Raw-markdown source view/edit (#1021). GET returns the document's literal
 // markdown; POST replaces the Y.Doc content from a user-supplied markdown string.
 export const API_DOCUMENT_RAW = "/api/document/raw";
+export const API_DOCUMENT_COMPARE = "/api/document/compare";
 export const API_DOCUMENT_RELOAD = "/api/document/reload";
 // Pre-overwrite document backups (#1086). GET lists a document's restorable
 // snapshots; POST restores one through the reload lifecycle.

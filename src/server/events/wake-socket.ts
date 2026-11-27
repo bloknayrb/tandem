@@ -13,8 +13,7 @@
  * Frames are payload-free (`toWakeFrame`) — see ADR-049 decision 2 and that
  * function's docblock. This carries the same contract as the supervisor's stdin
  * wake: enough to know something happened, never what. One frame is not an
- * event: the `ownership` frame ({@link requestOwnershipFrame}, #2358 PR 3b-2d,
- * ships dark), written when a change of owner leaves work waiting for a
+ * event: the `ownership` frame ({@link requestOwnershipFrame}, #2358 PR 3b-2d), written when a change of owner leaves work waiting for a
  * session other than Tandem's Claude, or for nobody. Same three fields.
  *
  * ## Why the guard is not `apiMiddleware`

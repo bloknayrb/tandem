@@ -108,6 +108,10 @@ let bindFailed = $state(false);
  * to the running Claude's run. Empty, and the list not rendered, when the
  * server sends none, which a dark server never does. */
 let boundTransports = $state<BoundTransportKind[]>([]);
+/** Tandem's Claude is running, and its last API error was a 403 (Bryan,
+ * 2026-11-27, "401 only signs out (Recommended)"): an access error, not a
+ * sign-in one. An older server never sends it, so nothing new renders. */
+let accessDenied = $state(false);
 /** The idle-minutes field's own text, so an invalid entry can be shown and
  * corrected without being saved. */
 let idleText = $state("");
@@ -188,7 +192,7 @@ let rereadTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleReread(): void {
   if (!mounted || rereadTimer !== null) return;
-  if (!bindFailed && boundTransports.length === 0) return;
+  if (!bindFailed && !accessDenied && boundTransports.length === 0) return;
   rereadTimer = setTimeout(() => {
     rereadTimer = null;
     void checkLauncherPresent();
@@ -207,6 +211,7 @@ async function checkLauncherPresent(): Promise<void> {
     // Read defensively: an unknown kind is dropped rather than shown, and a
     // malformed field reads as absent.
     bindFailed = value.bindFailed === true;
+    accessDenied = value.running && value.accessDenied === true;
     const rows: unknown = value.running ? value.boundTransports : undefined;
     boundTransports = Array.isArray(rows)
       ? rows
@@ -219,6 +224,7 @@ async function checkLauncherPresent(): Promise<void> {
     return;
   }
   bindFailed = false;
+  accessDenied = false;
   boundTransports = [];
   launcherAbsent = value.reason === "stdio-mode" || value.reason === "disabled-by-env";
 }
@@ -350,6 +356,20 @@ const controlsDisabled = $derived(settings === null || readOnly);
       answering for them. Starting it again won't fix this: reopen the integration wizard below to
       set Claude Code up again{#if isTauriRuntime()}.{:else}, or run <code>tandem doctor</code> in a
         terminal to see what's wrong.{/if}
+    </div>
+  {/if}
+  {#if !startModeOnly && accessDenied}
+    <!-- A 403: the sign-in worked and access was refused, so this names the
+         account's permissions, never signing in, and offers no Restart. -->
+    <div
+      role="status"
+      class="tandem-warning-box tc-warning"
+      data-testid="settings-modal-tandem-claude-access-denied"
+    >
+      Tandem's Claude is running, but Claude's service refused it access (an access error, not a
+      sign-in problem). Check that the account, organization or API key Claude Code uses is allowed
+      to use Claude Code. Tandem's Claude stays running and recovers on its own once access is
+      allowed.
     </div>
   {/if}
   {#if !startModeOnly && boundTransports.length > 0}
