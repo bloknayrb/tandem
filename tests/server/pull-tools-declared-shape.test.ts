@@ -18,7 +18,7 @@
  * - `client.listTools()` before any call: the SDK client only validates a tool
  *   whose schema it has cached.
  * - `registerTestCallerRecord()` + `ownershipTestDispatch`: with ownership on
- *   (CI's `ownership-flag-on` job), a poll by a caller with no record reads no
+ *   (the default since the flip), a poll by a caller with no record reads no
  *   document, and every case here would pass empty.
  * - The mode is written `"tandem"` before any fixture: with the key absent the
  *   state is indeterminate, `hideFromAI` holds marked records, and a case
@@ -1133,8 +1133,8 @@ describe("G6: the owner label is declared exactly when it is sent (#2358 PR 5c)"
 
     const structured = (await getAnnotations(o.documentId)) as Record<string, unknown>;
 
-    // This file's server follows the shipped flag (CI's `ownership-flag-on`
-    // job runs it flag on): ownership design §5.7's label rides only there.
+    // This file's server follows the shipped flag (on since the flip, so
+    // `check` runs it flag on): ownership design §5.7's label rides only there.
     expect(declared.has("owner"), "owner is declared").toBe(ownershipOn());
     expect("owner" in structured, "owner is sent").toBe(ownershipOn());
     for (const k of Object.keys(structured)) expect(declared.has(k), k).toBe(true);

@@ -233,8 +233,8 @@ describe("tests and the flag", () => {
   });
 
   it("the files that turn the flag OFF for themselves are a reviewed set", () => {
-    // A file stubbing "" runs that test flag-off even in the ownership-flag-on
-    // job: it pins dark behaviour, and the series lists each one (design §12).
+    // A file stubbing "" runs that test flag-off even in a flag-on run
+    // (`check`, since the flip): it pins dark behaviour, and the series lists each one (design §12).
     // Every one of these also stubs "1": none opts a whole file out.
     // PR 1c's four: each runs the same rows flag-off and flag-on (the
     // precedence pin, the tool-mode table, the `/api` differential), or pins

@@ -104,8 +104,8 @@ type ToolResult = {
 };
 
 /**
- * The output shape each tool was registered with: flag-on (the
- * `ownership-flag-on` job) `tandem_status` and `tandem_checkInbox` add their
+ * The output shape each tool was registered with: flag-on (the default
+ * since the flip) `tandem_status` and `tandem_checkInbox` add their
  * optional ownership fields, which a registered test caller (#2358 scope PR)
  * now receives. Flag off these are exactly the dark shapes, so the strict
  * match below still proves a dark response carries no ownership key.

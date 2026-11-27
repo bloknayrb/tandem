@@ -51,8 +51,8 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 beforeEach(() => {
   setCtrlMode("tandem");
   // The delivery-round seam as `index.ts` wires it (#2358, the delivery-rounds
-  // PR; review round 1, item 4): in the `ownership-flag-on` job these tests
-  // run keyed rounds, as a real server does; flag off, master's one round.
+  // PR; review round 1, item 4): flag on (the default since the flip) these
+  // tests run keyed rounds, as a real server does; flag off, master's one round.
   setDeliveryRoundSeam({
     keyed: keyedDeliveryRounds,
     isDocumentOpen: (documentId) => getOpenDocs().has(documentId),

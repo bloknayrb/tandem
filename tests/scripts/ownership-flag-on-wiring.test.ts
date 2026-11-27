@@ -76,9 +76,15 @@ describe("check's ownership anchor step (ADR-051)", () => {
   it("the flag-on job is gone, and nothing else runs the suite with the variable set", () => {
     expect(workflow.jobs["ownership-flag-on"]).toBeUndefined();
     for (const [name, j] of Object.entries(workflow.jobs)) {
+      // Job-level env is inherited by every step, so it counts too.
+      const jobEnv = (j as { env?: Record<string, unknown> }).env;
+      expect(jobEnv?.TANDEM_OWNERSHIP, `${name}: job env`).toBeUndefined();
       for (const step of j.steps ?? []) {
+        const label = `${name}: ${String(step.name ?? step.run)}`;
         const env = step.env as Record<string, unknown> | undefined;
-        expect(env?.TANDEM_OWNERSHIP, `${name}: ${String(step.name ?? step.run)}`).toBeUndefined();
+        expect(env?.TANDEM_OWNERSHIP, label).toBeUndefined();
+        // An inline `TANDEM_OWNERSHIP=… npm test` in a `run` sets it as surely.
+        expect(String(step.run ?? ""), label).not.toMatch(/\bTANDEM_OWNERSHIP=/);
       }
     }
   });

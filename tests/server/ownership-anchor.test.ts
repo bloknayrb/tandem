@@ -38,7 +38,7 @@ afterEach(() => {
 
 describe("ownership-flag-on anchor", () => {
   it.runIf(ownershipEnabled())(
-    "is on by the literal or by the job's TANDEM_OWNERSHIP=1, not a stub",
+    "is on by the literal or by a set TANDEM_OWNERSHIP=1, not a stub",
     () => {
       // Separately from what ownershipEnabled() reports: this worker is flag-on
       // either because nothing set the variable (the literal decides, as in
