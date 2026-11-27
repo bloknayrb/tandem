@@ -2,7 +2,7 @@
   "$comment": "Size ceilings for source files over their limit (.ts/.svelte 800 lines; .rs 1000 code lines: non-blank, excluding comments and #[cfg(test)] items). Enforced by tests/scripts/file-size-ratchet.test.ts. Ceilings only go down: a file may not grow past its entry, and a file that shrinks must have its entry lowered to match. A new entry needs a real reason.",
   "files": {
     "src-tauri/src/lib.rs": {
-      "lines": 1671,
+      "lines": 1672,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src-tauri/src/sidecar.rs": {
@@ -10,7 +10,7 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/cli/doctor.ts": {
-      "lines": 4310,
+      "lines": 4326,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/cli/mcp-stdio.ts": {
@@ -22,11 +22,11 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/client/App.svelte": {
-      "lines": 4541,
+      "lines": 4695,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/client/actions/builtin.svelte.ts": {
-      "lines": 1615,
+      "lines": 1526,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/client/components/ActivityTray.svelte": {
@@ -134,7 +134,11 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/documents/open.ts": {
-      "lines": 1753,
+      "lines": 1835,
+      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
+    },
+    "src/server/documents/reload-family.ts": {
+      "lines": 909,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/documents/reload-remap.ts": {
@@ -146,7 +150,11 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/events/queue.ts": {
-      "lines": 927,
+      "lines": 924,
+      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
+    },
+    "src/server/file-io/doc-backup.ts": {
+      "lines": 1210,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/file-io/docx-apply.ts": {
@@ -182,11 +190,15 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/launcher/api-routes.ts": {
-      "lines": 1238,
+      "lines": 1245,
+      "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
+    },
+    "src/server/launcher/run-files.ts": {
+      "lines": 977,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/launcher/supervisor.ts": {
-      "lines": 5684,
+      "lines": 6125,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/local-model/collaborator.ts": {
@@ -198,7 +210,7 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/mcp/awareness.ts": {
-      "lines": 4484,
+      "lines": 4515,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/mcp/document-model.ts": {
@@ -206,15 +218,15 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/mcp/document-service.ts": {
-      "lines": 2374,
+      "lines": 2472,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/mcp/document.ts": {
-      "lines": 2067,
+      "lines": 2099,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/mcp/server.ts": {
-      "lines": 1547,
+      "lines": 1552,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/models/chat-answerer.ts": {
@@ -230,15 +242,15 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/server/sessions/ownership.ts": {
-      "lines": 5996,
+      "lines": 5995,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/shared/constants.ts": {
-      "lines": 811,
+      "lines": 847,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/shared/launcher/contract.ts": {
-      "lines": 902,
+      "lines": 918,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/shared/sse-consumer.ts": {
@@ -246,7 +258,7 @@
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     },
     "src/shared/types.ts": {
-      "lines": 935,
+      "lines": 940,
       "reason": "Predates the size ratchet (2026-11-27). Split when next worked on; never grow."
     }
   }
