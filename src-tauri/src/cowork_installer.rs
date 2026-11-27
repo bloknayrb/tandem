@@ -22,7 +22,7 @@ use crate::cowork_atomic_json::{
     with_locked_json, CoworkError, SweepOutcome, ORPHAN_MIN_AGE,
 };
 use crate::cowork_meta::CoworkMeta;
-use crate::cowork_workspace_scan::{find_cowork_workspaces, probe, walk_below, Probe, Walk};
+use crate::cowork_workspace_scan::{probe, walk_below, Probe, Walk};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -491,73 +491,6 @@ pub fn sweep_orphaned_temps(ws_path: &Path) -> Result<SweepOutcome, String> {
 // ---------------------------------------------------------------------------
 // Token rotation
 // ---------------------------------------------------------------------------
-
-/// Re-walk all workspaces and update `env.TANDEM_AUTH_TOKEN` in each
-/// `installed_plugins.json` entry.
-///
-/// Used by `tandem rotate-token` after a successful rotation so that
-/// post-rotation Cowork sessions use the new token instead of 401ing against a
-/// token the server no longer accepts — a failure that is otherwise silent until
-/// the user next tries to use Cowork.
-///
-/// Token is NEVER logged.
-pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
-    let workspaces = find_cowork_workspaces();
-    log::info!(
-        "[cowork-install] apply_token_to_all_workspaces: {} workspace(s)",
-        workspaces.len()
-    );
-
-    workspaces
-        .iter()
-        .map(|ws_path| {
-            let workspace_id = parent_component(ws_path);
-            let vm_id = leaf_component(ws_path);
-
-            // Write-time revalidation (#433): re-run the five-step path guard
-            // immediately before the token rewrite so a dir swapped for a
-            // junction after the scan cannot receive the rotated token.
-            let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
-                Ok(p) => p,
-                Err(reason) => {
-                    log::warn!("[cowork-install] apply_token: revalidation failed: {reason}");
-                    return WorkspaceWriteReport {
-                        workspace_id,
-                        vm_id,
-                        installed_plugins: WriteStatus::Failed(format!(
-                            "revalidation failed: {reason}"
-                        )),
-                        known_marketplaces: WriteStatus::AlreadyPresent,
-                        cowork_settings: WriteStatus::AlreadyPresent,
-                    };
-                }
-            };
-            let plugins_dir = ws_path.join("cowork_plugins");
-            let path = plugins_dir.join("installed_plugins.json");
-
-            // No-follow existence check (#2144): a link here must not receive
-            // the rotated token.
-            let installed_status = match plugin_file_exists(&path) {
-                Ok(false) => WriteStatus::AlreadyPresent, // no entry to update
-                Ok(true) => {
-                    let token_owned = token.to_string();
-                    write_status_from(with_locked_json(&path, move |json| {
-                        update_token_in_installed_plugins(json, &token_owned)
-                    }))
-                }
-                Err(e) => write_status_from(Err(e)),
-            };
-
-            WorkspaceWriteReport {
-                workspace_id,
-                vm_id,
-                installed_plugins: installed_status,
-                known_marketplaces: WriteStatus::AlreadyPresent,
-                cowork_settings: WriteStatus::AlreadyPresent,
-            }
-        })
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // Orphan reconciliation
@@ -1468,29 +1401,6 @@ mod tests {
             Err(CoworkError::IoError(_)) | Ok(()) => {} // either is acceptable
             other => panic!("unexpected result: {:?}", other),
         }
-    }
-
-    #[test]
-    fn test_apply_token_updates_existing_entry() {
-        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
-        let dir = TempDir::new().unwrap();
-        let ws_path = dir.path().join("ws-abc").join("vm-123");
-        fs::create_dir_all(&ws_path).unwrap();
-
-        // Override root for both install + walker, plus ACL bypass.
-        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.path().to_str().unwrap());
-
-        install_tandem_plugin_into_workspace(&ws_path, "old-token", DEFAULT_TANDEM_URL).unwrap();
-
-        let reports = apply_token_to_all_workspaces("new-token");
-        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
-
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].installed_plugins, WriteStatus::Ok);
-
-        let content = fs::read_to_string(ws_path.join("cowork_plugins/installed_plugins.json")).unwrap();
-        let json: Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"], "new-token");
     }
 
     #[test]

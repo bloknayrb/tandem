@@ -1,5 +1,12 @@
 //! The Cowork Tauri invoke commands (#433, #1371, #1437, #1438, #1560).
 //!
+//! **Amended 2026-11-27 (ADR-055):** five of the eleven commands had no caller
+//! anywhere in the client (`cowork_scan_workspaces`, `cowork_get_meta`,
+//! `cowork_apply_token`, `cowork_install_into_workspace`,
+//! `cowork_uninstall_from_workspace`) and were deleted, with the snapshot-handle
+//! resolver only they used. Six remain. The counts in the paragraphs below
+//! describe the Unit 11d move as it was made, not this file today.
+//!
 //! **Extracted from `lib.rs` (Unit 11d).** A pure move: the eleven commands,
 //! their non-Windows stubs, the pure decision helpers and their four test
 //! modules are reproduced verbatim, along with `iso_now`/`is_leap`, whose only
@@ -94,10 +101,10 @@ const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only";
 /// While false, every command that would add Tandem entries to a Cowork
 /// workspace, record an enable or an override in `cowork-meta.json`, or add a
 /// firewall rule refuses, and the heal pass does nothing. The removals
-/// (disable, per-workspace uninstall, the uninstall scrub) and the read-only
-/// commands still answer, though no shipped UI calls them while dark: someone
-/// who enabled Cowork in an earlier version keeps their entries, and nothing
-/// here may stand in the way of removing them.
+/// (disable, the uninstall scrub) and the read-only commands still answer,
+/// though no shipped UI calls them while dark: someone who enabled Cowork in
+/// an earlier version keeps their entries, and nothing here may stand in the
+/// way of removing them.
 pub(crate) const COWORK_ENABLED: bool = false;
 
 /// Whether an earlier version left Cowork recorded as enabled. A meta file
@@ -140,25 +147,6 @@ mod dark_gate_tests {
     fn allows_when_lit() {
         assert_eq!(refuse_if(true), Ok(()));
     }
-}
-
-/// Scan for Cowork workspace directories.
-///
-/// Returns an opaque, validated [`cowork_workspace_scan::WorkspaceHandle`] per
-/// workspace rather than a bare path. The handle's `token` must be round-tripped
-/// to `cowork_install_into_workspace` / `cowork_uninstall_from_workspace`, which
-/// resolve it back to the exact canonical path validated here — closing the
-/// TOCTOU window between this scan and the install IPC call (issue #433). The
-/// `path` field is for display only and is never trusted on the return trip.
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub(crate) fn cowork_scan_workspaces() -> Result<Vec<cowork_workspace_scan::WorkspaceHandle>, String> {
-    Ok(cowork_workspace_scan::scan_workspaces_with_handles())
-}
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub(crate) fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
-    Err(WINDOWS_ONLY_ERR.into())
 }
 
 /// Outcome of the enable path's final step: persisting `enabled = true` (plus
@@ -1382,18 +1370,6 @@ pub(crate) fn cowork_get_status() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Read the Cowork metadata file.
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub(crate) fn cowork_get_meta() -> Result<cowork_meta::CoworkMeta, String> {
-    cowork_meta::load()
-}
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub(crate) fn cowork_get_meta() -> Result<serde_json::Value, String> {
-    Err(WINDOWS_ONLY_ERR.into())
-}
-
 /// Coalesces concurrent advisory subnet probes (#1371).
 ///
 /// Moving the command off the main thread removes an accidental mutex — Tauri
@@ -1445,118 +1421,6 @@ fn detect_subnet_advisory_blocking() -> Result<String, String> {
 }
 #[cfg(not(target_os = "windows"))]
 fn detect_subnet_advisory_blocking() -> Result<String, String> {
-    Err(WINDOWS_ONLY_ERR.into())
-}
-
-/// Re-walk all workspaces with a new auth token (called after `tandem rotate-token`).
-///
-/// Token is never logged — passed through to `apply_token_to_all_workspaces`
-/// which also never logs it.
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub(crate) fn cowork_apply_token(token: String) -> Result<String, String> {
-    refuse_if_dark()?;
-
-    let reports = cowork_installer::apply_token_to_all_workspaces(&token);
-    let total = reports.len();
-    let success = reports.iter().filter(|r| matches!(
-        r.installed_plugins,
-        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-    )).count();
-
-    if total > 0 && success == 0 {
-        let failure_summary: Vec<String> = reports.iter().map(|r| {
-            format!("{}/{}: {:?}", r.workspace_id, r.vm_id, r.installed_plugins)
-        }).collect();
-        return Err(format!(
-            "Cowork apply-token failed: all {total} workspace(s) failed. Failures: {}",
-            failure_summary.join("; ")
-        ));
-    }
-    if success < total {
-        log::warn!("[cowork] apply-token partial: {success}/{total} workspace(s) succeeded");
-    }
-    Ok(format!("Cowork: {success} workspace(s) re-walked with new token"))
-}
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub(crate) fn cowork_apply_token(_token: String) -> Result<String, String> {
-    Err(WINDOWS_ONLY_ERR.into())
-}
-
-/// Resolve a snapshot handle token to its validated canonical workspace path.
-///
-/// Closes the TOCTOU window (issue #433): instead of re-scanning the filesystem
-/// and trusting a caller-supplied string, the token can only name a path that
-/// `cowork_scan_workspaces` already validated this session. The resolved path is
-/// then re-run through the five-step guard (`revalidate_resolved_path`) to
-/// catch a directory swapped *after* the scan. An unknown token — forged, or
-/// from a superseded scan — is rejected with no file I/O. The re-validation's
-/// specific rejection reason is preserved (single informative message, not
-/// re-flattened) for incident triage.
-#[cfg(target_os = "windows")]
-fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::PathBuf, String> {
-    let Some(resolved) = cowork_workspace_scan::resolve_handle(handle) else {
-        log::warn!(
-            "[cowork] {op}: unknown workspace handle — rejected (no current scan token matches)"
-        );
-        return Err("Unknown or expired workspace handle — re-scan and try again".to_string());
-    };
-
-    // Defense-in-depth: re-run the five-step guard against the stored path to
-    // catch a post-scan swap (directory replaced with a junction, moved, etc.).
-    cowork_workspace_scan::revalidate_resolved_path(&resolved).map_err(|reason| {
-        log::warn!("[cowork] {op}: resolved handle failed re-validation — rejected: {reason}");
-        reason
-    })
-}
-
-/// Install the Tandem plugin into a specific workspace, named by an opaque
-/// snapshot handle from `cowork_scan_workspaces`.
-///
-/// The handle resolves — in-process — to the exact canonical path validated at
-/// scan time, which is re-checked against invariant §3 before any file I/O.
-/// A caller-supplied path string is never trusted; an unknown handle is rejected.
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub(crate) fn cowork_install_into_workspace(handle: String) -> Result<String, String> {
-    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
-
-    refuse_if_dark()?;
-
-    let validated_path = cowork_resolve_validated_handle(&handle, "cowork_install_into_workspace")?;
-
-    let token = token_store::get_or_create_token()?;
-    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
-    let tandem_url = resolve_tandem_url(&meta);
-
-    let report = install_tandem_plugin_into_workspace(&validated_path, &token, &tandem_url)
-        .map_err(|e| e.to_string())?;
-
-    serde_json::to_string(&report).map_err(|e| e.to_string())
-}
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub(crate) fn cowork_install_into_workspace(_handle: String) -> Result<String, String> {
-    Err(WINDOWS_ONLY_ERR.into())
-}
-
-/// Uninstall the Tandem plugin from a specific workspace, named by an opaque
-/// snapshot handle from `cowork_scan_workspaces`. See
-/// [`cowork_install_into_workspace`] for the handle contract.
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub(crate) fn cowork_uninstall_from_workspace(handle: String) -> Result<String, String> {
-    let validated_path =
-        cowork_resolve_validated_handle(&handle, "cowork_uninstall_from_workspace")?;
-
-    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&validated_path)
-        .map_err(|e| e.to_string())?;
-    serde_json::to_string(&report).map_err(|e| e.to_string())
-}
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub(crate) fn cowork_uninstall_from_workspace(_handle: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 

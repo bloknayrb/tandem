@@ -40,18 +40,9 @@ const CLIENT_SRC = join(REPO_ROOT, "src", "client");
  * against these keys exactly, so an entry that gains a caller must be removed
  * here too — the list can only describe the present, never the past.
  */
-const COWORK_DARK_NO_CALLER =
-  "Cowork setup ships dark (ADR-055, COWORK_ENABLED) and nothing calls this " +
-  "command; whether to delete it — along with its capability grant, its " +
-  "cowork-dark-gate row and, for the workspace writers, the #433 hardening — " +
-  "is a separate, Tier A decision for Bryan, not a side effect of this check.";
-const UNINVOKED_ALLOWLIST: Record<string, string> = {
-  cowork_scan_workspaces: COWORK_DARK_NO_CALLER,
-  cowork_get_meta: COWORK_DARK_NO_CALLER,
-  cowork_apply_token: COWORK_DARK_NO_CALLER,
-  cowork_install_into_workspace: COWORK_DARK_NO_CALLER,
-  cowork_uninstall_from_workspace: COWORK_DARK_NO_CALLER,
-};
+// Empty since 2026-11-27: the five Cowork commands this check found with no
+// caller were deleted (ADR-055's amendment of that date).
+const UNINVOKED_ALLOWLIST: Record<string, string> = {};
 
 /** Drop `//` and block comments, so a name merely discussed in prose is not read as a call. */
 function stripComments(src: string): string {

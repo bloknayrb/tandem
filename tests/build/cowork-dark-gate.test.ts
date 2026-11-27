@@ -13,7 +13,7 @@
  *   - the two literals agree — a half-flip lights the UI over commands that
  *     refuse, or the reverse;
  *   - one row per `#[tauri::command]`, failing closed on a command with no row —
- *     a twelfth command arriving ungated;
+ *     a seventh command arriving ungated;
  *   - where the gate sits in each gated arm — `cowork_toggle_integration` is
  *     the one command whose gate must NOT open the arm, because the same
  *     command is the disable path, and disable only removes;
@@ -89,8 +89,6 @@ const TABLE: Record<string, Row> = {
     gate: "arm-start",
     why: "force-reinstalls into every workspace and writes meta when meta says enabled",
   },
-  cowork_apply_token: { gate: "arm-start", why: "rewrites the token in every workspace" },
-  cowork_install_into_workspace: { gate: "arm-start", why: "writes one workspace's entries" },
   cowork_set_lan_ip_override: {
     gate: "arm-start",
     why: "writes meta unconditionally, then re-walks workspaces when enabled",
@@ -99,13 +97,7 @@ const TABLE: Record<string, Row> = {
     gate: "none",
     why: "delegates to cowork_toggle_integration(true) and nothing else (cowork-retry-delegates.test.ts), so the enable branch refuses for it",
   },
-  cowork_uninstall_from_workspace: { gate: "none", why: "removal only" },
-  cowork_scan_workspaces: {
-    gate: "none",
-    why: "read-only scan; mutates only the in-process handle snapshot",
-  },
   cowork_get_status: { gate: "none", why: "read-only" },
-  cowork_get_meta: { gate: "none", why: "read-only" },
   cowork_detect_vethernet_subnet: { gate: "none", why: "read-only advisory probe" },
 };
 
@@ -265,7 +257,6 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
  */
 const WRITE_PRIMITIVES = [
   "install_tandem_plugin_into_workspace",
-  "apply_token_to_all_workspaces",
   "reconcile_stale_workspace_tokens",
   "add_cowork_allow_rule",
   "add_cowork_deny_rule",
@@ -277,8 +268,6 @@ const META_WRITE = String.raw`cowork_meta::(?:update|save)`;
 const ALLOWED_CALLERS: Record<string, string> = {
   "cowork_commands.rs::cowork_toggle_integration": "gated on its enable branch",
   "cowork_commands.rs::cowork_rescan": "gated at arm start",
-  "cowork_commands.rs::cowork_apply_token": "gated at arm start",
-  "cowork_commands.rs::cowork_install_into_workspace": "gated at arm start",
   "cowork_commands.rs::cowork_set_lan_ip_override": "gated at arm start",
   "cowork_commands.rs::cowork_heal_pass": "not a command; returns before doing anything while dark",
 };
@@ -321,6 +310,40 @@ describe("Cowork ships dark (ADR-055): who can write into a workspace", () => {
       String.raw`\b(?:${WRITE_PRIMITIVES.join("|")})\s+as\s+\w+|\buse\s[^;]*cowork_meta::(?:\{[^}]*\b(?:update|save)\b|(?:update|save)\b)`,
     );
     expect(SOURCES.filter((f) => aliased.test(f.code)).map((f) => f.rel)).toEqual([]);
+  });
+
+  it.each([
+    "install_tandem_plugin_into_workspace",
+    "uninstall_tandem_plugin_from_workspace",
+    "sweep_orphaned_temps",
+    "reconcile_stale_workspace_tokens",
+  ])("%s re-validates the workspace path before any file I/O (#433)", (name) => {
+    // The scan-to-write TOCTOU guard sits inside the installer functions, not
+    // in the commands, so every caller gets it. Since the snapshot-handle
+    // registry was deleted (ADR-055, 2026-11-27) this is the only layer, and
+    // until now nothing pinned it.
+    const installer = SOURCES.find((f) => f.rel === "src-tauri/src/cowork_installer.rs");
+    const fn = topLevelFns(installer?.code ?? "").find((f) => f.name === name);
+    expect(fn, `${name} not found in cowork_installer.rs`).toBeDefined();
+    const body = fn?.body ?? "";
+    const guard = body.indexOf("revalidate_resolved_path(");
+    expect(guard, `${name} never calls revalidate_resolved_path`).toBeGreaterThanOrEqual(0);
+    const io = [
+      "with_locked_json(",
+      "ensure_plugins_dir(",
+      "sweep_orphaned_temps_in(",
+      "plugin_file_exists(",
+      "read_plugin_file(",
+      "fs::",
+    ]
+      .map((t) => body.indexOf(t))
+      .filter((i) => i >= 0);
+    expect(io.length, `${name}: no file I/O found, so this check would be vacuous`).toBeGreaterThan(
+      0,
+    );
+    expect(guard, `${name} touches the filesystem before re-validating`).toBeLessThan(
+      Math.min(...io),
+    );
   });
 
   it("the uninstall scrub deletes cowork-meta.json", () => {
