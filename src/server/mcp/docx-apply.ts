@@ -31,6 +31,7 @@ import {
 import { resolveAppDataDir } from "../platform.js";
 import { relPosToFlatOffset } from "../positions.js";
 import { narrowConflict } from "../session/manager.js";
+import { backupKeptFields } from "./backup-kept.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
@@ -544,7 +545,8 @@ export async function applyChangesCore(
  *
  * Lives HERE, in the tool's own response mapping, and never inside
  * `listDocBackups` — that function also serves GET /api/backups, which feeds
- * the palette action that restores `backups[0]`.
+ * the editor's Version history (whose `.docx` gap is moot while `.docx` ships
+ * dark, ADR-053).
  *
  * `lstat` + `isFile()` only: a symlinked sidecar is not listed. The named
  * restore refuses it too, at the open syscall.
@@ -559,6 +561,7 @@ async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | n
       name: path.basename(sidecar),
       timestamp: new Date(st.mtimeMs).toISOString(),
       size: st.size,
+      kind: "disk",
     };
   } catch {
     // No sidecar is the normal case, not an error.
@@ -657,7 +660,8 @@ export function registerApplyTools(server: McpServer): void {
   server.tool(
     "tandem_restoreBackup",
     "Restore a document from a backup. Tandem snapshots a document's on-disk bytes before its " +
-      `first overwrite each server run (${docxEnabled() ? ".md/.txt/.docx" : ".md/.txt"}). ` +
+      `first overwrite each server run and before every restore (${docxEnabled() ? ".md/.txt/.docx" : ".md/.txt"}), ` +
+      "and keeps .md/.txt unsaved edits that tandem_open force, a restore or tandem_close discarded. " +
       "Call without `backup` to list available " +
       "snapshots (newest first), then call again with `backup` set to a snapshot name to restore " +
       "it. " +
@@ -666,8 +670,11 @@ export function registerApplyTools(server: McpServer): void {
           "tandem_applyChanges, listed last; restore it by name like any snapshot. "
         : "") +
       "Restoring overwrites the file on disk with the snapshot and reloads the open document in " +
-      "place, discarding unsaved in-memory edits; annotations are preserved and re-anchored. Refused " +
-      "for read-only, uploaded and scratchpad documents.",
+      "place; annotations are preserved and re-anchored. The bytes it overwrites are snapshotted " +
+      "first, and unsaved in-memory edits it discards are kept as a backup named in the result as " +
+      "backupKept (each entry's kind says which: disk or unsaved); if that backup cannot be kept, " +
+      "nothing is restored and the call answers BACKUP_FAILED. Refused for read-only, uploaded and " +
+      "scratchpad documents.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
@@ -726,7 +733,9 @@ export function registerApplyTools(server: McpServer): void {
               return mcpError(
                 "FILE_NOT_FOUND",
                 `No backups found for ${path.basename(filePath)}. Tandem snapshots a ` +
-                  "document's on-disk bytes before its first overwrite each server run." +
+                  "document's on-disk bytes before its first overwrite each server run and " +
+                  "before every restore, and keeps unsaved edits a Claude reload, restore or " +
+                  "close discarded." +
                   (docState.format === "docx"
                     ? " tandem_applyChanges also writes a {name}.backup.docx sidecar beside the " +
                       "document, which is listed here whenever it exists."
@@ -746,10 +755,24 @@ export function registerApplyTools(server: McpServer): void {
                 " restore it.",
             });
           }
-          const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
-          return mcpSuccess(result);
+          // ADR-057: unsaved edits the restore discards are kept as a backup
+          // first; a backup that cannot be kept refuses with nothing written.
+          const { unsavedEditsKept, ...result } = await restoreDocumentFromBackup(
+            docState.id,
+            path.basename(args.backup),
+            { keepUnsavedEdits: true },
+          );
+          return mcpSuccess({
+            ...result,
+            ...(unsavedEditsKept ? backupKeptFields(unsavedEditsKept, "restore") : {}),
+          });
         } catch (err) {
-          const e = err as Error & { code?: string };
+          const e = err as Error & { code?: string; keptBackupNote?: string };
+          // A document closed mid-restore after its edits were kept (ADR-057):
+          // the fixed message would drop the backup's name.
+          if (e.code === "NO_DOCUMENT" && e.keptBackupNote) {
+            return noClaim(mcpError("NO_DOCUMENT", e.message));
+          }
           if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
           if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
           // An upload or scratchpad source has no on-disk location to restore
@@ -766,6 +789,8 @@ export function registerApplyTools(server: McpServer): void {
           if (e.code === "UNSUPPORTED_FORMAT") return noClaim(mcpError("FORMAT_ERROR", e.message));
           if (e.code === "READ_ONLY") return noClaim(mcpError("READ_ONLY", e.message));
           if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
+          // The unsaved edits could not be kept, so nothing was written.
+          if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
           throw err;
         }
       }

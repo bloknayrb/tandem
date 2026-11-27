@@ -18,7 +18,14 @@ function activityItem(overrides: Partial<ActivityItem> = {}): ActivityItem {
 describe("resolveActivityAction", () => {
   it("maps a save-error with a documentId to a Retry action", () => {
     const action = resolveActivityAction(activityItem({ documentId: "doc-7" }));
-    expect(action).toEqual({ label: "Retry", documentId: "doc-7" });
+    expect(action).toEqual({ kind: "retry-save", label: "Retry", documentId: "doc-7" });
+  });
+
+  it("maps unsaved-edits-kept with a documentId to a View action (ADR-057 PR 2)", () => {
+    const action = resolveActivityAction(
+      activityItem({ type: "unsaved-edits-kept", severity: "warning", documentId: "doc-7" }),
+    );
+    expect(action).toEqual({ kind: "view-backups", label: "View", documentId: "doc-7" });
   });
 
   it("returns null for a save-error missing its documentId (nothing to retry)", () => {

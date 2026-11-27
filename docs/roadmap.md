@@ -89,6 +89,11 @@ before relying on it.
 - **#2510** (document headings follow the user's editor font) is open.
 - **Dependabot:** #2506 (npm group), #2511, #2512 and #2513 (libloading 0.9, a major).
 - **Not v1.0 work:** reply sounds for chat notifications (#2168) merged as #2537.
+- **Not v1.0 work (2026-11-26):** undo, not ask ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)).
+  A Claude force-open, restore or close now keeps the unsaved edits it discards as a backup.
+  Follow-ups: the Version history picker with a durable "your edits were kept" banner, whose
+  restore keeps the unsaved edits too (2026-11-27, ADR-057 amendment); the same undo for the conflict
+  banner's Keep/Reload (ADR-057 PR 3); still planned, a compare view.
 
 ### Decisions still owed
 
