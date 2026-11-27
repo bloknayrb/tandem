@@ -215,7 +215,7 @@ describe("GET /api/document/compare", () => {
   });
 
   it("never hides what a cut file has past a complete, shorter document", async () => {
-    const extra = Array.from({ length: 40 }, (_, i) => `${i}`.padEnd(100_000, "b")).join("\n");
+    const extra = Array.from({ length: 80 }, (_, i) => `${i}`.padEnd(50_000, "b")).join("\n");
     for (const [name, doc] of [
       ["short.md", "small\n"],
       ["empty.txt", ""],
@@ -227,7 +227,7 @@ describe("GET /api/document/compare", () => {
       expect(d.current, name).toBe(doc);
       // The disk side runs to its last full line within the cap, far past the document.
       expect(d.other.startsWith(doc), name).toBe(true);
-      expect(d.other.length, name).toBeGreaterThan(COMPARE_MAX_BYTES - 100_100);
+      expect(d.other.length, name).toBeGreaterThan(COMPARE_MAX_BYTES - 50_100);
       expect(d.other.endsWith("\n"), name).toBe(true);
     }
   });
@@ -280,6 +280,24 @@ describe("GET /api/document/compare", () => {
     expect(data(await call({ documentId: id, against: "disk" }))).toMatchObject({ format: "md" });
   });
 
+  it("compares what was read of an over-cap file that ends in one long line", async () => {
+    const para = "word ".repeat(Math.ceil((COMPARE_MAX_BYTES + 500_000) / 5));
+    const edited = `${para.slice(0, 100)}CHANGED${para.slice(107)}`;
+    const { filePath, id } = await opened("long-line.txt", "x\n");
+    // Disk: a title then one huge line. The document holds the same with a word changed early.
+    await fs.writeFile(filePath, `Title\n${para}\n`);
+    const doc = getOrCreateDocument(id);
+    const adapter = getAdapter("txt");
+    const prepared = await adapter.parse(`Title\n${edited}\n`);
+    withMcp(doc, () => adapter.apply(doc, prepared, { fileName: "long-line.txt" }));
+    const d = data(await call({ documentId: id, against: "disk" }));
+    expect(d.truncated).toBe(true);
+    // Far more than "Title\n" is compared, and the change is in it.
+    expect(d.other.length).toBeGreaterThan(1_000_000);
+    expect(d.current).toContain("CHANGED");
+    expect(d.other).not.toContain("CHANGED");
+  });
+
   it("keeps a real U+FFFD that ends exactly at the cut", async () => {
     const { filePath, id } = await opened("fffd.txt", "small\n");
     // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.
@@ -289,8 +307,8 @@ describe("GET /api/document/compare", () => {
   });
 
   it("cuts both sides of an over-cap CRLF file at the same line, so an unchanged file shows no difference", async () => {
-    // Few long lines keep the open fast; 25 x 100k chars is past the 2 MB cap.
-    const lines = Array.from({ length: 25 }, (_, i) => `${i}`.padEnd(100_000, "a"));
+    // Few long lines keep the open fast; 50 x 50k chars is past the 2 MB cap.
+    const lines = Array.from({ length: 50 }, (_, i) => `${i}`.padEnd(50_000, "a"));
     const crlf = `${lines.join("\r\n")}\r\n`;
     expect(Buffer.byteLength(crlf)).toBeGreaterThan(COMPARE_MAX_BYTES);
     const { id } = await opened("crlf.txt", crlf);

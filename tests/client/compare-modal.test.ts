@@ -77,4 +77,30 @@ describe("CompareModal", () => {
     await fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("never shows the previous comparison when it opens again", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        calls++;
+        // The second open's fetch never answers, so only a stale result could show.
+        if (calls > 1) return new Promise<Response>(() => {});
+        return Promise.resolve(
+          json({ data: { current: "a\n", other: "OLD\n", otherLabel: "disk", truncated: false } }),
+        );
+      }),
+    );
+    const { container, rerender } = render(CompareModal, {
+      props: { documentId: "doc-a", fileName: "a.md", onClose: vi.fn() },
+    });
+    await settle();
+    expect(container.querySelector("[data-testid='diff-view']")?.textContent).toContain("OLD");
+    await rerender({ documentId: null, fileName: "", onClose: vi.fn() });
+    await settle();
+    await rerender({ documentId: "doc-b", fileName: "b.md", onClose: vi.fn() });
+    await settle();
+    expect(container.querySelector("[data-testid='diff-view']")).toBeNull();
+    expect(container.textContent).toContain("Comparing");
+  });
 });

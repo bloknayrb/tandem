@@ -36,7 +36,11 @@ import { resolveAppDataDir } from "../../platform.js";
 import { getDocument } from "../../yjs/provider.js";
 import { isValidDocumentId } from "./_shared.js";
 
-/** Each side is compared up to this many bytes (UTF-8 on disk, UTF-16 code units for the document). */
+/**
+ * The bound on each side: this many bytes of a file read from disk, and this
+ * many UTF-16 code units (characters) of the document, which as UTF-8 can be
+ * up to three times as many bytes.
+ */
 export const COMPARE_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
@@ -95,15 +99,31 @@ function capText(text: string, max: number): { text: string; truncated: boolean 
   return { text: text.slice(0, end), truncated: true };
 }
 
-/** `text` up to and including its last line break; all of it when it has none. */
-function toLastLine(text: string): string {
+/**
+ * A cut snaps back to a line break only when one is this close; a longer
+ * partial line is kept, cut by character, so a file ending in one very long
+ * line still compares what was read rather than almost none of it.
+ */
+const LINE_SNAP_MAX = 64 * 1024;
+
+/** `text` cut at `limit` (all of it if shorter), snapped back to a line break within `LINE_SNAP_MAX`. */
+function cutNear(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const nl = text.lastIndexOf("\n", limit - 1);
+  return nl >= 0 && limit - (nl + 1) <= LINE_SNAP_MAX
+    ? text.slice(0, nl + 1)
+    : capText(text, limit).text;
+}
+
+/** A cut side ends mid-line: drop that partial line when it is short, keep it otherwise. */
+function toNearLastLine(text: string): string {
   const nl = text.lastIndexOf("\n");
-  return nl >= 0 ? text.slice(0, nl + 1) : text;
+  return nl >= 0 && text.length - (nl + 1) <= LINE_SNAP_MAX ? text.slice(0, nl + 1) : text;
 }
 
 /**
  * Make the cut sides comparable. A side cut at the cap is taken back to its
- * last full line. Then neither side runs past the shortest cut side, because
+ * last full line when that line break is near (`LINE_SNAP_MAX`). Then neither side runs past the shortest cut side, because
  * beyond that point the other version is unknown, not different. A complete
  * side shorter than that is never cut: it really does end there, and what the
  * other side holds past it is a real difference. The caps count different
@@ -114,18 +134,13 @@ function alignCuts(
   a: { text: string; truncated: boolean },
   b: { text: string; truncated: boolean },
 ): [string, string] {
-  const at = a.truncated ? toLastLine(a.text) : a.text;
-  const bt = b.truncated ? toLastLine(b.text) : b.text;
+  const at = a.truncated ? toNearLastLine(a.text) : a.text;
+  const bt = b.truncated ? toNearLastLine(b.text) : b.text;
   const limit = Math.min(
     a.truncated ? at.length : Number.POSITIVE_INFINITY,
     b.truncated ? bt.length : Number.POSITIVE_INFINITY,
   );
-  const cut = (text: string): string => {
-    if (text.length <= limit) return text;
-    const nl = text.lastIndexOf("\n", limit - 1);
-    return nl >= 0 ? text.slice(0, nl + 1) : capText(text, limit).text;
-  };
-  return [cut(at), cut(bt)];
+  return [cutNear(at, limit), cutNear(bt, limit)];
 }
 
 function isEnoent(err: unknown): boolean {
@@ -157,9 +172,10 @@ export async function handleGetDocumentCompare(req: Request, res: Response): Pro
     return;
   }
   if (!canCompareWithDisk(docState)) {
-    res
-      .status(400)
-      .json({ error: "BAD_REQUEST", message: "Compare is available for .md and .txt files." });
+    res.status(400).json({
+      error: "BAD_REQUEST",
+      message: "Compare is available for .md and .txt files opened from disk, not read-only.",
+    });
     return;
   }
 

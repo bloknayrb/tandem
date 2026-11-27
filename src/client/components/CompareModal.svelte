@@ -34,8 +34,15 @@ let refreshes = $state(0);
 let pressedOnBackdrop = false;
 
 $effect(() => {
-  if (documentId === null) return;
   void refreshes;
+  if (documentId === null) {
+    // Cleared on close, so a later open never mounts (and diffs) a stale result.
+    seq++;
+    untrack(() => {
+      result = null;
+    });
+    return;
+  }
   const forDoc = documentId;
   const mine = ++seq;
   untrack(() => {

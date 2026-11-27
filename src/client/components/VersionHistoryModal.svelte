@@ -111,7 +111,13 @@ async function load(forDoc: string) {
 }
 
 $effect(() => {
-  if (documentId === null) return;
+  if (documentId === null) {
+    // Cleared on close, so a later open never mounts (and diffs) a stale comparison.
+    untrack(() => {
+      comparing = null;
+    });
+    return;
+  }
   const forDoc = documentId;
   untrack(() => {
     confirming = null;
@@ -171,18 +177,22 @@ async function askConfirm(name: string) {
   dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-confirm"]')?.focus();
 }
 
+/** Bumped per compare request; only the latest may land (Back then Compare again). */
+let compareSeq = 0;
+
 /** Show the difference between backup `name` and the document now, in place of the list. */
 async function openCompare(name: string) {
   if (documentId === null) return;
   const forDoc = documentId;
   confirming = null;
   rowError = null;
+  const mine = ++compareSeq;
   comparing = { name, result: null };
   // The row's button is gone with the list; keep focus inside the dialog.
   await tick();
   dialogEl?.querySelector<HTMLElement>('[data-testid="version-history-compare-back"]')?.focus();
   const result = await compareDocument(forDoc, name);
-  if (forDoc !== documentId || comparing?.name !== name) return;
+  if (mine !== compareSeq || forDoc !== documentId || comparing?.name !== name) return;
   comparing = { name, result };
 }
 
