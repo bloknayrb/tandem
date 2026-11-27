@@ -21,7 +21,7 @@
  * `windows-latest`; neither this file nor `session.test.ts` is on that list.
  * The advisory `vitest-windows` job (#2397) does run this file on Windows, but
  * a red there blocks no merge and a skip there is green. Every other vitest job
- * (`check`, `coverage`, `ownership-flag-on`) is ubuntu; the
+ * (`check`, `coverage`) is ubuntu; the
  * `rust-test`/`reaper-build` matrix does reach Windows but runs cargo only.
  *
  * So a change breaking only the Windows semantics here passes every required

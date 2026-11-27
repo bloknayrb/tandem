@@ -29,9 +29,8 @@ const DOCX_DEFINE = JSON.stringify(DOCX_ENABLED);
 // the value lives in src/shared/constants.ts and is only carried into the server and
 // cli bundles here, as __OWNERSHIP_ENABLED__, so a release ignores TANDEM_OWNERSHIP.
 // Derived from the literal and nothing else: no environment variable is read for
-// it, so a shell export cannot build a half-on bundle. The `ownership-flag-on` CI
-// job forces it on per block through scripts/ci/build-ownership-on.ts (since the
-// flip the same value the literal gives).
+// it, so a shell export cannot build a half-on bundle. A `check` step boots the
+// built server and proves it is on by this define, not by the variable.
 // Only the server bundle reaches src/server/ownership-flag.ts today; the cli
 // block carries it too so a future cli import cannot read a bare free global.
 const OWNERSHIP_DEFINE = JSON.stringify(OWNERSHIP_ENABLED);

@@ -26,8 +26,7 @@
  *                 it off and fail. Set rather than absent, because since the
  *                 flip an UNSET variable follows the bundled `true` literal, so
  *                 a define-less bundle would pass with no variable (`check`,
- *                 after the normal build, and the `ownership-flag-on` job,
- *                 after scripts/ci/build-ownership-on.ts);
+ *                 after the normal build);
  *   --expect off  the child gets `TANDEM_OWNERSHIP=1`, so a bundle that fell
  *                 back to the env var would turn on and fail. No CI step runs
  *                 it since the flip (before it, `check` did, to prove a dark

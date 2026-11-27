@@ -111,12 +111,13 @@ function stepByMarker(job: Job, marker: string): { index: number; step: Step } {
  * equality subsumes the whole exit-code-masking family in one assertion. The
  * count pin is what stops all but one being deleted, and what makes a new
  * site arrive red rather than silently unflagged. (#1345 retired
- * tauri-webdriver.yml, which held one; `vitest-windows`, #2397, added the
- * seventh.)
+ * tauri-webdriver.yml, which held one; `vitest-windows`, #2397, added a
+ * seventh, and deleting the `ownership-flag-on` job after the ownership
+ * flip, #2358, took one away.)
  */
 describe("#1832 npm ci runs no dependency lifecycle scripts", () => {
   const EXPECTED = "npm ci --ignore-scripts";
-  const EXPECTED_SITES = 7;
+  const EXPECTED_SITES = 6;
 
   function installSteps() {
     return allSteps().filter(({ step }) => step.run?.includes("npm ci"));

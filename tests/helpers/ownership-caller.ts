@@ -16,7 +16,7 @@ import {
  * Callers for tests that drive MCP tool handlers without the HTTP route
  * (#2358, ADR-054; ownership design §3.1, §12).
  *
- * With ownership on (the `ownership-flag-on` job), `withErrorBoundary` refuses
+ * With ownership on (the default since the flip), `withErrorBoundary` refuses
  * a tool call that carries no caller: in production every HTTP request is
  * dispatched inside a context naming its transport's owner record, and a
  * stdio-mode server answers as `local`. A test that calls a handler directly,

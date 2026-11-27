@@ -2,10 +2,11 @@
 /**
  * Did the flag-on test run actually run ownership flag-on? (#2358, ADR-054)
  *
- * The `ownership-flag-on` job runs the whole vitest suite with
- * `TANDEM_OWNERSHIP=1`. Everything in that suite also passes flag-off, so a
- * run where the variable never reached the workers would read exactly as green
- * as a real one. One test file, `tests/server/ownership-anchor.test.ts`, runs
+ * `check` runs the whole vitest suite flag-on: since the flip an unset
+ * `TANDEM_OWNERSHIP` follows the `true` literal. (Before it, a separate
+ * `ownership-flag-on` job set the variable to "1"; that job is gone.) Almost
+ * everything in the suite also passes flag-off, so a run that came out
+ * flag-off would read exactly as green as a real one. One test file, `tests/server/ownership-anchor.test.ts`, runs
  * only when `ownershipEnabled()` is true (`it.runIf`) and asserts something only
  * a flag-on process can make true. This reads the run's JSON report and refuses
  * unless that file ran and every assertion in it PASSED.
@@ -75,7 +76,7 @@ export function evaluateAnchors(report, repoRoot) {
       code: EXIT_FAILED,
       reason:
         `${notPassed.length} of ${assertions.length} anchor assertion(s) did not pass (${statuses}). ` +
-        "A skipped anchor means TANDEM_OWNERSHIP never reached the test workers: this run was flag-off.",
+        'A skipped anchor means this run was flag-off: the OWNERSHIP_ENABLED literal is false, or TANDEM_OWNERSHIP was set to something other than "1".',
     };
   }
   return { code: EXIT_OK, reason: `${assertions.length} anchor assertion(s) passed flag-on` };
