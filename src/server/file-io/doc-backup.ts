@@ -159,6 +159,18 @@ export function _resetDocBackupGateForTests(): void {
   _resetPrivateDirAclForTests();
 }
 
+/**
+ * The `dedupKey` this module's own notice for a failed `snapshotBeforeFirstWrite`
+ * of `filePath` uses, so a caller announcing the same failure in its own words
+ * coalesces with it in the activity tray instead of adding a second row.
+ */
+export function snapshotFailureNoticeKey(
+  filePath: string,
+  outcome: "failed" | "skipped-size-cap",
+): string {
+  return outcome === "skipped-size-cap" ? "doc-backup:size-cap" : `doc-backup:${docHash(filePath)}`;
+}
+
 /** Resolve the doc-backups root under `appDataDir` (injectable for tests). */
 export function docBackupsRoot(appDataDir: string): string {
   return path.join(appDataDir, DOC_BACKUP_DIR_NAME);

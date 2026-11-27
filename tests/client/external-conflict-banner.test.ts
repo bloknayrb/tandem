@@ -240,7 +240,7 @@ describe("ExternalConflictBanner", () => {
       );
       await tick();
       const text = container.querySelector(BANNER)?.textContent ?? "";
-      expect(text, name).toContain("reloading discards your unsaved edits");
+      expect(text, name).toMatch(/reloading discards (your unsaved edits|them)/);
       expect(text, name).not.toContain("reloading keeps");
       unmount();
     }

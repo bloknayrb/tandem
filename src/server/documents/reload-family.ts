@@ -51,6 +51,7 @@ import {
   docxSidecarBackupPath,
   markSnapshotNewest,
   snapshotBeforeFirstWrite,
+  snapshotFailureNoticeKey,
   snapshotKind,
 } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
@@ -706,8 +707,19 @@ export async function resolveExternalConflict(
   const resolvedFilePath = path.resolve(existing.filePath);
   /** The live document's meta map (an `onLoadDocument` swap can replace the Y.Doc during an await). */
   const liveMeta = () => (getDocument(safeId) ?? doc).getMap(Y_MAP_DOCUMENT_META);
-  /** Still the episode this click was for. */
-  const sameEpisode = () => liveMeta().get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve;
+  /**
+   * Still the episode this click was for. By `detectedAt`, not object
+   * identity: a Y.Doc swapped in during an await decodes its own copy of the
+   * same conflict (identity only where the value carries no `detectedAt`).
+   */
+  const sameEpisode = () => {
+    const live = liveMeta().get(Y_MAP_EXTERNAL_CONFLICT);
+    if (live === rawConflictBeforeResolve) return true;
+    return (
+      pendingAtClick !== undefined &&
+      readPendingConflict(getDocument(safeId) ?? doc)?.detectedAt === pendingAtClick.detectedAt
+    );
+  };
 
   if (choice === "keep") {
     // Only re-baseline for a format that HAS a save path. The baseline exists
@@ -718,6 +730,8 @@ export async function resolveExternalConflict(
     // flashing a check on a document whose edits still exist only in memory
     // (#1238).
     const canSave = canSaveToDisk(existing.format);
+    // A read-only document has no next save to overwrite the disk version.
+    const keepDiskVersion = canSave && existing.readOnly !== true;
     // Safe FS sink (CodeQL js/path-injection): `resolvedFilePath` is derived
     // from `existing.filePath`, the OpenDoc registry's server-managed path
     // (only ever set by openFromDisk / resolveAndValidatePath / a validated
@@ -738,7 +752,10 @@ export async function resolveExternalConflict(
     // newer data, the disk kind's contract — but say so here: the module's
     // own warnings are latched once per run or per path.
     let diskVersionKept: boolean | undefined;
-    if (canSave) {
+    // The fallback baseline when the stat failed: no later than the snapshot's
+    // read, so a write landing after it can never pass the next save's guard.
+    const beforeSnapshot = Date.now();
+    if (keepDiskVersion) {
       const snap = await snapshotBeforeFirstWrite(existing.filePath, {
         appDataDir: resolveAppDataDir(),
         documentId: safeId,
@@ -753,11 +770,19 @@ export async function resolveExternalConflict(
           severity: "warning",
           message: `The version of ${path.basename(existing.filePath)} on disk could not be kept as a backup, so your next save will overwrite it without a copy.`,
           documentId: safeId,
-          dedupKey: `keep-uncopied:${safeId}:${pendingAtClick?.detectedAt}`,
+          // The module announces the same failure (latched once per run or
+          // per path); sharing its key makes this one row, in Keep's words.
+          dedupKey: snapshotFailureNoticeKey(
+            existing.filePath,
+            snap === "skipped-size-cap" ? "skipped-size-cap" : "failed",
+          ),
           timestamp: Date.now(),
         });
       }
     }
+    // A stat that failed (a transient read-lock) gets one more try now that
+    // the snapshot has read the file.
+    const baseline = stat ?? (canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null);
     const liveDoc = getDocument(safeId) ?? doc;
     withInternal(liveDoc, () => {
       // Guarded, not unconditional (review finding): the awaits above were
@@ -773,7 +798,7 @@ export async function resolveExternalConflict(
         // the banner while the external-modification guard kept blocking every
         // subsequent save until the document was closed and reopened.
         if (canSave) {
-          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+          meta.set(Y_MAP_SAVED_AT_VERSION, baseline ? baseline.mtimeMs : beforeSnapshot);
         }
       }
     });
@@ -859,23 +884,25 @@ export async function resolveExternalConflict(
       actor: "user",
     });
   }
+  if (!reloaded) {
+    // Nothing was discarded: report no kept edits (the copy taken first stays
+    // listed, harmlessly).
+    reportSkipped();
+    return {};
+  }
   const unsavedEditsKept = await keptAfterSwap(existing.filePath, swap, editsBefore, keptBefore, {
     actor: "user",
   });
-  if (!reloaded) {
-    reportSkipped();
-  } else {
-    pushNotification({
-      id: generateNotificationId(),
-      type: "file-reloaded",
-      severity: "info",
-      message: unsavedEditsKept
-        ? `Reloaded from disk: ${path.basename(existing.filePath)}. Your unsaved edits were kept as a backup in Version history.`
-        : `Reloaded from disk: ${path.basename(existing.filePath)}`,
-      documentId: safeId,
-      dedupKey: `reload:${safeId}`,
-      timestamp: Date.now(),
-    });
-  }
+  pushNotification({
+    id: generateNotificationId(),
+    type: "file-reloaded",
+    severity: "info",
+    message: unsavedEditsKept
+      ? `Reloaded from disk: ${path.basename(existing.filePath)}. Your unsaved edits were kept as a backup in Version history.`
+      : `Reloaded from disk: ${path.basename(existing.filePath)}`,
+    documentId: safeId,
+    dedupKey: `reload:${safeId}`,
+    timestamp: Date.now(),
+  });
   return unsavedEditsKept ? { unsavedEditsKept } : {};
 }

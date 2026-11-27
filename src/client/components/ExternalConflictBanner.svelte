@@ -121,6 +121,13 @@ $effect(() => {
 
 const message = $derived.by(() => {
   if (!conflict) return "";
+  // A read-only document of a saveable format has no next save either: keeping
+  // the edits keeps them in this session, and Keep takes no disk backup.
+  if (readOnly && !cannotSave) {
+    return conflict.kind === "external-edit"
+      ? `${fileName} changed on disk while you have unsaved edits. This document is read-only, so keeping your edits keeps them in this session only; reloading discards them.`
+      : `Unsaved edits for ${fileName} were restored from your last session. This document is read-only, so keeping them keeps them in this session only. Reload to start fresh from the file on disk (discards them).`;
+  }
   if (conflict.kind === "external-edit") {
     return cannotSave
       ? `${fileName} changed on disk while you have unsaved edits. Tandem can't write this file type back to disk, so keeping your edits keeps them in this session only — the file itself will still hold the disk version. Reloading discards your unsaved edits.`

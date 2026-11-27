@@ -202,6 +202,44 @@ describe("Reload keeps the unsaved edits first", () => {
     expect(extractText(doc)).toContain("my unsaved words");
   });
 
+  it("still reloads when the Y.Doc's copy of the same conflict is a new object (a doc swap)", async () => {
+    const { id, doc, filePath, detectedAt } = await conflicted("swap.md");
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const real = store.snapshotUnsavedEdits;
+    const spy = vi.spyOn(store, "snapshotUnsavedEdits").mockImplementation(async (...args) => {
+      const r = await real(...args);
+      // What a swapped-in Y.Doc holds: an equal conflict, decoded afresh.
+      flagExternalConflict(id, doc, filePath, {
+        kind: "external-edit",
+        diskChanged: true,
+        detectedAt,
+      });
+      return r;
+    });
+    try {
+      await resolveExternalConflict(id, "reload", detectedAt);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(extractText(doc)).toContain("the external version");
+  });
+
+  it("a reload skipped for one already in flight reports no kept edits", async () => {
+    const { id } = await conflicted("skipped.md");
+    const watcher = await import("../../src/server/documents/watcher.js");
+    const spy = vi.spyOn(watcher, "reloadFromDisk").mockResolvedValue(false);
+    let result: Awaited<ReturnType<typeof resolveExternalConflict>>;
+    try {
+      result = await resolveExternalConflict(id, "reload");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(result).toEqual({});
+    expect(pushNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: `reload-skipped:${id}` }),
+    );
+  });
+
   it("a read-only document keeps nothing (the banner says Reload discards)", async () => {
     const { filePath, id } = await conflicted("ro.md", { readOnly: true });
 
@@ -225,6 +263,15 @@ describe("Keep keeps the version on disk first", () => {
     expect(disk).toContain("the external version\n");
   });
 
+  it("takes no disk backup for a read-only document, which has no next save", async () => {
+    const { filePath, id } = await conflicted("keep-ro.md", { readOnly: true });
+
+    const result = await resolveExternalConflict(id, "keep");
+
+    expect(result?.diskVersionKept).toBeUndefined();
+    expect((await kinds(filePath)).filter((b) => b.kind === "disk")).toEqual([]);
+  });
+
   it("proceeds, and says so, when the disk version can't be kept", async () => {
     const { id, doc } = await conflicted("keep-fail.md");
     const store = await import("../../src/server/file-io/doc-backup.js");
@@ -241,6 +288,8 @@ describe("Keep keeps the version on disk first", () => {
       expect.objectContaining({
         severity: "warning",
         message: expect.stringContaining("could not be kept as a backup"),
+        // One tray row with the backup module's own size-cap notice.
+        dedupKey: "doc-backup:size-cap",
       }),
     );
   });
