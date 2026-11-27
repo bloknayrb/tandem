@@ -16,8 +16,16 @@ import { sendApiError } from "./_shared.js";
  *
  * - "keep": keep the in-memory unsaved edits and re-baseline so explicit save
  *   unblocks (the next save overwrites the on-disk version).
- * - "reload": discard the unsaved edits, reload from disk through the
- *   file-watcher reload lifecycle (annotations preserved + re-anchored).
+ * - "reload": reload from disk through the file-watcher reload lifecycle
+ *   (annotations preserved + re-anchored), keeping the unsaved edits it
+ *   discards as a backup first (ADR-057, PR 3). If they cannot be kept the
+ *   reload is refused with `409 BACKUP_FAILED`, and the banner offers
+ *   "Reload anyway", which sends `discardUnsavedEdits: true`. That flag is not
+ *   a new destructive capability (#2027's class): it is this route's
+ *   behaviour before PR 3, behind the same origin and loopback gates, and a
+ *   `text/plain` POST parses no body, so it fails the `choice` check.
+ * - "keep" also keeps the version on disk as a backup first, since the next
+ *   save overwrites it.
  *
  * Gated on origin allowlist + loopback (#1121 F6): resolving a conflict is a
  * destructive state change and must not be reachable by authenticated LAN
@@ -47,13 +55,27 @@ import { sendApiError } from "./_shared.js";
 export async function handleResolveExternalConflict(req: Request, res: Response): Promise<void> {
   if (assertOriginAllowlisted(req, res, API_EXTERNAL_CONFLICT_RESOLVE)) return;
   if (assertLoopbackForMutation(req, res)) return;
-  const { documentId, choice, detectedAt } = (req.body ?? {}) as Record<string, unknown>;
+  const { documentId, choice, detectedAt, discardUnsavedEdits } = (req.body ?? {}) as Record<
+    string,
+    unknown
+  >;
   if (choice !== "keep" && choice !== "reload") {
     res.status(400).json({ error: "BAD_REQUEST", message: 'choice must be "keep" or "reload".' });
     return;
   }
   if (documentId !== undefined && typeof documentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
+    return;
+  }
+  // Strict: only a literal `true` discards; it means nothing to Keep.
+  if (
+    discardUnsavedEdits !== undefined &&
+    (typeof discardUnsavedEdits !== "boolean" || choice !== "reload")
+  ) {
+    res.status(400).json({
+      error: "BAD_REQUEST",
+      message: 'discardUnsavedEdits must be a boolean, and only with choice "reload".',
+    });
     return;
   }
   if (detectedAt !== undefined && typeof detectedAt !== "number") {
@@ -70,9 +92,23 @@ export async function handleResolveExternalConflict(req: Request, res: Response)
     return;
   }
   try {
-    await resolveExternalConflict(docId, choice, detectedAt);
-    res.json({ success: true });
+    const result = await resolveExternalConflict(docId, choice, detectedAt, {
+      discardUnsavedEdits: discardUnsavedEdits === true,
+    });
+    res.json({ success: true, ...(result ?? {}) });
   } catch (err: unknown) {
+    // Answered here, not in the shared table, which maps BACKUP_FAILED to 500
+    // for `/api/apply-changes`' different meaning; the message is the editor's
+    // own (the shared one is addressed to Claude).
+    if ((err as { code?: unknown }).code === "BACKUP_FAILED") {
+      res.status(409).json({
+        error: "BACKUP_FAILED",
+        message:
+          "Couldn't keep a backup of your unsaved edits first, so nothing was reloaded. " +
+          "Tandem's backup folder may be full or not writable, or the edits could not be read.",
+      });
+      return;
+    }
     sendApiError(res, err);
   }
 }

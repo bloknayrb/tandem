@@ -113,8 +113,9 @@ export async function reloadFromDisk(
   opts?: {
     /**
      * Called synchronously inside the swap transaction, before the old
-     * content is replaced: a Claude restore reads the unsaved edits typed
-     * during its own awaits here (ADR-057, `keep-unsaved.ts`). Must not write
+     * content is replaced: a restore (Claude's or the Version history's) and
+     * the conflict banner's Reload read the unsaved edits typed during their
+     * own awaits here (ADR-057, `keep-unsaved.ts`). Must not write
      * to the document. The watcher's own auto-reload never passes it.
      */
     atSwap?: (doc: Y.Doc) => void;

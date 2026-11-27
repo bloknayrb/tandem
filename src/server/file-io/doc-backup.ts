@@ -515,9 +515,10 @@ export async function snapshotBeforeFirstWrite(
     maxTotalBytes?: number;
     /**
      * Snapshot even when this path was already snapshotted this run (ADR-057).
-     * A backup restore passes it: a restore always overwrites the file, and
-     * after a Claude force-open the bytes at risk are an external version that
-     * the once-per-run gate, consumed by an earlier autosave, would not cover.
+     * Every backup restore passes it, and so does the conflict banner's Keep
+     * (whose next save overwrites the external version): the bytes at risk are
+     * then a version the once-per-run gate, consumed by an earlier autosave,
+     * would not cover.
      * The byte-identical skip still applies, so repeats cost nothing.
      */
     ignoreRunGate?: boolean;

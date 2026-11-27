@@ -667,11 +667,26 @@ export async function restoreDocumentFromBackup(
  *
  * Throws coded errors the route maps to HTTP status (NO_DOCUMENT).
  */
+/** What a resolve did beyond clearing the conflict (ADR-057, PR 3). */
+export interface ResolveConflictResult {
+  /** Reload: the unsaved edits it discarded, kept as a backup first. */
+  unsavedEditsKept?: KeptBackup;
+  /** Keep: whether the version on disk is held by a backup the next save cannot overwrite. */
+  diskVersionKept?: boolean;
+}
+
 export async function resolveExternalConflict(
   id: string,
   choice: "keep" | "reload",
   expectedDetectedAt?: number,
-): Promise<void> {
+  opts?: {
+    /**
+     * Reload without keeping the unsaved edits first: the banner's "Reload
+     * anyway", offered only after a keep was refused (`BACKUP_FAILED`).
+     */
+    discardUnsavedEdits?: boolean;
+  },
+): Promise<ResolveConflictResult | undefined> {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input (the request body's documentId, per handleResolveExternalConflict's
   // own comment) through Map.get(id) to existing.filePath FS sinks
@@ -685,20 +700,24 @@ export async function resolveExternalConflict(
   }
   const doc = getDocument(safeId) ?? getOrCreateDocument(safeId);
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  // Captured RAW (not narrowed) for the "keep" branch's post-await identity
-  // check below — see the comment there.
+  // Captured RAW (not narrowed) for the post-await identity checks below.
   const rawConflictBeforeResolve = meta.get(Y_MAP_EXTERNAL_CONFLICT);
-  if (rawConflictBeforeResolve === undefined) return;
+  if (rawConflictBeforeResolve === undefined) return undefined;
 
   // Episode-identity check — see the doc comment above. `readPendingConflict`
   // is a second, synchronous read of the same map (no await between here and
   // the raw read above), so it observes the identical value.
   if (expectedDetectedAt !== undefined) {
     const pending = readPendingConflict(doc);
-    if (pending?.detectedAt !== expectedDetectedAt) return;
+    if (pending?.detectedAt !== expectedDetectedAt) return undefined;
   }
 
   const resolvedFilePath = path.resolve(existing.filePath);
+  const appDataDir = resolveAppDataDir();
+  /** Still the episode this click was for, read from the live Y.Doc (it can be swapped during an await). */
+  const sameEpisode = () =>
+    (getDocument(safeId) ?? doc).getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT) ===
+    rawConflictBeforeResolve;
 
   if (choice === "keep") {
     // Only re-baseline for a format that HAS a save path. The baseline exists
@@ -719,25 +738,56 @@ export async function resolveExternalConflict(
     // joined, and `isUploadPath` diverts that path from every fs sink anyway.
     // Same established false-positive class as document-service.ts's FS
     // sinks; dismiss per issue #1042.
+    // Stat BEFORE the snapshot (as `reloadFromDisk` does): the baseline must
+    // never be newer than the bytes the backup holds, or a write landing
+    // between the two would pass the next save's mtime guard uncopied.
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
-    withInternal(doc, () => {
-      // Guarded, not unconditional (review finding): the fs.stat above was
+    // ADR-057, PR 3: the next save overwrites the version on disk, so keep it
+    // first, every time (the run's once-per-path gate is usually spent by an
+    // earlier save). Warn and proceed on failure — the in-memory edits are the
+    // newer data, the disk kind's contract — but say so here: the module's
+    // own warnings are latched once per run or per path.
+    let diskVersionKept: boolean | undefined;
+    if (canSave) {
+      const snap = await snapshotBeforeFirstWrite(existing.filePath, {
+        appDataDir,
+        documentId: safeId,
+        ignoreRunGate: true,
+      });
+      diskVersionKept =
+        snap === "written" || snap === "skipped-identical" || snap === "skipped-no-source";
+      if (!diskVersionKept) {
+        pushNotification({
+          id: generateNotificationId(),
+          type: "external-conflict",
+          severity: "warning",
+          message: `The version of ${path.basename(existing.filePath)} on disk could not be kept as a backup, so your next save will overwrite it without a copy.`,
+          documentId: safeId,
+          dedupKey: `keep-uncopied:${safeId}:${String((rawConflictBeforeResolve as { detectedAt?: unknown })?.detectedAt)}`,
+          timestamp: Date.now(),
+        });
+      }
+    }
+    const liveDoc = getDocument(safeId) ?? doc;
+    const liveMeta = liveDoc.getMap(Y_MAP_DOCUMENT_META);
+    withInternal(liveDoc, () => {
+      // Guarded, not unconditional (review finding): the awaits above were
       // async, so the file watcher could have flagged a NEWER conflict while
-      // it was in flight. "Keep" only means "keep the edits I saw when I
+      // they were in flight. "Keep" only means "keep the edits I saw when I
       // clicked" — it must not also silently dismiss a conflict that arrived
       // after the click.
-      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve) {
-        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      if (liveMeta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve) {
+        liveMeta.delete(Y_MAP_EXTERNAL_CONFLICT);
         // Date.now() fallback when the file is transiently unreadable (e.g. a
         // Word read-lock): clearing the flag without re-baselining would hide
         // the banner while the external-modification guard kept blocking every
         // subsequent save until the document was closed and reopened.
         if (canSave) {
-          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+          liveMeta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
         }
       }
     });
-    return;
+    return diskVersionKept === undefined ? {} : { diskVersionKept };
   }
 
   // reloadFromDisk returns false (and leaves the flag untouched) when a
@@ -749,8 +799,7 @@ export async function resolveExternalConflict(
   // silence on the same `false` is correct (the in-flight holder reports its
   // own reload) and the backup-restore caller already throws
   // RELOAD_IN_PROGRESS.
-  const reloaded = await reloadFromDisk(safeId, resolvedFilePath, existing.format);
-  if (!reloaded) {
+  const reportSkipped = (): void => {
     // `pushNotification` reaches every tab, including the one whose reload
     // won, so the wording must read correctly there too. Its own `dedupKey`
     // keeps it from coalescing with `reload:` or `external-conflict:`.
@@ -763,15 +812,93 @@ export async function resolveExternalConflict(
       dedupKey: `reload-skipped:${safeId}`,
       timestamp: Date.now(),
     });
+  };
+  // ADR-057, PR 3: Reload keeps the unsaved edits it discards, as the Version
+  // history restore does (`actor: "user"`: no kept-edits banner, the user chose
+  // this). A reload already in flight would skip this one, so report the skip
+  // before keeping anything.
+  if (isReloadInProgress(safeId)) {
+    reportSkipped();
+    return {};
+  }
+  const keepEdits = opts?.discardUnsavedEdits !== true;
+  // A clean document with a pending conflict (a reload that lost a race to a
+  // newer external write) "keeps" the text it already reloaded: harmless
+  // clutter in Version history, accepted rather than a second disk read.
+  const editsBefore = keepEdits ? unsavedEditsOf(safeId, doc, existing) : null;
+  // Refuses with BACKUP_FAILED before anything changes.
+  const keptBefore =
+    editsBefore !== null
+      ? await keepUnsavedEdits(existing.filePath, editsBefore, undefined, undefined, "user")
+      : undefined;
+  if (keptBefore) {
+    if (getOpenDocs().get(safeId) !== existing) {
+      throw reportKeptBackupOnFailure(
+        Object.assign(new Error("Document was closed while it was being reloaded."), {
+          code: "NO_DOCUMENT",
+        }),
+        safeId,
+        existing.filePath,
+        "reload",
+        keptBefore,
+        { actor: "user" },
+      );
+    }
+    // The keep awaited: a newer conflict may have replaced the one clicked on.
+    // Reload only for the episode the user saw; the kept copy stays listed.
+    if (!sameEpisode()) return undefined;
+  }
+  const swap = keepEdits ? captureAtSwap(safeId, existing) : undefined;
+
+  let reloaded: boolean;
+  try {
+    reloaded = await reloadFromDisk(
+      safeId,
+      resolvedFilePath,
+      existing.format,
+      swap ? { atSwap: swap.capture } : undefined,
+    );
+  } catch (err) {
+    // Nothing swapped yet (e.g. the read failed): the edits are still in the
+    // document, so report nothing about them.
+    if (!swap?.fired) throw err;
+    const kept =
+      (await keepEditsCapturedAtSwap(
+        existing.filePath,
+        swap.text,
+        editsBefore,
+        undefined,
+        undefined,
+        "user",
+      )) ?? keptBefore;
+    throw reportKeptBackupOnFailure(err, safeId, existing.filePath, "reload", kept, {
+      actor: "user",
+    });
+  }
+  const unsavedEditsKept = swap?.fired
+    ? ((await keepEditsCapturedAtSwap(
+        existing.filePath,
+        swap.text,
+        editsBefore,
+        undefined,
+        undefined,
+        "user",
+      )) ?? keptBefore)
+    : keptBefore;
+  if (!reloaded) {
+    reportSkipped();
   } else {
     pushNotification({
       id: generateNotificationId(),
       type: "file-reloaded",
       severity: "info",
-      message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
+      message: unsavedEditsKept
+        ? `Reloaded from disk: ${path.basename(existing.filePath)}. Your unsaved edits were kept as a backup in Version history.`
+        : `Reloaded from disk: ${path.basename(existing.filePath)}`,
       documentId: safeId,
       dedupKey: `reload:${safeId}`,
       timestamp: Date.now(),
     });
   }
+  return unsavedEditsKept ? { unsavedEditsKept } : {};
 }

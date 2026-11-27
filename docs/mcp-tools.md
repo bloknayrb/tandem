@@ -1357,7 +1357,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), `src/server/
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
 | `POST /api/document/reload` | Reload the document from disk. | origin + loopback |
 | `GET /api/backups` · `POST /api/backups/restore` · `POST /api/backups/acknowledge` | List / restore snapshots (the Version history); dismiss the kept-edits banner. | origin + loopback on the POSTs; list scrubs paths |
-| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback |
+| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. Keep snapshots the version on disk first; Reload keeps the unsaved edits first, answering `409 BACKUP_FAILED` when it can't (then `discardUnsavedEdits: true`, a strict boolean valid only with Reload) (ADR-057 PR 3). | origin + loopback |
 | `POST /api/read-only-file/resolve` | Answer the read-only-file prompt (#2273): `overwrite` (POSIX only) or `dismiss`, naming the prompt's `documentId` and `detectedAt`. | origin + loopback |
 | `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** |
 | `POST /api/remove-annotation` | Delete an annotation. | **one layer** |

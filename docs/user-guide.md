@@ -313,8 +313,8 @@ If another program changes a file you have open — a git checkout, a sync servi
 
 If you *do* have unsaved edits, Tandem won't choose for you. A banner at the top of the document says the file changed on disk while you have unsaved edits, and offers:
 
-- **Keep my edits** — keep what's in the editor. Your next save overwrites the changes on disk.
-- **Reload from file** — load the version on disk and discard your unsaved edits.
+- **Keep my edits** — keep what's in the editor. Your next save overwrites the changes on disk, so Tandem first keeps the version on disk as a backup, which you can bring back from Version history (command palette: "Version history: restore a backup…").
+- **Reload from file** — load the version on disk. For a `.md` or `.txt` file you can edit, your unsaved edits are kept as a backup first, in Version history; if they can't be kept (the backup folder is full or can't be written), nothing is reloaded and the banner offers **Reload anyway**, which discards them. For other files, reloading discards your unsaved edits, and the banner says so.
 
 ![A banner across the top of the document saying the file changed on disk while you have unsaved edits, with Keep my edits and Reload from file buttons](screenshots/18-external-conflict-banner.png)
 

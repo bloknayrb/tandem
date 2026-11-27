@@ -3777,6 +3777,8 @@ function dismissModelPicker() {
           documentId={activeTab.id}
           fileName={activeTab.fileName}
           format={activeTab.format}
+          source={activeTab.source}
+          readOnly={isReadOnly}
         />
       {/key}
     {/if}
