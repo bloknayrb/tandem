@@ -283,6 +283,11 @@ alias) is **hard-blocked** in agent sessions for exactly that reason. Use `HUSKY
   only as `#[cfg(test)] mod x;` is not counted). Files already over that are listed in
   `scripts/file-size-baseline.json` at their current size, which is a ceiling that only goes
   down. `tests/scripts/file-size-ratchet.test.ts` enforces it and prints the JSON to write.
+- Complexity: functions in `src/**/*.ts` stay at cyclomatic complexity 15 or below, enforced by
+  `node scripts/ci/complexity-ratchet.mjs` in CI's `check` job (not by `eslint .`). Functions over
+  15 when the cap landed are frozen in `scripts/complexity-baseline.json` at their own number, which
+  is a ceiling: they may not grow. After simplifying one, run the script with `--prune`. Moving a
+  frozen function to another file changes its key; rename the entry in the same change.
 
 On Windows: if `biome check .` fails locally with only CRLF errors while CI is green, check
 `git ls-files --eol | grep "w/crlf"` before blaming your change. The fix is

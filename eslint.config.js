@@ -54,6 +54,10 @@ export default tseslint.config(
     },
   },
 
+  // Cyclomatic complexity is NOT an ESLint rule here, deliberately: it is a
+  // per-function ratchet in scripts/ci/complexity-ratchet.mjs (CI `check`),
+  // which owns its own rule config so nothing in this file can loosen it.
+
   // Project-wide rule overrides
   {
     rules: {
