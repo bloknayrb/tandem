@@ -92,8 +92,8 @@ before relying on it.
 - **Not v1.0 work (2026-11-26):** undo, not ask ([ADR-057](decisions.md#adr-057-undo-not-ask-keep-unsaved-edits-a-claude-action-discards)).
   A Claude force-open, restore or close now keeps the unsaved edits it discards as a backup.
   Follow-ups: the Version history picker with a durable "your edits were kept" banner, whose
-  restore keeps the unsaved edits too (2026-11-27, ADR-057 amendment); still planned, the same
-  undo for the conflict banner's Keep/Reload, and a compare view.
+  restore keeps the unsaved edits too (2026-11-27, ADR-057 amendment); the same undo for the conflict
+  banner's Keep/Reload (ADR-057 PR 3); still planned, a compare view.
 
 ### Decisions still owed
 

@@ -204,6 +204,7 @@ error-boundary-reload-btn
 external-conflict-banner
 external-conflict-keep-btn
 external-conflict-live
+external-conflict-reload-anyway-btn
 external-conflict-reload-btn
 fidelity-report-banner
 fidelity-report-details

@@ -14,7 +14,8 @@
  * Opt-in by the three tools, and by the browser's Version history restore
  * (`POST /api/backups/restore`, `actor: "user"`), which keeps the edits the
  * same way but says so in the user's own voice and never records what it kept
- * as unseen (`kept-unseen.json`). The browser's Reload and close, `/api/open` and the watcher's
+ * as unseen (`kept-unseen.json`), and by the conflict banner's Reload (PR 3),
+ * the same way. The browser's close, `/api/open` and the watcher's
  * auto-reload do not pass through here.
  *
  * Covered: `.md`/`.txt` documents opened from disk (`AUTO_SAVE_FORMATS`,
@@ -35,7 +36,7 @@
 
 import path from "path";
 import type * as Y from "yjs";
-import { AUTO_SAVE_FORMATS } from "../../shared/constants.js";
+import { keepsUnsavedEditsOnDiscard } from "../../shared/constants.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { markSnapshotNewest, snapshotUnsavedEdits } from "../file-io/doc-backup.js";
 import { getAdapter } from "../file-io/index.js";
@@ -71,15 +72,6 @@ interface DocFacts {
   readOnly?: boolean;
 }
 
-/** True when this document can hold edits a Claude action would discard, and a backup can hold them. */
-function isCovered(docState: DocFacts): boolean {
-  return (
-    docState.source === "file" &&
-    docState.readOnly !== true &&
-    AUTO_SAVE_FORMATS.has(docState.format)
-  );
-}
-
 /**
  * The document's unsaved edits as the next autosave would have written them,
  * or null when it has none a Claude action could lose (clean, not covered).
@@ -90,7 +82,7 @@ function isCovered(docState: DocFacts): boolean {
  * byte-for-byte, so a clean document would otherwise "differ" on every call.
  */
 export function unsavedEditsOf(id: string, doc: Y.Doc, docState: DocFacts): string | null {
-  if (!isCovered(docState)) return null;
+  if (!keepsUnsavedEditsOnDiscard(docState)) return null;
   if (!isDirty(id) && readPendingConflict(doc) === undefined) return null;
   const adapter = getAdapter(docState.format);
   if (!adapter.save) return null;
@@ -219,6 +211,33 @@ export async function keepEditsCapturedAtSwap(
     );
     return undefined;
   }
+}
+
+/**
+ * The backup holding the edits an action discarded, once its swap has run:
+ * the swap-time capture's keep when it fired and differs from the first one,
+ * else the first one. Never throws (see `keepEditsCapturedAtSwap`). One place
+ * for the order every discarding action needs after its swap, success and
+ * failure alike.
+ */
+export async function keptAfterSwap(
+  filePath: string,
+  swap: SwapCapture | undefined,
+  editsBefore: string | null,
+  keptBefore: KeptBackup | undefined,
+  opts: { incoming?: string; protect?: string; actor?: KeepActor } = {},
+): Promise<KeptBackup | undefined> {
+  const atSwap = swap?.fired
+    ? await keepEditsCapturedAtSwap(
+        filePath,
+        swap.text,
+        editsBefore,
+        opts.incoming,
+        opts.protect,
+        opts.actor,
+      )
+    : undefined;
+  return atSwap ?? keptBefore;
 }
 
 /**

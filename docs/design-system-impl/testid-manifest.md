@@ -319,7 +319,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   ships dark, ADR-053)
 - `external-conflict-banner`, `external-conflict-keep-btn`,
   `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
-  write; every format since #1238)
+  write; every format since #1238), `external-conflict-reload-anyway-btn`
+  (ADR-057 PR 3 — shown only after Reload was refused because the unsaved
+  edits could not be kept)
 - `read-only-file-banner`, `read-only-file-overwrite-btn` (absent on Windows),
   `read-only-file-dismiss-btn`, `read-only-file-live` (#2273 — ask before
   overwriting a file that is read-only on disk)

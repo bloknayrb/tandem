@@ -778,6 +778,22 @@ export const SAVEABLE_FORMATS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * True when discarding this document's unsaved edits (a reload, a restore, a
+ * close) keeps them first as a backup Version history can restore (ADR-057):
+ * a `.md`/`.txt` opened from disk and not read-only, i.e. exactly where "what
+ * the next autosave would write" exists. The server's keeps
+ * (`documents/keep-unsaved.ts`) and the editor's copy that promises them read
+ * this one predicate, so neither can say the edits are kept where they are not.
+ */
+export function keepsUnsavedEditsOnDiscard(doc: {
+  format: string;
+  source: string;
+  readOnly?: boolean;
+}): boolean {
+  return doc.source === "file" && doc.readOnly !== true && AUTO_SAVE_FORMATS.has(doc.format);
+}
+
+/**
  * True when a document may be holding edits that are not on disk — so it keeps
  * the synthesized restore prompt and the dirty external-conflict flag.
  *
