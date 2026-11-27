@@ -61,6 +61,7 @@ test-results/
 # allow-list line here.
 .claude/skills/*
 !.claude/skills/changelog/
+!.claude/skills/context-audit/
 !.claude/skills/dev-server/
 !.claude/skills/e2e/
 !.claude/skills/e2e-debug/

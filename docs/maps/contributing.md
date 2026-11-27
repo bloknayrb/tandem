@@ -84,8 +84,9 @@ Historical records kept beside them (they say so at the top):
   [E2E](../../.claude/skills/e2e/SKILL.md), [E2E debugging](../../.claude/skills/e2e-debug/SKILL.md),
   [UI inspector](../../.claude/skills/ui-inspector/SKILL.md),
   [screenshots](../../.claude/skills/screenshots/SKILL.md),
-  [changelog](../../.claude/skills/changelog/SKILL.md) and
-  [release](../../.claude/skills/release/SKILL.md).
+  [changelog](../../.claude/skills/changelog/SKILL.md),
+  [release](../../.claude/skills/release/SKILL.md) and
+  [context audit](../../.claude/skills/context-audit/SKILL.md).
 - [The shipped skill](../../skills/tandem/SKILL.md) is different: it is installed into users'
   sessions, so a stale rule there is a product bug. Bump its version when you change it.
 
