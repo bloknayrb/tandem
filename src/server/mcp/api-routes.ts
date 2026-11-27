@@ -5,6 +5,7 @@ import {
   API_ANNOTATION_REPLY,
   API_APPLY_CHANGES,
   API_BACKUPS,
+  API_BACKUPS_ACKNOWLEDGE,
   API_BACKUPS_RESTORE,
   API_CHANNEL_AWARENESS,
   API_CHANNEL_ERROR,
@@ -47,6 +48,7 @@ import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleListBackups, handleRestoreBackup } from "./routes/backups.js";
+import { handleAcknowledgeKeptEdits } from "./routes/backups-ack.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
@@ -514,6 +516,9 @@ export function registerApiRoutes(
   app.get(API_BACKUPS, mw, handleListBackups);
   app.options(API_BACKUPS_RESTORE, mw);
   app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+  // The kept-edits banner's Dismiss (ADR-057 PR 2). Same gates, in the handler.
+  app.options(API_BACKUPS_ACKNOWLEDGE, mw);
+  app.post(API_BACKUPS_ACKNOWLEDGE, mw, largeBody, handleAcknowledgeKeptEdits);
 
   // External-conflict resolution (#1069, all formats since #1238). Gated on
   // origin allowlist + loopback inside the handler (#1121 F6).

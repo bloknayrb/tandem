@@ -11,8 +11,11 @@
  * kept, the action is REFUSED with `BACKUP_FAILED` — the edits are the thing at
  * risk, so proceeding would be the loss this exists to prevent.
  *
- * Opt-in by the three tools only. The browser's own Reload, Restore and close,
- * `/api/open` and the watcher's auto-reload do not pass through here.
+ * Opt-in by the three tools, and by the browser's Version history restore
+ * (`POST /api/backups/restore`, `actor: "user"`), which keeps the edits the
+ * same way but says so in the user's own voice and marks what it kept as
+ * already seen. The browser's Reload and close, `/api/open` and the watcher's
+ * auto-reload do not pass through here.
  *
  * Covered: `.md`/`.txt` documents opened from disk (`AUTO_SAVE_FORMATS`,
  * `source: "file"`), i.e. exactly where "what the next autosave would write"
@@ -51,6 +54,14 @@ export interface KeptBackup {
 
 /** Which Claude action discarded the edits; picks the notice's wording. */
 export type DiscardingAction = "reload" | "restore" | "close";
+
+/**
+ * Who asked for the action. `claude` (an MCP tool) gets the editor notice and
+ * a note addressed to Claude; `user` (the editor's own Version history) gets
+ * neither: the user is looking at the result, and a "Claude restored…" notice
+ * would be false.
+ */
+export type KeepActor = "claude" | "user";
 
 /** The open-document fields this module reads. */
 interface DocFacts {
@@ -257,11 +268,14 @@ export function reportKeptBackupOnFailure(
   action: DiscardingAction,
   kept: KeptBackup | undefined,
   alreadyNotified = false,
+  actor: KeepActor = "claude",
 ): unknown {
   if (!kept) return err;
-  if (!alreadyNotified) notifyUnsavedEditsKept(documentId, filePath, action, kept, "failed");
+  if (!alreadyNotified && actor === "claude") {
+    notifyUnsavedEditsKept(documentId, filePath, action, kept, "failed");
+  }
   if (err instanceof Error) {
-    const note = keptBackupFailureNote(kept);
+    const note = actor === "claude" ? keptBackupFailureNote(kept) : USER_KEPT_FAILURE_NOTE;
     err.message += ` ${note}`;
     // Also carried on its own, for an error mapping that replaces the message
     // with a fixed one (`tandem_open`'s FILE_LOCKED): the note must survive it.
@@ -269,6 +283,10 @@ export function reportKeptBackupOnFailure(
   }
   return err;
 }
+
+/** The sentence a failed Version history restore's error carries when the edits were kept. */
+const USER_KEPT_FAILURE_NOTE =
+  "Your unsaved edits had been kept as a backup first; you can restore them from Version history.";
 
 /** The sentence a failed Claude action's error carries when its backup was kept. */
 function keptBackupFailureNote(kept: KeptBackup): string {

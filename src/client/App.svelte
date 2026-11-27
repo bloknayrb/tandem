@@ -44,6 +44,7 @@ import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
+import KeptEditsBanner from "./components/KeptEditsBanner.svelte";
 import LicenseBanner from "./components/LicenseBanner.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
@@ -53,6 +54,7 @@ import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
+import VersionHistoryModal from "./components/VersionHistoryModal.svelte";
 import WakeStallBanner from "./components/WakeStallBanner.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
@@ -63,6 +65,7 @@ import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
+import { bumpBackupsRevision } from "./hooks/backupsRevision.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import {
   AI_CTA,
@@ -344,8 +347,16 @@ const ownerTakeBackText = $derived(
 
 // #1123 part B, R1.2: the switch's own notices are a trigger to re-read who
 // answers chat. Called from the stream's message handler (an event handler).
+// ADR-057 PR 2: a notice that a document's backups changed, or the stream
+// reopening after a drop (whose missed notices are not replayed), makes the
+// kept-edits banner re-read them. After the R1.2 call, so a throw here can
+// never skip it.
 const notifications = createNotifications({
-  onStreamNotice: (n) => noteNotifyNotice(n.dedupKey),
+  onStreamNotice: (n) => {
+    noteNotifyNotice(n.dedupKey);
+    if (n.type === "unsaved-edits-kept" || n.type === "file-reloaded") bumpBackupsRevision();
+  },
+  onStreamOpen: bumpBackupsRevision,
 });
 // R3: the first local model's toast goes where every client toast goes, with
 // its "Use it for chat" action; the store withdraws it once chat is local.
@@ -1468,6 +1479,7 @@ const actionExecutor = mountActionExecutor({
   afterLauncherAction: refreshAiReadinessAfterLauncherAction,
   aiNotice: () => licenseStore.ui.aiNotice,
   openSettings: openSettingsModalWithAck,
+  openVersionHistory,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   openFindBar: () => {
@@ -1673,6 +1685,57 @@ $effect(() => {
 // pending badge live in `layoutModel` (ADR-037, Unit 10b).
 
 let showHelp = $state(false);
+
+// --- Version history (ADR-057 PR 2) -----------------------------------------
+// The document it was opened for, fixed while it is open: Claude switching the
+// active tab must not retarget a restore. Null when closed.
+let versionHistoryDocId = $state<string | null>(null);
+const versionHistoryOpen = $derived(versionHistoryDocId !== null);
+const versionHistoryFileName = $derived(
+  yjsSync.tabs.find((t) => t.id === versionHistoryDocId)?.fileName ?? "",
+);
+
+/**
+ * Open the Version history for `documentId`. The one entry point for the
+ * palette, the kept-edits banner and the activity tray's "View".
+ */
+function openVersionHistory(documentId: string): void {
+  // Not over another exclusive surface (the guards those surfaces keep for the
+  // palette apply here too).
+  if (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen) return;
+  if (modelPickerOpen) return;
+  if (!yjsSync.tabs.some((t) => t.id === documentId)) {
+    notifications.push({
+      id: `version-history-closed-${documentId}`,
+      type: "general-error",
+      severity: "warning",
+      message: "Reopen the document to see its version history.",
+      dedupKey: `version-history-closed:${documentId}`,
+      timestamp: Date.now(),
+    });
+    return;
+  }
+  // A restore from source view would be undone by the stale draft's next
+  // commit (see the conflict banner's mount comment below).
+  if (documentWorkspace.inSourceView) {
+    notifications.push({
+      id: "version-history-source-view",
+      type: "general-error",
+      severity: "info",
+      message: "Leave source view to use Version history.",
+      dedupKey: "version-history-source-view",
+      timestamp: Date.now(),
+    });
+    return;
+  }
+  versionHistoryDocId = documentId;
+}
+
+// The document's tab went away (closed by the user or by Claude): close too.
+$effect(() => {
+  const id = versionHistoryDocId;
+  if (id !== null && !yjsSync.tabs.some((t) => t.id === id)) versionHistoryDocId = null;
+});
 let editor = $state<TiptapEditor | null>(null);
 let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
@@ -2116,6 +2179,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     }
     // #1123 (RW-2, RW-8): its own guard line, so the pin above stays exact.
     if (!untrack(() => paletteOpen) && modelPickerOpen) return;
+    // ADR-057 PR 2: nor over the Version history. Its own line, same reason.
+    if (!untrack(() => paletteOpen) && versionHistoryOpen) return;
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -2243,6 +2308,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // #1123 (RW-2): nor behind the first-run local-model window's scrim. Its
     // own line, so the exact pin on the set above stays as it is.
     if (modelPickerOpen) return;
+    // ADR-057 PR 2: nor behind the Version history. Its own line, same reason.
+    if (versionHistoryOpen) return;
     if (!hasSelection) {
       notifications.push({
         id: `comment-shortcut-no-selection-${Date.now()}`,
@@ -3427,6 +3494,25 @@ function dismissModelPicker() {
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
+    <VersionHistoryModal
+      open={versionHistoryOpen}
+      documentId={versionHistoryDocId}
+      fileName={versionHistoryFileName}
+      onClose={() => (versionHistoryDocId = null)}
+      onRestored={(editsKept) => {
+        bumpBackupsRevision();
+        notifications.push({
+          id: generateNotificationId(),
+          type: "general-error",
+          severity: "info",
+          message: editsKept
+            ? "Restored. Your unsaved edits were kept as a backup in Version history."
+            : "Restored.",
+          timestamp: Date.now(),
+        });
+      }}
+    />
+
     {#if shouldShowWizard}
       <IntegrationWizardModal
         open={true}
@@ -3484,6 +3570,10 @@ function dismissModelPicker() {
       onAction={(item) => {
         const action = resolveActivityAction(item);
         if (!action) return;
+        if (action.kind === "view-backups") {
+          openVersionHistory(action.documentId);
+          return;
+        }
         // The failed doc may have been closed since the error fired; triggerSave
         // would silently skip a closed doc, so tell the user to reopen instead.
         if (yjsSync.tabs.some((t) => t.id === action.documentId)) {
@@ -3688,6 +3778,19 @@ function dismissModelPicker() {
           ydoc={activeTab.ydoc}
           documentId={activeTab.id}
           fileName={activeTab.fileName}
+        />
+      {/key}
+    {/if}
+    <!-- ADR-057 PR 2: Claude kept this document's unsaved edits. Per-tab remount
+         like the banners above. Not in source view, for the conflict banner's
+         reason: its Version history leads to a restore a stale source-view
+         draft would undo. -->
+    {#if activeTab && !documentWorkspace.inSourceView}
+      {#key activeTab.id}
+        <KeptEditsBanner
+          documentId={activeTab.id}
+          fileName={activeTab.fileName}
+          onOpenHistory={openVersionHistory}
         />
       {/key}
     {/if}

@@ -59,6 +59,20 @@ const DOC_BACKUP_DIR_NAME = "doc-backups";
 /** Records the original absolute path inside each per-path subdir. */
 const SOURCE_MARKER_FILENAME = "source.txt";
 
+/**
+ * Which `unsaved` snapshots the user has already been told about, per path
+ * (PR 2 of ADR-057): `{"acked": {"<snapshot name>": <ms>}}`. A snapshot is
+ * acknowledged when its name is here with the millisecond its mtime carries
+ * now, so a snapshot touched later (a byte-identical re-keep by a new Claude
+ * action) is news again, and a clock that moved backwards cannot hide a new
+ * one. Never matches `SNAPSHOT_TAIL_RE`, so prune, listing and restore never
+ * treat it as a snapshot; the sweep removes it with its directory.
+ */
+const KEPT_ACK_FILENAME = "kept-ack.json";
+
+/** A larger ack file is not one this module wrote: read it as empty. */
+const KEPT_ACK_MAX_BYTES = 64 * 1024;
+
 /** Keep at most this many snapshots per document path, per kind. */
 export const MAX_DOC_BACKUPS = 3;
 
@@ -788,7 +802,14 @@ async function writeSnapshotFile(
   // below an older one taken in the same second. Per kind, so neither kind can
   // evict the other (ADR-057). The pinned snapshots are kept beyond the cap and
   // do not count toward it.
-  const olderNewestFirst = await sortByMtimeNewestFirst(subdir, existing);
+  // An `unsaved` snapshot the user has not been told about yet outranks one
+  // they have (`kept-ack.json`): the edits a Claude action kept stay until the
+  // user has seen them, however many of the user's own restores keep edits
+  // after them. The cap is unchanged; only who goes first.
+  const olderNewestFirst =
+    kind === "unsaved"
+      ? await unacknowledgedFirst(subdir, await sortByMtimeNewestFirst(subdir, existing))
+      : await sortByMtimeNewestFirst(subdir, existing);
   const all = [snapshotName, ...olderNewestFirst].filter((name) => !pinned.includes(name));
   for (const name of all.slice(MAX_DOC_BACKUPS)) {
     await fs
@@ -796,6 +817,154 @@ async function writeSnapshotFile(
       .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
   }
   return snapshotPath;
+}
+
+// ---------------------------------------------------------------------------
+// Which kept edits the user has been told about (kept-ack.json)
+// ---------------------------------------------------------------------------
+
+/** The listing's millisecond for an mtime: what `listDocBackups`' ISO timestamp parses back to. */
+function listedMs(mtimeMs: number): number {
+  return Math.floor(mtimeMs);
+}
+
+/**
+ * Read a subdir's ack map. Any failure — missing, unreadable (the #1299 ACL
+ * case), oversized, not JSON, wrong shape — reads as nothing acknowledged, so
+ * it fails toward telling the user again, never toward hiding kept edits.
+ */
+async function readAckMap(subdir: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    const file = path.join(subdir, KEPT_ACK_FILENAME);
+    if ((await fs.stat(file)).size > KEPT_ACK_MAX_BYTES) return out;
+    const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
+    const acked = (parsed as { acked?: unknown } | null)?.acked;
+    if (acked === null || typeof acked !== "object" || Array.isArray(acked)) return out;
+    for (const [name, ms] of Object.entries(acked as Record<string, unknown>)) {
+      if (typeof ms === "number" && Number.isFinite(ms) && ms >= 0) out.set(name, ms);
+    }
+  } catch {
+    // Read as empty: see above.
+  }
+  return out;
+}
+
+/** Serializes ack read-modify-writes per subdir within this process. */
+const ackChains = new Map<string, Promise<unknown>>();
+
+function withAckLock<T>(subdir: string, fn: () => Promise<T>): Promise<T> {
+  const prev = ackChains.get(subdir) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const settled = next.catch(() => {});
+  ackChains.set(subdir, settled);
+  void settled.then(() => {
+    if (ackChains.get(subdir) === settled) ackChains.delete(subdir);
+  });
+  return next;
+}
+
+/**
+ * `names` (newest first) reordered so the unacknowledged come before the
+ * acknowledged, each group keeping its order. For the `unsaved` prune.
+ */
+async function unacknowledgedFirst(subdir: string, names: string[]): Promise<string[]> {
+  const acked = await readAckMap(subdir);
+  if (acked.size === 0) return names;
+  const unacked: string[] = [];
+  const done: string[] = [];
+  for (const name of names) {
+    let isAcked = false;
+    const ms = acked.get(name);
+    if (ms !== undefined) {
+      try {
+        isAcked = listedMs((await fs.stat(path.join(subdir, name))).mtimeMs) === ms;
+      } catch {
+        // Raced away: its place in the order no longer matters.
+      }
+    }
+    (isAcked ? done : unacked).push(name);
+  }
+  return [...unacked, ...done];
+}
+
+/** The edits a Claude action kept that the user has not been told about yet. */
+export interface KeptEditsNotice {
+  /** The newest such snapshot. */
+  name: string;
+  /** Its timestamp, as `listDocBackups` reports it. */
+  timestamp: string;
+  /** Every such snapshot, newest first: what a Dismiss acknowledges. */
+  names: string[];
+}
+
+/**
+ * The `unsaved` snapshots in `backups` (a `listDocBackups` result for
+ * `filePath`) the user has not acknowledged, or null when there are none.
+ */
+export async function keptEditsNotice(
+  filePath: string,
+  appDataDir: string,
+  backups: ReadonlyArray<DocBackupSnapshot>,
+): Promise<KeptEditsNotice | null> {
+  const unsaved = backups.filter((b) => b.kind === "unsaved");
+  if (unsaved.length === 0) return null;
+  const acked = await readAckMap(path.join(docBackupsRoot(appDataDir), docHash(filePath)));
+  const pending = unsaved.filter((b) => acked.get(b.name) !== Date.parse(b.timestamp));
+  if (pending.length === 0) return null;
+  return {
+    name: pending[0].name,
+    timestamp: pending[0].timestamp,
+    names: pending.map((b) => b.name),
+  };
+}
+
+/**
+ * Record that the user has been told about the `unsaved` snapshots `names` of
+ * `filePath`, as they are now. Names are matched by string equality against
+ * the current listing, so caller-supplied text never reaches the file system;
+ * a name that is not a current `unsaved` snapshot is ignored. Entries for
+ * snapshots no longer listed are dropped. Never creates the backup directory.
+ * Returns whether any name was acknowledged. Never throws: a failed write is
+ * logged, and the user is told again — the failure direction that loses
+ * nothing.
+ */
+export async function acknowledgeKeptEdits(
+  filePath: string,
+  appDataDir: string,
+  names: ReadonlyArray<string>,
+): Promise<boolean> {
+  const subdir = path.join(docBackupsRoot(appDataDir), docHash(filePath));
+  try {
+    return await withAckLock(subdir, async () => {
+      const listing = await listDocBackups(filePath, appDataDir);
+      const unsaved = new Map(
+        listing.filter((b) => b.kind === "unsaved").map((b) => [b.name, Date.parse(b.timestamp)]),
+      );
+      const wanted = new Set(names);
+      const previous = await readAckMap(subdir);
+      const next: Record<string, number> = {};
+      let matched = false;
+      for (const [name, ms] of unsaved) {
+        if (wanted.has(name)) {
+          next[name] = ms;
+          matched = true;
+        } else if (previous.has(name)) {
+          next[name] = previous.get(name) as number;
+        }
+      }
+      if (!matched) return false;
+      await fs.writeFile(
+        path.join(subdir, KEPT_ACK_FILENAME),
+        `${JSON.stringify({ acked: next })}\n`,
+        { mode: 0o600 },
+      );
+      return true;
+    });
+  } catch (err) {
+    console.error("[DocBackup] could not record the acknowledged kept edits of %s:", filePath, err);
+    return false;
+  }
 }
 
 /** The result of `snapshotUnsavedEdits`. `name`/`timestamp` are set when a snapshot holds the edits. */
@@ -984,6 +1153,12 @@ export async function sweepDocBackups(
       // plain rmdir on a non-empty dir throws ENOTEMPTY, which is the
       // expected "keep" signal for stray files. Anything else (EACCES,
       // EPERM) is a real problem worth a log line.
+      await fs.rm(path.join(subPath, KEPT_ACK_FILENAME), { force: true }).catch((err) => {
+        console.error(
+          `[DocBackup] sweep: failed to remove ${KEPT_ACK_FILENAME} in ${subPath}:`,
+          err,
+        );
+      });
       await fs.rm(path.join(subPath, SOURCE_MARKER_FILENAME), { force: true }).catch((err) => {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
           console.error(`[DocBackup] sweep: failed to remove source.txt in ${subPath}:`, err);

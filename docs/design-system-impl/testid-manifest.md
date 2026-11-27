@@ -323,6 +323,13 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `read-only-file-banner`, `read-only-file-overwrite-btn` (absent on Windows),
   `read-only-file-dismiss-btn`, `read-only-file-live` (#2273 — ask before
   overwriting a file that is read-only on disk)
+- `kept-edits-banner`, `kept-edits-banner-view`, `kept-edits-banner-dismiss`,
+  `kept-edits-live` (ADR-057 PR 2 — Claude kept this document's unsaved edits)
+- `version-history-modal`, `version-history-close`, `version-history-row`,
+  `version-history-restore`, `version-history-confirm`, `version-history-cancel`,
+  `version-history-row-error`, `version-history-restore-anyway`,
+  `version-history-error`, `version-history-retry`, `version-history-empty`,
+  `version-history-live` (ADR-057 PR 2 — every backup of a document, restorable by name)
 - `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
   minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`
   it is a projection of live state rather than an event, so it erases itself
