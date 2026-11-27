@@ -38,9 +38,7 @@ NUDGE_MARK="${STATE_DIR}/nudged-simplify-${EDIT_TS}"
 [[ -f "$NUDGE_MARK" ]] && exit 0
 : > "$NUDGE_MARK"
 
-cat >&2 <<'EOF'
-⚠ Source edits since last /simplify run. Consider /simplify before committing.
-   This is a one-shot reminder; the commit will proceed.
-EOF
+# As context the model sees, not stderr (see _ws_emit_context).
+_ws_emit_context PreToolUse "Source edits since the last /simplify run. Consider /simplify before committing. (One-shot reminder; the commit proceeds.)"
 
 exit 0

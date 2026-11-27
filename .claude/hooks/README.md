@@ -4,16 +4,16 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 **Hook semantics:**
 - `PreToolUse` hooks exit `2` to block the tool call. **A blocking hook writes its reason to stderr**: on exit 2 the model is shown stderr and nothing else, so a reason on stdout blocks the call and explains nothing. The reason names the hook and says what to do next. `tests/scripts/blocking-hooks.test.ts` runs the hooks and pins both.
-- `PostToolUse` hooks exit `0` (warnings only — they emit to stderr but never block).
+- `PostToolUse` hooks exit `0` (warnings only — they emit to stderr but never block). On exit 0 that stderr is shown to the user, not the model, so these warnings do not reach the agent that made the edit; they are not checks (ADR-058).
 - **Exception: `check-token-violation.sh` exits `2` on a violation and carries `continueOnBlock: true` in `.claude/settings.json`, which turns that exit-2 into an in-turn self-correction rather than a halted turn** — see the script's own header comment. It is the one `PostToolUse` hook that does not follow the blanket exit-`0` rule above.
-- Workflow-nudge hooks emit stderr and never block.
+- Workflow-nudge hooks never block, and speak to the model through `_ws_emit_context` (`hookSpecificOutput.additionalContext` JSON on stdout). On exit 0 Claude Code shows stderr to the user only, never the model, so a nudge on stderr reached nobody who could act on it. `tests/scripts/hook-nudge-context.test.ts` fails on a `nudge-*.sh` that writes stderr itself.
 - Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days via `sessionstart-prune-state.sh`).
 
 ## Inventory (19 scripts + 1 `.mjs` helper)
 
 ### Shared / helper
 
-- **`_workflow-state.sh`** — Shared helpers for workflow-nudge hooks. Sourced, not executed.
+- **`_workflow-state.sh`** — Shared helpers for workflow-nudge hooks, including `_ws_emit_context` (one JSON object per run: jq, then node, then stderr as a last resort). Sourced, not executed.
 
 ### SessionStart
 

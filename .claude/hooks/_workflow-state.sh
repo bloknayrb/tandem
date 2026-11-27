@@ -119,3 +119,29 @@ _ws_is_tier_a_edit() {
   # Name the non-A answers, so empty or unexpected output means Tier A.
   [[ "$tier" != "B" && "$tier" != "outside" ]]
 }
+
+# Emit $2 as context the model sees, for hook event $1 (PreToolUse,
+# PostToolUse, Stop): hookSpecificOutput.additionalContext JSON on stdout.
+# Stderr on exit 0 is shown to the user only, never the model, so a nudge
+# written there reaches nobody who can act on it. Call at most once per hook
+# run (two JSON objects on stdout are not valid output): collect messages and
+# emit them together. jq builds the JSON, then node; stderr is the last resort
+# so a reminder is never silently dropped. An empty $2 emits nothing.
+_ws_emit_context() {
+  local event="$1" text="${2:-}"
+  [[ -n "$text" ]] || return 0
+  if command -v jq >/dev/null 2>&1 \
+    && jq -cn --arg e "$event" --arg ctx "$text" \
+      '{hookSpecificOutput:{hookEventName:$e,additionalContext:$ctx}}' 2>/dev/null; then
+    return 0
+  fi
+  if printf '%s' "$text" | WS_EVENT="$event" node -e "
+    let d='';
+    process.stdin.on('data', c => d += c);
+    process.stdin.on('end', () => process.stdout.write(JSON.stringify(
+      { hookSpecificOutput: { hookEventName: process.env.WS_EVENT, additionalContext: d } }) + '\n'));
+  " 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$text" >&2
+}

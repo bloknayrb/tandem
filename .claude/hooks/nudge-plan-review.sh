@@ -9,6 +9,11 @@ trap 'exit 0' ERR
 # shellcheck source=_workflow-state.sh
 source "$(dirname "$0")/_workflow-state.sh"
 
+# Every reminder this run produces is collected in CTX and emitted once, on
+# exit, as context the model sees (see _ws_emit_context).
+CTX=""
+trap '_ws_emit_context PreToolUse "$CTX"' EXIT
+
 INPUT=$(cat)
 SESSION_ID=$(_ws_session_id "$INPUT")
 STATE_DIR=$(_ws_state_dir "$SESSION_ID")
@@ -42,17 +47,7 @@ if [[ -n "$FILE_PATH" ]]; then
   if [[ ! -f "${STATE_DIR}/${_WS_MARK_PLAN_WRITE}" && ! -f "$TIER_MARK" ]] \
     && _ws_is_tier_a_edit "$FILE_PATH" "$EXISTED" "$CREATED_LIST"; then
     : > "$TIER_MARK"
-    REMINDER="Tier A edit with no plan this session: ${FILE_PATH}. Per CLAUDE.md's workflow (ADR-058), a change touching anything off the Tier B allowlist in .claude/review-tiers.json gets a plan and adversarial agent review before code. (One-shot reminder for this session.)"
-    # As real context for the model (hookSpecificOutput.additionalContext on
-    # stdout), not stderr, which Claude Code does not show the model on exit 0.
-    # Same pattern and jq fallback as stop-cycle-check.sh.
-    if command -v jq >/dev/null 2>&1 \
-      && jq -n --arg ctx "$REMINDER" \
-        '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$ctx}}'; then
-      :
-    else
-      printf '%s\n' "$REMINDER" >&2
-    fi
+    CTX="Tier A edit with no plan this session: ${FILE_PATH}. Per CLAUDE.md's workflow (ADR-058), a change touching anything off the Tier B allowlist in .claude/review-tiers.json gets a plan and adversarial agent review before code. (One-shot reminder for this session.)"
   fi
 fi
 
@@ -78,10 +73,7 @@ NUDGE_MARK="${STATE_DIR}/nudged-plan-${PLAN_HASH}"
 [[ -f "$NUDGE_MARK" ]] && exit 0
 : > "$NUDGE_MARK"
 
-cat >&2 <<'EOF'
-⚠ Plan written this session but no Agent tool calls since.
-   Per CLAUDE.md workflow: dispatch adversarial agents to review the plan before writing code.
-   (One-shot reminder. Run any Agent tool to suppress for this plan.)
-EOF
+CTX="${CTX:+$CTX
+}Plan written this session but no Agent tool calls since. Per CLAUDE.md's workflow, dispatch adversarial agents to review the plan before writing code. (One-shot reminder; any Agent tool call suppresses it for this plan.)"
 
 exit 0

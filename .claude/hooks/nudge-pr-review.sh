@@ -5,6 +5,9 @@
 set -uo pipefail
 trap 'exit 0' ERR
 
+# shellcheck source=_workflow-state.sh
+source "$(dirname "$0")/_workflow-state.sh"
+
 INPUT=$(cat)
 
 # Fast path: only consider Bash tool calls. Avoids matching commit-message
@@ -42,9 +45,7 @@ if [[ -n "$EXIT_CODE" && "$EXIT_CODE" != "0" ]]; then
   exit 0
 fi
 
-cat >&2 <<'EOF'
-✓ PR opened. Next step per CLAUDE.md workflow: /pr-review-toolkit:review-pr.
-   When review feedback lands, plan the fixes and have agents review the plan before implementing.
-EOF
+# As context the model sees, not stderr (see _ws_emit_context).
+_ws_emit_context PostToolUse "PR opened. Next step per CLAUDE.md's workflow: /pr-review-toolkit:review-pr. When review feedback lands, plan the fixes and have agents review the plan before implementing."
 
 exit 0

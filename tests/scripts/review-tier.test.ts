@@ -130,10 +130,8 @@ describe.skipIf(process.platform === "win32")("nudge-plan-review.sh tier branch"
         tool_input: { file_path: file },
       }),
     });
-  const hasJq = spawnSync("bash", ["-c", "command -v jq"]).status === 0;
-  /** The reminder the model would see: stdout JSON, or the stderr fallback without jq. */
+  /** The reminder the model would see: the stdout JSON (jq or node builds it). */
   const reminder = (run: ReturnType<typeof runHook>): string => {
-    if (!hasJq) return run.stderr;
     if (run.stdout.trim() === "") return "";
     const out = JSON.parse(run.stdout) as {
       hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
