@@ -225,6 +225,12 @@ interface SupervisorOpts {
    */
   backoffResetMs?: number;
   /**
+   * Override for `EXIT_STREAM_DRAIN_MS`, the longest an exit verdict waits for
+   * the child's stdout and stderr to end (#2358 S2), so a test of a pipe that
+   * never ends can wait it out in milliseconds.
+   */
+  exitStreamDrainMs?: number;
+  /**
    * Seam onto the `launcher-settings.json` read (#2195), so a test can make it
    * fail the way a held file does on Windows without racing an antivirus.
    * Defaults to `readLauncherSettings(integrationsBase)`.
@@ -509,8 +515,11 @@ export interface TandemPresenceSeam {
   /**
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
-   * **Called synchronously from the judging site**: inside the child's exit
-   * handler (site a), just before a stop releases the spawn's turn delivery
+   * **Called synchronously from the judging site**: the child's exit verdict
+   * (site a) — inside its exit handler, or, for a resumed, unconfirmed,
+   * non-zero exit whose output had not ended, up to `exitStreamDrainMs` later
+   * from a stream's end or the drain timer, after the restart is scheduled
+   * (#2358 S2) — just before a stop releases the spawn's turn delivery
    * (site b), while `activeTurnDelivery` may still point at the spawn being
    * torn down, or from the bind window's timer when it expires (site c). At
    * site (c) the spawn is not torn down — teardown cancels that timer — so
@@ -748,6 +757,16 @@ const SESSION_FILE_NAME = "launcher-session.json";
  * machine) — the old 5 s grace window was shorter than that probe, causing
  * the stale session to never be cleared (issue #1169). */
 export const RESUME_CONFIRM_MS = 30_000;
+/**
+ * The longest a resumed, unconfirmed exit's verdict waits for the child's
+ * stdout and stderr to end (#2358 S2). Node may emit `exit` before the last
+ * stream data is read, and a doomed `--resume` writes its "No conversation
+ * found" message and exits at once, so judging on `exit` alone would miss it.
+ * Bounded because a pipe can stay open past the exit (a grandchild holding
+ * it), and the restart must not wait on that. In practice both streams end
+ * within milliseconds of the exit.
+ */
+const EXIT_STREAM_DRAIN_MS = 1_000;
 const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
 
 /** How long after a delivery kill (#1867/#1868) the status keeps reading
@@ -1070,8 +1089,11 @@ export type SupervisorStatus =
  *     start with the phrase itself. Not anywhere in it: an errored envelope's `result` can carry a
  *     quoted log line ("I saw: [Claude] Output error: No conversation…"), and
  *     that is not Claude's verdict on this spawn;
- *   - the same text must also name THIS spawn's session id, so only a verdict
- *     about the conversation being resumed can clear it.
+ *   - THIS spawn's session id must follow the phrase directly (after an
+ *     optional colon, whitespace and opening quote), so only a verdict about
+ *     the conversation being resumed can clear it. Not merely somewhere in the
+ *     line: stderr also carries what Claude's MCP children print, and a line
+ *     naming another id with ours later in it is not about ours.
  * A false match loses a live conversation; a miss costs one retry. If Claude
  * Code rewords or re-prefixes the message, this stops matching and a doomed
  * resume's exit reads as unexplained: kept once, then cleared on the second
@@ -1079,9 +1101,10 @@ export type SupervisorStatus =
  * doomed retry and its backoff.
  */
 export function saysNoConversation(text: string, sessionId: string): boolean {
-  return (
-    NO_CONVERSATION_AT_START.test(text) && text.toLowerCase().includes(sessionId.toLowerCase())
-  );
+  const phrase = NO_CONVERSATION_AT_START.exec(text);
+  if (phrase === null) return false;
+  const named = text.slice(phrase[0].length).replace(/^\s*:?\s*["'`]?/, "");
+  return named.toLowerCase().startsWith(sessionId.toLowerCase());
 }
 /** Leading whitespace and SGR colour codes, then at most one label — a single
  * word and a colon (`Error:`) or a short bracketed tag (`[error]`) — then the
@@ -1103,11 +1126,14 @@ const NO_CONVERSATION_AT_START =
  *     `saysNoConversation`): clear at once, whatever the code. That is the
  *     doomed `--resume` this gate exists for, and the message is the CLI's
  *     own word on it, so even an exit we caused cannot make it wrong.
- *   - an intentional kill of ours (`commandedKill`): keep, every time and
- *     whatever the code, without spending the retry below. Our own kill says
- *     nothing about whether the conversation exists, and it is never an
- *     automatic loop: each one is a Restart, relaunch, stop, Off, idle stop or
- *     the sign-in kill.
+ *   - an intentional kill of ours that ended the way our kill ends
+ *     (`isOurKillExit`: `commandedKill` AND the code is our SIGTERM's 143 or
+ *     its escalation's 137): keep, every time, without spending the retry
+ *     below. Our own kill says nothing about whether the conversation
+ *     exists, and it is never an automatic loop: each one is a Restart,
+ *     relaunch, stop, Off, idle stop or the sign-in kill. Any other code under
+ *     a kill of ours is Claude's own exit, which the kill merely raced (a
+ *     doomed exit 1 landing as the user clicks Restart), and falls through.
  *   - any other non-zero exit: keep ONCE, so a one-off death resumes the same
  *     conversation; clear when an earlier resume of the same session id
  *     already died that way (`priorUncommandedDeaths >= 1`). No exit code
@@ -1120,7 +1146,8 @@ const NO_CONVERSATION_AT_START =
  *     reaper's own setup failures, and 127 its failed exec of a command
  *     resolved moments earlier (a missing CLI, not a missing conversation).
  *     A doomed resume whose message this build no longer matches, or whose
- *     message lands after its exit, lands here too. Keeping it
+ *     output did not end within `EXIT_STREAM_DRAIN_MS` of its exit, lands
+ *     here too. Keeping it
  *     unconditionally loops forever on a session that kills Claude every
  *     time it loads (a V8 abort on a huge transcript, 134) or fails to load
  *     for a reason the message does not name: each death lands inside the
@@ -1154,14 +1181,28 @@ export function shouldClearSession(opts: {
     return false;
   }
   if (opts.noConversationFound) return true;
-  if (opts.commandedKill) return false;
+  if (isOurKillExit(opts.code, opts.commandedKill)) return false;
   return opts.priorUncommandedDeaths >= 1;
+}
+
+/**
+ * Did this exit come from an intentional kill of ours? The supervisor sends
+ * the reaper SIGTERM only, which it forwards and escalates to SIGKILL after
+ * its grace (`reaper/src/linux.rs`), so our kill relays as 143 or 137 and
+ * nothing else on Linux and macOS. (A `null` code — the reaper itself killed,
+ * as every kill on Windows is — never reaches here: it is kept outright.)
+ * `commandKill` records the kill whenever the reaper has not yet exited, even
+ * if Claude already had, so the code is what proves our kill ended it.
+ */
+function isOurKillExit(code: number | null, commandedKill: boolean): boolean {
+  return commandedKill && (code === 128 + 15 || code === 128 + 9);
 }
 
 /** The one-retry half of `shouldClearSession`: true when this exit is kept
  * only on that allowance, so the caller counts it — a resumed, unconfirmed,
  * non-zero exit that neither carried the no-conversation message nor came
- * from an intentional kill of ours. Our own kill never spends the retry. */
+ * from an intentional kill of ours (`isOurKillExit`). Our own kill never
+ * spends the retry. */
 function isUncommandedResumeDeath(opts: {
   resuming: boolean;
   code: number | null;
@@ -1175,7 +1216,7 @@ function isUncommandedResumeDeath(opts: {
     opts.code !== null &&
     opts.code !== 0 &&
     !opts.noConversationFound &&
-    !opts.commandedKill
+    !isOurKillExit(opts.code, opts.commandedKill)
   );
 }
 
@@ -1563,6 +1604,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
   const resumeConfirmMs = opts.resumeConfirmMs ?? RESUME_CONFIRM_MS;
   const backoffResetMs = opts.backoffResetMs ?? RESUME_CONFIRM_MS;
+  const exitStreamDrainMs = opts.exitStreamDrainMs ?? EXIT_STREAM_DRAIN_MS;
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -1632,6 +1674,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    */
   let lastRefusal: AiRefusal | null = null;
   let child: ChildProcess | null = null;
+  /** The last process to become `child`. Unlike `child`, never nulled by an
+   * exit, so an exit verdict that waited for its streams (#2358 S2) can tell
+   * whether another spawn started in the meantime. */
+  let latestSpawned: ChildProcess | null = null;
+  /** The current spawn's exit verdict still waiting for its streams to end
+   * (#2358 S2; a superseded spawn's never takes this slot),
+   * settled when it has run. `buildPlan` awaits it before reading the saved
+   * session, so the next spawn never resumes a session that verdict clears.
+   * Bounded by `exitStreamDrainMs`. */
+  let pendingExitVerdict: Promise<void> | null = null;
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
   /** Wall-clock start of the current spawn. Lets the status route tell this
@@ -3233,6 +3285,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!integration) return null;
 
     const { cwd, fromOverride, workingDirectoryIgnored } = resolveCwd(integration, cwdOverride);
+    // The last exit's verdict may clear the session; let it land first.
+    if (pendingExitVerdict !== null) await pendingExitVerdict;
     const saved = readSavedSession();
 
     // The resume decision is made HERE, against the planned cwd, rather than at
@@ -3326,6 +3380,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       throw err;
     }
     child = spawned;
+    latestSpawned = spawned;
     markFactsDirty();
     if (run) {
       // The child is started: this spawn is now the current one (Terms), and
@@ -3429,11 +3484,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     let resumeConfirmed = !plan.resuming;
     /** Claude said it has no conversation under this spawn's id
      * (`saysNoConversation`), on stderr or in a `result` envelope. Read once,
-     * by the exit handler. Node may emit `exit` before the last stream data is
-     * read; a message that loses that race reads as an unexplained exit, which
-     * is kept once and cleared on the next doomed resume — the same fail-safe
-     * path as a reworded message. */
+     * by the exit verdict, which waits for both streams to end when this could
+     * still decide it (`exitStreamDrainMs`). */
     let noConversationFound = false;
+    /** Whether each of the child's output streams has ended or closed. An
+     * absent stream counts as ended. */
+    let stdoutSettled = !spawned.stdout;
+    let stderrSettled = !spawned.stderr;
+    /** The exit verdict waiting for both streams to settle, if any. */
+    let onStreamsSettled: (() => void) | null = null;
+    const streamSettled = (which: "stdout" | "stderr"): void => {
+      if (which === "stdout") stdoutSettled = true;
+      else stderrSettled = true;
+      if (stdoutSettled && stderrSettled && onStreamsSettled !== null) {
+        const decide = onStreamsSettled;
+        onStreamsSettled = null;
+        decide();
+      }
+    };
     const noteNoConversation = (text: string): void => {
       if (!noConversationFound && saysNoConversation(text, plan.sessionId)) {
         noConversationFound = true;
@@ -4089,7 +4157,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     spawned.stdout?.on("data", (text: string) => stdoutFramer.push(text));
     // A stream can end mid-line (no trailing newline). Without this the last
     // message — often the `result` envelope — would never be seen.
-    spawned.stdout?.on("end", () => stdoutFramer.flush());
+    // `close` too: a destroyed stream closes without ending. Both are
+    // idempotent, and either one releases a waiting exit verdict.
+    const stdoutDone = () => {
+      stdoutFramer.flush();
+      streamSettled("stdout");
+    };
+    spawned.stdout?.on("end", stdoutDone);
+    spawned.stdout?.on("close", stdoutDone);
 
     // stderr is line-buffered for the same reason stdout is: a per-chunk
     // console.error splits one Claude diagnostic across two log lines and
@@ -4103,7 +4178,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       noteNoConversation(text);
     });
     spawned.stderr?.on("data", (text: string) => stderrFramer.push(text));
-    spawned.stderr?.on("end", () => stderrFramer.flush());
+    const stderrDone = () => {
+      stderrFramer.flush();
+      streamSettled("stderr");
+    };
+    spawned.stderr?.on("end", stderrDone);
+    spawned.stderr?.on("close", stderrDone);
 
     spawned.on("error", (err: NodeJS.ErrnoException) => {
       // A child `error` is not a failed bind (#2358 PR 3b-1, Ruling O).
@@ -4171,69 +4251,75 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
       const wasCurrent = child === spawned;
-      // The verdict, computed once: the clear below and judging site (a) must
-      // agree, and the counter it reads is updated in between.
-      const exitShape = {
-        resuming: plan.resuming,
-        code,
-        resumeConfirmed,
-        commandedKill: commandedKills.has(spawned),
-        noConversationFound,
-      };
-      const priorUncommandedDeaths =
-        uncommandedDeaths?.sessionId === plan.sessionId ? uncommandedDeaths.count : 0;
-      const clearSession = shouldClearSession({ ...exitShape, priorUncommandedDeaths });
-      // A superseded spawn's verdict must not act on state the successor now
+      // A superseded spawn's exit must not act on state the successor now
       // owns (#1995): neither the timer slot this spawn no longer holds, nor
-      // the single `launcher-session.json` the successor is running on. Both
-      // sit inside the identity guard for that reason.
+      // the single `launcher-session.json` the successor is running on.
       if (wasCurrent) {
         child = null;
         markFactsDirty();
-
         // Cancel the confirmation timer — the process has already exited.
         if (confirmTimer) {
           clearTimeout(confirmTimer);
           confirmTimer = null;
         }
-
-        // If the resume failed before being confirmed, drop the stale session so
-        // the next restart goes fresh: at once when Claude said the
-        // conversation is not there. Anything else keeps it: the reaper's own
-        // signal death (`code` null) and an intentional kill of ours always,
-        // any other non-zero exit — a crash, an outside or fault kill, a
-        // Windows kill's 1, a native crash's byte — once (`shouldClearSession`).
-        // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
-        // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
-        // was set (5 s), so the session was never cleared (issue #1169).
-        if (clearSession) {
-          console.error(
-            `[Launcher] Resume failed before confirmation — clearing saved session (${
-              noConversationFound ? "Claude has no such conversation" : `code=${code}`
-            })`,
-          );
-          clearSavedSession();
-          uncommandedDeaths = null;
-        } else if (isUncommandedResumeDeath(exitShape)) {
-          uncommandedDeaths = { sessionId: plan.sessionId, count: priorUncommandedDeaths + 1 };
-          console.error(
-            `[Launcher] Resumed Claude died before confirmation (code=${code}) without saying the conversation is missing — keeping the saved session for one more resume`,
-          );
-        }
       }
-      // Judging site (a) (#2358 PR 3b-1, R1.4): here, with the exit code in
-      // hand. The #1169 shape — an exit that clears the saved session
-      // (`shouldClearSession`) — is never judged; its record is torn down now,
-      // so no later release judges it either. An exit that keeps the session
-      // (a null code, an intentional kill of ours, or a first unexplained
-      // non-zero exit — a fault kill's 143 on Linux and a Windows kill's 1
-      // among them) is not that shape and is judged.
-      if (record !== null && judgeable(record) && !clearSession) {
-        try {
-          failBind(record, "torn-down-unbound");
-        } catch (err) {
-          console.error("[Launcher] Bind judgement failed (ignored):", err);
-        }
+      // Read now, at the exit: a superseded spawn's leaked confirmation timer
+      // must not flip it while the verdict waits for the streams.
+      const confirmedAtExit = resumeConfirmed;
+      const commandedKill = commandedKills.has(spawned);
+
+      // The verdict waits for stdout and stderr to end when Claude's message
+      // could still change it (#2358 S2): Node may emit `exit` before the last
+      // stream data is read, and a doomed `--resume` writes its message and
+      // exits at once. Only then: every other exit's verdict cannot depend on
+      // the message, so it keeps its synchronous timing. Bounded by
+      // `exitStreamDrainMs`, so a pipe a grandchild holds open cannot stall
+      // the next spawn; past it, the verdict is made on what arrived.
+      //
+      // The restart below is still scheduled now, so "a restart is underway"
+      // (`restartTimer`, presence, `restartPending`) reads exactly as before.
+      // What waits is the next spawn's plan: `buildPlan` awaits
+      // `pendingExitVerdict` before it reads the saved session, so no spawn —
+      // the restart, or a user's Start in the window — can resume a session
+      // this verdict is about to clear.
+      const messageCouldDecide =
+        plan.resuming && !confirmedAtExit && code !== null && code !== 0 && !noConversationFound;
+      if (!messageCouldDecide || (stdoutSettled && stderrSettled)) {
+        judgeExit();
+      } else {
+        let release!: () => void;
+        const verdict = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        // Only the current spawn's verdict gates the next plan: it is the only
+        // one that can clear the session (`stillLatest`). A superseded spawn's
+        // late exit must not take the single slot, or it would replace the
+        // current spawn's still-pending verdict there, and a `buildPlan`
+        // awaiting it could read a session that verdict is about to clear.
+        if (wasCurrent) pendingExitVerdict = verdict;
+        const settle = () => {
+          try {
+            judgeExit();
+          } finally {
+            if (pendingExitVerdict === verdict) pendingExitVerdict = null;
+            release();
+          }
+        };
+        const drainTimer = setTimeout(() => {
+          if (onStreamsSettled === null) return;
+          onStreamsSettled = null;
+          console.error(
+            `[Launcher] Claude's output did not end within ${exitStreamDrainMs}ms of its exit — judging the exit on what arrived`,
+          );
+          settle();
+        }, exitStreamDrainMs);
+        // Never what keeps the process alive: with nothing else running there
+        // is no next plan to hold back.
+        drainTimer.unref?.();
+        onStreamsSettled = () => {
+          clearTimeout(drainTimer);
+          settle();
+        };
       }
 
       // Only the CURRENT spawn's exit may restart anything. A superseded one has
@@ -4273,6 +4359,68 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
 
       scheduleRestart();
+
+      /** Everything that depends on the exit's verdict: the session clear, the
+       * retry counter and judging site (a). Synchronous in the exit unless it
+       * waits for the streams (above). */
+      function judgeExit(): void {
+        // Still the latest spawn: current at the exit, and no other spawn
+        // started since. The same #1995 rule as `wasCurrent`; held across a
+        // wait as defence in depth, since `buildPlan` already holds the next
+        // spawn back until this runs.
+        const stillLatest = wasCurrent && latestSpawned === spawned;
+        // The verdict, computed once: the clear below and judging site (a) must
+        // agree, and the counter it reads is updated in between.
+        const exitShape = {
+          resuming: plan.resuming,
+          code,
+          resumeConfirmed: confirmedAtExit,
+          commandedKill,
+          noConversationFound,
+        };
+        const priorUncommandedDeaths =
+          uncommandedDeaths?.sessionId === plan.sessionId ? uncommandedDeaths.count : 0;
+        const clearSession = shouldClearSession({ ...exitShape, priorUncommandedDeaths });
+        if (stillLatest) {
+          // If the resume failed before being confirmed, drop the stale session so
+          // the next restart goes fresh: at once when Claude said the
+          // conversation is not there. Anything else keeps it: the reaper's own
+          // signal death (`code` null) and our own kill's 143 or 137 always,
+          // any other non-zero exit — a crash, an outside or fault kill, a
+          // Windows kill's 1, a native crash's byte — once (`shouldClearSession`).
+          // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
+          // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
+          // was set (5 s), so the session was never cleared (issue #1169).
+          if (clearSession) {
+            console.error(
+              `[Launcher] Resume failed before confirmation — clearing saved session (${
+                noConversationFound ? "Claude has no such conversation" : `code=${code}`
+              })`,
+            );
+            clearSavedSession();
+            uncommandedDeaths = null;
+          } else if (isUncommandedResumeDeath(exitShape)) {
+            uncommandedDeaths = { sessionId: plan.sessionId, count: priorUncommandedDeaths + 1 };
+            console.error(
+              `[Launcher] Resumed Claude died before confirmation (code=${code}) without saying the conversation is missing — keeping the saved session for one more resume`,
+            );
+          }
+        }
+        // Judging site (a) (#2358 PR 3b-1, R1.4): here, with the exit code and
+        // the streams in hand. The #1169 shape — an exit that clears the saved
+        // session (`shouldClearSession`) — is never judged; its record is torn
+        // down at the exit, so no later release judges it either. An exit that
+        // keeps the session (a null code, our own kill's 143 or 137, or a first
+        // unexplained non-zero exit — a fault kill's 143 on Linux and a Windows
+        // kill's 1 among them) is not that shape and is judged.
+        if (record !== null && judgeable(record) && !clearSession) {
+          try {
+            failBind(record, "torn-down-unbound");
+          } catch (err) {
+            console.error("[Launcher] Bind judgement failed (ignored):", err);
+          }
+        }
+      }
     });
 
     // Await the immediate spawn outcome so an exec failure reaches the caller

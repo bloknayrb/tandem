@@ -640,21 +640,24 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
     expect(shouldClearSession({ ...base, code, priorUncommandedDeaths: 1 })).toBe(true);
   });
 
-  // Our own kill never spends the retry, whatever the code: it says nothing
-  // about the conversation, and it is never an automatic loop.
+  // `commandKill` records our kill whenever the reaper has not yet exited,
+  // even when Claude already had: only 143 or 137 proves our kill ended it.
+  // Any other code is Claude's own exit, which the kill merely raced.
   it.each([
     [134, "a V8 abort as we stopped it"],
     [139, "a segfault"],
-    [1, "a Windows-style exit 1"],
+    [1, "a doomed exit 1 racing a Restart"],
     [127, "the reaper's exec failure"],
     [5, "a Windows access violation's low byte"],
-  ])("never clears on an intentional kill of ours (code %i, %s)", (code) => {
-    for (const prior of [0, 1, 7]) {
+  ])(
+    "a kill of ours that ended with another code is unexplained (code %i, %s): kept once, then cleared",
+    (code) => {
+      expect(shouldClearSession({ ...base, code, commandedKill: true })).toBe(false);
       expect(
-        shouldClearSession({ ...base, code, commandedKill: true, priorUncommandedDeaths: prior }),
-      ).toBe(false);
-    }
-  });
+        shouldClearSession({ ...base, code, commandedKill: true, priorUncommandedDeaths: 1 }),
+      ).toBe(true);
+    },
+  );
 
   // No exit code is evidence that the conversation is missing, so every
   // unexplained exit gets the one retry. A false clear loses a live
@@ -690,7 +693,6 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
 
   it("an exit 1 without the message is kept once, then cleared on the second", () => {
     expect(shouldClearSession({ ...base, code: 1 })).toBe(false);
-    expect(shouldClearSession({ ...base, code: 1, commandedKill: true })).toBe(false);
     expect(shouldClearSession({ ...base, code: 1, priorUncommandedDeaths: 1 })).toBe(true);
   });
 
@@ -712,6 +714,7 @@ describe("saysNoConversation — a doomed --resume's own message (#2358 S2)", ()
     [`\u001b[31mNo conversation found with session ID: ${ID}\u001b[0m`, "a colour code"],
     [`no conversation found with session id ${ID.toUpperCase()}`, "a change of case"],
     [`  [error] No conversation found with session ID: ${ID}`, "whitespace and a bracket label"],
+    [`No conversation found with session ID "${ID}"`, "the id quoted, no colon"],
   ])("matches %j (%s)", (text) => {
     expect(saysNoConversation(text, ID)).toBe(true);
   });
@@ -729,6 +732,10 @@ describe("saysNoConversation — a doomed --resume's own message (#2358 S2)", ()
       "the phrase mid-sentence",
     ],
     [`The log says: No conversation found with session ID: ${ID}`, "a sentence, not a label"],
+    [
+      `No conversation found with session ID: 99999999-2222-4333-8444-555555555555 (current ${ID})`,
+      "another id named, ours only later in the line",
+    ],
   ])("does not match %j (%s)", (text) => {
     expect(saysNoConversation(text, ID)).toBe(false);
   });

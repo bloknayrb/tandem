@@ -138,6 +138,9 @@ class FakeChild extends EventEmitter {
     this.exitCode = code;
     this.signalCode = signal;
     this.emit("exit", code, signal);
+    // A real child's output streams end after its exit (#2358 S2).
+    this.stdout.end();
+    this.stderr.end();
   }
 }
 
@@ -682,6 +685,25 @@ describe("R1.4 site (b): fault kills torn down by a Start or an Off before their
     await until(() => c2.killed, "the fault kill");
     await sayNoConversation(c2);
     c2.releaseExit(1); // the #1169 shape: resuming, the message, code 1, unconfirmed
+    await settle();
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(h.log.filter((e) => e.startsWith("failed:"))).toEqual([]);
+  });
+
+  it("the #1169 shape whose message is read only after the exit: still never judged", async () => {
+    // #2358 S2: Node may emit `exit` before the last stream data is read. The
+    // verdict, and with it site (a), waits for both streams to end.
+    const h = makeSupervisor();
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    h.emit(annotationEvent()); // its wake: the window runs
+    await settle();
+    c2.exitCode = 1;
+    c2.emit("exit", 1, null); // the exit first, its streams still open
+    await settle();
+    c2.stderr.write(`No conversation found with session ID: ${argAfter(c2, "--resume")}\n`);
+    c2.stdout.end();
+    c2.stderr.end();
     await settle();
     await h.sup.updateSettings({ startMode: "off" });
     await settle();
