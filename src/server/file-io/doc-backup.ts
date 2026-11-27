@@ -751,7 +751,10 @@ async function findIdenticalSnapshot(
 ): Promise<string | null> {
   for (const name of names) {
     try {
-      if ((await fs.readFile(path.join(subdir, name))).equals(bytes)) return name;
+      const file = path.join(subdir, name);
+      // A different size cannot be identical: skip the read.
+      if ((await fs.stat(file)).size !== bytes.length) continue;
+      if ((await fs.readFile(file)).equals(bytes)) return name;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }

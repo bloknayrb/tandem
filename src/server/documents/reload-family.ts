@@ -68,8 +68,8 @@ import {
   captureAtSwap,
   type KeepActor,
   type KeptBackup,
-  keepEditsCapturedAtSwap,
   keepUnsavedEdits,
+  keptAfterSwap,
   notifyUnsavedEditsKept,
   reportKeptBackupOnFailure,
   unsavedEditsOf,
@@ -576,17 +576,11 @@ export async function restoreDocumentFromBackup(
     if (!fileWritten && !swap?.fired) throw err;
     // A failure after the swap: edits typed during the awaits were read at the
     // swap but not yet kept, and they are gone from the document now.
-    const kept =
-      (swap
-        ? await keepEditsCapturedAtSwap(
-            existing.filePath,
-            swap.text,
-            editsBefore,
-            incoming,
-            protect,
-            actor,
-          )
-        : undefined) ?? keptBefore;
+    const kept = await keptAfterSwap(existing.filePath, swap, editsBefore, keptBefore, {
+      incoming,
+      protect,
+      actor,
+    });
     throw reportKeptBackupOnFailure(err, id, existing.filePath, "restore", kept, { actor });
   }
 
@@ -599,16 +593,11 @@ export async function restoreDocumentFromBackup(
   withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
 
   const unsavedEditsKept = keepEdits
-    ? ((swap
-        ? await keepEditsCapturedAtSwap(
-            existing.filePath,
-            swap.text,
-            editsBefore,
-            incoming,
-            protect,
-            actor,
-          )
-        : undefined) ?? keptBefore)
+    ? await keptAfterSwap(existing.filePath, swap, editsBefore, keptBefore, {
+        incoming,
+        protect,
+        actor,
+      })
     : undefined;
 
   if (unsavedEditsKept && actor === "claude") {
@@ -637,6 +626,14 @@ export async function restoreDocumentFromBackup(
   };
 }
 
+/** What a resolve did beyond clearing the conflict (ADR-057, PR 3). */
+export interface ResolveConflictResult {
+  /** Reload: the unsaved edits it discarded, kept as a backup first. */
+  unsavedEditsKept?: KeptBackup;
+  /** Keep: whether the version on disk is held by a backup the next save cannot overwrite. */
+  diskVersionKept?: boolean;
+}
+
 /**
  * Resolve a pending external-conflict (#1069). Invoked by
  * POST /api/external-conflict/resolve from the client banner.
@@ -645,9 +642,12 @@ export async function restoreDocumentFromBackup(
  *   Y_MAP_SAVED_AT_VERSION to the CURRENT disk mtime so the explicit-save
  *   external-modification guard unblocks — the user has explicitly accepted
  *   that their next save overwrites the external/disk version.
- * - "reload": discard the unsaved edits and reload from disk through the
- *   existing file-watcher reload lifecycle (annotations preserved +
- *   re-anchored; reloadFromDisk clears the flag and refreshes the baseline).
+ * - "reload": reload from disk through the existing file-watcher reload
+ *   lifecycle (annotations preserved + re-anchored; reloadFromDisk clears the
+ *   flag and refreshes the baseline), keeping the unsaved edits it discards
+ *   as a backup first unless `discardUnsavedEdits` (ADR-057, PR 3).
+ * - "keep" also keeps the version on disk as a backup first, since the next
+ *   save overwrites it.
  *
  * No-op success when no conflict is pending (double-click / stale banner race).
  *
@@ -667,14 +667,6 @@ export async function restoreDocumentFromBackup(
  *
  * Throws coded errors the route maps to HTTP status (NO_DOCUMENT).
  */
-/** What a resolve did beyond clearing the conflict (ADR-057, PR 3). */
-export interface ResolveConflictResult {
-  /** Reload: the unsaved edits it discarded, kept as a backup first. */
-  unsavedEditsKept?: KeptBackup;
-  /** Keep: whether the version on disk is held by a backup the next save cannot overwrite. */
-  diskVersionKept?: boolean;
-}
-
 export async function resolveExternalConflict(
   id: string,
   choice: "keep" | "reload",
@@ -699,25 +691,23 @@ export async function resolveExternalConflict(
     throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
   }
   const doc = getDocument(safeId) ?? getOrCreateDocument(safeId);
-  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   // Captured RAW (not narrowed) for the post-await identity checks below.
-  const rawConflictBeforeResolve = meta.get(Y_MAP_EXTERNAL_CONFLICT);
+  const rawConflictBeforeResolve = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
   if (rawConflictBeforeResolve === undefined) return undefined;
+  // A second, synchronous read of the same map (no await since the raw read),
+  // so it observes the identical value, narrowed.
+  const pendingAtClick = readPendingConflict(doc);
 
-  // Episode-identity check — see the doc comment above. `readPendingConflict`
-  // is a second, synchronous read of the same map (no await between here and
-  // the raw read above), so it observes the identical value.
-  if (expectedDetectedAt !== undefined) {
-    const pending = readPendingConflict(doc);
-    if (pending?.detectedAt !== expectedDetectedAt) return undefined;
+  // Episode-identity check — see the doc comment above.
+  if (expectedDetectedAt !== undefined && pendingAtClick?.detectedAt !== expectedDetectedAt) {
+    return undefined;
   }
 
   const resolvedFilePath = path.resolve(existing.filePath);
-  const appDataDir = resolveAppDataDir();
-  /** Still the episode this click was for, read from the live Y.Doc (it can be swapped during an await). */
-  const sameEpisode = () =>
-    (getDocument(safeId) ?? doc).getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT) ===
-    rawConflictBeforeResolve;
+  /** The live document's meta map (an `onLoadDocument` swap can replace the Y.Doc during an await). */
+  const liveMeta = () => (getDocument(safeId) ?? doc).getMap(Y_MAP_DOCUMENT_META);
+  /** Still the episode this click was for. */
+  const sameEpisode = () => liveMeta().get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve;
 
   if (choice === "keep") {
     // Only re-baseline for a format that HAS a save path. The baseline exists
@@ -750,7 +740,7 @@ export async function resolveExternalConflict(
     let diskVersionKept: boolean | undefined;
     if (canSave) {
       const snap = await snapshotBeforeFirstWrite(existing.filePath, {
-        appDataDir,
+        appDataDir: resolveAppDataDir(),
         documentId: safeId,
         ignoreRunGate: true,
       });
@@ -763,27 +753,27 @@ export async function resolveExternalConflict(
           severity: "warning",
           message: `The version of ${path.basename(existing.filePath)} on disk could not be kept as a backup, so your next save will overwrite it without a copy.`,
           documentId: safeId,
-          dedupKey: `keep-uncopied:${safeId}:${String((rawConflictBeforeResolve as { detectedAt?: unknown })?.detectedAt)}`,
+          dedupKey: `keep-uncopied:${safeId}:${pendingAtClick?.detectedAt}`,
           timestamp: Date.now(),
         });
       }
     }
     const liveDoc = getDocument(safeId) ?? doc;
-    const liveMeta = liveDoc.getMap(Y_MAP_DOCUMENT_META);
     withInternal(liveDoc, () => {
       // Guarded, not unconditional (review finding): the awaits above were
       // async, so the file watcher could have flagged a NEWER conflict while
       // they were in flight. "Keep" only means "keep the edits I saw when I
       // clicked" — it must not also silently dismiss a conflict that arrived
       // after the click.
-      if (liveMeta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve) {
-        liveMeta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      if (sameEpisode()) {
+        const meta = liveMeta();
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
         // Date.now() fallback when the file is transiently unreadable (e.g. a
         // Word read-lock): clearing the flag without re-baselining would hide
         // the banner while the external-modification guard kept blocking every
         // subsequent save until the document was closed and reopened.
         if (canSave) {
-          liveMeta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
         }
       }
     });
@@ -862,29 +852,16 @@ export async function resolveExternalConflict(
     // Nothing swapped yet (e.g. the read failed): the edits are still in the
     // document, so report nothing about them.
     if (!swap?.fired) throw err;
-    const kept =
-      (await keepEditsCapturedAtSwap(
-        existing.filePath,
-        swap.text,
-        editsBefore,
-        undefined,
-        undefined,
-        "user",
-      )) ?? keptBefore;
+    const kept = await keptAfterSwap(existing.filePath, swap, editsBefore, keptBefore, {
+      actor: "user",
+    });
     throw reportKeptBackupOnFailure(err, safeId, existing.filePath, "reload", kept, {
       actor: "user",
     });
   }
-  const unsavedEditsKept = swap?.fired
-    ? ((await keepEditsCapturedAtSwap(
-        existing.filePath,
-        swap.text,
-        editsBefore,
-        undefined,
-        undefined,
-        "user",
-      )) ?? keptBefore)
-    : keptBefore;
+  const unsavedEditsKept = await keptAfterSwap(existing.filePath, swap, editsBefore, keptBefore, {
+    actor: "user",
+  });
   if (!reloaded) {
     reportSkipped();
   } else {

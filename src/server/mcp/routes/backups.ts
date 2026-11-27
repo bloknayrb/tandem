@@ -30,7 +30,12 @@ import {
 } from "../../integrations/api-routes.js";
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
-import { isValidDocumentId, scrubPathForCaller, sendApiError } from "./_shared.js";
+import {
+  isValidDocumentId,
+  scrubPathForCaller,
+  sendApiError,
+  sendEditorBackupFailed,
+} from "./_shared.js";
 
 export async function handleListBackups(req: Request, res: Response): Promise<void> {
   const raw = req.query.documentId;
@@ -139,9 +144,6 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
       },
     });
   } catch (err) {
-    // Answered here, not in the shared table, which maps BACKUP_FAILED to 500
-    // for `/api/apply-changes`' different meaning (its sidecar copy). The
-    // message is the editor's own: the server's is addressed to Claude.
     // The snapshot named is gone (pruned or swept after the list loaded); the
     // shared message is addressed to Claude's tool.
     if ((err as { code?: unknown }).code === "FILE_NOT_FOUND") {
@@ -151,14 +153,15 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
       });
       return;
     }
-    if ((err as { code?: unknown }).code === "BACKUP_FAILED") {
-      res.status(409).json({
-        error: "BACKUP_FAILED",
-        message:
-          "Couldn't keep a backup of your unsaved edits first, so nothing was restored. " +
+    if (
+      sendEditorBackupFailed(
+        res,
+        err,
+        "Couldn't keep a backup of your unsaved edits first, so nothing was restored. " +
           "Tandem's backup folder may be full or not writable; if it is full, restoring " +
           "anyway can't keep a copy of the file's current version either.",
-      });
+      )
+    ) {
       return;
     }
     sendApiError(res, err);

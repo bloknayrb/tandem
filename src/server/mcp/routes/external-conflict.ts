@@ -7,7 +7,7 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { sendApiError } from "./_shared.js";
+import { sendApiError, sendEditorBackupFailed } from "./_shared.js";
 
 /**
  * POST /api/external-conflict/resolve — resolve a pending external-conflict
@@ -97,16 +97,14 @@ export async function handleResolveExternalConflict(req: Request, res: Response)
     });
     res.json({ success: true, ...(result ?? {}) });
   } catch (err: unknown) {
-    // Answered here, not in the shared table, which maps BACKUP_FAILED to 500
-    // for `/api/apply-changes`' different meaning; the message is the editor's
-    // own (the shared one is addressed to Claude).
-    if ((err as { code?: unknown }).code === "BACKUP_FAILED") {
-      res.status(409).json({
-        error: "BACKUP_FAILED",
-        message:
-          "Couldn't keep a backup of your unsaved edits first, so nothing was reloaded. " +
+    if (
+      sendEditorBackupFailed(
+        res,
+        err,
+        "Couldn't keep a backup of your unsaved edits first, so nothing was reloaded. " +
           "Tandem's backup folder may be full or not writable, or the edits could not be read.",
-      });
+      )
+    ) {
       return;
     }
     sendApiError(res, err);

@@ -71,6 +71,11 @@ function parseKeptNotice(raw: unknown): KeptNotice | null {
   return names.length > 0 ? { timestamp: n.timestamp, names } : null;
 }
 
+/** The editor routes' "the unsaved edits could not be kept, so nothing changed" answer (ADR-057). */
+export function isBackupFailedResponse(status: number, body: unknown): boolean {
+  return status === 409 && (body as { error?: unknown } | null)?.error === "BACKUP_FAILED";
+}
+
 export type RestoreResult =
   | { ok: true; editsKept: boolean }
   /** `backup-failed`: the unsaved edits could not be kept, so nothing was restored. */
@@ -101,7 +106,7 @@ export async function restoreBackup(
     message?: unknown;
     data?: { unsavedEditsKept?: unknown };
   } | null;
-  if (res.status === 409 && body?.error === "BACKUP_FAILED") {
+  if (isBackupFailedResponse(res.status, body)) {
     return {
       ok: false,
       reason: "backup-failed",

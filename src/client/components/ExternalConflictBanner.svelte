@@ -8,6 +8,7 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
 } from "../../shared/constants";
 import type { ExternalConflictState } from "../../shared/types";
+import { isBackupFailedResponse } from "../utils/backups";
 import { API_BASE } from "../utils/fileUpload";
 import LiveRegion from "./LiveRegion.svelte";
 import "./tandem-banner.css";
@@ -66,12 +67,11 @@ let conflict = $state<ExternalConflictState | null>(null);
 let pending = $state<"keep" | "reload" | "reload-anyway" | null>(null);
 let error = $state<string | null>(null);
 /**
- * The conflict episode (`detectedAt`) whose Reload was refused because the
- * unsaved edits could not be kept: "Reload anyway" shows only for that one, so
- * a newer conflict never inherits it. Written only after an await, never read
- * in the effect below.
+ * This episode's Reload was refused because the unsaved edits could not be
+ * kept: show "Reload anyway". Reset with `error` and `pending` whenever the
+ * episode changes, so a newer conflict never inherits it.
  */
-let backupFailedFor = $state<number | undefined | null>(null);
+let backupFailed = $state(false);
 
 $effect(() => {
   // Track the ydoc prop — re-observe when the active tab's doc changes.
@@ -99,6 +99,7 @@ $effect(() => {
     if (next?.detectedAt !== lastDetectedAt) {
       error = null;
       pending = null;
+      backupFailed = false;
     }
     lastDetectedAt = next?.detectedAt;
     conflict = next;
@@ -114,7 +115,7 @@ $effect(() => {
     conflict = null;
     error = null;
     pending = null;
-    backupFailedFor = null;
+    backupFailed = false;
   };
 });
 
@@ -184,7 +185,7 @@ async function resolve(choice: "keep" | "reload", discardUnsavedEdits = false) {
       // ADR-057 PR 3: the edits could not be kept, so nothing was reloaded.
       // Autosave and Ctrl+S are refused while the conflict is pending, so
       // without this way out the user would be stranded.
-      if (res.status === 409 && body?.error === "BACKUP_FAILED") backupFailedFor = forConflict;
+      if (isBackupFailedResponse(res.status, body)) backupFailed = true;
     }
     // On success the server clears the meta flag — the observer hides the banner.
   } catch {
@@ -244,7 +245,7 @@ async function resolve(choice: "keep" | "reload", discardUnsavedEdits = false) {
     >
       {pending === "reload" ? "Reloading…" : "Reload from file"}
     </button>
-    {#if backupFailedFor !== null && backupFailedFor === conflict.detectedAt}
+    {#if backupFailed}
       <button
         type="button"
         class="tandem-banner__cta"

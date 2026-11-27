@@ -214,6 +214,33 @@ export async function keepEditsCapturedAtSwap(
 }
 
 /**
+ * The backup holding the edits an action discarded, once its swap has run:
+ * the swap-time capture's keep when it fired and differs from the first one,
+ * else the first one. Never throws (see `keepEditsCapturedAtSwap`). One place
+ * for the order every discarding action needs after its swap, success and
+ * failure alike.
+ */
+export async function keptAfterSwap(
+  filePath: string,
+  swap: SwapCapture | undefined,
+  editsBefore: string | null,
+  keptBefore: KeptBackup | undefined,
+  opts: { incoming?: string; protect?: string; actor?: KeepActor } = {},
+): Promise<KeptBackup | undefined> {
+  const atSwap = swap?.fired
+    ? await keepEditsCapturedAtSwap(
+        filePath,
+        swap.text,
+        editsBefore,
+        opts.incoming,
+        opts.protect,
+        opts.actor,
+      )
+    : undefined;
+  return atSwap ?? keptBefore;
+}
+
+/**
  * Tell the editor that a Claude action discarded unsaved edits and where they
  * went. `warning`, so it stays in the activity tray (an `info` expires) — past
  * tense on what happened, per `TandemNotification.severity`.
