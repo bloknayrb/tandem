@@ -60,6 +60,7 @@ test-results/
 # then allow-list the real tracked skills. New tracked skills need a new
 # allow-list line here.
 .claude/skills/*
+!.claude/skills/batch-issues/
 !.claude/skills/changelog/
 !.claude/skills/dev-server/
 !.claude/skills/e2e/
