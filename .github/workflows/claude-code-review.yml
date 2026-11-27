@@ -117,8 +117,8 @@ jobs:
       # Symlinks first, so nothing below can write through one. Then every
       # agent-config name at every depth (a nested CLAUDE.md is loaded as
       # instructions when the model reads that directory), then master's copies
-      # back: AGENTS.md at the root and every CLAUDE.md at its own depth, its
-      # directory recreated if the PR removed it. The PR's changes to these
+      # back: AGENTS.md at the root and every CLAUDE.md at its own depth where
+      # the PR still has that directory. The PR's changes to these
       # files still show in the diff; a CLAUDE.md the PR adds is not restored.
       - name: Neutralise the PR checkout
         if: steps.recheck.outputs.skip == 'false'
@@ -140,15 +140,18 @@ jobs:
           cp -L ../trusted/AGENTS.md .
           # Master's CLAUDE.md at every depth, by content (`cp -L`, so a
           # symlinked one is copied as its target), never under a .claude*
-          # directory. A nested restore whose directory the PR turned into a
-          # file is skipped and logged; only the root copy is mandatory.
+          # directory. Restored only where the PR still has that directory: a
+          # directory the PR removed, renamed or turned into a file is not
+          # recreated. A copy that cannot be read (a link whose target is
+          # outside the sparse set) is skipped and logged, never fatal; only
+          # the root copy is mandatory, checked below.
           (cd ../trusted && find . -path ./.git -prune -o -name '.claude*' -prune -o \
             \( -type f -o -type l \) -name 'CLAUDE.md' -print0) |
             while IFS= read -r -d '' f; do
-              if mkdir -p "$(dirname "$f")" 2>/dev/null; then
-                cp -L "../trusted/$f" "$f"
-              else
-                echo "not restoring $f: its directory is not a directory in the PR"
+              if [ ! -d "$(dirname "$f")" ]; then
+                echo "not restoring $f: the PR has no directory there"
+              elif ! cp -L "../trusted/$f" "$f"; then
+                echo "not restoring $f: master's copy could not be read"
               fi
             done
           test -f CLAUDE.md && test ! -L CLAUDE.md

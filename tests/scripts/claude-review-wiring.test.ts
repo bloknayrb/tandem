@@ -278,8 +278,13 @@ describe("workspace", () => {
     // Symlinked master files are copied by content; .claude* is never recreated.
     expect(loop).toContain("\\( -type f -o -type l \\) -name 'CLAUDE.md' -print0");
     expect(loop).toContain('cp -L "../trusted/$f" "$f"');
-    // A nested restore the PR's tree makes impossible is skipped, not fatal.
-    expect(loop).toContain('if mkdir -p "$(dirname "$f")" 2>/dev/null; then');
+    // A nested copy goes only where the PR still has its directory (a removed
+    // or renamed one is not recreated), and a copy that cannot be read (a link
+    // whose target is outside the sparse set) is skipped, never fatal under
+    // GitHub's `bash -e`.
+    expect(loop).toContain('if [ ! -d "$(dirname "$f")" ]; then');
+    expect(loop).toContain('elif ! cp -L "../trusted/$f" "$f"; then');
+    expect(loop).not.toContain("mkdir");
     expect(loop, "the root copy must exist, as a regular file, after the loop").toContain(
       "test -f CLAUDE.md && test ! -L CLAUDE.md",
     );
