@@ -2,7 +2,12 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
+import {
+  BYO_MODELS_ENABLED,
+  COWORK_ENABLED,
+  canCompareWithDisk,
+  Y_MAP_ANNOTATIONS,
+} from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import { isHeldInSoloMarker } from "../shared/sanitize";
 import {
@@ -35,6 +40,7 @@ import ActivityTray from "./components/ActivityTray.svelte";
 import AiOffNotice from "./components/AiOffNotice.svelte";
 import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
+import CompareModal from "./components/CompareModal.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
@@ -1697,8 +1703,10 @@ let showHelp = $state(false);
 // active tab must not retarget a restore. Null when closed.
 let versionHistoryDocId = $state<string | null>(null);
 const versionHistoryOpen = $derived(versionHistoryDocId !== null);
-const versionHistoryFileName = $derived(
-  yjsSync.tabs.find((t) => t.id === versionHistoryDocId)?.fileName ?? "",
+const versionHistoryTab = $derived(yjsSync.tabs.find((t) => t.id === versionHistoryDocId));
+const versionHistoryFileName = $derived(versionHistoryTab?.fileName ?? "");
+const versionHistoryCanCompare = $derived(
+  versionHistoryTab !== undefined && canCompareWithDisk(versionHistoryTab),
 );
 
 /**
@@ -1709,7 +1717,7 @@ function openVersionHistory(documentId: string): void {
   // Not over another exclusive surface (the guards those surfaces keep for the
   // palette apply here too).
   if (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen) return;
-  if (modelPickerOpen) return;
+  if (modelPickerOpen || compareOpen) return;
   if (!yjsSync.tabs.some((t) => t.id === documentId)) {
     notifications.push({
       id: `version-history-closed-${documentId}`,
@@ -1742,6 +1750,24 @@ function openVersionHistory(documentId: string): void {
 $effect(() => {
   const id = versionHistoryDocId;
   if (id !== null && !yjsSync.tabs.some((t) => t.id === id)) versionHistoryDocId = null;
+});
+
+// --- Compare with the file on disk (ADR-057 PR 4) ----------------------------
+// Opened from the "changed on disk" banner. Read-only, so no source-view guard.
+let compareDocId = $state<string | null>(null);
+const compareOpen = $derived(compareDocId !== null);
+const compareFileName = $derived(yjsSync.tabs.find((t) => t.id === compareDocId)?.fileName ?? "");
+
+function openCompare(documentId: string): void {
+  if (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen) return;
+  if (modelPickerOpen || versionHistoryOpen) return;
+  if (!yjsSync.tabs.some((t) => t.id === documentId)) return;
+  compareDocId = documentId;
+}
+
+$effect(() => {
+  const id = compareDocId;
+  if (id !== null && !yjsSync.tabs.some((t) => t.id === id)) compareDocId = null;
 });
 let editor = $state<TiptapEditor | null>(null);
 let marginLayerEl = $state<HTMLDivElement | null>(null);
@@ -2188,6 +2214,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (!untrack(() => paletteOpen) && modelPickerOpen) return;
     // ADR-057 PR 2: nor over the Version history. Its own line, same reason.
     if (!untrack(() => paletteOpen) && versionHistoryOpen) return;
+    // ADR-057 PR 4: nor over the compare view. Same reason.
+    if (!untrack(() => paletteOpen) && compareOpen) return;
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -2317,6 +2345,8 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (modelPickerOpen) return;
     // ADR-057 PR 2: nor behind the Version history. Its own line, same reason.
     if (versionHistoryOpen) return;
+    // ADR-057 PR 4: nor behind the compare view.
+    if (compareOpen) return;
     if (!hasSelection) {
       notifications.push({
         id: `comment-shortcut-no-selection-${Date.now()}`,
@@ -3501,11 +3531,18 @@ function dismissModelPicker() {
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
+    <CompareModal
+      documentId={compareDocId}
+      fileName={compareFileName}
+      onClose={() => (compareDocId = null)}
+    />
+
     <!-- The server's own "Restored … from backup" notice (same dedupKey)
          coalesces with this toast in the tray. -->
     <VersionHistoryModal
       documentId={versionHistoryDocId}
       fileName={versionHistoryFileName}
+      canCompare={versionHistoryCanCompare}
       onClose={() => (versionHistoryDocId = null)}
       onRestored={(editsKept) => {
         // The server's notice also re-reads the banner, but not while the
@@ -3779,6 +3816,7 @@ function dismissModelPicker() {
           format={activeTab.format}
           source={activeTab.source}
           readOnly={isReadOnly}
+          onCompare={openCompare}
         />
       {/key}
     {/if}

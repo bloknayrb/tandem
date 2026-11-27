@@ -262,3 +262,66 @@ describe("backups formatting", () => {
     expect(formatBackupSize(3 * 1024 * 1024)).toBe("3.0 MB");
   });
 });
+
+describe("VersionHistoryModal compare", () => {
+  it("compares a backup with the document now, and Back returns to the list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/api/document/compare")) {
+          return Promise.resolve(
+            json({
+              data: {
+                current: "now\n",
+                other: "then\n",
+                otherLabel: "disk-backup",
+                truncated: false,
+              },
+            }),
+          );
+        }
+        return Promise.resolve(TWO());
+      }),
+    );
+    const { container } = open({ canCompare: true });
+    await settle();
+    await fireEvent.click(container.querySelectorAll("[data-testid='version-history-compare']")[1]);
+    await settle();
+    expect(container.querySelector("[data-testid='diff-view']")?.textContent).toContain("then");
+    expect(container.querySelectorAll(ROW)).toHaveLength(0);
+    // Focus stays in the dialog, on the way back.
+    const back = container.querySelector<HTMLElement>(
+      "[data-testid='version-history-compare-back']",
+    );
+    expect(document.activeElement).toBe(back);
+    await fireEvent.click(back as HTMLElement);
+    await settle();
+    expect(container.querySelectorAll(ROW)).toHaveLength(2);
+    // ... and returns to the row that was compared.
+    expect(document.activeElement).toBe(
+      container.querySelectorAll("[data-testid='version-history-compare']")[1],
+    );
+  });
+
+  it("offers no Compare for a document the compare view cannot show", async () => {
+    routes(TWO);
+    const { container } = open({ canCompare: false });
+    await settle();
+    expect(container.querySelectorAll(ROW)).toHaveLength(2);
+    expect(container.querySelector("[data-testid='version-history-compare']")).toBeNull();
+  });
+
+  it("a drag that ends on the backdrop does not close it; a click on the backdrop does", async () => {
+    routes(TWO);
+    const { container, onClose } = open();
+    await settle();
+    const backdrop = container.querySelector<HTMLElement>(".modal-backdrop") as HTMLElement;
+    const dialog = container.querySelector(MODAL) as HTMLElement;
+    await fireEvent.pointerDown(dialog);
+    await fireEvent.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent.pointerDown(backdrop);
+    await fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalled();
+  });
+});
