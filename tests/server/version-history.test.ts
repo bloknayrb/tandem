@@ -416,6 +416,25 @@ describe('restoreDocumentFromBackup with actor: "user"', () => {
     expect(await noticeFor(filePath)).toBeNull();
   });
 
+  it("a restore still lands when marking the restored snapshot seen fails", async () => {
+    const { filePath, id, doc } = await openWithUnsavedEdits("ack-throws.md", "disk\n", "edits\n");
+    const kept = await claudeForceOpen(filePath);
+    const store = await import("../../src/server/file-io/doc-backup.js");
+    const spy = vi
+      .spyOn(store, "acknowledgeKeptEdits")
+      .mockRejectedValueOnce(Object.assign(new Error("locked"), { code: "EPERM" }));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await restoreDocumentFromBackup(id, kept, { keepUnsavedEdits: true, actor: "user" });
+    } finally {
+      spy.mockRestore();
+      errors.mockRestore();
+    }
+    expect(extractText(doc)).toContain("edits");
+    // Not marked seen: the banner still offers it, the failure direction that loses nothing.
+    expect(await noticeFor(filePath)).toMatchObject({ names: [kept] });
+  });
+
   it("a Claude restore's keep still raises the banner", async () => {
     const { filePath, good } = await withGoodSnapshot("claude.md");
     const { id } = await openWithUnsavedEdits("claude.md", "good\n", "edits\n");
