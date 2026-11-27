@@ -313,8 +313,8 @@ push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor std
 
 ## Tandem-Specific Skills
 
-- `.claude/skills/context-audit/SKILL.md` -- Measure what a fresh session reads, and what that costs, while it fixes a real closed bug in a history-free copy (run before and after changing instruction files)
 - `.claude/skills/changelog/SKILL.md` -- Generate a Keep a Changelog entry from git log since last tag
+- `.claude/skills/context-audit/SKILL.md` -- Measure what a fresh session reads, and what that costs, while it fixes a real closed bug in a history-free copy (run before and after changing instruction files)
 - `.claude/skills/dev-server/SKILL.md` -- Start dev environment (server + client) and verify MCP connection
 - `.claude/skills/e2e/SKILL.md` -- Run Playwright E2E tests safely (warns about dev server conflicts)
 - `.claude/skills/e2e-debug/SKILL.md` -- Debug Playwright E2E test failures (port conflicts, server startup, post-mortem)
