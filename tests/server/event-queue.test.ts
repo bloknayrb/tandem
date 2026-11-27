@@ -783,7 +783,7 @@ describe("wasEmittedViaChannelInDocument", () => {
 describe("pushEvent records which inbox item a forward waits on", () => {
   const T = 1_700_000_000_000;
   // Master's one global round (the delivery-rounds PR): these pin its item
-  // hold, so they run with the round seam unwired even in the flag-on job.
+  // hold, so they run with the round seam unwired even in a flag-on run.
   // The keyed twin is the describe after this one.
   beforeEach(() => setDeliveryRoundSeam(undefined));
 

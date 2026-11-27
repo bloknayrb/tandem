@@ -161,7 +161,9 @@ describe("scripts/ci/ownership-flag-on-runner.mjs", () => {
   const FIXTURES = path.join(ROOT, "tests/scripts/fixtures/ownership-anchor");
   // Captured from real vitest JSON reports of tests/server/ownership-anchor.test.ts
   // (vitest 5.0.5), run once with TANDEM_OWNERSHIP=1 and once without, then
-  // trimmed and given repo-relative names.
+  // trimmed and given repo-relative names. Captured before the flip: an unset
+  // variable now follows the `true` literal, so to rebuild skipped.json run
+  // with TANDEM_OWNERSHIP=0, not with the variable unset.
   const passed = JSON.parse(readFileSync(path.join(FIXTURES, "passed.json"), "utf-8"));
   const skipped = JSON.parse(readFileSync(path.join(FIXTURES, "skipped.json"), "utf-8"));
   const runner = path.join(ROOT, "scripts/ci/ownership-flag-on-runner.mjs");
@@ -488,7 +490,7 @@ describe("probeRefusal by behaviour (#2358 flip-blocker row, the plan's gate (c)
 });
 
 describe("the E2E MCP client's identity (PR 1c, ownership design §12)", () => {
-  // The flag-on E2E run is part of the required `ownership-flag-on` job. With
+  // check's E2E run is flag-on (the bundle's define, since the flip). With
   // ownership on, a client that sends no identity header is its own owner
   // record per connection, so the document one spec opened would refuse the
   // next spec. Every E2E client therefore sends one fixed client id.

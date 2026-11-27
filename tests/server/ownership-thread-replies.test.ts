@@ -5,7 +5,7 @@
  * amendment).
  *
  * Flag on for the MCP worlds (each stubs `TANDEM_OWNERSHIP=1`); the dark rows
- * stub `""`, so they pin master's behaviour in the flag-on job too. The seam
+ * stub `""`, so they pin master's dark behaviour in a flag-on run too. The seam
  * rows take `parents` explicitly and need no flag.
  *
  * Every `answers` row here is read straight off the stored reply; PR B's

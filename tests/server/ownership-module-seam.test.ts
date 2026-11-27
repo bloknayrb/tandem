@@ -28,9 +28,9 @@ import { readTree, SRC_FILES, stripComments } from "../helpers/src-tree.js";
  *
  * And the test side of shipping dark: which test files turn the flag on or off
  * for themselves is a pinned set (a file stubbing it `""` opts out of the
- * flag-on job, silently shrinking it), nothing mocks the flag module, and only
- * the anchor keys a test on the flag — while never stubbing it, so the anchor
- * proves the job's variable reached the workers.
+ * flag-on run — `check`, since the flip — silently shrinking it), nothing
+ * mocks the flag module, and only the anchor keys a test on the flag — while
+ * never stubbing it, so the anchor proves the run really was flag-on.
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -402,7 +402,7 @@ describe("tests and the flag", () => {
 
   it("no test writes the variable except through vi.stubEnv", () => {
     // An assignment, a bracket access, or a `delete` (which turns the flag off
-    // for the rest of the file in the flag-on job, past every stubEnv pin).
+    // for the rest of the file in a flag-on run, past every stubEnv pin).
     expect(
       filesMatching(
         /process\.env\.TANDEM_OWNERSHIP\s*=(?!=)|process\.env\[\s*["'`]TANDEM_OWNERSHIP|\bdelete\s+process\.env\.TANDEM_OWNERSHIP\b/,
