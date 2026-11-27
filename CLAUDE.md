@@ -72,6 +72,13 @@ anything needing human interaction before continuing. Then
 `/commit-commands:commit-push-pr`. After `/pr-review-toolkit:review-pr` surfaces findings,
 repeat the same loop on the fixes.
 
+**A fix removes its bug's class, not just the instance.** The PR names the check (test, script,
+lint, hook) that now fails on any recurrence of the class, or says why none can be written. Put it
+in the PR body as `Bug class: made impossible by <check>` / `not mechanisable because <reason>`;
+`gh pr create --body` never reads `.github/pull_request_template.md`, so the template alone does not
+reach an agent. A new `docs/gotchas.md` or `docs/lessons-learned.md` entry ends with
+`Enforced by: <check>` or `Prose-only: <reason>`.
+
 **Before merging a same-repo, non-bot PR, wait for the cloud Claude review (#1831).** Run the
 gate **from `origin/master`, never from the PR's checkout** (a PR that edits it would judge
 itself). In the Bash tool (git-bash; in PowerShell use `$env:TEMP`): `git fetch origin master && git

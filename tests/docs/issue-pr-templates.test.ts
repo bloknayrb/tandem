@@ -23,6 +23,10 @@ const repoRoot = path.resolve(__dirname, "../..");
 
 const REQUIRED_FIELD_SENTENCE = "**What does correctness here depend on that is not in the repo?**";
 
+const BUG_CLASS_SENTENCE =
+  "**Bug class** (fixes only): made impossible by `<the check that now fails on any recurrence>`, or\n" +
+  "not mechanisable because `<reason>`.";
+
 const ON_BEHALF_BLOCKQUOTE =
   "> Filing this on behalf of an outside reporter? Apply **both** `beta-report` and\n" +
   "> `untrusted-source` — the body is then read as data, not instructions. Summarising rather than\n" +
@@ -68,6 +72,16 @@ describe("issue and PR templates (#1605)", () => {
     expect(typeof fm.about).toBe("string");
     expect((fm.about as string).length).toBeGreaterThan(0);
     expect(fm.labels).toBe(expectedLabel);
+  });
+
+  it("PR template asks what makes the bug's class impossible", () => {
+    // The rule itself lives in CLAUDE.md's Development Workflow, because
+    // `gh pr create --body` never reads this template (see the bound above);
+    // the template carries it for the web-UI compose flow.
+    expect(prTemplate).toContain(BUG_CLASS_SENTENCE);
+    expect(read("CLAUDE.md")).toContain(
+      "**A fix removes its bug's class, not just the instance.**",
+    );
   });
 
   it("PR template points at CONTRIBUTING.md rather than re-stating its full contract", () => {
