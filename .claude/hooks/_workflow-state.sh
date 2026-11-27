@@ -105,3 +105,17 @@ _ws_is_source_edit() {
   [[ "$p" =~ /node_modules/ ]] && return 1
   return 0
 }
+
+# Return 0 if editing path $1 is a Tier A change (ADR-058): anything not on the
+# Tier B allowlist in .claude/review-tiers.json. $2 is "0" when the file did not
+# exist before this edit, "1" when it did; $3 is the per-session list of files
+# this session created. A path outside the repo is not Tier A. If the classifier
+# fails it answers "A", so this fails toward the full review path.
+_ws_is_tier_a_edit() {
+  local p="${1//\\//}"
+  [[ -n "$p" ]] || return 1
+  local tier
+  tier=$(node "$(dirname "${BASH_SOURCE[0]}")/review-tier.mjs" "$p" "${2:-1}" "${3:-}" 2>/dev/null) || tier="A"
+  # Name the non-A answers, so empty or unexpected output means Tier A.
+  [[ "$tier" != "B" && "$tier" != "outside" ]]
+}

@@ -9,11 +9,12 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 - Workflow-nudge hooks emit stderr and never block.
 - Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days via `sessionstart-prune-state.sh`).
 
-## Inventory (19 scripts + 1 `.mjs` helper)
+## Inventory (19 scripts + 2 `.mjs` helpers)
 
 ### Shared / helper
 
 - **`_workflow-state.sh`** — Shared helpers for workflow-nudge hooks. Sourced, not executed.
+- **`review-tier.mjs`** — The ADR-058 tier classifier `nudge-plan-review.sh` calls: prints `A`, `B` or `outside` for a path against `.claude/review-tiers.json`, and `A` on any error. A file inside `.claude/worktrees/<name>/` is classified by its path below the worktree root.
 
 ### SessionStart
 
@@ -22,7 +23,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 ### PreToolUse — `Edit|Write` matcher
 
 - **`block-sensitive.sh`** — Blocks an edit whose path ends in `.env` or `package-lock.json`, and nothing else. Exits 2 on match. It does **not** cover `src-tauri/Cargo.lock`, `.env.local` or `.env.example` — those edits pass, so of the release skill's two never-hand-edit lockfiles only `package-lock.json` is enforced here. The block message gives the way through: regenerate the lockfile with `npm install --package-lock-only` (also how a merge conflict in it is resolved, after taking one side whole), and ask the user for a `.env` change.
-- **`nudge-plan-review.sh`** — Warns when a `.claude/plans/*.md` was written this session but no `Agent` tool has run before a source edit. One-shot per plan.
+- **`nudge-plan-review.sh`** — Warns when a `.claude/plans/*.md` was written this session but no `Agent` tool has run before a source edit. One-shot per plan. Also (ADR-058) warns once per session on a Tier A edit made before any plan was written, classifying the path with `review-tier.mjs` against `.claude/review-tiers.json`, and records the files the session creates so a new test file stays Tier B.
 
 ### PreToolUse — `Bash` matcher
 

@@ -1,0 +1,37 @@
+{
+  "$comment": "Review tiers (ADR-058). A change is Tier A (plan + adversarial agent review before code) unless EVERY path it touches is Tier B. Tier B is an allowlist, so an unlisted path fails closed to Tier A (#1604). alwaysTierA wins over every Tier B glob: instruction files, reviewers, hooks, CI, scripts and the checks themselves never go through the light path. tierBNewFilesOnly is Tier B only for a test file the session CREATES with Write; editing or overwriting an existing test is Tier A, and a new helper, fixture or harness module beside the tests is Tier A like tests/helpers/**. notAChange is agent scratch inside the repo dir (plan files, worktree roots, hook state): no tier applies; a file inside a worktree is classified by its path below the worktree root. Read by .claude/hooks/review-tier.mjs; pinned by tests/scripts/review-tier.test.ts.",
+  "tierB": [
+    "docs/plans/**",
+    "docs/reviews/**",
+    "docs/spikes/**",
+    "docs/triage/**",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "src/client/**/*.css"
+  ],
+  "notAChange": [
+    ".claude/plans/**",
+    ".claude/worktrees/**",
+    ".claude/.workflow-state/**"
+  ],
+  "tierBNewFilesOnly": [
+    "tests/server/**/*.test.ts",
+    "tests/client/**/*.test.ts",
+    "tests/e2e/**/*.spec.ts"
+  ],
+  "alwaysTierA": [
+    "**/CLAUDE.md",
+    "**/AGENTS.md",
+    ".claude/**",
+    "skills/**",
+    ".github/**",
+    "scripts/**",
+    "tests/docs/**",
+    "tests/build/**",
+    "tests/scripts/**",
+    "tests/setup/**",
+    "tests/helpers/**",
+    "tests/hooks/**"
+  ]
+}
