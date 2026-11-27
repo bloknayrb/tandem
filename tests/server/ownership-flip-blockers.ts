@@ -10,10 +10,12 @@
  * The plan's flip row (`docs/plans/2358-ownership.md`, PR 6) points here.
  *
  * **To close a row:** land what `closedBy` names, then delete the row in that
- * same PR. A row is never closed by editing its text; the one sanctioned edit
- * to a standing row is adding `acceptedFor`, which records a pick of Bryan's
- * and does not close it. The flip PR may set the literal only once every
- * remaining row carries `acceptedFor`.
+ * same PR. A row is never closed by editing its text; the sanctioned edits
+ * to a standing row are adding `acceptedFor`, which records a pick of Bryan's
+ * and does not close it, and recording a partial measurement in its `gap`,
+ * which closes nothing (the CTRL pending row's Chromium and WebView2 results;
+ * the Claude Desktop row's client name). The flip PR may set the literal only
+ * once every remaining row carries `acceptedFor`.
  *
  * **An accepted row** stays in the list, still open, and does not stop the
  * flip. Adding `acceptedFor` records a pick of Bryan's, cited in ADR-054;
@@ -35,7 +37,71 @@
  * the filter cannot see), and *a forged pre-flip chat `replyTo`*, closed by
  * its own `closedBy`: `docs/security.md`'s accepted (bounded) entry for
  * client-written answer marks (Bryan's Q7, "Accepted, bounded
- * (Recommended)").
+ * (Recommended)"). And #2360 PR C's one (2026-11-26): *#2360's switch has
+ * not merged*, closed by its own `closedBy`, the switch PR (the shipped
+ * skill, `docs/mcp-tools.md` and the local model's tool description), which
+ * lands immediately before the flip, in the same release (Bryan's Q1, "Gate
+ * it, skill last (Recommended)"). And the flip PR's three (ADR-054's flip
+ * amendment), each by its own `closedBy`: *the skill's wake-frame line*
+ * (skills/tandem/SKILL.md, version 44, says an id-less `ownership-changed`
+ * frame on `/api/events` means "call tandem_checkInbox"); *tandem_checkInbox's
+ * description and the skill text* (the lit description, `documentId` inputs,
+ * summary sentences and the skill's Multi-Document and `NO_DOCUMENT` text,
+ * with `docs/mcp-tools.md`'s section rewritten); and *output schemas across
+ * the flip* (the remedy decided there: a documented restart or reconnect, in
+ * the skill's Error Recovery, the CHANGELOG and docs/troubleshooting.md).
+ * And *#2360 PR A's document-room pending guard* (2026-11-26): smoke S8 in
+ * Chromium saw the guard drop a real paste after a forced reconnect, and the
+ * tab stopped syncing, so Bryan picked "Drop the doc-room guard
+ * (Recommended)"; the guard was removed, which closes the row's premise, and
+ * what that leaves is `docs/security.md` #2576's widened bound.
+ * And *whether Claude Code shows output-schema descriptions to a model*
+ * (2026-11-26), closed by its own `closedBy`: smoke S7 (Claude Code 2.1.332,
+ * on #2358) found it shows a tool's name, top-level description and input
+ * schema only, and Bryan picked "Skill and description (Recommended)" for
+ * where the sentence goes: the shipped skill's Multi-Document paragraph
+ * (version 44) and a one-line form in the lit `tandem_checkInbox` description.
+ * And *a session whose live stream dropped stays lapsed* (2026-11-26), closed
+ * by its own `closedBy`: smoke S5 (Claude Code 2.1.332 on Linux, a
+ * direct-HTTP entry, on #2358) found Claude Code holds its GET stream: one
+ * stream stayed open for 61 idle minutes with no close, reopen or
+ * re-initialize, the idle reaper logged it pinned past its 30-minute TTL,
+ * and the last `tools/call` ran on the same session. Recorded in ADR-054's
+ * flip amendment, so 3b-2b2's re-ask is not owed. What it cannot speak to
+ * (other versions, the stdio bridge, Windows and macOS, real network drops
+ * or sleep, reopening after a drop) is listed there.
+ * And the Windows smoke's four (2026-11-26; Windows 11 Pro 10.0.26300,
+ * Claude Code 2.1.332, the desktop release build, results on #2358,
+ * issuecomment-7209705011), each as Bryan directed and then explicitly
+ * accepted (2026-11-27, "Accept them (Recommended)"), which accepts what its
+ * `closedBy` asked for and neither smoke measured (macOS throughout; for S1
+ * the AppImage's Node and a not-signed-in child's bind; for S4 hook timing
+ * under `-p`), all recorded in ADR-054's flip amendment: *PR 3a's
+ * assumptions* (smoke S1), by the Linux
+ * and Windows measurements (`--settings` disables the tagged plugin keys;
+ * `.mcp.json` and the user's own `tandem` entry lose to the launcher's; a
+ * missing run file recovers; no run file re-read after start on either OS,
+ * so #2439's void condition is not observed) and the fix for what Windows
+ * found: an account-synced `tandem@synced` plugin, in no settings file,
+ * loaded beside the launcher's bridge, so the launcher now asks Claude Code
+ * (`claude plugin list --json`) and disables every `tandem@` key it reports,
+ * falling back to the known keys, which is S1's pre-fix state (Bryan's "Ask Claude Code (Recommended)").
+ * Its residual, a run file deleted between its write and its ACL step,
+ * which launches Tandem's Claude without run files, unbound and with no
+ * line saying so, Bryan accepted ("Accept all three (Recommended)"). The
+ * user-scope `tandem-channel` shim also loads under the launcher; it is not
+ * suppressed (its one tool is refused for the launcher's own child, and it
+ * registers no MCP session), as the amendment records. *Resumes the smoke
+ * did not exercise* (S2), by the measurements: all three bound and took back
+ * their documents on Linux and Windows (the early-crash session clear, exit
+ * code 1 on Windows, is a separate PR). *An auth failure that is not 'Not
+ * logged in'* (S3), by the fix: an `is_error` result with `api_error_status`
+ * 401 ends presence as the sign-in refusal does (Bryan's "Treat it like
+ * signed out (Recommended)", narrowed to 401 by his "401 only signs out
+ * (Recommended)" of 2026-11-27; `signInFailureOf`), and a 403 is an access
+ * error that keeps Tandem's Claude running (`accessErrorOf`). *Project settings `env`
+ * against the run config* (S4), by the measurements on both OSes: an entry's
+ * `env` wins key by key for all six keys.
  *
  * Not a test file: no `.test.` in its name, so vitest does not collect it.
  */
@@ -56,66 +122,22 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
-      "The shipped skill (skills/tandem/SKILL.md) says wake frames on /api/events carry an id, " +
-      "a type and a timestamp. With ownership on, the stream also sends PR 4a's id-less " +
-      "`event: ownership-changed` / `data: {}` nudge, which the skill does not mention, so a " +
-      "session watching ?filter=wake as the skill describes is not told what it means.",
-    closedBy:
-      'A SKILL.md line saying an ownership-changed frame also means "call tandem_checkInbox", ' +
-      "with its frontmatter version bumped, landed with or before the flip (it reaches users, so " +
-      "not while dark).",
-  },
-  {
-    gap:
       "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
       "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
       "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
       "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
-      "dropped silently.",
+      "dropped silently. Measured in Chromium only (smoke S8, 2026-11-26, results on " +
+      "#2358): no pending CTRL data in hundreds of transactions. Measured in WebView2 (the " +
+      "Windows desktop build, smoke S8, 2026-11-26, results on #2358, issuecomment-7209705011): " +
+      "the CTRL row held (chat and mode written offline arrived at reconnect; only writes " +
+      "reloaded away before reconnecting were lost, the known chat loss and an unsaved offline " +
+      "edit), and no `pendingStructs` was logged. WKWebView (macOS) is not measured.",
     closedBy:
       "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
       "pending data after a tab's update, or a narrower drop.",
-  },
-  {
-    gap:
-      "#2360 PR A drops update data a browser tab left pending in a DOCUMENT room " +
-      "(`makeDocumentPendingGuard`, `events/observers/reply-client-undo.ts`), so a struct aimed " +
-      "at the server's next clock cannot land under a server origin past the replies-map undo. " +
-      "It widens the CTRL row's unmeasured premise (a real tab never leaves anything pending) to " +
-      "document rooms, where a wrong premise drops the user's typing silently, not a chat row.",
-    closedBy:
-      "The CTRL row's measurement, run in document rooms too (reconnect, offline edits, two " +
-      "tabs, a long paste), showing no pending data after a tab's update; or a guard narrowed " +
-      "to updates that touch the replies map.",
-  },
-  {
-    gap:
-      "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
-      "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
-      "another session's polls never hide its items from you' (with inbox scope, only the " +
-      "document's holder reads it); 'each item repeats on every poll until you pass a cursor from " +
-      "a response that held it' (after a handover an acknowledged item is handed again, " +
-      "unmarked; and since the notice-rule PR an accept or dismiss notice is not repeated once " +
-      "its document has left the holder that was handed it, even to that holder's own retry " +
-      "with an old cursor, so 'Items repeat until acknowledged ... recovered by polling again " +
-      "with the same cursor' is false for it); 'Omit `documentId` to cover every open document'; and the summary's 'The cursor " +
-      "was not recognised ... returns everything not yet acknowledged' (only what is in scope). " +
-      "The `documentId` input: 'Omit it to poll every open document'. skills/tandem/SKILL.md: " +
-      "'polls every open document', and its contract that a summary with no document read means " +
-      "nothing is open (flag-on, it can mean nothing open is yours to answer). docs/mcp-tools.md's " +
-      "tandem_checkInbox section says the same things; it carries a 'ships dark' paragraph listing " +
-      "what changes flag-on, and the flip PR rewrites the section. Since the chat owners PR " +
-      "also: tandem_checkInbox's '`chatMessages` spans every document', 'each item repeats on " +
-      "every poll until you pass a cursor from a response that held it' and 'a chat message you " +
-      "answered with tandem_reply `replyTo` is not repeated' (chat is scoped by owner); " +
-      "CHAT_ACK_DIRECTIVE (said to every poll that hands chat, though a refused reply is now " +
-      "possible); and tandem_reply's `documentId` input 'defaults to active document' (a reply " +
-      "to a message is stamped with the message's document; since the posts PR, a post with no " +
-      "`documentId` from a session that does not hold the active document is stamped with no " +
-      "document, and one from a session that may not post doc-less is refused `post`).",
-    closedBy:
-      "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
-      "changes at the flip together with the plugin ref bump.",
+    acceptedFor:
+      "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (Chromium " +
+      "and WebView2 held; macOS not run); tracked as #2358.",
   },
   {
     gap:
@@ -174,71 +196,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     acceptedFor:
       "Bryan picked 'Accept, use Release/Assign (Recommended)', picked from options, 2026-11-23 " +
       "(PR 5's controls are the remedy); tracked as #2358.",
-  },
-  {
-    gap:
-      "Output schemas across the flip: an MCP client caches tool output schemas from tools/list, " +
-      "and the stdio bridge's re-initialize after a 404 never lists again, so a session (Claude " +
-      "Desktop through the bridge, say) that lives across the upgrade from a dark build to the " +
-      "flipped one keeps tandem_checkInbox's and tandem_status's dark schemas, which have no " +
-      "`ownership` / `owner` field, and its SDK rejects every response that carries one " +
-      "(additionalProperties: false).",
-    closedBy:
-      "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
-      "the bridge's replay, or a documented restart), decided there.",
-  },
-  {
-    gap:
-      "Whether Claude Code shows output-schema descriptions to a model is unverified (the " +
-      "change-notice PR): if it does not, a model sees only `changed`'s bare cause words and the " +
-      "summary sentence, not the description saying `holding` is the truth and `changed` may be " +
-      "incomplete.",
-    closedBy:
-      "A hand test on a real Claude Code session before the flip, recorded on #2358; if the " +
-      "descriptions are not shown, a decision on where that sentence goes.",
-  },
-  {
-    gap:
-      "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
-      "answered-link, and the switch lands immediately before the flip, in the same release).",
-    closedBy: "#2360's switch PR merged.",
-  },
-  {
-    gap:
-      "PR 3a's assumptions the 2026-11-17 smoke left unmeasured (Windows 11, Claude Code " +
-      "2.1.325, one sample, run contained): whether `--settings` disables a plugin beside " +
-      "`--mcp-config`; a project-scope `.mcp.json` `tandem` entry and the user's own Tandem " +
-      "entry and skill being replaced; missing or invalid run files; a `--settings` re-read; " +
-      "macOS, Linux and the bundled Node; whether a not-signed-in child's bridge binds before " +
-      "its refusal.",
-    closedBy: "A further smoke measuring them, or Bryan's acceptance of each.",
-  },
-  {
-    gap:
-      "Project settings `env` against the run config: measured for one key (`TANDEM_URL`) in " +
-      "one file (`.claude/settings.json`), in a hand run, with Tandem's value reaching the " +
-      "bridge; not measured for `settings.local.json`, the other keys the run config sets or " +
-      "clears (`TANDEM_OWNER_HANDLE`, `TANDEM_OWNER_HANDLE_URL`, " +
-      "`CLAUDE_PLUGIN_OPTION_SERVER_URL`, `NODE_OPTIONS`, `NODE_DEBUG`), the launcher's own " +
-      "invocation, or hook timing under `-p` before the first bind.",
-    closedBy:
-      "The remaining cases measured with Tandem's value winning in each, or a guard that " +
-      "refuses the run files on such a file; a measurement showing a project value wins does " +
-      "not close it.",
-  },
-  {
-    gap:
-      "An auth failure that is not 'Not logged in' (an expired token, a revoked key) is " +
-      "unmeasured: if it returns an ordinary `result`, such a child stays present though it " +
-      "cannot answer.",
-    closedBy:
-      "A measured list of auth-failure results, and the not-signed-in pattern widened to it.",
-  },
-  {
-    gap:
-      "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
-      "resume across a server restart, a resume after a crash.",
-    closedBy: "A smoke run of each, or Bryan's acceptance.",
   },
   {
     gap:
@@ -323,20 +280,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Claude Desktop is left out of 'another session' by its self-reported client name " +
       "('claude-ai', transport-registry.ts), which is unverified. The rule is decided (Bryan " +
       "picked 'No, Desktop doesn't count (Recommended)', picked from options, 2026-11-19); only " +
-      "the name is open.",
+      "the name is open. Measured on Windows (smoke S6, 2026-11-26, Claude Desktop 6.28899.6.0, " +
+      "results on #2358, issuecomment-7209705011): Desktop's `tandem` entry registered as client " +
+      "'claude-ai' (owners show 'Claude Desktop'), and a comment on a document Tandem's Claude " +
+      "held started it with Desktop connected. The precondition, a document nobody holds, was " +
+      "not reached: Tandem's Claude's record outlives its run, so every open document had a holder.",
     closedBy:
       "A hand check recorded in the ADR: with Claude Desktop connected and no other session, a " +
       "comment on an unheld document makes tandemWorkWaiting true.",
-  },
-  {
-    gap:
-      "A session still open whose live stream dropped and that stayed quiet past its grace has " +
-      "lapsed and stays lapsed while registered, so it does not count as another session, and " +
-      "another session's departure starts or wakes Tandem's Claude beside it (3b-2b1c; how often " +
-      "Claude Code drops its GET stream is unmeasured).",
-    closedBy:
-      "A hand check of whether Claude Code holds or reopens its GET stream, recorded in the " +
-      "ADR; if it does not, 3b-2b2's re-ask, with a test.",
+    acceptedFor:
+      "Bryan picked 'Accept all three (Recommended)', picked from options, 2026-11-26 (the client " +
+      "name measured; the nobody-holds precondition unreachable); tracked as #2358.",
   },
 ];
 

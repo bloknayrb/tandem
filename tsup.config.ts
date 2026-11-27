@@ -25,12 +25,13 @@ const LICENSE_GATE_ENABLED = false;
 // server + cli bundles as __DOCX_ENABLED__ so a release ignores TANDEM_DOCX.
 const DOCX_DEFINE = JSON.stringify(DOCX_ENABLED);
 
-// Multi-session document ownership (#2358, ADR-054): ships DARK. Like `.docx`, the
-// value lives in src/shared/constants.ts and is only carried into the server and
+// Multi-session document ownership (#2358, ADR-054): on since the flip. Like `.docx`,
+// the value lives in src/shared/constants.ts and is only carried into the server and
 // cli bundles here, as __OWNERSHIP_ENABLED__, so a release ignores TANDEM_OWNERSHIP.
 // Derived from the literal and nothing else: no environment variable is read for
 // it, so a shell export cannot build a half-on bundle. The `ownership-flag-on` CI
-// job overrides it per block through scripts/ci/build-ownership-on.ts instead.
+// job forces it on per block through scripts/ci/build-ownership-on.ts (since the
+// flip the same value the literal gives).
 // Only the server bundle reaches src/server/ownership-flag.ts today; the cli
 // block carries it too so a future cli import cannot read a bare free global.
 const OWNERSHIP_DEFINE = JSON.stringify(OWNERSHIP_ENABLED);

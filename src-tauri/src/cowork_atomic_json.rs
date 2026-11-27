@@ -386,11 +386,9 @@ pub(crate) fn require_plain_dir(dir: &Path) -> Result<(), CoworkError> {
             format!("{} does not exist", dir.display()),
         )
         .into()),
-        Probe::Other => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{} is not a directory", dir.display()),
-        )
-        .into()),
+        Probe::Other => {
+            Err(io::Error::other(format!("{} is not a directory", dir.display())).into())
+        }
         Probe::Unreadable(e) => Err(e.into()),
     }
 }

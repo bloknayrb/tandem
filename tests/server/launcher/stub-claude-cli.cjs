@@ -151,6 +151,15 @@ if (mcpConfigPath !== undefined || settingsPath !== undefined) {
   }
 }
 
+// --- a doomed resume's own message (#2358 S2; opt-in) -----------------------
+// Written at start, long before any exit the test drives, so it is read before
+// the supervisor's `exit` verdict. It makes a resumed spawn's non-zero exit the
+// #1169 shape, which an exit code alone no longer is.
+if (process.env.TANDEM_STUB_CLAUDE_NO_CONVERSATION === "1") {
+  const i = argv.indexOf("--resume");
+  if (i !== -1) process.stderr.write(`No conversation found with session ID: ${argv[i + 1]}\n`);
+}
+
 // --- a secret-shaped string on both streams (#2358 PR 3a, R5.3; opt-in) ----
 // One stderr line (the supervisor logs each as `[Claude] …`) and one stdout
 // line that starts with `{` but does not parse (logged, not dropped).

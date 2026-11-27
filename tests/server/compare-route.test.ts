@@ -1,0 +1,362 @@
+/**
+ * ADR-057, PR 4: `GET /api/document/compare` — the document now against the
+ * file on disk or a backup, loopback-only, bounded, never echoing a path.
+ */
+
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/platform")>();
+  const osMod = await import("os");
+  const pathMod = await import("path");
+  const cryptoMod = await import("crypto");
+  const appDataDir = pathMod.join(osMod.tmpdir(), `tandem-test-vh-${cryptoMod.randomUUID()}`);
+  process.env.TANDEM_APP_DATA_DIR = appDataDir;
+  return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
+});
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
+  watchFile: vi.fn(),
+  suppressNextChange: vi.fn(),
+  recordSelfWrite: vi.fn(),
+}));
+vi.mock(import("../../src/server/notifications.js"), () => ({ pushNotification: vi.fn() }));
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
+import type { Request, Response } from "express";
+import { markDirty } from "../../src/server/documents/dirty.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import {
+  _resetDocBackupGateForTests,
+  docBackupsRoot,
+  listDocBackups,
+  snapshotBeforeFirstWrite,
+} from "../../src/server/file-io/doc-backup.js";
+import { getAdapter } from "../../src/server/file-io/index.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import {
+  COMPARE_MAX_BYTES,
+  handleGetDocumentCompare,
+} from "../../src/server/mcp/routes/compare.js";
+import { resolveAppDataDir } from "../../src/server/platform.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { withMcp } from "../../src/shared/origins.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
+
+let tmpDir: string;
+
+beforeEach(async () => {
+  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  setActiveDocId(null);
+  _resetDocBackupGateForTests();
+  vi.clearAllMocks();
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-cmp-"));
+  await fs.rm(docBackupsRoot(resolveAppDataDir()), { recursive: true, force: true });
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+});
+
+afterAll(async () => {
+  await teardownFileAppDataDir();
+});
+
+function mockRes(): Response & { _status: number; _json: unknown } {
+  const res = {
+    _status: 200,
+    _json: undefined as unknown,
+    status(code: number) {
+      this._status = code;
+      return this;
+    },
+    json(body: unknown) {
+      this._json = body;
+      return this;
+    },
+  };
+  return res as unknown as Response & { _status: number; _json: unknown };
+}
+
+const req = (query: Record<string, unknown>, remoteAddress = "127.0.0.1"): Request =>
+  ({ headers: {}, socket: { remoteAddress }, query, body: {} }) as unknown as Request;
+
+async function call(query: Record<string, unknown>, remote?: string) {
+  const res = mockRes();
+  await handleGetDocumentCompare(req(query, remote), res);
+  return res;
+}
+
+/** Open `name` with `disk` on disk, then give it unsaved edits `edited`. */
+async function opened(name: string, disk: string, edited?: string) {
+  const filePath = path.join(tmpDir, name);
+  await fs.writeFile(filePath, disk);
+  const { documentId: id } = await openFromDisk(filePath);
+  if (edited !== undefined) {
+    const doc = getOrCreateDocument(id);
+    const adapter = getAdapter(name.endsWith(".txt") ? "txt" : "md");
+    const prepared = await adapter.parse(edited);
+    withMcp(doc, () => adapter.apply(doc, prepared, { fileName: name }));
+    markDirty(id);
+  }
+  return { filePath, id };
+}
+
+const data = (res: { _json: unknown }) =>
+  (
+    res._json as {
+      data: { current: string; other: string; otherLabel: string; truncated: boolean };
+    }
+  ).data;
+
+describe("GET /api/document/compare", () => {
+  it("refuses a non-loopback caller before looking anything up", async () => {
+    const spy = vi.spyOn(fs, "open");
+    const res = await call({ documentId: "anything", against: "disk" }, "192.168.1.9");
+    expect(res._status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("compares the document now with the file on disk", async () => {
+    const { filePath, id } = await opened("doc.md", "first version\n", "edited version\n");
+    await fs.writeFile(filePath, "\uFEFFdisk line one\r\ndisk line two\r\n");
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(200);
+    const d = data(res);
+    expect(d.otherLabel).toBe("disk");
+    expect(d.current).toContain("edited version");
+    // BOM stripped, CRLF normalized.
+    expect(d.other).toBe("disk line one\ndisk line two\n");
+    expect(d.truncated).toBe(false);
+  });
+
+  it("compares with a backup named by the listing", async () => {
+    const { filePath, id } = await opened("named.md", "the original\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [snap] = await listDocBackups(filePath, resolveAppDataDir());
+    const res = await call({ documentId: id, against: snap.name });
+    expect(res._status).toBe(200);
+    expect(data(res)).toMatchObject({ other: "the original\n", otherLabel: "disk-backup" });
+  });
+
+  it("answers 404 for a name that is not a snapshot, without opening anything", async () => {
+    const { filePath, id } = await opened("names.md", "x\n");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const spy = vi.spyOn(fs, "open");
+    for (const against of [
+      "../../../etc/passwd",
+      "a/b-20260101-000000-abcdef12.md",
+      "source.txt",
+    ]) {
+      const res = await call({ documentId: id, against });
+      expect(res._status, against).toBe(404);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("answers 404 for a snapshot name that is not in this document's folder, opening nothing", async () => {
+    const { id } = await opened("missing.md", "x\n");
+    const spy = vi.spyOn(fs, "open");
+    const res = await call({ documentId: id, against: "nope-20260101-000000-abcdef12.md" });
+    expect(res._status).toBe(404);
+    expect((res._json as { message?: string }).message).toBe("That backup no longer exists.");
+    // Matched against the folder's listing: the caller's name reaches no fs call.
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("validates its query", async () => {
+    const { id } = await opened("q.md", "x\n");
+    const cases: Array<[Record<string, unknown>, number]> = [
+      [{ against: "disk" }, 400],
+      [{ documentId: `dir/${id}`, against: "disk" }, 400],
+      [{ documentId: id }, 400],
+      [{ documentId: id, against: ["a", "b"] }, 400],
+      [{ documentId: id, against: "" }, 400],
+      [{ documentId: "aaaaaaaaaaaa", against: "disk" }, 404],
+    ];
+    for (const [query, status] of cases) {
+      const res = await call(query);
+      expect(res._status, JSON.stringify(query)).toBe(status);
+    }
+  });
+
+  it("refuses a format without plain text on both sides", async () => {
+    const { id } = await opened("page.html", "<p>x</p>\n");
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(400);
+  });
+
+  it("answers 404 with no path when the file is gone", async () => {
+    const { filePath, id } = await opened("gone.md", "x\n");
+    await fs.rm(filePath);
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(404);
+    expect(JSON.stringify(res._json)).not.toContain(tmpDir);
+  });
+
+  it("reads at most the cap of a file that grew, and says it was cut", async () => {
+    const { filePath, id } = await opened("big.txt", "small\n");
+    await fs.writeFile(filePath, "x".repeat(COMPARE_MAX_BYTES + 10));
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(200);
+    expect(data(res).truncated).toBe(true);
+    // One unbroken line: the cut side keeps all it read; the complete side is whole.
+    expect(data(res).other.length).toBe(COMPARE_MAX_BYTES);
+    expect(data(res).current).toBe("small\n");
+  });
+
+  it("never hides what a cut file has past a complete, shorter document", async () => {
+    const extra = Array.from({ length: 80 }, (_, i) => `${i}`.padEnd(50_000, "b")).join("\n");
+    for (const [name, doc] of [
+      ["short.md", "small\n"],
+      ["empty.txt", ""],
+    ] as const) {
+      const { filePath, id } = await opened(name, doc);
+      await fs.writeFile(filePath, `${doc}${extra}\n`);
+      const d = data(await call({ documentId: id, against: "disk" }));
+      expect(d.truncated, name).toBe(true);
+      expect(d.current, name).toBe(doc);
+      // The disk side runs to its last full line within the cap, far past the document.
+      expect(d.other.startsWith(doc), name).toBe(true);
+      expect(d.other.length, name).toBeGreaterThan(COMPARE_MAX_BYTES - 50_100);
+      expect(d.other.endsWith("\n"), name).toBe(true);
+    }
+  });
+
+  it("answers 404 when the document closes while its other side is being read", async () => {
+    const { id } = await opened("closing.md", "on disk\n");
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      removeDoc(id); // the tab closes mid-request
+      return realOpen(...(args as Parameters<typeof fs.open>));
+    });
+    const res = await call({ documentId: id, against: "disk" });
+    spy.mockRestore();
+    expect(res._status).toBe(404);
+  });
+
+  it("reads the whole file across short reads", async () => {
+    const body = `${"line of text\n".repeat(5000)}`;
+    const { filePath, id } = await opened("short-reads.txt", "x\n");
+    await fs.writeFile(filePath, body);
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      const realRead = handle.read.bind(handle);
+      // At most 1,000 bytes per call, as a network filesystem may answer.
+      handle.read = ((buf: Buffer, offset: number, length: number, position: number) =>
+        realRead(buf, offset, Math.min(length, 1000), position)) as typeof handle.read;
+      return handle;
+    });
+    const d = data(await call({ documentId: id, against: "disk" }));
+    spy.mockRestore();
+    expect(d.other).toBe(body);
+    expect(d.truncated).toBe(false);
+  });
+
+  it("answers its own 500 when the document cannot be serialized", async () => {
+    const { id } = await opened("throws.md", "x\n");
+    const adapter = getAdapter("md");
+    const spy = vi.spyOn(adapter, "save").mockImplementation(() => {
+      throw new Error("serializer bug");
+    });
+    const res = await call({ documentId: id, against: "disk" });
+    spy.mockRestore();
+    expect(res._status).toBe(500);
+    expect((res._json as { message?: string }).message).toBe("Couldn't read the document.");
+  });
+
+  it("names the document's format, so the view can explain Markdown re-serialization", async () => {
+    const { id } = await opened("fmt.md", "x\n");
+    expect(data(await call({ documentId: id, against: "disk" }))).toMatchObject({ format: "md" });
+  });
+
+  it("compares what was read of an over-cap file that ends in one long line", async () => {
+    const para = "word ".repeat(Math.ceil((COMPARE_MAX_BYTES + 500_000) / 5));
+    const edited = `${para.slice(0, 100)}CHANGED${para.slice(107)}`;
+    const { filePath, id } = await opened("long-line.txt", "x\n");
+    // Disk: a title then one huge line. The document holds the same with a word changed early.
+    await fs.writeFile(filePath, `Title\n${para}\n`);
+    const doc = getOrCreateDocument(id);
+    const adapter = getAdapter("txt");
+    const prepared = await adapter.parse(`Title\n${edited}\n`);
+    withMcp(doc, () => adapter.apply(doc, prepared, { fileName: "long-line.txt" }));
+    const d = data(await call({ documentId: id, against: "disk" }));
+    expect(d.truncated).toBe(true);
+    // Far more than "Title\n" is compared, and the change is in it.
+    expect(d.other.length).toBeGreaterThan(1_000_000);
+    expect(d.current).toContain("CHANGED");
+    expect(d.other).not.toContain("CHANGED");
+  });
+
+  it("reports a file that shrank after its size was read as cut", async () => {
+    const { filePath, id } = await opened("shrunk.txt", "x\n");
+    await fs.writeFile(filePath, "\u4e2d\u4e2d\u4e2d\n");
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      const realStat = handle.stat.bind(handle);
+      // The stat saw a larger file than the read then finds.
+      handle.stat = (async () => {
+        const st = await realStat();
+        return Object.assign(st, { size: st.size + 100 });
+      }) as typeof handle.stat;
+      return handle;
+    });
+    const d = data(await call({ documentId: id, against: "disk" }));
+    spy.mockRestore();
+    expect(d.truncated).toBe(true);
+    expect(d.other).not.toContain("\uFFFD");
+  });
+
+  it("keeps a real U+FFFD that ends exactly at the cut", async () => {
+    const { filePath, id } = await opened("fffd.txt", "small\n");
+    // U+FFFD is 3 bytes; it ends exactly at the cap, then more text follows.
+    await fs.writeFile(filePath, `${"a".repeat(COMPARE_MAX_BYTES - 3)}\uFFFDtail`);
+    const d = data(await call({ documentId: id, against: "disk" }));
+    expect(d.other.endsWith("\uFFFD")).toBe(true);
+  });
+
+  it("cuts both sides of an over-cap CRLF file at the same line, so an unchanged file shows no difference", async () => {
+    // Few long lines keep the open fast; 50 x 50k chars is past the 2 MB cap.
+    const lines = Array.from({ length: 50 }, (_, i) => `${i}`.padEnd(50_000, "a"));
+    const crlf = `${lines.join("\r\n")}\r\n`;
+    expect(Buffer.byteLength(crlf)).toBeGreaterThan(COMPARE_MAX_BYTES);
+    const { id } = await opened("crlf.txt", crlf);
+    const res = await call({ documentId: id, against: "disk" });
+    expect(res._status).toBe(200);
+    const d = data(res);
+    expect(d.truncated).toBe(true);
+    expect(d.other.endsWith("\n")).toBe(true);
+    expect(d.current).toBe(d.other);
+  });
+
+  it("drops a character split by the byte cut", async () => {
+    // 3-byte characters: the byte cap lands mid-character.
+    const text = "\u4e2d".repeat(Math.ceil(COMPARE_MAX_BYTES / 3) + 10);
+    const { id } = await opened("cjk.md", "small\n");
+    const filePath = path.join(tmpDir, "cjk.md");
+    await fs.writeFile(filePath, text);
+    const res = await call({ documentId: id, against: "disk" });
+    expect(data(res).other).not.toContain("\uFFFD");
+  });
+});
+
+describe("registration", () => {
+  it("sits behind the API middleware (its Host check is what stops DNS rebinding)", async () => {
+    const src = await fs.readFile(
+      path.join(__dirname, "../../src/server/mcp/api-routes.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/app\.get\(API_DOCUMENT_COMPARE, mw, handleGetDocumentCompare\)/);
+  });
+});

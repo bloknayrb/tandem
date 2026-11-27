@@ -192,6 +192,8 @@ enum NativeThemeAction {
 /// the push as a success (see `set_native_theme`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HighContrast {
+    // Constructed by the Windows probe (`win_app_mode.rs`); tests use it everywhere.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     On,
     Off,
     Unknown,
@@ -344,7 +346,7 @@ fn apply_native_theme_action(
         NativeThemeAction::SetWindowTheme(theme) => window
             .set_theme(theme)
             .map(|()| None)
-            .map_err(|e| NativeThemeError::set_theme_failed(e)),
+            .map_err(NativeThemeError::set_theme_failed),
         NativeThemeAction::SetAppMode(mode) => apply_app_mode(window, mode).map(Some),
     }
 }
@@ -408,7 +410,7 @@ fn apply_app_mode(
             }
             let _ = tx.send(outcome);
         })
-        .map_err(|e| NativeThemeError::main_thread_dispatch_failed(e))?;
+        .map_err(NativeThemeError::main_thread_dispatch_failed)?;
     match rx.recv_timeout(std::time::Duration::from_secs(2)) {
         Ok(outcome) => Ok(outcome),
         // A timeout abandons the wait; it does NOT cancel the queued closure,

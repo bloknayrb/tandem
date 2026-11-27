@@ -32,13 +32,21 @@
  * (the replies observer is not attached to those), and again after the
  * Hocuspocus swap, like the Solo stamp observer.
  *
- * **Pending structs.** {@link makeDocumentPendingGuard} drops update data a
- * client left pending in the document's store, as `ctrl-chat.ts` does for the
- * CTRL doc: a struct waiting on the server's next clock would otherwise land
- * later under the server's next write's origin and dodge the undo. Its premise
- * (a real tab never leaves data pending) is unmeasured in document rooms, where
- * a wrong premise drops a user's typing: a flip-blocker row
- * (`tests/server/ownership-flip-blockers.ts`).
+ * **Pending structs: no guard (Bryan, 2026-11-26).** A client update that
+ * depends on data the room does not hold yet is kept in the store's pending
+ * state, as Yjs keeps it, and is never dropped here. #2360 PR A dropped it
+ * (`makeDocumentPendingGuard`); the Chromium measurement (smoke S8) saw that
+ * guard drop a real user's paste after a forced reconnect, and the tab then
+ * stopped syncing, so it was removed (ADR-054's flip amendment). What that
+ * leaves (`docs/security.md` #2576): a pending struct or delete aimed at the
+ * server's next clock is integrated only inside a later `applyUpdate` after
+ * that write lands (a local write never retries pending data). In the live
+ * room that is a client's update, a `Connection` transaction, so this undo
+ * still sees it. But `encodeStateAsUpdate` carries pending data, so a session
+ * file written while it is held integrates it under no origin when restored,
+ * past this undo, and a lit file is trusted, so the load sweep keeps a forged
+ * `answers`; the Hocuspocus swap's merge (`yjs/provider.ts`) is the same
+ * mechanism. Pinned in `tests/server/ownership-thread-replies.test.ts`.
  *
  * The session restore, the envelope merge and `onLoadDocument` apply with no
  * origin, so they are never undone here; the load sweep
@@ -51,7 +59,7 @@ import { withInternal } from "../../../shared/origins.js";
 import { queueSnapshot } from "../../annotations/sync.js";
 import { chatClientWritesUndone } from "../../chat-client-writes.js";
 import { getFileSyncContextForDoc } from "../file-sync-registry.js";
-import { dropPendingUpdates, isClientConnection } from "./chat-client-undo.js";
+import { isClientConnection } from "./chat-client-undo.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -119,24 +127,6 @@ export function makeReplyClientUndo(doc: Y.Doc): () => void {
   };
   replies.observe(onChange);
   return () => replies.unobserve(onChange);
-}
-
-/**
- * Drop update data a client connection left pending in a document's store,
- * with ownership on (see the module docblock). Returns the teardown.
- */
-export function makeDocumentPendingGuard(doc: Y.Doc, docName: string): () => void {
-  const guard = (txn: Y.Transaction): void => {
-    if (!isClientConnection(txn.origin) || !chatClientWritesUndone()) return;
-    if (dropPendingUpdates(doc)) {
-      console.error(
-        "[Tandem] A browser tab sent updates for %s that depend on data the server never wrote; they were dropped",
-        docName,
-      );
-    }
-  };
-  doc.on("afterTransaction", guard);
-  return () => doc.off("afterTransaction", guard);
 }
 
 /** Forget which transactions were repaired (tests). */

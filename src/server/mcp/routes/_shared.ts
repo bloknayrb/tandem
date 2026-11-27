@@ -384,3 +384,18 @@ export const ERROR_LABELS = [
   "OPEN_FAILED",
   "INTERNAL",
 ] as const;
+
+/**
+ * An editor route's answer when the unsaved edits its action would discard
+ * could not be kept first (ADR-057): `409 BACKUP_FAILED` with the editor's own
+ * `message`, so the client can offer its "… anyway". Answered per route, not
+ * through `errorCodeToHttpStatus`, which maps BACKUP_FAILED to 500 for
+ * `/api/apply-changes`' different meaning (its sidecar copy); the thrown
+ * message is addressed to Claude and never reaches the editor. Returns
+ * whether it answered.
+ */
+export function sendEditorBackupFailed(res: Response, err: unknown, message: string): boolean {
+  if ((err as { code?: unknown } | null)?.code !== "BACKUP_FAILED") return false;
+  res.status(409).json({ error: "BACKUP_FAILED", message });
+  return true;
+}

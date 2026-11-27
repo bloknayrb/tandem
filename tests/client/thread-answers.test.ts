@@ -41,8 +41,21 @@ function userCard(ydoc: Y.Doc, id = "card", status = "pending"): void {
   });
 }
 
-function addAnswer(ydoc: Y.Doc, id: string, timestamp: number, annotationId = "card"): void {
-  const reply: AnnotationReply = { id, annotationId, author: "claude", text: id, timestamp };
+function addAnswer(
+  ydoc: Y.Doc,
+  id: string,
+  timestamp: number,
+  annotationId = "card",
+  extra: Partial<AnnotationReply> = {},
+): void {
+  const reply: AnnotationReply = {
+    id,
+    annotationId,
+    author: "claude",
+    text: id,
+    timestamp,
+    ...extra,
+  };
   ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set(id, reply);
 }
 
@@ -147,6 +160,44 @@ describe("createThreadAnswers (#2360)", () => {
     expect(answers.unseenAnswerIds("d", "card")).toEqual([]);
     addAnswer(doc, "fresh", NOW + 1);
     await waitFor(() => expect(answers.unseenAnswerIds("d", "card")).toEqual(["fresh"]));
+  });
+
+  it("an in-progress acknowledgement neither announces nor holds a marker; the answer does both", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const doc = new Y.Doc();
+    const ctrl = new Y.Doc();
+    userCard(doc);
+    const onAnswers = vi.fn();
+    const answers = mount({ tabs: [{ id: "d", ydoc: doc }], ctrl, onAnswers });
+    await waitFor(() =>
+      expect(ctrl.getMap(Y_MAP_REPLY_SEEN).get(Y_MAP_REPLY_SEEN_WATERMARK)).toBe(NOW),
+    );
+    addAnswer(doc, "ack", NOW + 1, "card", { inProgress: true });
+    addAnswer(doc, "final", NOW + 2);
+    await waitFor(() => expect(answers.unseenAnswerIds("d", "card")).toEqual(["final"]));
+    await waitFor(() => expect(onAnswers).toHaveBeenCalled());
+    const announced = onAnswers.mock.calls.flatMap((call) =>
+      (call[0] as ThreadAnswer[]).map((a) => a.replyId),
+    );
+    expect(announced).toEqual(["final"]);
+  });
+
+  it("an acknowledgement whose field is later stripped still holds no marker", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const doc = new Y.Doc();
+    const ctrl = new Y.Doc();
+    userCard(doc);
+    const answers = mount({ tabs: [{ id: "d", ydoc: doc }], ctrl });
+    await waitFor(() =>
+      expect(ctrl.getMap(Y_MAP_REPLY_SEEN).get(Y_MAP_REPLY_SEEN_WATERMARK)).toBe(NOW),
+    );
+    addAnswer(doc, "ack", NOW + 1, "card", { inProgress: true });
+    // An untrusted reload strips the server-only field from the same row.
+    addAnswer(doc, "ack", NOW + 1);
+    addAnswer(doc, "final", NOW + 2);
+    await waitFor(() => expect(answers.unseenAnswerIds("d", "card")).toEqual(["final"]));
   });
 
   it("a resolved comment never holds an unseen marker", async () => {

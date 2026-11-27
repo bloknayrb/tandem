@@ -8,16 +8,28 @@ import {
   buildRunSettings,
   collectTandemPluginKeys,
   ensureLauncherDir,
+  isTandemPluginKey,
+  listInstalledTandemPluginKeys,
   loopbackBaseUrl,
+  PLUGIN_LIST_DEADLINE_MARGIN_MS,
+  PLUGIN_LIST_DEADLINE_MS,
+  PLUGIN_LIST_MAX_BYTES,
+  type PluginListExec,
+  RUN_FILE_READ_BACK_RETRY_MS,
   RUN_FILE_SWEEP_AGE_MS,
   type RunFileAcl,
   RunFileError,
+  type RunFileReadBackIo,
   readHostileSettingsKeys,
   realRunFileAcl,
   resetVerifiedLauncherDirsForTests,
+  runFileReadsBack,
+  runFileText,
   SETTINGS_READ_MAX_BYTES,
   SETTINGS_READ_MAX_KEYS,
   sweepRunFiles,
+  TANDEM_PLUGIN_KEY_MAX_LENGTH,
+  tandemKeysFromPluginList,
   writeRunFile,
 } from "../../../src/server/launcher/run-files.js";
 import { stripComments } from "../../helpers/src-tree.js";
@@ -261,6 +273,149 @@ describe("writing the run files (R1.6)", () => {
 });
 
 /**
+ * The pre-spawn read-back (smoke S1; Bryan's "Guard it before the flip
+ * (Recommended)", 2026-11-26). A pair written by `writeRunFile` as the
+ * supervisor writes it, then damaged the ways S1 measured. The spawn path's
+ * refusal and restart are in owner-handle-spawn.test.ts.
+ */
+describe("the run files' read-back before the spawn (S1)", () => {
+  async function writePair() {
+    const dir = path.join(root, "launcher");
+    await ensureLauncherDir(dir, { create: true, acl: NO_ACL });
+    const mcpValue = buildRunMcpConfig({
+      nodePath: "/usr/bin/node",
+      bridgeScript: "/opt/tandem/bridge.js",
+      baseUrl: "http://127.0.0.1:3479",
+      handle: `th_${"A".repeat(32)}`,
+    });
+    const settingsValue = buildRunSettings([ALWAYS_DISABLED_PLUGIN_KEY, "tandem@other"]);
+    return {
+      mcp: { file: await writeRunFile(dir, "mcp", mcpValue, NO_ACL), text: runFileText(mcpValue) },
+      settings: {
+        file: await writeRunFile(dir, "settings", settingsValue, NO_ACL),
+        text: runFileText(settingsValue),
+      },
+    };
+  }
+  /** Truncated mid-file, as S1 did it: no longer parses. */
+  function truncate(file: string) {
+    const text = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, text.slice(0, Math.floor(text.length / 2)));
+    expect(() => JSON.parse(fs.readFileSync(file, "utf8"))).toThrow();
+  }
+
+  const OK = { ok: true };
+  const refused = (reason: string) => ({ ok: false, reason });
+
+  it("a valid pair reads back, and what is on disk is exactly the text written", async () => {
+    const pair = await writePair();
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(OK);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(OK);
+    expect(fs.readFileSync(pair.settings.file, "utf8")).toBe(pair.settings.text);
+  });
+
+  it("a missing settings file is refused: missing", async () => {
+    const pair = await writePair();
+    fs.unlinkSync(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("missing"));
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(OK);
+  });
+
+  it("a truncated settings file is refused: size", async () => {
+    const pair = await writePair();
+    truncate(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("size"));
+  });
+
+  it("a truncated MCP config is refused: size", async () => {
+    const pair = await writePair();
+    truncate(pair.mcp.file);
+    expect(runFileReadsBack(pair.mcp.file, pair.mcp.text)).toEqual(refused("size"));
+  });
+
+  it("a directory at the name is refused: not-regular", async () => {
+    const pair = await writePair();
+    fs.unlinkSync(pair.settings.file);
+    fs.mkdirSync(pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(
+      refused("not-regular"),
+    );
+  });
+
+  /** An io over the real file system whose `read` throws `codes` in turn,
+   * once each, before reading for real; records every sleep. */
+  function flakyIo(codes: string[]) {
+    const sleeps: number[] = [];
+    let reads = 0;
+    const io: RunFileReadBackIo = {
+      lstat: (f) => fs.lstatSync(f),
+      read: (f, flag) => {
+        reads += 1;
+        const code = codes.shift();
+        if (code) throw Object.assign(new Error(`${code}: busy, open '${f}'`), { code });
+        return fs.readFileSync(f, { encoding: "utf8", flag });
+      },
+      sleep: (ms) => sleeps.push(ms),
+    };
+    return { io, sleeps, reads: () => reads };
+  }
+
+  it.each(["EBUSY", "EPERM", "EACCES"])(
+    "one %s, then a clean read: retried once after the bounded wait, and it reads back",
+    async (code) => {
+      const pair = await writePair();
+      const f = flakyIo([code]);
+      expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(OK);
+      expect(f.sleeps).toEqual([RUN_FILE_READ_BACK_RETRY_MS]);
+      expect(RUN_FILE_READ_BACK_RETRY_MS).toBeLessThanOrEqual(100);
+      expect(f.reads()).toBe(2);
+    },
+  );
+
+  it("a second transient error refuses, with that attempt's code as the reason", async () => {
+    const pair = await writePair();
+    const f = flakyIo(["EBUSY", "EACCES"]);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(
+      refused("EACCES"),
+    );
+    expect(f.sleeps).toEqual([RUN_FILE_READ_BACK_RETRY_MS]);
+    expect(f.reads()).toBe(2);
+  });
+
+  it.each([
+    ["EAGAIN", "EAGAIN"],
+    ["EIO", "EIO"],
+    ["ESOMETHINGNEW", "unreadable"],
+  ])("%s is not retried and refuses as %s", async (code, reason) => {
+    const pair = await writePair();
+    const f = flakyIo([code]);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text, f.io)).toEqual(refused(reason));
+    expect(f.sleeps).toEqual([]);
+    expect(f.reads()).toBe(1);
+  });
+  it("a file of the right length that parses but holds other values is refused", async () => {
+    const pair = await writePair();
+    // Re-enables a plugin key, at the same length, and still parses.
+    const other = pair.settings.text.replace("false", "true ");
+    expect(other.length).toBe(pair.settings.text.length);
+    expect(() => JSON.parse(other)).not.toThrow();
+    fs.writeFileSync(pair.settings.file, other);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(refused("content"));
+  });
+
+  it.runIf(POSIX)("a link at the name is refused, even to the right text (POSIX)", async () => {
+    const pair = await writePair();
+    const elsewhere = path.join(root, "elsewhere.json");
+    fs.writeFileSync(elsewhere, pair.settings.text);
+    fs.unlinkSync(pair.settings.file);
+    fs.symlinkSync(elsewhere, pair.settings.file);
+    expect(runFileReadsBack(pair.settings.file, pair.settings.text)).toEqual(
+      refused("not-regular"),
+    );
+  });
+});
+
+/**
  * Runs `fn` with `process.platform` reading `"win32"`, restored in `finally`
  * (precedent: tests/server/file-io/private-dir.test.ts), so the Windows branch
  * of `ensureLauncherDir` and `writeRunFile` runs on Linux with a recording
@@ -465,5 +620,280 @@ describe("the boot sweep (R1.9, Ruling D13)", () => {
     fs.symlinkSync(victim, link);
     expect(await sweepRunFiles(dir, { acl: NO_ACL })).toBe(0);
     expect(fs.existsSync(victim)).toBe(true);
+  });
+});
+
+// Smoke S1 on Windows (#2358, 2026-11-26): the account-synced `tandem@synced`
+// plugin is enabled by account sync, not by any settings file, so the settings
+// reads never saw it and its toolset loaded beside the launcher's. Bryan's
+// "Ask Claude Code (Recommended)": the launcher asks `claude plugin list
+// --json` and disables every `tandem@` key it reports, failing safe.
+describe("the installed-plugin lookup (smoke S1, Windows)", () => {
+  const TOO_LONG = `tandem@${"x".repeat(TANDEM_PLUGIN_KEY_MAX_LENGTH)}`;
+  /** The shape `claude plugin list --json` printed on Linux, Claude Code 2.1.332. */
+  const LISTED = JSON.stringify([
+    { id: "pdf-viewer@synced", version: "0.2.0", scope: "synced", enabled: true },
+    { id: "tandem@synced", version: "0.32.0", scope: "synced", enabled: true },
+    { id: "tandem@tandem-editor", version: "0.32.0", scope: "user", enabled: false },
+    { id: "tandemx@synced", version: "1", scope: "synced", enabled: true },
+    { id: "tandem@odd key", version: "1", scope: "user", enabled: true },
+    { id: TOO_LONG, version: "1", scope: "user", enabled: true },
+    { id: TOO_LONG, version: "1", scope: "project", enabled: true },
+    { id: 42 },
+    null,
+  ]);
+
+  it("takes every tandem@ id the settings path would disable, enabled or not, and counts the dropped", () => {
+    expect(tandemKeysFromPluginList(LISTED)).toEqual({
+      keys: ["tandem@odd key", "tandem@synced", "tandem@tandem-editor"],
+      dropped: 1,
+    });
+    expect(tandemKeysFromPluginList("[]")).toEqual({ keys: [], dropped: 0 });
+  });
+
+  // Bryan's Windows run (#2599, 2026-11-27, Claude Code 2.1.332): the same id
+  // listed once per scope, disabled in both, beside the enabled synced plugin.
+  it("takes an id listed once per scope as one key (the Windows run's shape)", () => {
+    const windows = JSON.stringify([
+      { id: "tandem@tandem-desktop", version: "0.6.2", scope: "user", enabled: false },
+      { id: "tandem@tandem-desktop", version: "0.6.2", scope: "local", enabled: false },
+      { id: "tandem@synced", version: "0.32.0", scope: "synced", enabled: true },
+    ]);
+    expect(tandemKeysFromPluginList(windows)).toEqual({
+      keys: ["tandem@synced", "tandem@tandem-desktop"],
+      dropped: 0,
+    });
+  });
+
+  // Review of #2599, item 4: the lookup's filter was narrower than the
+  // settings path's, so an id the settings path would disable was dropped.
+  it("one predicate: the lookup and the settings files keep exactly the same keys", async () => {
+    const atCap = `tandem@${"m".repeat(TANDEM_PLUGIN_KEY_MAX_LENGTH - "tandem@".length)}`;
+    const candidates = ["tandem@odd key", "tandem@x/y", "tandem@", atCap, TOO_LONG, "tandemx@a"];
+    const cwd = path.join(root, "same");
+    fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    const file = path.join(cwd, ".claude", "settings.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ enabledPlugins: Object.fromEntries(candidates.map((k) => [k, true])) }),
+    );
+    const fromSettings = (await readHostileSettingsKeys(file)).sort();
+    const fromList = tandemKeysFromPluginList(JSON.stringify(candidates.map((id) => ({ id }))));
+    expect(fromList?.keys).toEqual(fromSettings);
+    expect(fromSettings).toEqual(["tandem@", "tandem@odd key", "tandem@x/y", atCap].sort());
+    expect(fromList?.dropped).toBe(1);
+    expect(candidates.filter(isTandemPluginKey).sort()).toEqual(fromSettings);
+  });
+
+  it("answers null for output that is not Claude Code's array", () => {
+    expect(tandemKeysFromPluginList("not json")).toBeNull();
+    expect(tandemKeysFromPluginList('{"plugins":[]}')).toBeNull();
+    const many = Array.from({ length: SETTINGS_READ_MAX_KEYS + 1 }, (_, i) => ({
+      id: `tandem@m${i}`,
+    }));
+    expect(tandemKeysFromPluginList(JSON.stringify(many))).toBeNull();
+  });
+
+  function fakeExec(
+    answer: (cb: Parameters<PluginListExec>[3]) => void,
+    seen: { file?: string; args?: readonly string[]; options?: Parameters<PluginListExec>[2] } = {},
+  ): PluginListExec {
+    return (file, args, options, cb) => {
+      seen.file = file;
+      seen.args = args;
+      seen.options = options;
+      answer(cb);
+      return undefined;
+    };
+  }
+
+  it("runs the child's own binary with plugin list --json, in its cwd and environment, bounded", async () => {
+    const seen: Parameters<typeof fakeExec>[1] = {};
+    const env = { PATH: "/x", CLAUDE_CONFIG_DIR: "/cfg" };
+    const result = await listInstalledTandemPluginKeys({
+      claudeBin: "/bin/claude",
+      env,
+      cwd: "/work",
+      exec: fakeExec((cb) => cb(null, LISTED), seen),
+    });
+    expect(result).toEqual({
+      ok: true,
+      keys: ["tandem@odd key", "tandem@synced", "tandem@tandem-editor"],
+      dropped: 1,
+    });
+    expect(seen.file).toBe("/bin/claude");
+    expect(seen.args).toEqual(["plugin", "list", "--json"]);
+    expect(seen.options).toMatchObject({
+      cwd: "/work",
+      env,
+      timeout: PLUGIN_LIST_DEADLINE_MS,
+      maxBuffer: PLUGIN_LIST_MAX_BYTES,
+      windowsHide: true,
+      killSignal: "SIGKILL",
+      // POSIX: its own process group, so the deadline can kill the tree.
+      detached: POSIX,
+    });
+  });
+
+  it("names each failure, never rejecting", async () => {
+    const run = (answer: Parameters<typeof fakeExec>[0]) =>
+      listInstalledTandemPluginKeys({ claudeBin: "c", env: {}, cwd: "/", exec: fakeExec(answer) });
+    const err = (fields: Record<string, unknown>) => Object.assign(new Error("x"), fields);
+    expect(await run((cb) => cb(err({ killed: true, code: null }), ""))).toEqual({
+      ok: false,
+      reason: "timeout",
+    });
+    expect(await run((cb) => cb(err({ code: 1 }), ""))).toEqual({ ok: false, reason: "exit" });
+    // Killed from outside (not by the deadline): it ran, so not a spawn failure.
+    expect(
+      await run((cb) => cb(err({ killed: false, code: null, signal: "SIGSEGV" }), "")),
+    ).toEqual({ ok: false, reason: "exit" });
+    expect(await run((cb) => cb(err({ code: "ENOENT" }), ""))).toEqual({
+      ok: false,
+      reason: "spawn",
+    });
+    expect(
+      await run((cb) => cb(err({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: true }), "")),
+    ).toEqual({
+      ok: false,
+      reason: "unparseable",
+    });
+    expect(await run((cb) => cb(null, "Usage: claude"))).toEqual({
+      ok: false,
+      reason: "unparseable",
+    });
+    const throwing: PluginListExec = () => {
+      throw new Error("spawn EINVAL");
+    };
+    expect(
+      await listInstalledTandemPluginKeys({ claudeBin: "c", env: {}, cwd: "/", exec: throwing }),
+    ).toEqual({ ok: false, reason: "spawn" });
+  });
+
+  it.skipIf(!POSIX)("runs a real executable and reads its JSON", async () => {
+    const bin = path.join(root, "claude");
+    fs.writeFileSync(
+      bin,
+      `#!${process.execPath}\nconst a = process.argv.slice(2).join(" ");\n` +
+        `if (a !== "plugin list --json") process.exit(3);\n` +
+        `process.stdout.write(JSON.stringify([{ id: "tandem@synced" }, { id: process.cwd() }]));\n`,
+      { mode: 0o755 },
+    );
+    expect(
+      await listInstalledTandemPluginKeys({ claudeBin: bin, env: process.env, cwd: root }),
+    ).toEqual({ ok: true, keys: ["tandem@synced"], dropped: 0 });
+    expect(
+      await listInstalledTandemPluginKeys({
+        claudeBin: path.join(root, "missing"),
+        env: process.env,
+        cwd: root,
+      }),
+    ).toEqual({ ok: false, reason: "spawn" });
+  });
+
+  it.skipIf(!POSIX)(
+    "the default runner names a real non-zero exit and an oversized answer",
+    async () => {
+      const failing = path.join(root, "claude-fails");
+      fs.writeFileSync(failing, `#!${process.execPath}\nprocess.exit(3);\n`, { mode: 0o755 });
+      expect(
+        await listInstalledTandemPluginKeys({ claudeBin: failing, env: process.env, cwd: root }),
+      ).toEqual({ ok: false, reason: "exit" });
+      const chatty = path.join(root, "claude-chatty");
+      fs.writeFileSync(
+        chatty,
+        `#!${process.execPath}\nprocess.stdout.write("x".repeat(${PLUGIN_LIST_MAX_BYTES + 1}));\n` +
+          `setInterval(() => {}, 1000);\n`,
+        { mode: 0o755 },
+      );
+      expect(
+        await listInstalledTandemPluginKeys({ claudeBin: chatty, env: process.env, cwd: root }),
+      ).toEqual({ ok: false, reason: "unparseable" });
+    },
+  );
+
+  // Review of #2599, item 1: `execFile` calls back on `close`, so a child
+  // whose stdout stays open never settled the lookup, and `prepareRun` awaits
+  // it under the supervisor lock.
+  it("a child that never calls back settles at the deadline, killing it and destroying its pipes", async () => {
+    const calls: string[] = [];
+    const stream = (name: string) => ({ destroy: () => calls.push(`destroy ${name}`) });
+    const child = {
+      pid: undefined,
+      kill: (sig?: string) => {
+        calls.push(`kill ${sig}`);
+        return true;
+      },
+      stdin: stream("stdin"),
+      stdout: stream("stdout"),
+      stderr: stream("stderr"),
+    };
+    const hanging: PluginListExec = () => child;
+    const started = Date.now();
+    const result = await listInstalledTandemPluginKeys({
+      claudeBin: "c",
+      env: {},
+      cwd: "/",
+      deadlineMs: 20,
+      exec: hanging,
+    });
+    const took = Date.now() - started;
+    expect(result).toEqual({ ok: false, reason: "timeout" });
+    expect(took).toBeGreaterThanOrEqual(20 + PLUGIN_LIST_DEADLINE_MARGIN_MS - 5);
+    expect(took).toBeLessThan(20 + PLUGIN_LIST_DEADLINE_MARGIN_MS + 2_000);
+    expect(calls).toEqual(["kill SIGKILL", "destroy stdin", "destroy stdout", "destroy stderr"]);
+  });
+
+  it.skipIf(!POSIX)(
+    "a real wrapper whose grandchild holds stdout settles at the deadline, and the grandchild is killed",
+    async () => {
+      const bin = path.join(root, "claude-wrapper");
+      const pidFile = path.join(root, "grandchild.pid");
+      // A wrapper that does not `exec`: the background sleep inherits stdout,
+      // so killing the shell alone never closes the pipe.
+      fs.writeFileSync(bin, `#!/bin/sh\nsleep 30 &\necho $! > "${pidFile}"\nwait\n`, {
+        mode: 0o755,
+      });
+      const started = Date.now();
+      const result = await listInstalledTandemPluginKeys({
+        claudeBin: bin,
+        env: process.env,
+        cwd: root,
+        deadlineMs: 200,
+      });
+      const took = Date.now() - started;
+      expect(result).toEqual({ ok: false, reason: "timeout" });
+      expect(took).toBeLessThan(200 + PLUGIN_LIST_DEADLINE_MARGIN_MS + 2_000);
+      const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
+      expect(grandchild).toBeGreaterThan(0);
+      const alive = () => {
+        try {
+          process.kill(grandchild, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const until = Date.now() + 2_000;
+      while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+      expect(alive()).toBe(false);
+    },
+  );
+
+  it("collectTandemPluginKeys adds the lookup's keys to the settings files' and the known one", async () => {
+    const home = path.join(root, "home");
+    const cwd = path.join(root, "doc");
+    fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "tandem@proj": true } }),
+    );
+    const keys = await collectTandemPluginKeys({
+      env: {},
+      cwd,
+      home,
+      installed: ["tandem@synced", "tandem@proj"],
+    });
+    expect(keys).toEqual([ALWAYS_DISABLED_PLUGIN_KEY, "tandem@proj", "tandem@synced"].sort());
   });
 });

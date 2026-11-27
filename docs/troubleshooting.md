@@ -77,6 +77,7 @@ If you restart the server while Claude Code is open, run `/mcp` inside Claude Co
 2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `tandem` entry points at the wrong place: `mcpServers.tandem.url` in a direct HTTP entry, or `mcpServers.tandem.env.TANDEM_URL` in the bridge entry Tandem has written since v0.31.0. Re-run the in-app integration wizard or `tandem setup --apply`.
 3. **Stale [auth token](glossary.md#auth-token).** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
 4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them (with only the desktop app installed, run it as `npx tandem-editor --uninstall-scrub`).
+5. **The session was open across a Tandem update, and only `tandem_checkInbox` or `tandem_status` fails**, with an error that the result does not match the tool's output schema. Your client checks results against the tool list it read when it connected, and the update added a field (the multi-session ownership release added `ownership` and `owner`). Restart the session, or reconnect: `/mcp` in Claude Code, or restart Claude Desktop. Nothing on Tandem's side needs fixing.
 
 `tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
 
@@ -622,22 +623,25 @@ If a saved session file is corrupt, Tandem quarantines it instead of failing the
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file, or you just want yesterday's version back, there are three ways to restore:
+Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. It also keeps your **unsaved edits** there when Claude reloads a document from disk, restores a backup over it, or closes it while it holds edits that hadn't been saved yet. The "file changed on disk" banner adds both sides: **Keep my edits** keeps the version on disk before your next save overwrites it, and **Reload from file** keeps your unsaved edits before it discards them. The editor tells you when that happens. If a save ever mangles your file, you want yesterday's version back, or you want those unsaved edits back, there are three ways to restore:
 
-- **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
-- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
+- **In the app:** open the command palette (Ctrl+Shift+P) and run "Version history: restore a backup…". It lists every backup of the document, newest first, labelled "Your unsaved edits" or "File on disk", and restores the one you pick; **Compare** on a row shows what is different between that backup and your document first. The document reloads in place; annotations are preserved. Any unsaved edits the document has are kept as a backup first, and the version on disk is copied before it is overwritten, so a restore made here can itself be undone from the same list. If the edits can't be kept (the backup folder is full or not writable), nothing is restored and the row offers **Restore anyway**, which discards them. When Claude has kept your edits, a banner above the document says so until you dismiss it; its **Version history** button opens the same list.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name. Each one is labelled `disk` (the file as it was on disk) or `unsaved` (edits Claude's action discarded). When Claude's action keeps your edits, it tells Claude the backup's name, so you can simply ask for them back.
 - **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
-- up to 3 timestamped copies, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), and
-- a `source.txt` recording the original file's full path.
+- up to 3 timestamped copies of the file on disk, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), plus one more while Tandem runs: the copy taken before its first write that run (and, during a restore, the copy being restored is never removed either),
+- up to 3 copies of unsaved edits, named the same way with `-unsaved` before the extension, e.g. `thesis-20260609-142200-9f8e7d6c-unsaved.md`, and
+- a `source.txt` recording the original file's full path, and
+- once Claude has kept your edits, a `kept-unseen.json` listing the kept edits you have not been shown yet (what the "your edits were kept" banner reads). Deleting it only hides the banner; the edits stay in Version history.
 
 To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 
 Notes:
 
-- Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
+- Backups of the file on disk are taken once per document per server run (and before every restore Claude makes), and skipped when nothing changed since the newest backup — so the folder stays small.
+- If Tandem can't keep a backup of unsaved edits — the backup folder is full or can't be written — Claude's reload, restore or close is refused and nothing changes. Save the document first, then try again.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
 
 ## Reading server logs

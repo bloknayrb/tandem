@@ -180,7 +180,7 @@ const lossesMessage = $derived(
             {/each}
           </ul>
           <p class="fidelity-report-restore-hint">
-            To recover, run "Restore a backup of this document…" from the command palette.
+            To recover, run "Version history: restore a backup…" from the command palette.
           </p>
         </section>
       {/if}

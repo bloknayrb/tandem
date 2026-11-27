@@ -285,7 +285,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // update, not a widening of the accepted scope in docs/security.md.
   "src/server/annotations/store.ts": 7,
   "src/server/auth/token-store.ts": 3,
-  "src/server/file-io/doc-backup.ts": 2,
+  // 4 since ADR-057 PR 2: `kept-unseen.json` (which kept edits the user has
+  // not been shown), a temp `writeFile` plus a `rename`, in the per-path
+  // doc-backups folder. Tandem's OWN app-data root, never a Claude config
+  // file, so the accepted #1599 scope is unchanged.
+  "src/server/file-io/doc-backup.ts": 4,
   "src/server/file-io/index.ts": 3,
   // #2266: `hardenPrivateDir`'s `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` open of
   // an app-data store DIRECTORY, so it can `fchmod` the descriptor. The idiom
@@ -318,6 +322,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/license/grace.ts": 2,
   "src/server/license/license-state.ts": 2,
   "src/server/mcp/annotations.ts": 1,
+  // ADR-057 PR 4: the compare view's bounded READ, an `fs.open` with
+  // O_RDONLY | O_NONBLOCK so the size comes from the opened handle. The idiom
+  // list counts every `fs.open` conservatively; this one writes nothing, and
+  // never a Claude config, so the accepted #1599 scope is unchanged.
+  "src/server/mcp/routes/compare.ts": 1,
   "src/server/mcp/convert.ts": 1,
   "src/server/mcp/document-service.ts": 4,
   "src/server/mcp/document.ts": 1,
